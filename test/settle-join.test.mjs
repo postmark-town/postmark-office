@@ -613,3 +613,191 @@ test("POS-884 · the tick's pass: pen and hand joins for each reserved prefix ar
   for (const r of reserved) assert.equal(printed[r.h], undefined, `${r.road} ${r.h}: not in the printed pins`);
   assert.ok(printed["inv-moss"] && printed["inv-fern"], "the controls are");
 });
+
+// ── POS-1033: THE TRUTHFUL ANSWER FOR A MERGED HAND-WRITTEN JOIN (Wright, 2026-11-14 06:17Z) ──
+//
+// Venice (town #4578, 11-13) and Cee (11-12) were merged hand-written joins; the door answered NO_PR, the Registrar escalated an outage, and the tick bound
+// both minutes later. Wright's words: "bound already" if the tick has run, otherwise "settles on the office's next tick, nothing to do"; "The pen-join path and
+// every other refusal stay as they are." THE TRUTH CONSTRAINT: the tick's cursor moves past a join it refused for good, so a refused join is NEVER promised
+// the next tick. The door reads (the merged PR, the record's pins, the tick's cursor file) and writes nothing. Fictional handle `vesper`, the file's own fixtures.
+//
+// Until 2026-11-14 a merged hand-written join with no pin, from a branch other than residency/<handle>, was answered NO_PR in every case below.
+
+const H_NOW = new Date("2026-09-29T10:05:00Z");          // five minutes after handPR()'s merge
+const BEFORE = "2026-09-29T09:30:00.000Z", AFTER = "2026-09-29T10:00:01.000Z";   // a cursor the tick has not reached / has passed the merge
+const PENDING_NOTE = (h) => `${h}'s hand-written join (#3239) is merged; the office's keep tick binds a hand-written join on its next pass (within minutes). Nothing to do, and nothing was written. If the tick refuses it, that is logged for a person to read.`;
+const PASSED_HINT = "a hand-written join for this handle is merged, but the office's keep tick has already passed that merge without binding it, and it does not ask again; a person reads it (the tick's log names why). Nothing was written, and calling this door again will not change it";
+
+function handWorld({ cardHouse = "house-of-many-doors", cardGithub = "commander-and-chief", author = { id: 334016343, login: "commander-and-chief" }, handle = "vesper", pins = PINS(), ledger = null } = {}) {
+  pulls = [handPR({ author, handle })];
+  files = { 3239: joinFiles(handle) };
+  cards = { [handle]: card(handle, cardHouse, cardGithub) };
+  users = { [cardGithub]: author.id };
+  return town({ pins, ledger, cards: { [handle]: { house: cardHouse, github: cardGithub } } });
+}
+function cursorFile(text) {
+  const p = join(tempDir("settle-cursor-"), "cursor");
+  if (text !== null) writeFileSync(p, text + "\n");
+  return p;
+}
+async function settleHand(clone, { handle = "vesper", cursorPath, key = REGISTRAR, now = H_NOW } = {}) {
+  asked = [];
+  return withRecordFrom(clone, async (pool) => {
+    try { return { out: await settleJoinAtOffice({ handle }, key, { pen: PEN, clone, env: RECORD_ON, run: inProcess, cursorPath, now }), pool }; }
+    catch (e) { return { err: e, pool }; }
+  });
+}
+const writesNothing = (clone, pool, head) => {
+  assert.equal(pool.state.writes.pins + pool.state.writes.households, 0, "nothing reached the record");
+  assert.equal(git(clone, "rev-parse", "HEAD"), head, "nothing reached the town");
+  assert.equal(git(clone, "status", "--porcelain", "--untracked-files=all"), "", "the clone is untouched");
+  assert.ok(asked.every((a) => a.startsWith("GET ")), "only reads were asked of GitHub");
+};
+
+test("POS-1033 · PENDING: a merged hand-written join the tick has not reached is told 'next tick, nothing to do', and nothing is written", async () => {
+  const clone = handWorld(); const head = git(clone, "rev-parse", "HEAD");
+  const { out, err, pool } = await settleHand(clone, { cursorPath: cursorFile(BEFORE) });
+  assert.equal(err, undefined, err?.hint);
+  assert.deepEqual(out, { settled: false, pending: true, handle: "vesper", road: "hand", pr: 3239, merged_at: "2026-09-29T10:00:00Z", note: PENDING_NOTE("vesper") });
+  writesNothing(clone, pool, head);
+});
+
+test("POS-1033 · BOUND: once the tick has bound it, the same call answers 'already' from the record", async () => {
+  const clone = handWorld();
+  const cursorPath = cursorFile(BEFORE);
+  const first = await settleHand(clone, { cursorPath });
+  assert.equal(first.out?.pending, true);
+  const ticked = await pass(clone, cursorPath);                       // the REAL pass binds it
+  assert.deepEqual(ticked.out.settled, ["vesper"], ticked.lines.join("\n"));
+  const head = git(clone, "rev-parse", "HEAD");
+  const { out, err, pool } = await settleHand(clone, { cursorPath });
+  assert.equal(err, undefined, err?.hint);
+  assert.equal(out.already_settled, true);
+  assert.equal(out.pin.gh_id, 334016343);
+  assert.match(out.note, /already has a pin/);
+  assert.equal(pool.state.writes.pins + pool.state.writes.households, 0);
+  assert.equal(git(clone, "rev-parse", "HEAD"), head);
+  assert.deepEqual(asked, [], "answered from the record, before GitHub is asked");
+});
+
+test("POS-1033 · PASSED: a join the tick refused is NOT promised the next tick: the cursor moved past it and no pin was written", async () => {
+  const clone = handWorld({ cardHouse: "starforge" });                // a house its author is not on: a person's call, refused for good
+  const cursorPath = cursorFile(BEFORE);
+  const ticked = await pass(clone, cursorPath);
+  assert.deepEqual([ticked.out.settled, ticked.out.refused], [[], [3239]], ticked.lines.join("\n"));
+  assert.equal(readFileSync(cursorPath, "utf8").trim(), AFTER, "the REAL pass moved its cursor past the refusal");
+  const head = git(clone, "rev-parse", "HEAD");
+  const { out, err, pool } = await settleHand(clone, { cursorPath });
+  assert.equal(out, undefined);
+  assert.deepEqual([err?.code, err?.defect], [SETTLE_REFUSALS.NO_PR.code, SETTLE_REFUSALS.NO_PR.defect], "the same 409 and defect as ever");
+  assert.equal(err?.hint, `#3239 merged 2026-09-29T10:00:00Z, before the tick's cursor ${AFTER} — ${PASSED_HINT}`);
+  assert.doesNotMatch(JSON.stringify(err), /next (tick|pass)|settles on|nothing to do/i, "no false reassurance");
+  writesNothing(clone, pool, head);
+});
+
+test("POS-1033 · a durable refusal the door can read is never promised away: the existing refusal stays, whatever the cursor says", async () => {
+  const MINTED = "- 2026-09-01 · MINT → vesper · 1 · for: x (sent) · sig: x\n";
+  // each world is built when its turn comes: the mock GitHub's fixtures are shared module state
+  const cases = {
+    "a card naming a house its author is not on": () => [handWorld({ cardHouse: "starforge" }), "vesper"],
+    "a reserved prefix": () => [handWorld({ handle: "berth-vesper" }), "berth-vesper"],
+    "a handle the ledger already knows unbound": () => [handWorld({ ledger: MINTED }), "vesper"],
+  };
+  for (const [what, build] of Object.entries(cases)) {
+    const [clone, handle] = build();
+    const head = git(clone, "rev-parse", "HEAD");
+    const { out, err, pool } = await settleHand(clone, { handle, cursorPath: cursorFile(BEFORE) });
+    assert.equal(out, undefined, what);
+    assert.equal(err?.hint, `no PR from residency/${handle} — ${SETTLE_REFUSALS.NO_PR.hint}`, `${what}: today's refusal, exactly`);
+    writesNothing(clone, pool, head);
+  }
+});
+
+test("POS-1033 · PARITY: each refusal the door's read sees is the refusal the critical section gives", async () => {
+  const MINTED = "- 2026-09-01 · MINT → vesper · 1 · for: x (sent) · sig: x\n";
+  const { registryFromRows } = await import("../src/registry-rows.mjs");
+  const { loadRegistryRows } = await import("../src/registry-store.mjs");
+  const { handDurableRefusal } = await import("../src/settle-join.mjs");
+  const worlds = [
+    [() => handWorld({ cardHouse: "starforge" }), "vesper", SETTLE_REFUSALS.OTHER_HOUSE],
+    [() => handWorld({ handle: "berth-vesper" }), "berth-vesper", SETTLE_REFUSALS.RESERVED],
+    [() => handWorld({ ledger: MINTED }), "vesper", SETTLE_REFUSALS.MINTED],
+    // controls: a join that settles (an account on a house naming none, and an unknown account naming a fresh house to be minted) is no refusal on either side
+    [() => handWorld({ cardHouse: "(unstated — ask them)" }), "vesper", null],
+    [() => handWorld({ cardHouse: "A Fresh Hearth", author: { id: 555555, login: "new-human" }, cardGithub: "new-human" }), "vesper", null],
+    [() => handWorld(), "vesper", null],
+  ];
+  for (const [build, handle, want] of worlds) {
+    const clone = build();
+    const cardText = cards[handle];
+    const pr = pulls[0];
+    const seen = await withRecordFrom(clone, async () => {
+      const found = await joinOfMergedPR(PEN, pr);
+      const registry = registryFromRows(await loadRegistryRows(RECORD_ON));
+      return handDurableRefusal({ handle, found, card: cardText, registry, clone, date: "2026-09-29" });
+    });
+    assert.equal(seen?.defect ?? null, want?.defect ?? null, `${handle}: the door's read`);
+    const { err } = await byHand(clone, pr);
+    assert.equal(err?.defect ?? null, want?.defect ?? null, `${handle}: the critical section`);
+  }
+});
+
+test("POS-1033 · doubt keeps today's refusal: no readable cursor, an unreadable PR or card, no merged join, a non-join, an unmerged PR", async () => {
+  const TODAY = `no PR from residency/vesper — ${SETTLE_REFUSALS.NO_PR.hint}`;
+  const same = async (clone, cursorPath, what, now = H_NOW) => {
+    const head = git(clone, "rev-parse", "HEAD");
+    const { out, err, pool } = await settleHand(clone, { cursorPath, now });
+    assert.equal(out, undefined, what);
+    assert.equal(err?.hint, TODAY, what);
+    writesNothing(clone, pool, head);
+  };
+  await same(handWorld(), tempDir("a-directory-"), "a cursor that cannot be read (not merely absent)");
+  await same(handWorld(), cursorFile(null), "no cursor file and a merge older than the pass's own default day", new Date("2026-10-30T00:00:00Z"));
+  const noCard = handWorld(); cards = {};
+  await same(noCard, cursorFile(BEFORE), "the card cannot be read");
+  const noFiles = handWorld(); files = {};
+  await same(noFiles, cursorFile(BEFORE), "the PR's files cannot be read");
+  const notJoin = handWorld(); files = { 3239: [{ filename: "README.md", status: "modified" }] };
+  await same(notJoin, cursorFile(BEFORE), "a PR that is not a join");
+  const unmerged = handWorld(); pulls = [{ ...pulls[0], merged_at: null, state: "open" }];
+  await same(unmerged, cursorFile(BEFORE), "an unmerged PR");
+  const other = handWorld(); files = { 3239: joinFiles("somebody-else") };
+  await same(other, cursorFile(BEFORE), "another handle's join");
+  const none = town(); pulls = [];
+  await same(none, cursorFile(BEFORE), "no PR at all");
+});
+
+test("POS-1033 · an absent cursor file within the pass's own day reads as the pass reads it: the merge is still ahead of the tick", async () => {
+  const clone = handWorld();
+  const { out } = await settleHand(clone, { cursorPath: cursorFile(null) });
+  assert.equal(out?.pending, true);
+});
+
+test("POS-1033 · the pen road and the fork courtesy are untouched: a merged pen join still settles, a fork join keeps POS-1012's hint", async () => {
+  pulls = [penPR()];
+  const settled = await settle(town());
+  assert.equal(settled.out?.settled, true, settled.err?.hint);
+  // a fork join whose card cannot be read (GitHub's weather) is POS-1012's courtesy, exactly
+  pulls = [forkPR()]; files = { 4642: joinFiles("inv-fern") }; cards = {};
+  const { err } = await settle(town(), REGISTRAR, "inv-fern");
+  assert.equal(err?.hint, FORK_HINT("inv-fern"));
+});
+
+test("POS-1033 · through the apex, the authorization negatives hold and the listed caller gets the truthful answer", async () => {
+  const clone = handWorld();
+  const cursorPath = cursorFile(BEFORE);
+  const was = process.env.SETTLE_PASS_CURSOR; process.env.SETTLE_PASS_CURSOR = cursorPath;
+  try {
+    await withRecordFrom(clone, async () => {
+      asked = [];
+      const denied = await householdApex({ do: "settle-join", args: { handle: "vesper" } }, RESIDENT, { pen: PEN, clone });
+      const never = await householdApex({ do: "no-such-act", args: { handle: "vesper" } }, RESIDENT, { pen: PEN, clone });
+      assert.deepEqual(strip(denied), strip(never), "an unlisted caller is answered as an act the door has never heard of");
+      assert.deepEqual(asked, [], "and GitHub was not asked");
+      const r = await householdApex({ do: "settle-join", args: { handle: "vesper" } }, REGISTRAR, { pen: PEN, clone });
+      assert.equal(r.did, "settle-join");
+      assert.equal(r.result?.pending, true, JSON.stringify(r));
+      assert.equal(r.result?.note, PENDING_NOTE("vesper"));
+    });
+  } finally { if (was === undefined) delete process.env.SETTLE_PASS_CURSOR; else process.env.SETTLE_PASS_CURSOR = was; }
+});

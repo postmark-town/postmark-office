@@ -94,6 +94,8 @@ export const SETTLE_REFUSALS = Object.freeze({
   NO_PR: { code: 409, defect: "no join PR for this handle", hint: "a merged pen join opens from the branch residency/<handle>; nothing was written" },
   // POS-1012 (Wright, 2026-11-12 09:30Z): the SAME refusal, code and defect, with a hint that says what happened when a merged join for the handle exists from a FORK
   NO_PR_FORK: { code: 409, defect: "no join PR for this handle", hint: "this join was made by hand from a fork, and this door does not settle those; the office's keep tick normally settles valid hand joins within about fifteen minutes. Nothing needs retrying through this door, and this call wrote nothing. If the resident's card still reads solo: half an hour after the merge, ask a person to check it" },
+  // POS-1033: the SAME 409 and defect again, for a merged hand-written join the keep tick's cursor has already passed with no pin written: the tick does not retry it
+  NO_PR_PASSED: { code: 409, defect: "no join PR for this handle", hint: "a hand-written join for this handle is merged, but the office's keep tick has already passed that merge without binding it, and it does not ask again; a person reads it (the tick's log names why). Nothing was written, and calling this door again will not change it" },
   NOT_A_JOIN: { code: 409, defect: "this PR is not a single-address join", hint: "a hand-written join adds one WHITE_PAGES/<handle>/ADDRESS.md and touches nothing outside that folder; anything else is a person's read" },
   CARD_NOT_AUTHOR: { code: 409, defect: "the card's github: is not the account that opened the PR", hint: "a hand-written join is keyed by its author's GitHub id, and the card's github: must resolve to that same id — a person reads it" },
   OTHER_HOUSE: { code: 409, defect: "the card names a house its author is not on", hint: "the account that opened the PR is not one of that house's accounts — a person's call (a sibling vouches by letter)" },
@@ -175,6 +177,135 @@ export async function mergedForkJoinExists(pen, handle) {
     }
   } catch { /* the hint is a courtesy: a failed read keeps today's refusal */ }
   return false;
+}
+
+// ── POS-1033 · THE TRUTHFUL ANSWER FOR A MERGED HAND-WRITTEN JOIN ─────────────
+//
+// A hand-written join is the keep tick's job (the 09-29 amendment above), and
+// this door used to answer it as if no join existed (NO_PR), which the Registrar
+// escalated as an outage (Venice, town #4578, 11-13; Cee, 11-12; both bound by
+// the tick minutes later). The door still does not bind, rekey or replay a hand
+// join: it only READS, and says what is true.
+//
+//   BOUND     the record holds a pin for the handle: `alreadySettled`, which
+//             the door has always answered first, before GitHub is asked.
+//   PENDING   a merged hand-written join exists, the tick has not yet answered
+//             that merge, and nothing the door can read says the tick will
+//             refuse it: "settles on the next tick, nothing to do".
+//   PASSED    the same join, but the tick's cursor is already past its merge and
+//             the record holds no pin: the tick answered it WITHOUT binding it,
+//             and it never asks again (deploy/settle-pass.mjs § the cursor moves
+//             past a refusal for good). Saying "next tick" here would be false,
+//             so the door says it was passed, same code and defect as NO_PR.
+//
+// THE EVIDENCE, all existing and all read-only: the town's merged PRs (the
+// tick's own listing) judged by `judgeJoinPR` and `joinOfMergedPR`; the record's
+// pins; the tick's cursor file. A cursor is NOT proof of binding: it is read only
+// to learn whether the tick has answered THIS merge, and the pin decides whether
+// it bound. Any doubt (GitHub, the record, the cursor unreadable, a durable
+// refusal the door can see) keeps today's refusal, the named fallback.
+export const SETTLE_PASS_CURSOR = () => process.env.SETTLE_PASS_CURSOR ?? "/srv/postmark-office/settle-pass.cursor";
+
+// Same bound as POS-1012's courtesy: the newest closed PRs on the base, 2 pages.
+const HAND_PAGES = 2, HAND_CANDIDATES = 10;
+
+/** The newest merged hand-written join for `handle` on the base (same repository or a fork), or null on no positive evidence. */
+export async function findMergedHandJoin(pen, handle) {
+  try {
+    const repo = `/repos/${pen.owner}/${pen.repo}`;
+    let candidates = 0;
+    for (let page = 1; page <= HAND_PAGES; page++) {
+      const r = await ghFetch(pen, "GET", `${repo}/pulls?state=closed&base=${encodeURIComponent(pen.baseBranch)}&sort=updated&direction=desc&per_page=100&page=${page}`);
+      if (!r.ok) return null;
+      const prs = Array.isArray(r.json) ? r.json : [];
+      for (const pr of prs) {
+        if (!pr?.merged_at || Number(pr?.user?.id) === PEN_GH_ID) continue;
+        if (++candidates > HAND_CANDIDATES) return null;
+        const f = await ghFetch(pen, "GET", `${repo}/pulls/${pr.number}/files?per_page=100`);
+        if (!f.ok) continue;
+        try { if (judgeJoinPR(pr, f.json).handle === handle) return pr; } catch { /* not a join, or not this one */ }
+      }
+      if (prs.length < 100) break;
+    }
+  } catch { /* no evidence */ }
+  return null;
+}
+
+// The tick's cursor, as the pass itself reads it. `{ since }` is where the pass
+// would list from; null when the file cannot be read for a reason other than
+// its absence (then the door knows nothing about the tick).
+function tickSince(cursorPath, now) {
+  let text;
+  try { text = readFileSync(cursorPath, "utf8").trim(); }
+  catch (e) { if (e?.code !== "ENOENT") return null; text = ""; }
+  const since = Number.isNaN(Date.parse(text)) ? null : text;
+  return { since: since ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(), written: since !== null };
+}
+
+// The refusals settleUnderLock would give a hand join that a person must read,
+// asked read-only against the record and the clone. (The house-key judgment signs
+// with the pen's key under the lock and is not asked here: a residual the report
+// names.) Parity with settleUnderLock is asserted in test/settle-join.test.mjs.
+export function handDurableRefusal({ handle, found, card, registry, clone, date }) {
+  if (reservedHandleRefusal(handle)) return SETTLE_REFUSALS.RESERVED;
+  if (ledgerKnowsUnbound(clone, handle, found.ghId)) return SETTLE_REFUSALS.MINTED;
+  if (String(cardGithub(card) ?? "").toLowerCase() !== String(found.cardLogin ?? "").toLowerCase()) return SETTLE_REFUSALS.CARD_NOT_AUTHOR;
+  const line = cardHousehold(card);
+  const named = line && !/^\(unstated/i.test(line) ? line : null;
+  const byAccount = houseForAccount(registry, found.ghId, found.ghLogin);
+  const byName = named ? houseForName(registry, named) : null;
+  if (byName && byName !== byAccount) return SETTLE_REFUSALS.OTHER_HOUSE;
+  if (!byAccount) {
+    try {
+      if (planRegistryJoin(registry, { handle, household: named, ghId: found.ghId, ghLogin: found.ghLogin, siblings: [], date })?.action !== "created") return SETTLE_REFUSALS.NO_HOUSE;
+    } catch { return SETTLE_REFUSALS.NO_HOUSE; }
+  }
+  return null;
+}
+
+/**
+ * The truthful answer for a merged hand-written join, or null when the door
+ * cannot say (the caller then raises its existing refusal). Throws PASSED.
+ */
+export async function handJoinAnswer(pen, handle, { env = process.env, clone, cursorPath = SETTLE_PASS_CURSOR(), now = new Date() } = {}) {
+  const pr = await findMergedHandJoin(pen, handle);
+  if (!pr) return null;
+  let found;
+  try { found = await joinOfMergedPR(pen, pr); } catch { return null; } // a refusal of the PR itself is the tick's too: keep NO_PR as it was
+  if (found.road !== "hand" || found.handle !== handle) return null;
+
+  const tick = tickSince(cursorPath, now);
+  if (!tick) return null;
+  // Read the record AFTER the cursor: a tick that bound it between the two shows as a pin, never as a passed merge.
+  const rows = await loadRegistryRows(env);
+  if (rows === null) return null;
+  const registry = registryFromRows(rows);
+  const pin = pinsFromRows(rows)[handle];
+  if (pin) return alreadySettled(handle, pin, registry);
+
+  if (String(pr.merged_at) < tick.since) {
+    // No cursor file and a merge older than the pass's default day: the pass would not list it, so nobody has answered it. Unknown.
+    if (!tick.written) return null;
+    throw refuse(SETTLE_REFUSALS.NO_PR_PASSED, `#${pr.number} merged ${pr.merged_at}, before the tick's cursor ${tick.since}`);
+  }
+
+  let card;
+  try {
+    const c = await ghFetch(pen, "GET", `/repos/${pen.owner}/${pen.repo}/contents/WHITE_PAGES/${handle}/ADDRESS.md?ref=${pr.merge_commit_sha}`);
+    if (!c.ok) return null;
+    card = Buffer.from(String(c.json?.content ?? ""), "base64").toString("utf8");
+  } catch { return null; }
+  if (handDurableRefusal({ handle, found, card, registry, clone, date: now.toISOString().slice(0, 10) })) return null; // a known refusal is never promised away
+
+  return {
+    settled: false,
+    pending: true,
+    handle,
+    road: "hand",
+    pr: pr.number,
+    merged_at: pr.merged_at,
+    note: `${handle}'s hand-written join (#${pr.number}) is merged; the office's keep tick binds a hand-written join on its next pass (within minutes). Nothing to do, and nothing was written. If the tick refuses it, that is logged for a person to read.`,
+  };
 }
 
 /**
@@ -389,7 +520,7 @@ async function runUnderTownLock(payload, { clone }) {
  * The door: `household { do: "settle-join", args: { handle } }`.
  * `run` is the locked critical section, injected in tests.
  */
-export async function settleJoinAtOffice(fields, key, { pen, clone, env = process.env, run = runUnderTownLock } = {}) {
+export async function settleJoinAtOffice(fields, key, { pen, clone, env = process.env, run = runUnderTownLock, cursorPath = SETTLE_PASS_CURSOR(), now = new Date() } = {}) {
   // The apex gates before dispatch; reaching here without the gate is a
   // machinery fault, not a refusal to phrase for the caller.
   if (!callerMaySettle(key)) throw new Error("settle-join reached without its caller gate");
@@ -404,6 +535,15 @@ export async function settleJoinAtOffice(fields, key, { pen, clone, env = proces
   if (pins[handle]) return alreadySettled(handle, pins[handle], registryFromRows(rows));
 
   if (!pen?.token) throw refuse(SETTLE_REFUSALS.NO_PEN);
-  const found = await findJoin(pen, handle);
+  let found;
+  try { found = await findJoin(pen, handle); }
+  catch (e) {
+    // POS-1033: only the two "no join PR" refusals are asked again, and only to READ; every other refusal, and the fallback, stay exactly as they were
+    if (e?.defect === SETTLE_REFUSALS.NO_PR.defect && e?.code === 409) {
+      const answer = await handJoinAnswer(pen, handle, { env, clone, cursorPath, now });
+      if (answer) return answer;
+    }
+    throw e;
+  }
   return run({ ...found, handle }, { clone, env });
 }
