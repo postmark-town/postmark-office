@@ -29,24 +29,75 @@ export const startOf = (cursor) => {
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
-const FOLD_OVER = 600;
-/** A row that cannot fit a page alone: each string over 600 bytes is said, counted and left out, never cut. */
-function foldRow(row) {
-  if (!row || typeof row !== "object") return row;
-  const out = {};
-  for (const [k, v] of Object.entries(row)) {
-    if (typeof v === "string" && Buffer.byteLength(v, "utf8") > FOLD_OVER) out[`${k}_folded`] = `${Buffer.byteLength(v, "utf8")} bytes not shown`;
-    else out[k] = v;
+// ── a single field over the cap (Wright, verified 2026-11-14 08:37Z) ────────
+//
+// "A single field over the cap is cut off with a plain marker that says how many bytes were cut and where the full text lives.
+// That's the read or source that already holds it whole … 'Nothing waiting is lost' means every item is reachable, not that every
+// byte comes through this read. If there's no such read for a field, name it in the Build." No fragment paging, no field cursor.
+//
+// A row is cut ONLY when it cannot be delivered whole: a lone row that fits the hard cap goes out whole even past the 9,000 page
+// target. Then the longest string anywhere in it (top level or nested) is cut at a character boundary, just enough that the whole
+// answer, markers included, is ≤ CAP_BYTES, and says in the field itself how many UTF-8 bytes were cut and where the whole text is.
+
+/** A string shorter than this is never cut (its marker would cost about as much). */
+const CUT_MIN_BYTES = 200;
+const bytesOf = (s) => Buffer.byteLength(String(s), "utf8");
+
+/** The first `keep` bytes of `s`, ending on a whole character. */
+function prefixOf(s, keep) {
+  if (keep <= 0) return "";
+  const out = Buffer.from(s, "utf8").subarray(0, keep).toString("utf8");
+  return out.endsWith("�") ? out.slice(0, -1) : out;
+}
+
+/** The marker a cut field ends with: the exact bytes cut, and where the whole text lives (or that no existing read holds it). */
+export const cutMarker = (cutBytes, source) => ` […cut ${cutBytes} bytes; ${source ? `the whole text: ${source}` : "no existing read holds this field whole"}]`;
+
+/** Every string in `value`, as `{ path, value }` (paths are dotted keys and array indices). */
+function stringLeaves(value, path = []) {
+  if (typeof value === "string") return [{ path, value }];
+  if (Array.isArray(value)) return value.flatMap((v, i) => stringLeaves(v, [...path, String(i)]));
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => stringLeaves(v, [...path, k]));
+  return [];
+}
+const setAt = (root, path, v) => { let o = root; for (const k of path.slice(0, -1)) o = o[k]; o[path.at(-1)] = v; };
+
+/**
+ * `row` made to fit: `build(row)` is the whole answer carrying it. Returns `{ answer, cuts }`, `cuts` being
+ * `[{ path, cut_bytes, source }]` for the report; `answer` is ≤ cap unless the row holds no string long enough to cut.
+ * `sourceOf(path, row)` is the read or source that holds that field whole, or null.
+ */
+export function cutToCap(row, build, { cap = CAP_BYTES, sourceOf = () => null } = {}) {
+  const cur = structuredClone(row);
+  const cuts = new Map();
+  for (let i = 0; i < 200; i++) {
+    const answer = build(cur);
+    const over = textBytes(answer) - cap;
+    if (over <= 0) return { answer, cuts: [...cuts.values()] };
+    const leaf = stringLeaves(cur).filter((l) => bytesOf(l.value) > CUT_MIN_BYTES).sort((a, b) => bytesOf(b.value) - bytesOf(a.value))[0];
+    if (!leaf) return { answer, cuts: [...cuts.values()] };
+    const key = leaf.path.join(".");
+    const was = cuts.get(key);
+    // the original text, whole, so the count is of the field and not of its last cut
+    const original = was ? was.original : leaf.value;
+    const source = sourceOf(leaf.path, row);
+    const now = was ? was.kept : original;
+    const keep = Math.max(0, bytesOf(now) - over - bytesOf(cutMarker(bytesOf(original), source)) - 8);
+    const kept = prefixOf(original, Math.min(keep, bytesOf(now)));
+    const cutBytes = bytesOf(original) - bytesOf(kept);
+    setAt(cur, leaf.path, kept + cutMarker(cutBytes, source));
+    cuts.set(key, { path: key, cut_bytes: cutBytes, source, original, kept });
   }
-  return out;
+  return { answer: build(cur), cuts: [...cuts.values()] };
 }
 
 /**
  * The largest page of `rows` from `start` whose whole answer fits `budget`.
  * `build(pageRows, next)` is the read's answer for those rows: `next` is the cursor of the first row not on it, or null.
+ * `sourceOf(path, row)` names where a row's long field lives whole, for a row that has to be cut.
  * Returns `{ answer, taken, next }`.
  */
-export function fitRows(rows, start, build, { budget = PAGE_BYTES } = {}) {
+export function fitRows(rows, start, build, { budget = PAGE_BYTES, sourceOf } = {}) {
   const avail = rows.slice(start);
   const nextOf = (n) => (start + n < rows.length ? String(start + n) : null);
   const at = (n) => build(avail.slice(0, n), nextOf(n));
@@ -57,10 +108,15 @@ export function fitRows(rows, start, build, { budget = PAGE_BYTES } = {}) {
     if (textBytes(at(mid)) <= budget) lo = mid; else hi = mid - 1;
   }
   if (lo >= 1) return { answer: at(lo), taken: lo, next: nextOf(lo) };
-  // not even one row fits: the row, folded, alone
-  const answer = build([foldRow(avail[0])], nextOf(1));
+  // not even one row fits the page target: it goes out whole if it fits the cap (never cut merely to reach 9,000), else cut to the cap
+  const whole = at(1);
+  if (textBytes(whole) <= CAP_BYTES) return { answer: whole, taken: 1, next: nextOf(1) };
+  const { answer } = cutToCap(avail[0], (r) => build([r], nextOf(1)), { sourceOf });
   return { answer, taken: 1, next: nextOf(1) };
 }
+
+/** The read that holds a mark's body whole: the world's bare mark focus (world-apex.mjs, `world { mark: "<id>" }`). */
+export const markSource = (id) => (id ? `world { mark: ${JSON.stringify(String(id))} }` : null);
 
 const call = (read, args) => `household { read: "${read}"${args ? `, args: { ${args} }` : ""} }`;
 
@@ -92,7 +148,7 @@ export function pageStances(answer, args = {}) {
     if (textBytes(answer) <= CAP_BYTES) return answer;
     return marksPage(answer, startOf(args.cursor));
   }
-  if (part === "teach") return { read: "stances", part, law: answer.law, teach: answer.teach };
+  if (part === "teach") return teachPage(answer);
   const listOf = STANCE_PARTS[part];
   if (!listOf) return { error: "bounce", code: 422, defect: `part: "${part}" is not a part of the stances read`, hint: `part is one of ${Object.keys(STANCE_PARTS).join(" | ")} | teach; omit it for the marks` };
   const rows = listOf(answer);
@@ -103,6 +159,32 @@ export function pageStances(answer, args = {}) {
   }));
   return out;
 }
+
+/**
+ * The teaching block, whole when it fits the cap, else its longest strings cut with the marker (never paged: it is one block).
+ * Where each string lives whole: the response-function file named in `teach.from` (the strings quoted from it), and the law mark
+ * `teach.after_it_is_published.law_mark` (`the_law_reaches`). `unruled` is composed from both. A string with no such source says so.
+ */
+function teachPage(answer) {
+  const teach = answer.teach ?? {};
+  const law = teach.after_it_is_published?.law_mark ?? teach.law_mark ?? null;
+  const file = typeof teach.from === "string" && teach.from ? `${teach.from} in the world checkout` : null;
+  const lawRead = markSource(law);
+  const sourceOf = (path) => {
+    const p = path.join(".");
+    if (["what_opposed_does", "until_you_speak", "any_latency"].includes(p)) return file;
+    if (p === "after_it_is_published.the_law_reaches") return lawRead;
+    if (p.startsWith("after_it_is_published.unruled")) return [file, lawRead].filter(Boolean).join(" and ") || null;
+    return null;
+  };
+  const build = (t) => ({ read: "stances", part: "teach", law: answer.law, teach: t });
+  const whole = build(teach);
+  if (textBytes(whole) <= CAP_BYTES) return whole;
+  return cutToCap(teach, build, { sourceOf }).answer;
+}
+
+/** Where a stance row's long field lives whole: its mark's body is the world's bare mark focus. */
+const stanceSource = (path, row) => (path.join(".") === "body" ? markSource(row?.mark) : null);
 
 function marksPage(answer, start) {
   const { awaiting, cursor: _c, complete: _k, ids: _i, ...rest } = answer;
@@ -123,7 +205,7 @@ function marksPage(answer, start) {
     cursor: next != null ? String(start + page.length) : upstreamNext,
     complete: next == null && answer.complete,
     context,
-  }));
+  }), { sourceOf: stanceSource });
   return out;
 }
 
@@ -162,8 +244,22 @@ export function pageNeeds(answer, args = {}) {
   const { answer: out } = fitRows(list, start, (page, next) => ({
     read: "needs-you", household: answer.household, part, total: list.length, shown: page.length, offset: start,
     ...extras, rows: page, cursor: next, complete: next == null,
-  }));
+  }), { sourceOf: needsSource(part) });
   return out;
+}
+
+/**
+ * Where a needs-you row's long field lives whole, by part. A mark's body is the world's bare mark focus. An alert's `about.body` is
+ * the mark's body too, except for escrow-on-missing-mark, whose mark is not in the world or the store (alerts.mjs): no existing read
+ * holds that body whole, and it is said so. Fields the office composes itself (a message, a reason) have no other copy.
+ */
+function needsSource(part) {
+  return (path, row) => {
+    const p = path.join(".");
+    if (part === "alerts" && p === "about.body") return row?.kind === "escrow-on-missing-mark" ? null : markSource(row?.about?.mark);
+    if (part === "stakes_at_risk" && p === "body") return markSource(row?.mark);
+    return null;
+  };
 }
 
 function needsSkeleton(a) {

@@ -303,6 +303,39 @@ test("R6 · the doorstep, through the actual call chain, still names every kind 
   assert.ok(bytesOf(text(d)) <= CAP_BYTES, `${bytesOf(text(d))} bytes`);
 });
 
+test("R8 · a single field over the cap, through the real dispatcher: cut with its exact bytes and where the whole text lives; the item stays identified and the walk goes on", async () => {
+  const huge = "庭の柵 café 🌱 ".repeat(1200);
+  const mk = (kind, mark) => ({ ...ALERT_ROWS[0], kind, about: { mark, body: huge } });
+  const rows = [mk("mark-taken", "r000/old-huge"), mk("escrow-on-missing-mark", "r001/ghost-huge"), ...ALERT_ROWS.slice(0, 3)];
+  const withHuge = { ...ctx, readers: { ...ctx.readers, alertsFor: async () => ({ alerts: rows, unread: [] }) } };
+  const read = (args) => householdApex({ read: "needs-you", args }, key, withHuge);
+  const first = await read({ part: "alerts" });
+  assert.ok(!first.error, JSON.stringify(first).slice(0, 300));
+  assert.ok(bytesOf(text(first)) <= CAP_BYTES, `${bytesOf(text(first))} bytes`);
+  const cutOf = (body) => /^(.*) \[…cut (\d+) bytes; (the whole text: (.*)|no existing read holds this field whole)\]$/s.exec(body);
+  const m = cutOf(first.rows[0].about.body);
+  assert.ok(m, "the first alert's body is cut with a marker");
+  assert.equal(m[4], 'world { mark: "r000/old-huge" }');
+  assert.equal(bytesOf(m[1]) + Number(m[2]), bytesOf(huge), "kept + cut = the field, exactly");
+  assert.deepEqual([first.rows[0].kind, first.rows[0].about.mark, first.rows[0].act.verb], ["mark-taken", "r000/old-huge", "world.stake"]);
+  // the whole walk: every alert once, each page under the cap, the escrow alert's body honestly without a source
+  const got = [];
+  let cursor = null;
+  for (let i = 0; i < 20; i++) {
+    const p = await read({ part: "alerts", ...(cursor ? { cursor } : {}) });
+    assert.ok(bytesOf(text(p)) <= CAP_BYTES, `page ${i}: ${bytesOf(text(p))}`);
+    got.push(...p.rows);
+    if (p.complete) break;
+    cursor = p.cursor;
+  }
+  assert.deepEqual(got.map((r) => r.about.mark), rows.map((r) => r.about.mark), "no alert lost or doubled");
+  const e = cutOf(got[1].about.body);
+  assert.equal(e[3], "no existing read holds this field whole", "no source is promised where none exists");
+  // the real teaching block, through the dispatcher, fits the cap whole
+  const teach = await callRead("stances", { part: "teach" });
+  assert.ok(bytesOf(text(teach)) <= CAP_BYTES, `${bytesOf(text(teach))} bytes`);
+});
+
 test("R7 · a caller that is not the connector reads the canonical answers of all three reads: whole, unfolded, unpaged", async () => {
   const rest = { ...ctx, connector: false };
   const w = await householdApex({ read: "waiting" }, key, rest);

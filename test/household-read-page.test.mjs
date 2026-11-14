@@ -16,7 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fitRows, pageStances, pageNeeds, textBytes, startOf, PAGE_BYTES, CAP_BYTES, STANCE_PARTS, NEEDS_PARTS } from "../src/household-read-page.mjs";
+import { fitRows, cutToCap, pageStances, pageNeeds, textBytes, startOf, PAGE_BYTES, CAP_BYTES, STANCE_PARTS, NEEDS_PARTS } from "../src/household-read-page.mjs";
 
 const body = (n, tag) => `${tag} ${"café 庭の柵を直してください 🌱 ".repeat(n)}`.trim();
 const mark = (i, by = `by-${i % 7}`, n = 4) => ({ mark: `${by}/m-${i}`, by, on_your_ground: [`r000/ground-${i % 5}`], kind: "mark", date: "2026-11-01", body: body(n, `m${i}`) });
@@ -137,18 +137,112 @@ test("P4 · needs-you that does not fit is its parts counted, each paged by its 
   assert.match(sk.stances_awaiting.read, /read: "stances", args: \{ limit: 100 \}/, "the marks are read at stances");
 });
 
-test("P5 · a row that cannot fit alone is folded and counted, never cut; a part that does not exist is refused by name", () => {
-  const huge = { mark: "x/y", by: "x", on_your_ground: ["r000/g"], body: "庭".repeat(6000) };
-  const answer = stancesAnswer([huge, mark(1)], { limit: 20, ground: Array.from({ length: 1000 }, (_, i) => `r000/g-${i}`) });
-  assert.ok(textBytes(answer) > PAGE_BYTES);
-  const p = pageStances(answer, {});
-  assert.ok(textBytes(p) <= PAGE_BYTES);
-  assert.equal(p.awaiting.length, 1, "the page is that one row");
-  assert.ok(!("body" in p.awaiting[0]));
-  assert.equal(p.awaiting[0].body_folded, `${Buffer.byteLength(huge.body, "utf8")} bytes not shown`);
-  assert.equal(p.cursor, "1", "and the next row is where the walk goes on");
+test("P5 · a part that does not exist is refused by name", () => {
+  const answer = stancesAnswer([mark(1)], { limit: 20 });
   assert.equal(pageStances(answer, { part: "nope" }).defect, 'part: "nope" is not a part of the stances read');
   assert.equal(pageNeeds({ read: "needs-you" }, { part: "nope" }).defect, 'part: "nope" is not a part of the needs-you read');
+});
+
+// ── a single field over the cap: cut with a plain marker (Wright, verified 08:37Z), never paged ──────────────
+const bytes = (s) => Buffer.byteLength(s, "utf8");
+/** The cut field's kept text and its marker, split; the marker says exactly how many bytes were cut and where the whole text is. */
+const split = (cut) => {
+  const m = / \[…cut (\d+) bytes; (the whole text: (.*)|no existing read holds this field whole)\]$/s.exec(cut);
+  assert.ok(m, `a marker at the end of: ${cut.slice(-160)}`);
+  return { kept: cut.slice(0, m.index), cutBytes: Number(m[1]), source: m[3] ?? null };
+};
+
+test("P9 · a stance row whose body alone is over the cap: the body is cut with its exact byte count and the mark's read, the row's identity stands, the walk goes on", () => {
+  const original = "庭の柵 café 🌱 ".repeat(1500); // 3-, 1- and 4-byte characters
+  const huge = { mark: "x/y", by: "x", on_your_ground: ["r000/g"], kind: "mark", date: "2026-11-01", body: original };
+  assert.ok(bytes(original) > CAP_BYTES);
+  const answer = stancesAnswer([huge, mark(1)], { limit: 20, ground: Array.from({ length: 1000 }, (_, i) => `r000/g-${i}`) });
+  const p = pageStances(answer, {});
+  assert.ok(textBytes(p) <= CAP_BYTES, `${textBytes(p)} bytes`);
+  assert.equal(p.awaiting.length, 1, "the page is that one row");
+  assert.deepEqual([p.awaiting[0].mark, p.awaiting[0].by, p.awaiting[0].on_your_ground], ["x/y", "x", ["r000/g"]], "identity stands");
+  const { kept, cutBytes, source } = split(p.awaiting[0].body);
+  assert.equal(source, 'world { mark: "x/y" }', "the world's bare mark focus, by the row's own mark id");
+  assert.ok(original.startsWith(kept), "what is kept is the text's own beginning");
+  assert.ok(!kept.includes("�"), "cut on a whole character");
+  assert.equal(bytes(kept) + cutBytes, bytes(original), "kept bytes + cut bytes = the field's bytes, exactly");
+  assert.equal(p.cursor, "1", "and the next row is where the walk goes on");
+  assert.ok(!("body_folded" in p.awaiting[0]));
+});
+
+test("P10 · a lone row that fits the cap goes out whole, even past the 9,000 page target; never cut merely to reach it", () => {
+  const original = "x".repeat(8300); // with the page's own context, the lone row is between the 9,000 target and the 10,000 cap
+  const answer = stancesAnswer([{ mark: "x/y", by: "x", on_your_ground: ["r000/g"], kind: "mark", date: "d", body: original }, mark(1)], { limit: 20, ground: Array.from({ length: 800 }, (_, i) => `r000/g-${i}`) });
+  const p = pageStances(answer, {});
+  assert.ok(textBytes(p) > PAGE_BYTES && textBytes(p) <= CAP_BYTES, `${textBytes(p)} bytes`);
+  assert.equal(p.awaiting[0].body, original, "the body is whole");
+});
+
+test("P11 · an alert's nested about.body over the cap is cut: its mark's read where there is one, and plainly no read where there is none", () => {
+  const big = "庭".repeat(4000);
+  const alert = (kind, mark) => ({ kind, severity: "act", about: { mark, body: big }, message: "m", act: { verb: "world.stake", args: { mark } }, since: "d", until: null });
+  const needs = (rows) => ({ read: "needs-you", household: "h", residents: ["r000"], as_of: "x", count: rows.length, alerts: rows, alerts_unread: [] });
+  const taken = pageNeeds(needs([alert("mark-taken", "r000/old")]), { part: "alerts" });
+  assert.ok(textBytes(taken) <= CAP_BYTES, `${textBytes(taken)}`);
+  const t = split(taken.rows[0].about.body);
+  assert.equal(t.source, 'world { mark: "r000/old" }');
+  assert.equal(bytes(t.kept) + t.cutBytes, bytes(big), "exact");
+  assert.deepEqual([taken.rows[0].kind, taken.rows[0].about.mark, taken.rows[0].act.verb], ["mark-taken", "r000/old", "world.stake"], "the alert is still identified and actionable");
+  const escrow = pageNeeds(needs([alert("escrow-on-missing-mark", "r001/ghost")]), { part: "alerts" });
+  assert.ok(textBytes(escrow) <= CAP_BYTES);
+  const e = split(escrow.rows[0].about.body);
+  assert.equal(e.source, null, "the mark is not in the world or the store: no existing read holds this body");
+  assert.equal(bytes(e.kept) + e.cutBytes, bytes(big));
+});
+
+test("P12 · a top-level message over the cap is cut too (the office composes it: no other copy), and two long fields are both counted", () => {
+  const msg = "y".repeat(12000);
+  const row = { kind: "info", severity: "info", about: { mark: "r000/a", body: "z".repeat(12000) }, message: msg, act: { verb: "x", args: {} }, since: "d", until: null };
+  const p = pageNeeds({ read: "needs-you", household: "h", count: 1, alerts: [row] }, { part: "alerts" });
+  assert.ok(textBytes(p) <= CAP_BYTES, `${textBytes(p)}`);
+  const m = split(p.rows[0].message);
+  assert.equal(m.source, null);
+  assert.equal(bytes(m.kept) + m.cutBytes, bytes(msg));
+  const b = split(p.rows[0].about.body);
+  assert.equal(bytes(b.kept) + b.cutBytes, 12000, "the second long field is counted by its own bytes");
+  assert.equal(b.source, 'world { mark: "r000/a" }');
+});
+
+test("P13 · the teaching block bypassed no fit: over the cap its longest strings are cut with where each lives; within the cap it is whole", () => {
+  const long = "the response function says that ".repeat(400);
+  const teach = { what_opposed_does: "short", any_latency: long, from: "LOGOS/the-response-function.md",
+    after_it_is_published: { the_law_reaches: "law ".repeat(2000), law_mark: "the-town/the-late-welcome", unruled: ["a", long].join(" ") }, law_mark: "the-town/the-law" };
+  const answer = { ...stancesAnswer([mark(1)], { limit: 20 }), teach, law: "A stance is a revisable word on an edge." };
+  assert.ok(bytes(JSON.stringify(teach)) > CAP_BYTES);
+  const t = pageStances(answer, { part: "teach" });
+  assert.ok(textBytes(t) <= CAP_BYTES, `${textBytes(t)}`);
+  assert.equal(t.law, answer.law);
+  assert.equal(t.teach.what_opposed_does, "short", "a short string is not touched");
+  const cuts = [["any_latency", t.teach.any_latency, long], ["the_law_reaches", t.teach.after_it_is_published.the_law_reaches, teach.after_it_is_published.the_law_reaches], ["unruled", t.teach.after_it_is_published.unruled, teach.after_it_is_published.unruled]];
+  let cutOnes = 0;
+  for (const [name, field, original] of cuts) {
+    if (!/\[…cut \d+ bytes;/.test(field)) continue;
+    cutOnes += 1;
+    const { kept, cutBytes, source } = split(field);
+    assert.equal(bytes(kept) + cutBytes, bytes(original), `${name}: exact`);
+    if (name === "any_latency") assert.equal(source, "LOGOS/the-response-function.md in the world checkout");
+    if (name === "the_law_reaches") assert.equal(source, 'world { mark: "the-town/the-late-welcome" }');
+    if (name === "unruled") assert.equal(source, 'LOGOS/the-response-function.md in the world checkout and world { mark: "the-town/the-late-welcome" }');
+  }
+  assert.ok(cutOnes >= 1);
+  // within the cap: whole, the same strings
+  const small = { ...answer, teach: { ...teach, any_latency: "short", after_it_is_published: { ...teach.after_it_is_published, the_law_reaches: "short", unruled: "short" } } };
+  assert.deepEqual(pageStances(small, { part: "teach" }).teach, small.teach);
+});
+
+test("P14 · a field with no string long enough to cut is delivered as it is, never looped on; cutToCap says what it cut", () => {
+  const row = { a: Array.from({ length: 400 }, (_, i) => `field ${i} `.repeat(5)) }; // many strings, none over the cut floor
+  const { answer, cuts } = cutToCap(row, (r) => ({ rows: [r] }), { cap: 1000 });
+  assert.equal(cuts.length, 0);
+  assert.ok(textBytes(answer) > 1000, "nothing was long enough to cut, so it is what it is: the Build names this limit");
+  const { cuts: two } = cutToCap({ x: "a".repeat(3000), y: "b".repeat(2900) }, (r) => ({ rows: [r] }), { cap: 2500, sourceOf: (p) => (p[0] === "x" ? "src-x" : null) });
+  assert.deepEqual(two.map((c) => [c.path, c.source]).sort(), [["x", "src-x"], ["y", null]]);
+  assert.equal(two.reduce((n, c) => n + bytes(c.kept) + c.cut_bytes, 0), two.reduce((n, c) => n + bytes(c.original), 0));
 });
 
 test("P6 · fitRows: the largest prefix that fits, deterministic, with the cursor of the first row off the page", () => {
