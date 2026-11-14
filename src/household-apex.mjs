@@ -1559,7 +1559,8 @@ async function householdWaiting(key, ctx) {
   // CORE-88: folded to the connector's budget when it does not fit (household-waiting-budget.mjs); a house that fits reads what it always read
   const { foldWaiting } = await import("./household-waiting-budget.mjs");
   return foldWaiting({ ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
-    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) });
+    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) },
+  { marks: stances.awaiting ?? [] });
 }
 
 /**

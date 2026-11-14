@@ -27,7 +27,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
-import { foldWaiting, deliveredBytes, WAITING_BUDGET_BYTES, CONNECTOR_CAP_BYTES, PART_ROWS } from "../src/household-waiting-budget.mjs";
+import { foldWaiting, deliveredBytes, WAITING_BUDGET_BYTES, CONNECTOR_CAP_BYTES, GROUP_PAGE_BYTES } from "../src/household-waiting-budget.mjs";
+import { markTakenAlerts, escrowOnMissingAlerts, sortAlerts } from "../src/alerts.mjs";
 import { contentFor } from "../src/mcp.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
@@ -111,10 +112,14 @@ const BIG = () => {
       keyAsks: ["r000", "r001"],
       likeness: { rows: [{ question: "likeness", cause: "the house's human has not said whether the town may use its residents' likeness" }] },
       atRisk: Array.from({ length: 5 }, (_, i) => ({ mark: `r000/shed-${i}`, class: "commons", escrow: 0, at_risk: true })),
-      alerts: [
-        { kind: "stake-at-risk", severity: "act", about: { mark: "r000/shed-0", body: body(400, "alert body") }, message: "a mark of yours is at risk", act: { verb: "world.stake", args: { handle: "r000" } }, since: "2026-11-12", until: null },
-        ...Array.from({ length: 2 }, (_, i) => ({ kind: "info", severity: "info", about: null, message: `info ${i}`, act: { verb: "x", args: {} }, since: "2026-11-12", until: null })),
-      ],
+      // built by alerts.mjs's own producers (WLD-51), bodies whole by law: two marks the settlement took, one escrow on a mark that is not in the world
+      alerts: sortAlerts([
+        ...markTakenAlerts([
+          { slug: "r000/old-shed", owner: "r000", body: body(400, "mark-taken body"), opens_at: "2026-11-13T12:00:00.000Z" },
+          { slug: "r001/old-well", owner: "r001", body: body(3, "small body"), opens_at: "2026-11-13T12:00:00.000Z" },
+        ], new Date(NOW)),
+        ...escrowOnMissingAlerts([{ mark: "r001/ghost-kiln", holder: "r001", n: 3, body: body(300, "escrow body") }], () => false),
+      ]),
     },
   };
 };
@@ -155,26 +160,39 @@ test("B2 · through the real composer and serializer: ≤ the budget, and the bu
   assert.equal(a.folded.budget_bytes, WAITING_BUDGET_BYTES);
 });
 
-test("B3 · every part is whole or counted with the existing read that opens the rest, and the counts match the source", async () => {
+test("B3 · every part names its items as bodyless identity rows, or counts the rest with the read that lists them; counts match the source", async () => {
   const h = BIG();
   const a = await ask(h);
   const src = {
-    set_downs_awaiting: h.extras.setDowns.length, takes_awaiting: h.extras.takes.length, key_asks: h.extras.keyAsks.length,
-    stakes_at_risk: h.extras.atRisk.length, alerts: h.extras.alerts.length, unplaced_bounces: h.extras.bounces.length, likeness_question: h.extras.likeness.rows.length,
+    set_downs_awaiting: h.extras.setDowns, takes_awaiting: h.extras.takes, key_asks: h.extras.keyAsks,
+    stakes_at_risk: h.extras.atRisk, alerts: h.extras.alerts, unplaced_bounces: h.extras.bounces, likeness_question: h.extras.likeness.rows,
   };
-  for (const [k, total] of Object.entries(src)) {
+  const ID = { // the field that names a row of each part, in the source's own shape
+    set_downs_awaiting: (r) => r.thing, takes_awaiting: (r) => r.thing, key_asks: (r) => r, stakes_at_risk: (r) => r.mark,
+    alerts: (r) => r.about?.mark ?? r.message, unplaced_bounces: (r) => r.path, likeness_question: (r) => r.household,
+  };
+  const got = (k, r) => ({ set_downs_awaiting: r.thing, takes_awaiting: r.thing, key_asks: r.handle, stakes_at_risk: r.mark, alerts: r.about?.mark ?? r.message, unplaced_bounces: r.path, likeness_question: r.household })[k];
+  for (const [k, rows] of Object.entries(src)) {
     const p = a[k];
     assert.ok(p, `${k} is on the answer`);
-    assert.equal(p.total, total, `${k}: the source's count`);
+    assert.equal(p.total, rows.length, `${k}: the source's count`);
     assert.equal(p.rows.length, p.shown, `${k}: shown is the rows that ride`);
-    assert.ok(p.shown <= PART_ROWS);
+    assert.ok(p.shown >= 1, `${k}: at least one item is named while any room is left`);
+    // identity rows are the source's first rows, in order, named by the source's own id
+    for (const [i, r] of p.rows.entries()) {
+      const want = k === "key_asks" ? h.extras.keyAsks[i] : ID[k](rows[i]);
+      assert.equal(got(k, r), want, `${k} row ${i} names the source's item`);
+      assert.ok(!JSON.stringify(r).includes("body"), `${k} row ${i} carries no body`);
+    }
     if (p.shown < p.total) {
-      assert.equal(p.rows_folded, p.total - p.shown, `${k}: the folded rows are counted`);
-      assert.ok(KNOWN_READS.includes(p.read), `${k}: names an existing read that lists the rest: ${p.read}`);
-    } else assert.ok(!("read" in p) && !("rows_folded" in p), `${k}: nothing folded, nothing to open`);
+      assert.equal(p.rows_not_shown, p.total - p.shown, `${k}: the rows not shown are counted`);
+      assert.ok("read" in p && typeof p.read_cost === "string" && p.read_cost.length > 0, `${k}: the read that lists the rest, and what it costs, are said`);
+    } else assert.ok(!("rows_not_shown" in p), `${k}: nothing left over`);
   }
-  // the rows that ride are the source's own, first ones first
-  assert.deepEqual(a.set_downs_awaiting.rows.map((r) => r.thing), h.extras.setDowns.slice(0, a.set_downs_awaiting.shown).map((r) => r.thing));
+  assert.equal(a.alerts.shown, 3, "all three producer-shaped alerts are named");
+  assert.deepEqual(a.alerts.rows.map((r) => r.about?.mark).sort(), h.extras.alerts.map((r) => r.about?.mark).sort());
+  assert.ok(a.alerts.rows.every((r) => r.about === null || Object.keys(r.about).join() === "mark"), "an alert names its mark and not its body");
+  assert.ok(a.alerts.rows.every((r) => r.act?.verb && r.message && r.kind && r.severity), "and keeps what lets it be acted on");
   assert.deepEqual(a.unplaced_bounces.by_resident, { r000: 4, r001: 3 }, "each bounce count names the resident whose mail read lists it");
   // the marks: groups whole or stubbed, listed, or counted; every group exactly once, every mark once
   const want = new Map();
@@ -203,30 +221,32 @@ test("B4 · an oversized sample is folded whole, never cut; every body shown is 
   assert.match(heron.act, /declare-stance-on/);
   for (const g of a.groups.filter((x) => "sample" in x)) assert.equal(g.sample, oldest(g.by).body, `${g.by}'s sample is its oldest body, whole`);
   assert.ok(a.groups.some((g) => "sample" in g), "the groups that fit keep their sample");
-  // the alert whose body is too big rides as a count, never half a body
-  assert.equal(a.alerts.shown, 0);
-  assert.equal(a.alerts.rows_folded, 3);
-  assert.ok(!delivered(a).includes("alert body"), "no piece of the oversized alert body");
+  // the alerts' bodies are whole by law and far over the budget: named without them, never cut
+  const t = delivered(a);
+  assert.ok(!t.includes("mark-taken body") && !t.includes("escrow body"), "no piece of an alert's body rides");
+  assert.equal(a.alerts.shown, 3);
 });
 
-test("B5 · many groups: every group is on the answer or counted, and the answer still fits", async () => {
+test("B5 · many groups: every group is on the answer or counted, the tail is called anonymous, and the answer still fits", async () => {
   const marks = Array.from({ length: 100 }, (_, i) => stream(`solo-${String(i).padStart(3, "0")}`, `r00${i % 2}/spot-${i % 9}`, 1)[0]);
   const a = await ask({ marks, total: 400, cursor: "100" });
   assert.ok(bytesOf(delivered(a)) <= WAITING_BUDGET_BYTES);
   const onAnswer = a.groups.length + (a.groups_more?.listed?.length ?? 0) + (a.groups_more?.unlisted?.groups ?? 0);
   assert.equal(onAnswer, 100);
-  assert.equal(a.groups_more.groups, a.groups_more.listed?.length + a.groups_more.unlisted.groups || a.groups_more.groups);
   assert.equal(a.groups.reduce((n, g) => n + g.count, 0) + a.groups_more.marks, 100, "the 100 marks read, none lost");
-  assert.match(a.groups_more.open, /read: "stances", args: \{ by, over, limit: 100 \}/);
-  assert.match(a.groups_more.open, /read: "stances", args: \{ limit: 100, cursor \}/, "and the read that walks every mark");
+  assert.match(a.groups_more.unlisted.note, /^not named here/, "the tail says it is not named");
+  assert.match(a.groups_more.open, /read: "stances", args: \{ limit: \d+ \} \} walks every mark/);
+  assert.match(a.groups_more.open, /teaching block and your spoken stances, which the connector's cap may not hold/, "and says what the walk costs");
   assert.deepEqual([a.stances_awaiting.total, a.stances_awaiting.shown], [400, 100]);
+  assert.ok(!/the marks read are the groups below\b/.test(JSON.stringify(a)), "no claim that the groups below are all the marks");
+  assert.match(a.stances_awaiting.in_groups, /a group not named is counted in groups_more/);
 });
 
 test("B6 · upstream continuation and scope survive: the first page is never called the house's total", async () => {
   const h = BIG();
   const a = await ask(h);
-  assert.equal(a.groups_note, 'groups are drawn from the first 100 of 130; household { read: "stances", args: { cursor: "100" } } walks the rest');
-  assert.equal(a.stances_awaiting.more, 'household { read: "stances", cursor: "100" }');
+  assert.match(a.groups_note, /^groups are drawn from the first 100 of 130; household \{ read: "stances", args: \{ cursor: "100", limit: \d+ \} \} walks the rest$/);
+  assert.match(a.stances_awaiting.more, /^household \{ read: "stances", args: \{ cursor: "100", limit: \d+ \} \}$/, "the cursor is carried, and its page is sized");
   assert.equal(a.count, BIG_COUNT, "count is the house's, not the page's");
   assert.ok(a.stances_awaiting.total > a.stances_awaiting.shown);
   // no cursor, nothing to walk: the note is not invented
@@ -238,13 +258,15 @@ test("B7 · empty, unavailable and cut are three different words", async () => {
   const h = BIG();
   h.extras.setDowns = []; // empty: read, and nothing waits
   h.extras.keyAsksThrow = true; // unavailable: the key store could not be read
+  // cut: more bounces than the answer can name
+  h.extras.bounces = Array.from({ length: 60 }, (_, i) => ({ handle: "r000", date: "2026-11-01", path: `WHITE_PAGES/r000/outbox/${i}.md`, reason: `no resident "ghost-${i}"` }));
   const a = await ask(h);
   assert.deepEqual([a.set_downs_awaiting.total, a.set_downs_awaiting.shown, a.set_downs_awaiting.rows.length], [0, 0, 0]);
   assert.ok(!("unavailable" in a.set_downs_awaiting) && !("read" in a.set_downs_awaiting), "empty is not unavailable and not cut");
   assert.match(a.key_asks.unavailable, /could not be read/, "unavailable says so");
   assert.equal(a.key_asks.total, 0);
-  assert.ok(!("rows_folded" in a.key_asks), "an unreadable list is not a cut one");
-  assert.ok(a.unplaced_bounces.rows_folded > 0 && a.unplaced_bounces.read, "cut says how many and which read");
+  assert.ok(!("rows_not_shown" in a.key_asks), "an unreadable list is not a cut one");
+  assert.ok(a.unplaced_bounces.rows_not_shown > 0 && a.unplaced_bounces.read, "cut says how many and which read");
   // a stance inbox that could not be read stays unavailable, on a folded answer too
   const blind = BIG();
   blind.extras.stancesUnavailable = "the consent inbox could not be read (record)";
@@ -263,14 +285,16 @@ test("B8 · a house that fits reads exactly what it read before: nothing folded,
   assert.equal(a.stances_awaiting.rows.length, 4, "the rows ride, as before");
   assert.deepEqual(Object.keys(a.stances_awaiting), ["total", "shown", "rows"]);
   assert.equal(a.set_downs_awaiting.rows.length, 1);
+  assert.ok("cause" in a.set_downs_awaiting.rows[0], "a whole row keeps its cause");
   assert.deepEqual(foldWaiting(a, { budget: WAITING_BUDGET_BYTES }), a, "folding what fits is the identity");
   assert.ok(bytesOf(delivered(a)) <= WAITING_BUDGET_BYTES);
   assert.equal(a.shown, 5, "`shown` keeps its meaning where nothing is folded");
   assert.ok(a.groups.every((g) => "sample" in g));
 });
 
-test("B9 · every read a stub names exists, and every argument it carries is one that read takes", async () => {
-  const a = await ask(BIG());
+test("B9 · every read a folded answer names exists, with arguments it takes, and a group's read is sized to its own bodies", async () => {
+  const h = BIG();
+  const a = await ask(h);
   const used = new Set();
   const walk = (v) => { if (typeof v === "string") for (const m of v.matchAll(/household \{ read: "([a-z-]+)"(?:, args: \{ ([^}]*) \})? \}/g)) used.add(JSON.stringify([m[1], m[2] ?? ""])); else if (v && typeof v === "object") Object.values(v).forEach(walk); };
   walk(a);
@@ -283,16 +307,38 @@ test("B9 · every read a stub names exists, and every argument it carries is one
       assert.ok(name === "handle" || name in (HOUSEHOLD_READ_FIELDS[read] ?? {}), `read "${read}" takes ${name}`);
     }
   }
-  // each stub's open is the group's own by/over, and the source holds exactly that many marks for it
-  const h = BIG();
+  // each group read is the group's own by/over, its limit is the marks whose bodies fit GROUP_PAGE_BYTES, and the source holds exactly that many marks for it
   for (const g of a.groups.filter((x) => "open" in x)) {
-    const [, by, over] = g.open.match(/by: ("[^"]*"), over: ("[^"]*")/);
+    const [, by, over, limit] = g.open.match(/by: ("[^"]*"), over: ("[^"]*"), limit: (\d+)/);
     assert.deepEqual([JSON.parse(by), JSON.parse(over)], [g.by, g.over]);
-    assert.equal(h.marks.filter((m) => m.by === g.by && m.on_your_ground[0] === g.over).length, g.count, "the group the read lists is the one counted");
+    const own = h.marks.filter((m) => m.by === g.by && m.on_your_ground[0] === g.over);
+    assert.equal(own.length, g.count, "the group the read lists is the one counted");
+    let used2 = 0, n = 0;
+    for (const m of own) { used2 += bytesOf(m.body); if (n > 0 && used2 > GROUP_PAGE_BYTES) break; n += 1; }
+    assert.equal(Number(limit), n, "the page is sized to this group's bodies");
+    assert.ok(!g.act.includes("limit: 100"), "and its act no longer names the 100-row page");
   }
+  const big = a.groups.find((g) => g.by === "kiln-keeper");
+  assert.ok(!big.act.includes("limit: 100"), "a whole group's act is sized too");
+  assert.match(big.act, /limit: \d+ \} \}.*then declare-stance-on/);
 });
 
-test("B10 · REST and MCP skins are one composer: the same bytes", async () => {
+test("B12 · at-risk marks past the room are counted, and the answer says no bounded read lists them (stakes' limit: is the newest, not the at-risk)", async () => {
+  const h = BIG();
+  h.extras.atRisk = Array.from({ length: 80 }, (_, i) => ({ mark: `r000/shed-${i}`, class: "commons", escrow: 0, at_risk: true, body: body(5, "shed") }));
+  const a = await ask(h);
+  assert.ok(bytesOf(delivered(a)) <= WAITING_BUDGET_BYTES);
+  const p = a.stakes_at_risk;
+  assert.equal(p.total, 80);
+  assert.ok(p.shown >= 1 && p.shown < 80);
+  assert.equal(p.rows_not_shown, 80 - p.shown);
+  assert.equal(p.read, null, "no read is named that would be refused or would answer the wrong rows");
+  assert.match(p.read_cost, /no bounded read lists the at-risk marks past these/);
+  assert.match(p.read_cost, /limit: answers the newest rows, not the at-risk ones/);
+  assert.ok(p.rows.every((r) => r.mark && !("body" in r) && !("cause" in r)), "identity rows: the mark, and no body");
+});
+
+test("B10 ·REST and MCP skins are one composer: the same bytes", async () => {
   const h = BIG();
   const mcp = await ask(h, { slim: true, strictFields: true });
   const rest = await ask(h, {});
