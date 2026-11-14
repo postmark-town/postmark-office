@@ -83,6 +83,25 @@
 # they would sit unpublished until the town happened to change. The key is:
 #
 #   town origin/main · site origin/main · newest release/* tag · settlement tags
+#   · the office's town-index version (POS-1034)
+#
+# THE OFFICE INDEX IS A FIFTH INPUT (POS-1034). The site builds its resident and
+# household lists from the office's API (tools/fetch-town.mjs walks GET
+# /api/residents), and the office answers from its own town index, which a timer
+# refreshes on its own clock (:05, :20, :35, :50). The index can therefore CATCH
+# UP while the town, site main, the tag and the world stand still: a resident who
+# joined just after a refresh was in the town repo but not yet in the index the
+# 20:10 tick read (Meddy, 2026-11-13), and with a key that ignored the index the
+# next tick said "nothing moved" until the town's next commit, hours away on a
+# quiet night. So the key carries the local API's `x-postmark-town-index-as-of`
+# header, asked the way crossing_now() asks for the crossing (the box door,
+# bounded, keyless). UNKNOWN (unreachable, no header, an unreadable value) is not a
+# moved input: it keeps whatever the key last carried (nothing, for an office that
+# has never answered it: the old key byte for byte), so a blip is never a refresh
+# storm, and it is never stamped as a version (the stamp says unknown). The version a pass SURVEYED is the one it hands the
+# stamper (BUILD_TOWN_INDEX_AS_OF -> build.json's town_index_as_of), not a later
+# look; an index that advances during a build is one more moved input for the
+# convergence loop below, inside its same pass and time budgets.
 #
 # Site main is in the key for the transition: while sync-atlas.yml is still
 # enabled it commits every 30 minutes, so main moves every tick and the quiet
@@ -269,7 +288,9 @@ LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_START="$(date -u +%s)"   # the time budget's clock (STAR-135)
-TOWN_SHA=""; SITE_MAIN=""; TAG=""; CODEREF=""; PUBLISHED=""; PASSES=0
+TOWN_SHA=""; SITE_MAIN=""; TAG=""; CODEREF=""; PUBLISHED=""; PASSES=0; INDEX_AS_OF=""
+# The index version the KEY last carried: what the last build's key held (state.json), kept while the version cannot be read (see survey()).
+INDEX_KEYED="$( [ -f "$STATE" ] && sed -n 's/.*"key": ".* index:\([^" ]*\)".*/\1/p' "$STATE" | head -1 || true )"
 
 mkdir -p "$ROOT" "$RELEASES" "$(dirname "$OUT")"
 
@@ -363,6 +384,22 @@ fi
 [ -d "$TOWN/.git" ] || { say "first run: cloning the town"; git clone -q "$TOWN_REMOTE" "$TOWN"; }
 [ -d "$SITE/.git" ] || { say "first run: cloning the site"; git clone -q "$SITE_REMOTE" "$SITE"; }
 
+# ── the office index's version, as the office's own door states it ──────────
+# `x-postmark-town-index-as-of` rides every index read (src/server.mjs); GET
+# /residents?limit=1 is the cheapest of them and the very route the site's fetch
+# walks. Asked of the box door ($API, loopback, never charged), keyless, bounded
+# like crossing_now(). It prints the version, or NOTHING: unreachable, no header, a
+# non-2xx answer and a value that is not a plain token are all "unknown", and this
+# function cannot fail the run (the `|| true`s are the pipefail guard, not decoration).
+index_as_of() {
+  local v
+  v="$(curl -fsS --max-time 10 -D - -o /dev/null "$API/residents?limit=1" 2>/dev/null \
+    | tr -d '\r' | awk '/^HTTP\// { good = ($2 ~ /^2/) } { n = index($0, ":"); if (good && n > 0 && tolower(substr($0, 1, n - 1)) == "x-postmark-town-index-as-of") { v = substr($0, n + 1); sub(/^[ \t]+/, "", v); print v; exit } }' || true)"
+  # the stamper's own rule for a version: one plain token (build-stamp.mjs, townIndexAsOf)
+  if printf '%s' "$v" | grep -Eq '^[A-Za-z0-9._:+-]{1,80}$'; then printf '%s' "$v"; fi
+  return 0
+}
+
 # ── what the world looks like right now ─────────────────────────────────────
 survey() {
   git -C "$TOWN" fetch -q --prune origin
@@ -381,7 +418,13 @@ survey() {
   # blessing, cheap enough to spend on every quiet tick. The real decision (the
   # three guardrails) is still resolve-world-pin.mjs's, inside the build.
   WORLD_TAGS="$(git ls-remote "$WORLD_REMOTE" 'refs/tags/settlement/*' 2>/dev/null | sha1sum | cut -d' ' -f1)"
-  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "$CODEREF^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS"
+  # POS-1034: the office index's version, when it can be read. UNREADABLE keeps the version the key last carried (INDEX_KEYED), so a blip of the local API
+  # (a 10 s timeout, a restart) is not a moved input: a tick that cannot read it decides on the other four inputs exactly as the old key did, and a later tick that
+  # reads the SAME version stays quiet instead of rebuilding twice for one blip. It never claims a version it did not read: the STAMP gets INDEX_AS_OF, which is
+  # empty when unknown (build_once), and a script that has never read one (an office without the header) keeps the old key byte for byte.
+  INDEX_AS_OF="$(index_as_of)"
+  [ -z "$INDEX_AS_OF" ] || INDEX_KEYED="$INDEX_AS_OF"
+  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "$CODEREF^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS${INDEX_KEYED:+ index:$INDEX_KEYED}"
 }
 
 survey
@@ -394,7 +437,7 @@ fi
 LAST="$( [ -f "$STATE" ] && sed -n 's/.*"key": "\(.*\)".*/\1/p' "$STATE" || true )"
 if [ "$KEY" = "$LAST" ]; then
   report quiet "nothing moved since the last build (town $(echo "$TOWN_SHA" | cut -c1-8), $TAG)"
-  say "quiet: town, site main, $TAG and the settlement tags are all where the last build left them"
+  say "quiet: town, site main, $TAG, the settlement tags and the office index are all where the last build left them"
   exit 0
 fi
 
@@ -460,6 +503,8 @@ crossing_now() {
 # ── one build pass ──────────────────────────────────────────────────────────
 build_once() {
   PASSES=$((PASSES + 1))
+  # THE INDEX VERSION THIS PASS SURVEYED (POS-1034): taken here, before anything in the pass runs, so the stamp names what the pass saw first and never a later look.
+  local index_seen="$INDEX_AS_OF"
   say "pass $PASSES — town $(echo "$TOWN_SHA" | cut -c1-8) · site main $(echo "$SITE_MAIN" | cut -c1-8) · code $TAG"
 
   # THE TOWN AT A PINNED SHA. Detached at exactly the sha the key names, so the
@@ -674,6 +719,7 @@ build_once() {
       BUILD_TOWN_DATA_SHA="$SITE_MAIN" \
       BUILD_TOWN_SHA="$TOWN_SHA" \
       BUILD_CROSSING="$crossing" \
+      BUILD_TOWN_INDEX_AS_OF="$index_seen" \
       BUILD_WORLD_REF="$world_ref" \
       node tools/build-stamp.mjs --out dist-town/build.json ) || die "the build stamp tripped"
   fi
@@ -731,8 +777,8 @@ build_once() {
   PUBLISHED="$rel"
   say "published: $link -> $rel ($(du -sh "$rel" | cut -f1))"
 
-  printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
-    "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
+  printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "index_as_of": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
+    "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$index_seen" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
 
   # Prune, never the one being served. readlink -f resolves through the symlink
   # we just swapped, so "current" is read from the world rather than remembered.
