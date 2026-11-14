@@ -43,7 +43,10 @@ export const TENDING_DEFECT = DEFECT;
  */
 export async function tendingBefore(clone, { waitMs = Number(process.env.TOWN_CLEAN_WAIT_MS ?? WAIT_MS), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (process.env.TOWN_PUSH !== "1") return null;
-  const read = () => { try { return cloneDirt(clone); } catch { return []; } };   // a clone the read cannot see is the exec's to judge, as it always was
+  // THE LAST DIRT SEEN IS KEPT (declared before the read that sets it). A first read that fails sees nothing and defers to the exec, as it always did; but a REREAD that fails
+  // after dirt was seen is not a clear copy: it keeps what was last observed, waits on to the bound, and refuses there. Only a successful clean read clears it.
+  let last = [];
+  const read = () => { try { last = cloneDirt(clone); } catch { /* keep `last`: a clone the read cannot see is the exec's to judge only when no dirt was ever observed */ } return last; };
   const t0 = Date.now();
   let dirt = read(), slept = false;
   while (dirt.length && Date.now() - t0 < Math.max(0, waitMs)) { slept = true; await sleep(STEP_MS); dirt = read(); }

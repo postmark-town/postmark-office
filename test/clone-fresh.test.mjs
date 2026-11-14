@@ -19,7 +19,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,6 +188,40 @@ test("4b · THE IN-PROCESS PENS NEVER SLEEP ON THE OFFICE'S THREAD: a letter on 
   assert.ok(Date.now() - t0 < 2_000, `refused at once (${Date.now() - t0} ms), not after the execs' six-second wait`);
   const src = (f) => readFileSync(join(ROOT, "src", f), "utf8");
   for (const f of ["write.mjs", "edit.mjs"]) assert.match(src(f), /freshenClone\(clone, \{ waitMs: 0 \}\)/, `${f} passes waitMs: 0: it runs on the office's own thread`);
+});
+
+test("3d · A FAILED REREAD IS NOT A CLEAR COPY: dirt seen, then the clone unreadable: it keeps waiting and refuses 503 at the bound; a later successful clean read still clears; an unreadable FIRST read defers to the exec", async () => {
+  const was = process.env.TOWN_PUSH; process.env.TOWN_PUSH = "1";
+  const hide = (t) => renameSync(join(t.clone, ".git"), join(t.clone, ".git-away"));
+  const show = (t) => renameSync(join(t.clone, ".git-away"), join(t.clone, ".git"));
+  try {
+    // dirt seen, then every reread fails (the sleep hook makes the clone unreadable): refused at the bound, never returned as clear
+    const t = town();
+    dirty(t);
+    let naps = 0;
+    const e = await tendingBefore(t.clone, { waitMs: 400, sleep: async (ms) => { naps += 1; if (naps === 1) hide(t); await new Promise((r) => setTimeout(r, ms)); } });
+    show(t);
+    assert.ok(naps >= 2, "it kept waiting through the failed rereads");
+    assert.equal(e?.code, 503, "refused at the bound: a reread that failed after dirt was seen is not a clear copy");
+    assert.equal(e.pen, NEEDS_TENDING);
+    assert.deepEqual(e.dirt, ["WHITE_PAGES/stamp-ledger.md"], "it kept the last dirt it observed");
+    // the control: the reread fails once, then a SUCCESSFUL clean read arrives: not sticky, the copy clears
+    const c = town();
+    dirty(c);
+    let n = 0;
+    const ok = await tendingBefore(c.clone, { waitMs: 3_000, sleep: async (ms) => {
+      n += 1;
+      if (n === 1) hide(c);
+      if (n === 2) { show(c); sh(c.clone, "checkout", "-q", "--", "WHITE_PAGES/stamp-ledger.md"); }
+      await new Promise((r) => setTimeout(r, ms));
+    } });
+    assert.equal(ok, null, "a later successful clean read clears it");
+    // the accepted first-read posture: nothing was ever observed, so the exec decides
+    const u = town();
+    hide(u);
+    assert.equal(await tendingBefore(u.clone, { waitMs: 0 }), null, "an unreadable first read observes no dirt and defers to the exec");
+    show(u);
+  } finally { if (was === undefined) delete process.env.TOWN_PUSH; else process.env.TOWN_PUSH = was; }
 });
 
 test("4 · a CLEAN clone is freshened as it always was: the town's new commit arrives", () => {
