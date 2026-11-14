@@ -76,6 +76,7 @@
 // Node 22+. Runs anywhere the office suite runs (the embedded-postgres
 // devDependency). Prints no secrets; holds none.
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync, verify as edVerify } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -166,7 +167,7 @@ export function resignLedger(text, keyPem, engine) {
  */
 export function chainCheck(engine, prevText, nextText, pubPem) {
   const problems = [];
-  const prev = prevText.replace(/\s*$/, "\n");
+  const prev = endWithNewline(prevText);
   if (!nextText.startsWith(prev.trimEnd())) problems.push("append-only: the ledger's earlier bytes changed");
   const before = engine.parseStampLedger(prevText).length;
   const entries = engine.parseStampLedger(nextText);

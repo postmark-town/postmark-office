@@ -74,6 +74,7 @@
 // Env: WORLD_CLONE, WORLD_MOVEMENT_V2 (the flag the freeze commits the town to),
 //      LEDGER_FREEZE=1 (consent for --apply).
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -392,7 +393,7 @@ async function main() {
   } else if (flag("--apply")) {
     if (isFrozen(ledgerText)) { report.applied = false; report.refused = "already frozen — the seam line is idempotent and is not written twice"; }
     else {
-      writeFileSync(ledgerFile, `${ledgerText.replace(/\s*$/, "\n")}${freezeSeamLine(atIso)}`, "utf8");
+      writeFileSync(ledgerFile, `${endWithNewline(ledgerText)}${freezeSeamLine(atIso)}`, "utf8");
       report.applied = true;
       if (flag("--commit")) {
         execFileSync("git", ["-C", CLONE, "add", LEDGER_PATH], { encoding: "utf8" });
