@@ -150,6 +150,8 @@ export const LANDED = {
   "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
   // 094 (POS-485): the sign-in a token pair came from, and its index (the file's last statement).
   "094_oauth_signin_family.sql": { probe: `${col("oauth_tokens", "family")} AND ${rel("oauth_tokens_family")}` },
+  // 096 (POS-939): a room purchase's retry key, private, office_api's only.
+  "096_parcel_room_nonces.sql": { probe: `${rel("parcel_room_nonces")} AND has_table_privilege('office_api', 'parcel_room_nonces', 'INSERT') AND NOT has_table_privilege('snapshot_reader', 'parcel_room_nonces', 'SELECT')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

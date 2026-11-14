@@ -27,7 +27,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -197,7 +197,44 @@ test("FIRST-DAY.md and PROMISES.md: the shelf lists eight docs, and each answers
   const takes = TOOLS.find((t) => t.name === "read_docs").inputSchema.properties.doc.enum;
   assert.ok(takes.includes("first-day"), "town { read: \"docs\", args: { doc: \"first-day\" } } is a name the door takes");
   assert.ok(takes.includes("promises"), "town { read: \"docs\", args: { doc: \"promises\" } } is a name the door takes");
-  assert.equal(takes.length, 8, "eight names, one per doc on the shelf");
+  assert.equal(takes.length, 9, "nine names, one per doc on the shelf (hearth-setup, POS-1020)");
+});
+
+// ── POS-1020: the Hearth setup prompt is read whole through the existing docs door, from the town's ONE authored file (POS-1019's HEARTH-SETUP.md) ──
+// The sentinel is a fixture sentence of this test's own: the office holds no copy of the prompt, so whatever the town file says is what is served. THE FALSIFIERS:
+// drop "HEARTH-SETUP.md" from OFFICE_DOCS (the body is not served), the key from DOC_NAMES (the door refuses the name), the door's pointers (the listing, read_docs,
+// the town apex), or serve a constant instead of the file (the sentinel goes missing).
+test("POS-1020 · hearth-setup: the canonical file's body is served whole, listed, takable, and pointed at from the door", async () => {
+  const dir = town();
+  const SENTINEL = "invented-sentinel-7f3a: ask your human first, build second.";
+  const HEARTH = `# Design your Hearth\n\n${SENTINEL}\n\n## The shipped designs\n\ndefault, ledger, desk, gazette.\n`;
+  writeFileSync(join(dir, "HEARTH-SETUP.md"), HEARTH);
+  const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  git("add", "-A");
+  git("-c", "user.name=f", "-c", "user.email=f@t.invalid", "commit", "-q", "-m", "the hearth prompt");
+  const s = await indexStoreFromTown(dir, { db: "ledger_docs_hearth_setup" });
+  stores.push(s);
+  const served = await storeRead(s, docsFromStore);
+  assert.deepEqual(served.docs["HEARTH-SETUP"], { body: HEARTH.trim(), path: "HEARTH-SETUP.md" }, "GET /town/docs serves the file whole, in the reader's own shape");
+
+  const one = docsAnswer(served, "hearth-setup");
+  assert.deepEqual(one, { as_of: served.as_of, doc: "hearth-setup", path: "HEARTH-SETUP.md", body: served.docs["HEARTH-SETUP"].body });
+  assert.ok(one.body.includes(SENTINEL), "the canonical sentence is in the served doc, whole");
+  const bare = docsAnswer(served);
+  assert.equal(bare.docs.find((d) => d.doc === "hearth-setup").path, "HEARTH-SETUP.md", "the shelf lists it");
+  assert.match(bare.open, /doc: "hearth-setup" is the prompt for designing your household's Hearth with your human/, "and says what it is, while it is on the shelf");
+
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const read = TOOLS.find((t) => t.name === "read_docs");
+  assert.ok(read.inputSchema.properties.doc.enum.includes("hearth-setup"), "a name the door takes");
+  assert.match(read.description, /hearth-setup \(the prompt for designing your household's Hearth with your human\)/, "and the door's own words name it");
+  const apex = readFileSync(new URL("../src/town-apex.mjs", import.meta.url), "utf8");
+  assert.equal(apex.split("hearth-setup (the prompt for designing your household's Hearth with your human)").length - 1, 2, "the town apex names it in its blurb and its description");
+
+  // no file on the shelf: no pointer that cannot lead anywhere, and the name answers as an absent doc, never an empty body
+  const none = docsAnswer({ as_of: "x", docs: { STAMPS: { path: "STAMPS.md", body: "s" } } });
+  assert.doesNotMatch(none.open, /hearth-setup/);
+  assert.equal(docsAnswer({ as_of: "x", docs: {} }, "hearth-setup"), null);
 });
 
 test("an index that predates the docs key answers an empty docs object, never a throw", async () => {
