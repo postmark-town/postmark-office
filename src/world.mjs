@@ -145,7 +145,7 @@ function engineDir() {
 
 const engineImport = (file) => import(pathToFileURL(join(engineDir(), "tools", file)));
 
-// IS THIS A SPARK? THE WORLD'S ANSWER, NEVER THE OFFICE'S (POS-1035, placement A; World #391 at ad3ad54a). The World owns the
+// IS THIS A SPARK? THE WORLD'S ANSWER, NEVER THE OFFICE'S (POS-1035, placement A; World #391 at 45f57eea). The World owns the
 // spark class and its place rules: `tools/mark-kind.mjs § isSparkIn` over the class index of the marks in hand. An engine that
 // does not yet export it (before #391 lands at the blessed ref) answers no — a spark is then refused as any unknown placement is,
 // never placed by a rule this office made up. `sparkWorld()` hands back the engine's spark helpers too, or null.
