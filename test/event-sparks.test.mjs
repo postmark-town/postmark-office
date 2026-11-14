@@ -148,3 +148,127 @@ test("the lasting list: every ended event past the calendar's week, newest end f
   await assert.rejects(calendarAtOffice({ past: true, before: "soon" }, { now: NOW, env: ENV }), /not a cursor/);
   await assert.rejects(calendarAtOffice({ past: true, event: "pica/tie-a" }, { now: NOW, env: ENV }), /past lists events/);
 });
+
+// ── THE HOSTING STAKE, on disposable fixtures: a town in a bottle (its own engine, ledger and key) and this store ──
+//
+// Money proof (the brief): an insufficient balance writes nothing; a cancellation returns the whole stake once and a second cannot
+// pay again; an interrupted act rolls back its coupled changes (no row, no line, no commit); a legacy (switch-off) event stays free.
+
+const { generateKeyPairSync } = await import("node:crypto");
+const { mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+const { join, resolve, dirname } = await import("node:path");
+const { execFileSync, spawnSync } = await import("node:child_process");
+const { fileURLToPath } = await import("node:url");
+const { copyTownTools } = await import("./helpers/town-tools.mjs");
+const { tempDir } = await import("./helpers/temp-dir.mjs");
+const { postAtTown, closeAtTown } = await import("../src/events-store.mjs");
+
+const TOWN_SRC = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "town-clone");
+const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+const bottle = tempDir("pos1035-stake-");
+after(() => rmSync(bottle, { recursive: true, force: true, maxRetries: 5 }));
+const KEY_FILE = join(bottle, "stamp-key.pem");
+writeFileSync(KEY_FILE, privateKey.export({ type: "pkcs8", format: "pem" }));
+const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+const ledgerText = (dir) => readFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
+const verifies = (dir) => spawnSync(process.execPath, [join(dir, "tools", "stamp-verify.mjs"), "--repo", dir], { encoding: "utf8" });
+let townN = 0;
+function townInABottle() {
+  const dir = join(bottle, `town-${++townN}`);
+  mkdirSync(join(dir, "tools"), { recursive: true });
+  mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
+  copyTownTools(TOWN_SRC, dir);
+  writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
+  writeFileSync(join(dir, "tools", "github-ids.json"), JSON.stringify({ wright: { login: "w", id: 7 }, ada: { login: "a", id: 9 } }));
+  // wright earns 25 stamps (five days of five letters), ada 10
+  const lines = [];
+  const days = { wright: ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"], ada: ["2026-06-07", "2026-06-08"] };
+  for (const [who, dates] of Object.entries(days))
+    for (const date of dates) for (let i = 1; i <= 5; i++) lines.push(`- ${date} · ${who}-${date}-${i} · ${who} → pen-pal-${i} · thread: new`);
+  writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), `# ledger\n\n${lines.join("\n")}\n`);
+  execFileSync(process.execPath, [join(dir, "tools", "stamp-mint.mjs"), "--append", "--key", KEY_FILE, "--repo", dir], { cwd: dir });
+  execFileSync(process.execPath, [join(dir, "tools", "stamp-mint.mjs"), "--declare-rules", "stamps-v2", "--meeps", "postmaster", "--date", "2026-06-20", "--key", KEY_FILE, "--repo", dir], { cwd: dir });
+  git(dir, "init", "-q");
+  git(dir, "config", "core.autocrlf", "false");
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
+  return dir;
+}
+const liquidOf = async (dir, handle) => {
+  const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  return mint.foldBalances(mint.parseStampLedger(ledgerText(dir))).get(handle) ?? 0;
+};
+const stakeEnv = (dir, on = true) => ({ ...ENV, ...(on ? { EVENT_STAKE: "on" } : {}), TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, TOWN_LOCK: join(bottle, `town-${townN}.lock`), TOWN_PUSH: "" });
+const keyOf = (handle) => ({ handles: new Set([handle]), household: `${handle}-house` });
+const T_POST = Date.now();
+const eventArgs = (title) => ({ class: "event", title, body: "sorbet on the counter", place: { at: { x: 10, y: 20 } },
+  starts: new Date(T_POST + 3_600_000).toISOString(), ends: new Date(T_POST + 7_200_000).toISOString() });
+const postRow = async (id) => (await owner.query("SELECT state, fields FROM posts WHERE id = $1", [id])).rows[0] ?? null;
+
+test("an insufficient balance writes NOTHING: no row, no ledger line, no commit — and the refusal says why in plain words", async () => {
+  const dir = townInABottle();
+  const head = git(dir, "rev-parse", "HEAD").trim();
+  const before = ledgerText(dir);
+  await assert.rejects(postAtTown(eventArgs("Ada's tea"), keyOf("ada"), { env: stakeEnv(dir) }),
+    (e) => e.code === 422 && /hosting an event stakes 20 of your own stamps, and ada holds 10/.test(e.defect) && /no housemate's/.test(e.hint));
+  assert.equal(ledgerText(dir), before);
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head);
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM posts WHERE author = 'ada'")).rows[0].n, 0);
+});
+
+test("posting stakes the host's own 20 in the post's own act; cancelling brings all 20 home in the cancellation's act — once", async () => {
+  const dir = townInABottle();
+  assert.equal(await liquidOf(dir, "wright"), 25);
+  const posted = await postAtTown(eventArgs("Sorbet night"), keyOf("wright"), { env: stakeEnv(dir) });
+  const id = posted.post.id;
+  assert.deepEqual(posted.stake && [posted.stake.n, posted.stake.by], [20, "wright"]);
+  assert.deepEqual((await postRow(id)).fields.stake, { n: 20, by: "wright" }, "the row carries the stake, through the fold");
+  assert.match(ledgerText(dir), new RegExp(`· wright → stake:post/${id} · 20 · side: for · via: api`));
+  assert.equal(await liquidOf(dir, "wright"), 5, "the 20 left the host's liquid stamps");
+  assert.equal(verifies(dir).status, 0, `the town's own verifier passes: ${verifies(dir).stdout}${verifies(dir).stderr}`);
+
+  const cancelled = await closeAtTown({ post: id }, keyOf("wright"), { env: stakeEnv(dir) });
+  assert.equal(cancelled.state, "cancelled");
+  assert.deepEqual([cancelled.stake.returned, cancelled.stake.to], [20, "wright"]);
+  assert.match(cancelled.stake.note, /no spark is made/);
+  const row = await postRow(id);
+  assert.equal(row.state, "cancelled");
+  assert.equal(row.fields.stake.returned.n, 20);
+  assert.match(ledgerText(dir), new RegExp(`· stake:post/${id} → wright · 20 · for: post-return`));
+  assert.equal(await liquidOf(dir, "wright"), 25, "all 20 came home");
+  assert.equal(verifies(dir).status, 0);
+
+  // never twice: the door refuses, and the executor asked directly refuses too, before any line is signed
+  const lines = ledgerText(dir);
+  await assert.rejects(closeAtTown({ post: id }, keyOf("wright"), { env: stakeEnv(dir) }), /already cancelled/);
+  const { stakedCancel } = await import("../src/event-sparks.mjs");
+  const again = await stakedCancel({ handle: "wright", id, door: "town", date: "2026-11-14" }, { clone: dir, keyPem: readFileSync(KEY_FILE, "utf8"), env: stakeEnv(dir) });
+  assert.match(again.error.defect, /already come home/);
+  assert.equal(ledgerText(dir), lines, "no second return line");
+});
+
+test("an interrupted staked post rolls back its coupled changes: the line it signed is put back, nothing committed, no row", async () => {
+  const dir = townInABottle();
+  const head = git(dir, "rev-parse", "HEAD").trim();
+  const before = ledgerText(dir);
+  // a place mark that does not stand passes the door's cheap shape check and is refused INSIDE the post's transaction, after the
+  // executor has signed the stake line — the interruption the coupling must survive
+  await assert.rejects(postAtTown({ ...eventArgs("Nowhere night"), place: { mark: "nobody/no-such-mark" } }, keyOf("wright"), { env: stakeEnv(dir) }));
+  assert.equal(ledgerText(dir), before, "the signed line was put back");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing was committed");
+  assert.equal(git(dir, "status", "--porcelain").trim(), "", "the clone is clean");
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM posts WHERE title = 'Nowhere night'")).rows[0].n, 0);
+  assert.equal(await liquidOf(dir, "wright"), 25);
+});
+
+test("legacy: with the switch off an event posts free and cancels free — no stake, no line (events scheduled before this ships stay free)", async () => {
+  const dir = townInABottle();
+  const before = ledgerText(dir);
+  const posted = await postAtTown(eventArgs("Free tea"), keyOf("wright"), { env: stakeEnv(dir, false) });
+  assert.equal("stake" in posted, false);
+  assert.equal((await postRow(posted.post.id)).fields.stake, undefined);
+  const closed = await closeAtTown({ post: posted.post.id }, keyOf("wright"), { env: stakeEnv(dir, true) });
+  assert.equal(closed.state, "cancelled", "a free event's cancellation is free even with the switch on");
+  assert.equal("stake" in closed, false);
+  assert.equal(ledgerText(dir), before);
+});

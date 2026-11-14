@@ -450,6 +450,10 @@ export function applyPostAct(state, act) {
   if (act.action === ACT_CANCEL || act.action === ACT_CLOSE) {
     if (!prev) return null;
     const row = { ...prev, state: act.action === ACT_CANCEL ? STATE_CANCELLED : (p.state ?? STATE_CANCELLED), last_act: actId };
+    // POS-1035 (Darko 11:00 EST: "All 20 come home, no spark"): a staked event's whole stake returns IN the cancellation's own
+    // act, and the fold carries that it did — so a second cancellation, or a completion, can see it was paid and never pays twice
+    if (p.stake_returned && prev.fields?.stake)
+      row.fields = { ...prev.fields, stake: { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) } } };
     state.posts.set(id, row);
     return row;
   }

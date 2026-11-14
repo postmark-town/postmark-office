@@ -19,6 +19,34 @@ import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
 
+// ── THE HOSTING STAKE (call 22; Darko 11:00 EST and 17:37:45Z) ───────────────
+//
+// Posting an event stakes EVENT_STAKE of the POSTING RESIDENT'S OWN liquid stamps: firm — below it the act refuses in plain words
+// and writes nothing; no clipping, no pooling, no housemate's stamps. The position is the town ledger's own post stake
+// (`<host> → stake:post/<event> · 20 · side: for`), reserved until the event is cancelled (all of it comes home, whole, in the
+// cancellation's act) or completes (the whole position comes home and the spark's own 1-stamp stake backs it: 19 home, 1 kept).
+// Events already scheduled when this ships carry no stake and stay free. EVENT_STAKE=on is the switch: the law line (POS-1045)
+// is read before it ships. A staked event's cancellation always returns its stake, whatever the switch says.
+export const EVENT_STAKE = 20;
+export const EVENT_SPARK_BACKING = 1;
+export const eventStakeOn = (env = process.env) => String(env?.EVENT_STAKE ?? "").trim().toLowerCase() === "on";
+
+/** A resident's open post position on one post, folded from ledger entries (`stake`/`unstake`/`return` lines), and whether it was returned. */
+export function postPositionOf(entries, post, handle) {
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const stakeRe = new RegExp(`^- \\S+ · ${esc(handle)} → stake:post/${esc(post)} · (\\d+) · side: `);
+  const outRe = new RegExp(`^- \\S+ · stake:post/${esc(post)} → ${esc(handle)} · (\\d+) · for: (unstake|post-return)`);
+  let n = 0, returned = false;
+  for (const e of entries ?? []) {
+    const line = e?.canonical ?? e;
+    let m = stakeRe.exec(line);
+    if (m) { n += Number(m[1]); continue; }
+    m = outRe.exec(line);
+    if (m) { n -= Number(m[1]); if (m[2] === "post-return") returned = true; }
+  }
+  return { n, returned };
+}
+
 /** The spark class's name (WLD-173: `the-town/spark`, extends mark; written `kind: spark`, no `class:` line). */
 export const SPARK_CLASS = "spark";
 
@@ -206,3 +234,104 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
     ...(unplaced.length ? { unplaced_says: unplaced.length } : {}),
   };
 }
+
+// ── THE EXECUTOR (POS-1035): the hosting stake and its whole return, under the town lock ──
+//
+// Spawned by the doors (events-store.mjs § viaStakeExec) through execUnderTownLock, as every office act that signs a ledger line
+// is (parcel-room-exec.mjs, stake-exec.mjs): the town lock is held, the clone is fresh, and penTransaction puts the ledger back
+// if anything after the signature fails. The line is signed first, then ONE store transaction writes the act, the row and the
+// ledger's landing together (stamp-lines.mjs § landPlannedVia) — the ballot stake's own order (ballots-store.mjs § stakeInStore).
+
+const refusal = (code, defect, hint) => ({ error: { code, defect, hint } });
+const asAnswer = (e) => { if (e?.code && e?.defect) return refusal(e.code, e.defect, e.hint); throw e; };
+
+/** The town's engine and the ledger as it stands, for one act under the lock. */
+async function ledgerOf(clone) {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { pathToFileURL } = await import("node:url");
+  const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+  const ballot = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")).href).catch(() => null);
+  const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
+  const entries = mint.parseStampLedger(readFileSync(path, "utf8"));
+  return { mint, ballot, path, entries };
+}
+
+/** Post an event with its hosting stake: the posting resident's own liquid EVENT_STAKE, firm, or nothing at all. */
+export async function stakedPost({ handle, input, door, now = Date.now(), date, via = "api" }, { clone, keyPem, env = process.env }) {
+  try {
+    const store = await import("./events-store.mjs");
+    const { planStampedCommit, landPlannedVia } = await import("./stamp-lines.mjs");
+    const { mint, ballot, path, entries } = await ledgerOf(clone);
+    if (ballot?.ballotState?.(clone)?.lawAt?.(date)?.meeps?.has?.(handle))
+      return refusal(403, `${handle} cannot host a staked event: a meep account does not stake`, "the stamps law: meeps neither mint nor stake");
+    const liquid = mint.foldBalances(entries).get(handle) ?? 0;
+    if (liquid < EVENT_STAKE)
+      return refusal(422, `hosting an event stakes ${EVENT_STAKE} of your own stamps, and ${handle} holds ${liquid}`,
+        `a household without ${EVENT_STAKE} stamps can't host yet — the stake is ${handle}'s own (no housemate's, never part of it); nothing was written. At the event's end ${EVENT_STAKE - EVENT_SPARK_BACKING} come home and ${EVENT_SPARK_BACKING} backs its spark; cancelled, all ${EVENT_STAKE} come home`);
+    const id = await store.nextEventId(handle, input?.title, { now, env });
+    mint.appendSigned(clone, [mint.postStakeLine({ date, handle, post: id, n: EVENT_STAKE, side: "for", via })], keyPem);
+    const plan = await planStampedCommit(clone, { env });
+    return await store.postStakedEvent(handle, input, { now, env, door, stake: { id, n: EVENT_STAKE, by: handle,
+      land: (client) => landPlannedVia(client, clone, plan, [path], `event stake: ${handle} -> ${id} · ${EVENT_STAKE} (via ${via})`, { env }) } });
+  } catch (e) { return asAnswer(e); }
+}
+
+/** Cancel a staked event: the whole position comes home to the one who paid it, in the cancellation's own act — once. */
+export async function stakedCancel({ handle, id, door, now = Date.now(), date }, { clone, keyPem, env = process.env }) {
+  try {
+    const store = await import("./events-store.mjs");
+    const { planStampedCommit, landPlannedVia } = await import("./stamp-lines.mjs");
+    const row = await store.eventRowAtOffice(id, { env });
+    if (!row) return refusal(404, `no event "${id}"`, "ids are <host>/<slug>, as the calendar names them");
+    const staked = row.fields?.stake;
+    if (!staked) return refusal(409, `"${id}" carries no stake`, "cancel it at its door; nothing was written");
+    if (staked.returned) return refusal(409, `"${id}"'s stake has already come home`, "nothing to do — it cannot be paid twice");
+    const { mint, path, entries } = await ledgerOf(clone);
+    const held = postPositionOf(entries, id, staked.by);
+    if (held.returned || held.n !== Number(staked.n))
+      return refusal(503, `the ledger holds ${held.n} on "${id}" for ${staked.by}${held.returned ? " (already returned)" : ""}, and the event's record says ${staked.n}`,
+        "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
+    mint.appendSigned(clone, [mint.postReturnLine({ date, post: id, handle: staked.by, n: Number(staked.n) })], keyPem);
+    const plan = await planStampedCommit(clone, { env });
+    return await store.closeStakedEvent(handle, id, { now, env, door, stakeReturn: { n: Number(staked.n), to: staked.by,
+      land: (client) => landPlannedVia(client, clone, plan, [path], `event stake home: ${id} -> ${staked.by} · ${staked.n} (cancelled)`, { env }) } });
+  } catch (e) { return asAnswer(e); }
+}
+
+async function execMain() {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { resolve, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const clone = process.env.TOWN_CLONE ?? resolve(here, "..", "town-clone");
+  const keyPath = process.env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem";
+  const payload = JSON.parse(process.argv[2] ?? "{}");
+  let result;
+  if (!existsSync(keyPath)) result = refusal(409, "not-yet-open", "the office has no pen key configured for the stamp-ledger");
+  else if (payload.mode !== "post" && payload.mode !== "cancel") result = refusal(422, `unknown mode ${JSON.stringify(payload.mode)}`, "mode: post | cancel");
+  else {
+    const keyPem = readFileSync(keyPath, "utf8");
+    const { penTransaction } = await import("./write.mjs");
+    const { freshenExec } = await import("./clone-fresh.mjs");
+    const { townDay } = await import("./votes.mjs");
+    const date = payload.date ?? townDay();
+    result = await penTransaction(clone, async () => {
+      freshenExec(clone); // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
+      return payload.mode === "post"
+        ? stakedPost({ ...payload, date }, { clone, keyPem })
+        : stakedCancel({ ...payload, date }, { clone, keyPem });
+    });
+  }
+  // the store pool would hold the process open: the answer is written, then the exit
+  process.stdout.write(JSON.stringify(result) + "\n", () => process.exit(0));
+}
+
+const isMain = await (async () => {
+  if (!process.argv[1]) return false;
+  const { realpathSync } = await import("node:fs");
+  const { pathToFileURL, fileURLToPath } = await import("node:url");
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
+})();
+if (isMain) execMain().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
