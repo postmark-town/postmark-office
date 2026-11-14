@@ -183,6 +183,7 @@ test("R0 · the invented house is large: unfolded over the cap, folded under it,
   assert.ok(w.folded, "folded");
   assert.ok(w.folded.full_bytes > CAP_BYTES * 3, `unfolded it was ${w.folded.full_bytes} bytes`);
   const n = bytesOf(text(w));
+  MEASURED.push({ call: "waiting (folded)", bytes: n, unfolded: w.folded.full_bytes });
   assert.ok(n <= 9000, `delivered ${n} bytes`);
   const marks = 32 + 18 + 9 + SOLOS;
   assert.equal(w.stances_awaiting.total, marks);
