@@ -16,7 +16,8 @@
 //   B6  upstream continuation and the first-N scope survive, and the page is never called the house's total;
 //   B7  empty, unavailable and cut are three different words;
 //   B8  a house that fits reads exactly what it read before; B9 every read a stub names exists, with arguments it takes;
-//   B10 REST and MCP skins give one answer; B11 the worst house still fits.
+//   B10 the connector's call is folded and REST's (and the doorstep's nested) is the canonical answer; B11 the worst house still fits;
+//   B13 an answer of 9,001 to 10,000 bytes fits the connector and is returned untouched, one byte over is folded.
 //
 //   node --test test/household-waiting-budget.test.mjs
 
@@ -93,7 +94,8 @@ function readersOf({ marks, total = marks.length, cursor = null, extras = {} }) 
     likenessNeed: async () => extras.likeness ?? { rows: [] },
   };
 }
-const ctxOf = (readers) => ({ clone: scratch, asOf: AS_OF, odb: { fixture: true }, nowMs: NOW, ix: storeIndexPooled(scratch), readers });
+// `connector: true` is mcp.mjs's mark on the connector's own top-level call: only that call is folded (CORE-88)
+const ctxOf = (readers) => ({ clone: scratch, asOf: AS_OF, odb: { fixture: true }, nowMs: NOW, ix: storeIndexPooled(scratch), readers, connector: true });
 
 const BIG = () => {
   // three long streams, a stream whose oldest body is oversized, then one-mark authors: 100 read of 130 waiting
@@ -329,11 +331,18 @@ test("B12 · at-risk marks past the room are counted, and the call named pages e
   assert.ok(p.rows.every((r) => r.mark && !("body" in r) && !("cause" in r)), "identity rows: the mark, and no body");
 });
 
-test("B10 ·REST and MCP skins are one composer: the same bytes", async () => {
+test("B10 · the connector's own call is folded; REST and the office's own nested calls read the canonical answer, unfolded and unchanged", async () => {
   const h = BIG();
   const mcp = await ask(h, { slim: true, strictFields: true });
-  const rest = await ask(h, {});
-  assert.deepEqual(rest, mcp);
+  const rest = await ask(h, { connector: false });
+  const nested = await ask(h, { slim: true, strictFields: true, connector: false }); // what the doorstep's ctx.call gets: slim, and not the connector's
+  assert.ok(mcp.folded);
+  assert.ok(!("folded" in rest), "no fold for a caller that is not the connector");
+  assert.deepEqual(nested, rest, "slim alone does not fold");
+  assert.equal(rest.stances_awaiting.rows.length, 100, "REST keeps its 100 rows, whole");
+  assert.equal(rest.set_downs_awaiting.rows.length, 12);
+  assert.ok(rest.set_downs_awaiting.rows[0].cause, "rows keep their cause");
+  assert.ok(bytesOf(delivered(rest)) > CONNECTOR_CAP_BYTES, "and REST has no cap to fit");
 });
 
 test("B11 · the worst house still fits: every part full, every group alone, every body huge", async () => {
@@ -342,4 +351,23 @@ test("B11 · the worst house still fits: every part full, every group alone, eve
   const a = await ask({ ...h, marks, total: 100, cursor: null });
   assert.ok(bytesOf(delivered(a)) <= WAITING_BUDGET_BYTES, `${bytesOf(delivered(a))} bytes`);
   assert.equal(a.count, 100 + BIG_COUNT - 130);
+});
+
+test("B13 · an answer of 9,001 to 10,000 bytes fits the connector and is returned untouched; one byte over is folded", () => {
+  // a composed waiting answer, sized by its set-down rows: find the counts that land in the window and just over the cap
+  const make = (n) => ({ read: "waiting", household: "h", residents: ["r000"], as_of: "x", count: n, shown: n,
+    stances_awaiting: { total: 0, shown: 0, rows: [] },
+    set_downs_awaiting: { rows: Array.from({ length: n }, (_, i) => ({ thing: `r000/thing-${i}`, made_by: "r000", set_down_by: "o", at: null, act_id: String(i), answer: "x", cause: "c".repeat(40) })) },
+    unplaced_bounces: { rows: [] }, key_asks: { rows: [] }, likeness_question: { rows: [] }, stakes_at_risk: { rows: [] }, alerts: [], groups: [] });
+  let n = 1;
+  while (deliveredBytes(make(n)) <= WAITING_BUDGET_BYTES) n++;
+  for (; deliveredBytes(make(n)) <= CONNECTOR_CAP_BYTES; n++) {
+    const a = make(n);
+    assert.ok(deliveredBytes(a) > WAITING_BUDGET_BYTES && deliveredBytes(a) <= CONNECTOR_CAP_BYTES);
+    assert.equal(foldWaiting(a), a, `${deliveredBytes(a)} bytes fits the connector: the same object, not folded`);
+  }
+  const over = make(n);
+  assert.ok(deliveredBytes(over) > CONNECTOR_CAP_BYTES);
+  const folded = foldWaiting(over);
+  assert.ok(folded.folded && deliveredBytes(folded) <= WAITING_BUDGET_BYTES, "one answer over the cap is folded, to the budget");
 });

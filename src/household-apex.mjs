@@ -1559,10 +1559,12 @@ async function householdWaiting(key, ctx) {
   const needs = await hb.needsYou({}, { key, clone: ctx.clone, odb: ctx.odb, asOf: ctx.asOf, ix, readers: { ...ctx.readers, stances: async () => stances } });
   if (needs?.refused) return bounce(...needs.refused);
   const v2 = await import("./household-read-v2.mjs");
-  // CORE-88: folded to the connector's budget when it does not fit (household-waiting-budget.mjs); a house that fits reads what it always read
+  // CORE-88: folded when it would not fit the connector (household-waiting-budget.mjs)
   const { foldWaiting } = await import("./household-waiting-budget.mjs");
-  return foldWaiting({ ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
-    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) });
+  const waiting = { ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
+    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) };
+  // CORE-88: folded only on the connector's own call (ctx.connector, set by mcp.mjs for the top-level MCP household call); REST and the doorstep's nested calls read the canonical answer
+  return ctx.connector === true ? foldWaiting(waiting) : waiting;
 }
 
 /**
@@ -2085,7 +2087,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       // CORE-88: an answer that would not fit the connector comes in pages (household-read-page.mjs); one that fits is returned as it was
       const { pageStances } = await import("./household-read-page.mjs");
       const answer = await (ctx.readers?.stances ?? stancesForHandles)(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
-      const paged = pageStances(answer, { part: f.part, cursor: f.cursor });
+      // paged only on the connector's own call (ctx.connector); REST and the doorstep's nested calls read the canonical answer, and `part` is a connector read
+      const paged = ctx.connector === true ? pageStances(answer, { part: f.part, cursor: f.cursor }) : answer;
       return paged?.error === "bounce" ? bounce(paged.code, paged.defect, paged.hint) : paged;
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
@@ -2172,7 +2175,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (what !== "needs-you") return r;
       // CORE-88: needs-you that would not fit the connector comes in parts and pages (household-read-page.mjs); one that fits is returned as it was
       const { pageNeeds } = await import("./household-read-page.mjs");
-      const paged = pageNeeds(r, { part: f.part, cursor: f.cursor });
+      const paged = ctx.connector === true ? pageNeeds(r, { part: f.part, cursor: f.cursor }) : r;
       return paged?.error === "bounce" ? bounce(paged.code, paged.defect, paged.hint) : paged;
     }
     // ── the house's posts (POS-293) · src/household-posts.mjs ──────────────

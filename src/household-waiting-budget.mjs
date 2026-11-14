@@ -22,12 +22,12 @@
 // THE BUDGET. WAITING_BUDGET_BYTES is measured on the text the connector delivers: JSON.stringify(answer, null, 1), as
 // mcp.mjs § contentFor writes it, in UTF-8 bytes. test/household-waiting-budget.test.mjs pins that this measure IS contentFor's.
 
-import { textBytes } from "./household-read-page.mjs";
+import { textBytes, CAP_BYTES } from "./household-read-page.mjs";
 
-/** The delivered MCP text this read may take, in UTF-8 bytes. The connector's cap is 10,000; the rest is headroom for a field the door adds. */
+/** What a folded waiting answer is BUILT to, in UTF-8 bytes (headroom under the cap for a field the door adds). It is not the threshold: an answer that fits the connector is returned as it was. */
 export const WAITING_BUDGET_BYTES = 9000;
-/** The connector's cap, for the test and the folded answer's own account. */
-export const CONNECTOR_CAP_BYTES = 10000;
+/** The connector's cap: an answer at or under it is not folded. */
+export const CONNECTOR_CAP_BYTES = CAP_BYTES;
 /** How much of the budget identity rows may take before the marks are placed (the rest is for the groups). */
 export const ROWS_SHARE = 0.75;
 
@@ -60,9 +60,9 @@ const WALK = 'household { read: "stances", args: { limit: 100 } }';
  * Fold a composed waiting answer to the budget. `answer` is householdWaiting's:
  * needs-you's answer with `read: "waiting"` and `groups` (needGroups, none cut).
  */
-export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES } = {}) {
+export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, limit = CONNECTOR_CAP_BYTES } = {}) {
   const fullBytes = deliveredBytes(answer);
-  if (fullBytes <= budget) return answer;
+  if (fullBytes <= limit) return answer;
 
   const groups = answer.groups ?? [];
   const stanceTotal = answer.stances_awaiting?.total ?? 0;

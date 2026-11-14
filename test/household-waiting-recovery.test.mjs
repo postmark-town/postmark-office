@@ -80,7 +80,7 @@ after(() => { delete process.env.WORLD_DYNAMIC_DB; delete process.env.WORLD_SING
 const AS_OF = "recoveryfixture000000000000000000000000";
 const HOUSE = "recovery-house";
 const key = { household: HOUSE, handles: new Set(["r000", "r001"]) };
-let householdApex, contentFor, ctx, stancesForHandles, PAGE_BYTES, CAP_BYTES, pen;
+let householdApex, contentFor, callTool, ctx, stancesForHandles, PAGE_BYTES, CAP_BYTES, pen;
 const cleanups = [];
 // a hook's own `after` would run when the hook ends, so the cleanups wait here, at the file's end
 after(async () => { for (const c of cleanups.reverse()) await c(); });
@@ -94,7 +94,7 @@ const text = (answer) => contentFor(answer)[0].text;
 let ALERT_ROWS, ATRISK_ROWS;
 before(async () => {
   ({ householdApex } = await import("../src/household-apex.mjs"));
-  ({ contentFor } = await import("../src/mcp.mjs"));
+  ({ contentFor, callTool } = await import("../src/mcp.mjs"));
   ({ stancesForHandles } = await import("../src/world-stance.mjs"));
   ({ PAGE_BYTES, CAP_BYTES } = await import("../src/household-read-page.mjs"));
   const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
@@ -139,7 +139,7 @@ before(async () => {
   const now = new Date("2026-11-14T06:00:00Z");
   ALERT_ROWS = sortAlerts(markTakenAlerts(Array.from({ length: ALERTS }, (_, i) => ({ slug: `r000/old-${String(i).padStart(2, "0")}`, owner: "r000", body: bodyOf(`alert ${i}`, 4), opens_at: "2026-11-13T12:00:00.000Z" })), now));
   ATRISK_ROWS = Array.from({ length: AT_RISK }, (_, i) => ({ mark: `r000/shed-${String(i).padStart(2, "0")}`, class: "commons", escrow: 0, at_risk: true, body: bodyOf(`shed ${i}`) }));
-  ctx = { clone: scratch, asOf: AS_OF, odb: { fixture: true }, nowMs: now.getTime(), ix: storeIndexPooled(scratch), strictFields: true, slim: true,
+  ctx = { clone: scratch, asOf: AS_OF, odb: { fixture: true }, nowMs: now.getTime(), ix: storeIndexPooled(scratch), strictFields: true, slim: true, connector: true,
     // the stance inbox, the holding record, the mail and the world are REAL; these four have a producer of their own that needs the store
     readers: {
       stakesFor: async () => ({ next_settlement: { at: "2026-11-15T00:00:00.000Z" }, rows: ATRISK_ROWS }),
@@ -282,4 +282,37 @@ test("R5 · unavailable survives the skeleton and the pages", async () => {
     const w = await householdApex({ read: "waiting" }, key, ctx);
     assert.match(w.key_asks.unavailable, /could not be read/);
   } finally { ctx.keyAsksThrow = false; }
+});
+
+// the connector's own call, as handleMessage hands it to callTool: `door: "mcp"`, the key, the clone, the store handle
+const mcpCall = (name, args) => callTool(name, args, { key, asOf: AS_OF, canWrite: false, clone: scratch, pen: null, odb: ctx.odb, door: "mcp" });
+
+test("R6 · the doorstep, through the actual call chain, still names every kind of waiting on an over-budget house", async () => {
+  // the connector's own household call IS paged: needs-you comes back as parts counted, no rows
+  const paged = await mcpCall("household", { read: "needs-you" });
+  assert.ok(paged.paged && !("rows" in paged.set_downs_awaiting), "the connector's top-level needs-you is the page");
+  // the doorstep's own nested call is not: callTool("doorstep") → ctx.call("household", needs-you) reads the canonical rows
+  const d = await mcpCall("doorstep", { handle: "r000" });
+  assert.ok(!d.error, JSON.stringify(d).slice(0, 300));
+  const lines = d.you.map((it) => it.what);
+  assert.ok(lines.some((l) => l.startsWith(`${32 + 18 + 9 + SOLOS} marks laid on your house's ground wait on your word`)), `marks: ${lines}`);
+  assert.ok(lines.some((l) => l.startsWith(`${SETDOWNS} things of your house's set down by another`)), `set-downs: ${lines}`);
+  assert.ok(lines.some((l) => l.startsWith(`${TAKES} things of your house's taken by another`)), `takes: ${lines}`);
+  assert.ok(lines.length >= 3);
+  // the doorstep's text is its own and fits the connector without help
+  assert.ok(bytesOf(text(d)) <= CAP_BYTES, `${bytesOf(text(d))} bytes`);
+});
+
+test("R7 · a caller that is not the connector reads the canonical answers of all three reads: whole, unfolded, unpaged", async () => {
+  const rest = { ...ctx, connector: false };
+  const w = await householdApex({ read: "waiting" }, key, rest);
+  assert.ok(!w.folded && w.stances_awaiting.rows.length === 32 + 18 + 9 + SOLOS && w.set_downs_awaiting.rows.length === SETDOWNS, "waiting whole");
+  assert.ok(bytesOf(text(w)) > CAP_BYTES, "and over the connector's cap, which REST does not have");
+  const n = await householdApex({ read: "needs-you" }, key, rest);
+  assert.ok(!n.paged && n.alerts.length === ALERTS && n.stakes_at_risk.rows.length === AT_RISK && n.likeness_question.rows[0].link, "needs-you whole, the likeness link in it");
+  const s = await householdApex({ read: "stances" }, key, rest);
+  assert.ok(!s.context && Array.isArray(s.standing) && s.set_downs_awaiting.length === SETDOWNS, "stances whole");
+  // and `part` is the connector's read: REST ignores it, as it ignores any field it does not use
+  const p = await householdApex({ read: "needs-you", args: { part: "alerts" } }, key, rest);
+  assert.ok(!p.part, "no page for a caller that is not the connector");
 });

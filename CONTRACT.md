@@ -565,9 +565,12 @@ received" — because chat agents arrive with no CONTRIBUTING.md in context.
 ## Household reads that would not fit the connector come in pages (CORE-88)
 
 The connector refuses a tool result over 10,000 bytes of text (CORE-84 measured 70,691 for the founder household's
-`household { read: "waiting" }`). Three household reads now come in pages **only when their answer would not fit**
-(9,000 UTF-8 bytes of the delivered text, `JSON.stringify(answer, null, 1)`, is the bound for a page and for `waiting`).
-An answer that fits is returned exactly as before, byte for byte, whatever cursor it was asked with.
+`household { read: "waiting" }`). Three household reads now come in pages **only on the connector's own call, and only
+when their answer would not fit**: more than 10,000 UTF-8 bytes of the delivered text (`JSON.stringify(answer, null, 1)`,
+what `mcp.mjs` delivers). An answer of 10,000 bytes or fewer is returned exactly as before, byte for byte, whatever cursor
+it was asked with; one over is built to 9,000 bytes a page (the construction target, not the threshold).
+REST, and the office's own nested reads (the doorstep reads `needs-you` for its YOU part), keep the canonical answers
+whole: nothing is paged for them, and `part` is ignored.
 
 - `household { read: "waiting" }` folds: each part keeps its total, bodyless identity rows as far as the budget allows
   (what the item is and what acting on it takes, never its body), and names the call that pages the rest from the rows

@@ -164,3 +164,41 @@ test("P6 · fitRows: the largest prefix that fits, deterministic, with the curso
   assert.equal(startOf("junk"), 0);
   assert.equal(startOf(undefined), 0);
 });
+
+test("P7 · stances of 9,001 to 10,000 bytes fit the connector and come back untouched; one over the cap is paged", () => {
+  const ground = (n) => Array.from({ length: n }, (_, i) => `r000/ground-${i}`);
+  const at = (n) => stancesAnswer(Array.from({ length: 3 }, (_, i) => mark(i)), { limit: 20, ground: ground(n) });
+  let n = 1;
+  while (textBytes(at(n)) <= PAGE_BYTES) n++;
+  let seen = 0;
+  for (; textBytes(at(n)) <= CAP_BYTES; n++) {
+    const a = at(n);
+    assert.ok(textBytes(a) > PAGE_BYTES);
+    assert.equal(pageStances(a, {}), a, `${textBytes(a)} bytes: the same object, not paged`);
+    assert.equal(pageStances(a, { cursor: "0" }), a);
+    seen += 1;
+  }
+  assert.ok(seen > 5, `${seen} sizes tried in the window`);
+  const over = at(n);
+  assert.ok(textBytes(over) > CAP_BYTES);
+  const page = pageStances(over, {});
+  assert.ok(page.context && textBytes(page) <= PAGE_BYTES, "one answer over the cap is paged, to the page budget");
+});
+
+test("P8 · needs-you of 9,001 to 10,000 bytes fits the connector and comes back untouched; one over the cap is its parts counted", () => {
+  const make = (n) => ({ read: "needs-you", household: "h", residents: ["r000"], as_of: "x", count: n, shown: n,
+    stances_awaiting: { total: 0, shown: 0, rows: [] }, set_downs_awaiting: { rows: [] }, unplaced_bounces: { rows: [] }, key_asks: { rows: [] },
+    likeness_question: { rows: [{ household: "h", residents: ["r000"], cause: "c", link: "https://postmark.town/likeness?household=h", hand_it_over: "give it to your human" }] },
+    stakes_at_risk: { next_settlement: null, rows: Array.from({ length: n }, (_, i) => ({ mark: `r000/shed-${i}`, class: "commons", escrow: 0, at_risk: true, cause: "c".repeat(40) })) }, alerts: [] });
+  let n = 1;
+  while (textBytes(make(n)) <= PAGE_BYTES) n++;
+  let seen = 0;
+  for (; textBytes(make(n)) <= CAP_BYTES; n++) {
+    const a = make(n);
+    assert.equal(pageNeeds(a, {}), a, `${textBytes(a)} bytes: the same object, rows and the likeness link intact`);
+    seen += 1;
+  }
+  assert.ok(seen >= 1);
+  const over = pageNeeds(make(n), {});
+  assert.ok(over.paged && textBytes(over) <= PAGE_BYTES);
+});

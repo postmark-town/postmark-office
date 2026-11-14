@@ -15,10 +15,10 @@
 //
 // THE MEASURE is the connector's own text: JSON.stringify(answer, null, 1) in UTF-8 bytes (mcp.mjs § contentFor).
 
-/** What one page's delivered text may take, in UTF-8 bytes. The connector's cap is 10,000. */
-export const PAGE_BYTES = 9000;
-/** The connector's cap, for the tests' and the answers' own account. */
+/** The connector's cap on a tool result's text, in UTF-8 bytes. An answer at or under it is deliverable, so it is returned untouched. */
 export const CAP_BYTES = 10000;
+/** What a page is BUILT to once paging is needed (headroom under the cap for a field the door adds). It is not the threshold: an answer of 9,001 to 10,000 bytes fits and is not paged. */
+export const PAGE_BYTES = 9000;
 
 /** The text the connector delivers for an answer, in UTF-8 bytes. */
 export const textBytes = (answer) => Buffer.byteLength(JSON.stringify(answer, null, 1), "utf8");
@@ -79,7 +79,7 @@ const CONTEXT_KEYS = ["standing", "ground", "law", "teach", "set_downs_awaiting"
 
 /**
  * `household { read: "stances" }` as pages. The answer is `stancesForHandles`' own.
- *  - no `part`, and the answer fits a page: returned as it was, byte for byte;
+ *  - no `part`, and the answer fits the connector (≤ CAP_BYTES): returned as it was, byte for byte;
  *  - no `part`, and it does not: the marks page that fits, the read's context counted and named instead of carried
  *    (`context`), each context list readable by its `part`;
  *  - `part`: one context list, paged by size with its own cursor (set_downs, takes, standing, ground), or `teach`.
@@ -89,7 +89,7 @@ export function pageStances(answer, args = {}) {
   if (!answer || answer.unavailable || !Array.isArray(answer.awaiting)) return answer;
   const part = args.part == null || args.part === "" ? null : String(args.part);
   if (part == null) {
-    if (textBytes(answer) <= PAGE_BYTES) return answer;
+    if (textBytes(answer) <= CAP_BYTES) return answer;
     return marksPage(answer, startOf(args.cursor));
   }
   if (part === "teach") return { read: "stances", part, law: answer.law, teach: answer.teach };
@@ -138,7 +138,7 @@ export const NEEDS_PARTS = Object.freeze({
 
 /**
  * `household { read: "needs-you" }` as pages. The answer is `needsYou`'s own.
- *  - no `part`, and it fits a page: returned as it was, byte for byte;
+ *  - no `part`, and it fits the connector (≤ CAP_BYTES): returned as it was, byte for byte;
  *  - no `part`, and it does not: every part counted (its total, its unavailable word) and the call that pages it;
  *  - `part`: that part's rows, whole as needs-you gives them, paged by size, with its own cursor.
  */
@@ -146,7 +146,7 @@ export function pageNeeds(answer, args = {}) {
   if (!answer || answer.refused) return answer;
   const part = args.part == null || args.part === "" ? null : String(args.part);
   if (part == null) {
-    if (textBytes(answer) <= PAGE_BYTES) return answer;
+    if (textBytes(answer) <= CAP_BYTES) return answer;
     return needsSkeleton(answer);
   }
   const rows = NEEDS_PARTS[part]?.(answer);
