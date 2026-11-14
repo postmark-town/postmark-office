@@ -90,9 +90,9 @@ import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mj
 // the office learns "pool" once per table — see world2-acts.mjs § THE STANCE
 // READ'S OWN CREDENTIAL.
 import { stanceQuery } from "./world2-acts.mjs";
-import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
+import { importEngineAt, mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import {
-  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
+  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstCover, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
   lawMarksAt, lawShaFor, onCurrentVersion, readVersions,
 } from "./town-stance.mjs";
 import { join } from "node:path";
@@ -657,15 +657,44 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // not yet cleared) keeps its own date, as before.
   const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
   if (laid.unreachable) return { unreachable: laid.unreachable };
-  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
-  const firstLaid = new Map();
+  const { firstClaimInstant, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
   for (const r of laid.rows ?? []) {
-    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
-    if (!r?.slug || !Number.isFinite(at)) continue;
+    if (!r?.slug) continue;
     const id = String(r.slug);
-    if (!firstLaid.has(id) || at < firstLaid.get(id)) firstLaid.set(id, at);
+    if (!chainOf.has(id)) chainOf.set(id, []);
+    chainOf.get(id).push({ id: r.id, geometry: r.geometry ?? null, decided_at: r.decided_at ?? null });
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (!firstLaid.has(id) || at < firstLaid.get(id)) { firstLaid.set(id, at); originOf.set(id, r.id); }
   }
-  const elder = elderByFirstLaid(firstLaid);
+  // AND ON THE CELLS TWO MARKS SHARE (POS-571). The fold reads seniority cell by
+  // cell wherever a mark's footprints say which of its cells are new (world
+  // consent.mjs § seniorAtContact: "an expansion is a newcomer on its new
+  // cells"), so the door asks the same blessed engine the same question, of the
+  // same claims it already reads: the footprints from the earliest locked claim
+  // on, through the canon shape the door is judging (`mark-render.mjs §
+  // footprintsThroughShape`), so an amend locked but not yet crossed neither drops
+  // the history canon's fold read nor adds what it has not (P3). They and the
+  // instants stay in this closure: `elder` hands `awaitingOf` a yes or no, and
+  // no date or footprint joins a candidate. An engine that cannot answer per
+  // cell (one older than the rule, or one that cannot be read) leaves the
+  // whole-mark order, which is what its own fold reads too.
+  let firstCoverOrder = null;
+  try { firstCoverOrder = (await importEngineAt(repo, "consent.mjs")).firstCoverOrder ?? null; } catch { firstCoverOrder = null; }
+  const records = new Map();
+  const recordOf = (m) => {
+    const id = String(m?.id ?? "");
+    if (records.has(id)) return records.get(id);
+    const at = firstLaid.get(id);
+    const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
+    const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
+    const rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
+      date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
+    records.set(id, rec);
+    return rec;
+  };
+  const elder = elderByFirstCover({ firstCoverOrder, recordOf, wholeMark: elderByFirstLaid(firstLaid) });
 
   // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
   // own test, the same one world.mjs uses for an act's anchor (held.mjs §
@@ -678,13 +707,17 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   return { marks, householdOf, elder, isThing };
 }
 
-// The first-laid read, on the one table `stance_reader` holds. Three columns,
+// The first-laid read, on the one table `stance_reader` holds. Six columns,
 // none of them a body, only claims that stood, and its rows never leave
-// `worldForStances`.
+// `worldForStances`. The id, the geometry and the decision instant are the
+// footprints' (POS-571): when each locked version took effect, and where.
 const FIRST_LAID_SELECT = `
   SELECT slug,
+         id,
          data ->> 'date' AS laid_date,
-         submitted_at
+         submitted_at,
+         decided_at,
+         geometry
     FROM claims
    WHERE slug = ANY($1) AND status = 'locked'`;
 

@@ -36,7 +36,7 @@ import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
 import { CLASS_STANCE, ACTION_STANCE, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
 import {
-  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstLaid,
+  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstCover, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
 } from "../src/town-stance.mjs";
 
@@ -442,6 +442,235 @@ test("5g · elderByFirstLaid: first-laid instants as ISO or milliseconds, else t
   const same = elderByFirstLaid(new Map([["a/one", "2026-09-18"], ["b/two", "2026-09-18"]]));
   assert.equal(same(a, b), true, "a tie goes to the id, as `before` breaks one");
   assert.equal(same(b, a), false);
+});
+
+// ── 5h · the door reads seniority cell by cell, as the fold does (POS-571) ──
+//
+// World LOGOS conflict-matrix § Roles from seniority (RULED 2026-10-04):
+// "per-cell (whoever first covered a cell is that cell's incumbent)", and "an
+// expansion is a newcomer on its new cells". The fold reads that off a mark's
+// footprints (world consent.mjs § seniorAtContact). Bevel's FIX of office#1019
+// (2026-11-13 16:33Z): the door's offers and its recording ask the same blessed
+// engine, of the same locked claims the stance credential already reads.
+//
+// The estate was first laid 08-01 over x -50..50 and amended 08-20 to reach
+// x 150; the mill was laid 08-15 at x 100..140, ground only the amend reached.
+// This World carries the real engine at the suite's pin.
+//
+// FLIP: in world-stance.mjs § worldForStances, hand `awaitingOf` the whole-mark
+// `elderByFirstLaid(firstLaid)` again → the estate is offered the mill, the
+// mill's word is refused, and the first half reds.
+
+/** A World in a bottle carrying the real engine at the suite's pin, serving `marks`. → its path. */
+async function cellWorld(name, marks, households) {
+  const dir = join(scratch, name);
+  const { worldClone } = await import("./fixture-paths.mjs");
+  const engine = execFileSync("git", ["-C", worldClone(), "ls-tree", "--name-only", "HEAD", "tools/"], { encoding: "utf8" })
+    .split("\n").filter((p) => /^tools\/[^/]+\.mjs$/.test(p) && !p.endsWith(".test.mjs"));
+  for (const p of engine) {
+    const f = join(dir, p);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, execFileSync("git", ["-C", worldClone(), "show", `HEAD:${p}`], { encoding: "utf8", maxBuffer: 64 << 20 }));
+  }
+  const f = join(dir, "WORLD", "world-state.json");
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, JSON.stringify({ tick: 0, marks, parcels: [], households }));
+  writeFileSync(join(dir, "WORLD", "skeleton.json"), JSON.stringify({ features: [] }));
+  const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  g("init", "-q", "-b", "main"); g("config", "user.email", "t@postmark.invalid"); g("config", "user.name", "cells");
+  g("add", "-A"); g("commit", "-qm", "canon");
+  return dir;
+}
+const CELL_HOUSEHOLDS = { east: "hh:east", miller: "hh:mill", holder: "hh:holder", shedder: "hh:shed", barner: "hh:barn" };
+let cellRepo;
+{
+  const D = (d) => `2026-08-${d}T00:00:00.000Z`;
+  const cellMarks = [
+    { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: D("20"), body: "the estate, reaching east" },
+    { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: D("15"), body: "the mill" },
+    // P2's shapes, far from the estate: a parcel claimed 08-10, and a shed first laid 08-01 over its
+    // west edge, amended 09-01 to reach further in
+    { id: "holder/the-plot", by: "holder", kind: "parcel", tier: "home", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: D("10"), body: "the plot" },
+    { id: "shedder/the-shed", by: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", body: "the shed" },
+    // P3's barn, laid 09-05 at x 220..240: ground only the estate's later amend (09-10) reaches
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
+  ];
+  cellRepo = await cellWorld("world-cells", cellMarks, CELL_HOUSEHOLDS);
+}
+const CELL_D = (d) => `2026-08-${d}T00:00:00.000Z`;
+const ESTATE_ORIGIN = { slug: "east/the-estate", id: "c-estate-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 0, y: 0 }, extent: { w: 100, h: 100 } } };
+const ESTATE_AMEND = { slug: "east/the-estate", id: "c-estate-1", status: "locked", laid_date: CELL_D("20"), submitted_at: CELL_D("19"), decided_at: CELL_D("20"), geometry: { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } } };
+const MILL_CLAIM = { slug: "miller/the-mill", id: "c-mill-0", status: "locked", laid_date: CELL_D("15"), submitted_at: CELL_D("15"), decided_at: CELL_D("15"), geometry: { at: { x: 120, y: 0 }, extent: { w: 40, h: 40 } } };
+const east = { household: "hh:east", handles: new Set(["east"]) };
+const miller = { household: "hh:mill", handles: new Set(["miller"]) };
+const cellSpeak = (args, key) => declareStanceViaOffice(cellRepo, args, key, { crossing: 145 });
+const offered = async (key) => (await stanceInbox(cellRepo, key)).candidates.map((c) => c.mark);
+
+test("5h · an EXPANSION is a newcomer on its new cells at the door too: the mill is offered the estate and its word is recorded; the estate's obsolete word on the mill is refused; the fold agrees", async () => {
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-1"), claim("miller/the-mill", "c-mill-0")];
+  assert.deepEqual(await offered(miller), ["east/the-estate"], "the mill was first on the cells the estate's amend added");
+  assert.deepEqual(await offered(east), [], "and the estate has no word on the mill there");
+  const r = await cellSpeak({ on: "east/the-estate", stance: "opposed" }, miller);
+  assert.equal(r.on, "east/the-estate", "the incumbent's word is recorded");
+  assert.equal(written().filter((w) => w.payload.on === "east/the-estate").length, 1);
+  await assert.rejects(() => cellSpeak({ on: "miller/the-mill", stance: "opposed" }, east), (e) => {
+    assert.equal(e.code, 403, "the obsolete word, the one the fold would now discard, is refused");
+    return true;
+  });
+  assert.equal(written().filter((w) => w.payload.on === "miller/the-mill").length, 0, "and nothing was written for it");
+
+  // THE FOLD AGREES: the same engine, the same footprints (the write-down's own builder), the same claims
+  const { pathToFileURL } = await import("node:url");
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const estate = { id: "east/the-estate", slug: "the-estate", by: "east", household: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: CELL_D("20"), claimed_at: CELL_D("01"), body: "e",
+    footprints: footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } } }) };
+  const mill = { id: "miller/the-mill", slug: "the-mill", by: "miller", household: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), body: "m" };
+  const stood = (state, id) => state.marks.some((m) => m.id === id);
+  const millSays = engine.fold({ marks: [estate, { ...mill, consent: { "east/the-estate": "opposed" } }], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: "miller/the-mill", n: 100, weight: 100, tick: 0 }] });
+  assert.equal(stood(millSays, "east/the-estate"), false, "the fold counts the word the door recorded");
+  const estateSays = engine.fold({ marks: [{ ...estate, consent: { "miller/the-mill": "opposed" } }, mill], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: "east/the-estate", n: 100, weight: 100, tick: 0 }] });
+  assert.equal(stood(estateSays, "miller/the-mill"), true, "and discards the word the door refused");
+});
+
+test("5h · NO HISTORY keeps the whole-mark door: without the amend's locked claim the estate is the mill's elder, and no date or footprint reaches a candidate", async () => {
+  FIRST = [ESTATE_ORIGIN, MILL_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-0"), claim("miller/the-mill", "c-mill-0")];
+  assert.deepEqual(await offered(east), ["miller/the-mill"], "dated 08-01 as a whole, the estate is offered the mill");
+  assert.deepEqual(await offered(miller), [], "and the mill is offered nothing");
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM];
+  // the estate's own date (08-20, its amend) is a candidate field as it always was; its first-laid instant and footprints are not
+  const read = JSON.stringify((await stanceInbox(cellRepo, miller)).candidates);
+  assert.ok(read.includes("east/the-estate"), "the candidate is there to read");
+  for (const leak of ["2026-08-01", "footprints", "claimed_at", "since", "geometry"])
+    assert.equal(read.includes(leak), false, `no ${leak} in the candidate rows`);
+});
+
+// 5h, A LATER AMEND LOCKED BUT NOT YET CROSSED (P3, round 3 of the review of
+// office#1019; Bevel's FIX 17:35Z): the estate's expansion (08-20) crossed, so
+// canon serves it and the fold read its file's two footprints; a further amend
+// (09-10, reaching x 250) is locked and has not crossed. The door judges canon's
+// shape, so it reads the chain through that shape (mark-render.mjs §
+// footprintsThroughShape), never the whole-chain rule that drops it. Once the
+// newer shape is served, the door reads through it. FLIP: in worldForStances use
+// footprintsFromChain again → the first two assertions red (the scalar answer).
+const ESTATE_LATER = { slug: "east/the-estate", id: "c-estate-2", status: "locked", laid_date: "2026-09-10T00:00:00.000Z", submitted_at: "2026-09-10T00:00:00.000Z", decided_at: "2026-09-10T00:00:00.000Z", geometry: { at: { x: 100, y: 0 }, extent: { w: 300, h: 100 } } };
+const BARN_CLAIM = { slug: "barner/the-barn", id: "c-barn-0", status: "locked", laid_date: "2026-09-05T00:00:00.000Z", submitted_at: "2026-09-05T00:00:00.000Z", decided_at: "2026-09-05T00:00:00.000Z", geometry: { at: { x: 230, y: 0 }, extent: { w: 20, h: 20 } } };
+const barner = { household: "hh:barn", handles: new Set(["barner"]) };
+const offeredAt = async (repo, key) => (await stanceInbox(repo, key)).candidates.map((c) => c.mark);
+
+test("5h · a LATER amend locked but not crossed keeps the door on the served history: the mill is still offered the estate, the estate refused on the mill; once the newer shape is served, the door advances", async () => {
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER, MILL_CLAIM, BARN_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-2"), claim("miller/the-mill", "c-mill-0"), claim("barner/the-barn", "c-barn-0")];
+  assert.deepEqual(await offered(miller), ["east/the-estate"], "the crossed expansion still makes the mill first on those cells");
+  assert.deepEqual(await offered(east), [], "and gives the estate no word on the mill");
+  assert.deepEqual(await offered(barner), [], "the barn is on no ground the served estate covers");
+  const r = await cellSpeak({ on: "east/the-estate", stance: "opposed" }, miller);
+  assert.equal(r.on, "east/the-estate", "the incumbent's word is recorded");
+  await assert.rejects(() => cellSpeak({ on: "miller/the-mill", stance: "opposed" }, east), (e) => e.code === 403);
+  assert.equal(written().filter((w) => w.payload.on === "miller/the-mill").length, 0);
+
+  // THE SERVED FOLD'S HISTORY: what the crossed file carries is exactly what the door reads now
+  const { footprintsFromChain, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  const served = { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } };
+  const atTheCrossing = footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: served });
+  assert.equal(atTheCrossing?.length, 2, "the write-down printed two footprints at the crossing");
+  assert.deepEqual(footprintsThroughShape({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), atTheCrossing,
+    "the door's history through the served shape is the file's");
+  assert.equal(footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), null,
+    "where the whole-chain rule, the write-down's, would read nothing");
+
+  // ONCE THE NEWER SHAPE IS SERVED: the door reads through it
+  const next = await cellWorld("world-cells-next", [
+    { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 100, y: 0 }, extent: { w: 300, h: 100 }, date: "2026-09-10T00:00:00.000Z", body: "the estate, reaching further" },
+    { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), body: "the mill" },
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
+  ], CELL_HOUSEHOLDS);
+  assert.deepEqual(await offeredAt(next, barner), ["east/the-estate"], "the barn was first on the cells the later amend added");
+  assert.deepEqual(await offeredAt(next, east), [], "and the estate has no word on the barn or the mill");
+  // (the mill's household has already spoken on the estate above, so its inbox no longer offers it)
+  await assert.rejects(() => declareStanceViaOffice(next, { on: "miller/the-mill", stance: "opposed" }, east, { crossing: 145 }), (e) => e.code === 403,
+    "the mill keeps its cells: the estate's word on it is still refused");
+});
+
+// 5h, A PARCEL KEEPS ITS OWN LAW (P2, round 2 of the review of office#1019; Bevel's
+// FIX 17:07Z): a parcel "speaks only on what came after it", whole-mark (world
+// consent.mjs § cameAfter), and seniority at contact never reads cells for a
+// parcel. The shed was first laid 08-01, before the plot (08-10), and amended
+// 09-01 further into it: the fold ignores the plot's word on it, so the door
+// neither offers it nor records it. FLIP: drop the parcel guard in town-stance.mjs
+// § elderByFirstCover → the plot's household is offered the shed, and this reds.
+const PLOT_CLAIM = { slug: "holder/the-plot", id: "c-plot-0", status: "locked", laid_date: CELL_D("10"), submitted_at: CELL_D("10"), decided_at: CELL_D("10"), geometry: { at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 } } };
+const SHED_ORIGIN = { slug: "shedder/the-shed", id: "c-shed-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 980, y: 0 }, extent: { w: 20, h: 20 } } };
+const SHED_AMEND = { slug: "shedder/the-shed", id: "c-shed-1", status: "locked", laid_date: "2026-09-01T00:00:00.000Z", submitted_at: "2026-09-01T00:00:00.000Z", decided_at: "2026-09-01T00:00:00.000Z", geometry: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } };
+const holder = { household: "hh:holder", handles: new Set(["holder"]) };
+
+test("5h · a PARCEL keeps its own law at the door: the plot's household is not offered the shed amended into it, its word is refused with nothing written, and the fold ignores that word too", async () => {
+  FIRST = [PLOT_CLAIM, SHED_ORIGIN, SHED_AMEND];
+  CLAIMS = [claim("holder/the-plot", "c-plot-0"), claim("shedder/the-shed", "c-shed-1")];
+  assert.deepEqual(await offered(holder), [], "first laid before the plot, the shed is not the plot's to answer, whatever its amend reached");
+  await assert.rejects(() => cellSpeak({ on: "shedder/the-shed", stance: "opposed" }, holder), (e) => {
+    assert.equal(e.code, 403, "the word the fold would ignore is refused");
+    return true;
+  });
+  assert.equal(written().filter((w) => w.payload.on === "shedder/the-shed").length, 0, "and nothing was written");
+
+  const { pathToFileURL } = await import("node:url");
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const shed = { id: "shedder/the-shed", slug: "the-shed", by: "shedder", household: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", claimed_at: CELL_D("01"), body: "s",
+    footprints: footprintsFromChain({ chain: [SHED_ORIGIN, SHED_AMEND], originId: "c-shed-0", originSince: CELL_D("01"), current: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } }) };
+  const plot = { id: "holder/the-plot", slug: "the-plot", by: "holder", household: "holder", kind: "parcel", tier: "market", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: CELL_D("10"), body: "p", consent: { "shedder/the-shed": "opposed" } };
+  assert.equal(shed.footprints?.length, 2, "the shed carries its history, so the cells could have been asked");
+  const state = engine.fold({ marks: [plot, shed], terrain: { features: [] }, tick: 1, stakes: [] });
+  assert.ok(state.marks.some((m) => m.id === "shedder/the-shed"), "the fold ignores the plot's word: the shed came first");
+});
+
+test("elderByFirstCover · a parcel on EITHER side keeps the whole-mark answer, whatever the cells would say", () => {
+  const always = (grantorFirst) => () => ({ grantorFirst });
+  const asked = [];
+  const wholeMark = (g, m) => { asked.push([g.id, m.id]); return g.id < m.id; };
+  const parcel = { id: "a/plot", kind: "parcel" }, sited = { id: "b/shed", kind: "sited" }, other = { id: "c/mill", kind: "sited" };
+  for (const cells of [true, false]) {
+    const elder = elderByFirstCover({ firstCoverOrder: always(cells), recordOf: (m) => m, wholeMark });
+    assert.equal(elder(parcel, sited), true, "a parcel as the ground: whole-mark");
+    assert.equal(elder(sited, parcel), false, "a parcel as the newcomer: whole-mark");
+    assert.equal(elder(sited, other), cells, "and two non-parcels take the cells' answer");
+  }
+  assert.deepEqual(asked, [["a/plot", "b/shed"], ["b/shed", "a/plot"], ["a/plot", "b/shed"], ["b/shed", "a/plot"]], "whole-mark answered every parcel comparison, and only those");
+});
+
+// 5f, on the estate and the mill (Bevel's FIX, 16:39Z: "the label and door agree
+// with the fold, not merely the helper names"): the label and the inbox, each
+// handed `elderByFirstCover` over the engine's own `firstCoverOrder`, say what
+// the fold does. FLIP: hand labelMarks `elderByFirstLaid` instead → the label
+// files the estate over the mill, and the first assertion reds.
+test("5f · on an EXPANSION the label, the inbox and the fold agree: the estate awaits the mill's household, the mill awaits nothing of the estate's", async () => {
+  const { labelMarks } = await import("../src/world-settlement.mjs");
+  const { pathToFileURL } = await import("node:url");
+  const consent = await import(pathToFileURL(join(cellRepo, "tools", "consent.mjs")).href);
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const estate = { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: CELL_D("20"), published: true };
+  const mill = { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), published: true };
+  const facts = new Map([
+    [estate.id, { ...estate, claimed_at: CELL_D("01"), footprints: footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: estate }) }],
+    [mill.id, { ...mill, claimed_at: CELL_D("15") }],
+  ]);
+  const elder = elderByFirstCover({ firstCoverOrder: consent.firstCoverOrder, recordOf: (m) => facts.get(m.id) ?? m,
+    wholeMark: elderByFirstLaid(new Map([[estate.id, CELL_D("01")], [mill.id, CELL_D("15")]])) });
+  const hh = { east: "hh:east", miller: "hh:mill" };
+  const ctx = { townWords: new Map(), overlaps, isThing: () => false, elder, householdOf: (h) => hh[h] ?? h };
+  const labelled = await labelMarks([estate, mill], ctx);
+  const awaits = (id) => (labelled.find((m) => m.id === id)?.awaiting ?? []).filter((w) => w !== TOWN);
+  assert.deepEqual(awaits(estate.id), ["hh:mill"], "the label: the estate awaits the mill's household");
+  assert.deepEqual(awaits(mill.id), [], "and the mill awaits no one of the estate's");
+  assert.deepEqual(candidatesFrom({ mine: [mill], all: [estate, mill], overlaps, householdOf: ctx.householdOf, isThing: ctx.isThing, elder }).map((c) => c.mark), [estate.id], "the inbox offers the mill the estate");
+  assert.deepEqual(candidatesFrom({ mine: [estate], all: [estate, mill], overlaps, householdOf: ctx.householdOf, isThing: ctx.isThing, elder }), [], "and offers the estate nothing");
+  const rec = (m, extra) => ({ ...facts.get(m.id), slug: m.id.split("/")[1], household: m.by, body: "x", ...extra });
+  const state = engine.fold({ marks: [rec(estate), rec(mill, { consent: { [estate.id]: "opposed" } })], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: mill.id, n: 100, weight: 100, tick: 0 }] });
+  assert.equal(state.marks.some((m) => m.id === estate.id), false, "and the fold counts the mill's word");
 });
 
 // ── 6 · the cutover ─────────────────────────────────────────────────────────

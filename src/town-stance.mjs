@@ -412,6 +412,31 @@ export function elderByFirstLaid(firstLaid) {
   return (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
 }
 
+/**
+ * SENIORITY ON THE CELLS TWO MARKS SHARE, as the fold reads it (POS-571; world
+ * LOGOS conflict-matrix § Roles from seniority, RULED 2026-10-04: "per-cell
+ * (whoever first covered a cell is that cell's incumbent)", "an expansion is a
+ * newcomer on its new cells"). PURE. `firstCoverOrder` is the blessed engine's
+ * own (world tools/consent.mjs § firstCoverOrder), never a copy: it answers
+ * `{ grantorFirst }` where a footprint history decides, and null where the cells
+ * prove nothing. `recordOf(m)` is the mark as that engine reads it (its first-laid
+ * instant and footprints beside its shape). Where the engine has no per-cell
+ * answer, or predates one, `wholeMark` answers as it always has
+ * (`elderByFirstLaid`). Only the yes or no crosses into `awaitingOf`.
+ */
+export function elderByFirstCover({ firstCoverOrder = null, recordOf, wholeMark }) {
+  if (typeof firstCoverOrder !== "function") return wholeMark;
+  return (g, m) => {
+    // A PARCEL KEEPS ITS OWN LAW, whole-mark on both sides: it "speaks only on what
+    // came after it", by first-laid instant (world consent.mjs § cameAfter), and
+    // the engine's seniority at contact refuses a parcel on either side before any
+    // cell is read (§ seniorAtContact). So the cells are never asked of a parcel.
+    if (g?.kind === "parcel" || m?.kind === "parcel") return wholeMark(g, m);
+    const byCell = firstCoverOrder(recordOf(g), recordOf(m));
+    return byCell ? byCell.grantorFirst === true : wholeMark(g, m);
+  };
+}
+
 /** A handle's household, with the town's own ground and pen folded into the town. */
 export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? TOWN : householdOf(h) ?? h);
 

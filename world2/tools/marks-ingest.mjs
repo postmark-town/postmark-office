@@ -179,8 +179,10 @@ export const STORE_STAMPS = new Set(DERIVED.filter((k) => !RECORD_FIELDS_FROM_CO
 
 // `claimed_at` is the store's own fact printed into the file (the origin claim's
 // date, mark-render.mjs § recordFromRow, POS-364 review): the file carries it
-// for the tree's fold, and it is never a resident's change to ingest back.
-export const PRINTED_FROM_THE_STORE = new Set(["claimed_at"]);
+// for the tree's fold, and it is never a resident's change to ingest back. So are
+// `footprints`, the mark's footprint history read off its locked claims
+// (mark-render.mjs § footprintsFromChain, POS-571).
+export const PRINTED_FROM_THE_STORE = new Set(["claimed_at", "footprints"]);
 
 /** Is `k` a key the fold's record carries as a fact of the mark? */
 export const isRecordField = (k, v) =>
