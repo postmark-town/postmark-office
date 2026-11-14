@@ -105,7 +105,7 @@ test("hearing lasts to the settlement — and the log keeps what hearing dropped
   assert.equal((await store.hear("wright")).voices.length, 1, "sixteen minutes old is still hearable: the fade no longer bounds the ear");
   tick(1 * MIN);
   settle();
-  tick(1 * MIN);
+  tick(61 * MIN); // the hour of grace (CORE-97) runs out with no say: the room closes at the hour
   const late = await store.hear("wright");
   assert.deepEqual(late.voices, [], "a settlement later it is gone from hearing");
   // the settlement ends the conversation as it ends hearing (POS-779): the same
@@ -207,9 +207,9 @@ test("a settlement splits the thread — the same edge hearing has (POS-779)", a
   await store.say("rei", "the first remark");
   tick(3 * MIN);
   settle();
-  tick(3 * MIN);
+  tick(61 * MIN); // the hour of grace (CORE-97) runs out with no say
   const heard = await store.hear("wright");
-  assert.deepEqual(heard.voices, [], "the ear lost it at the settlement");
+  assert.deepEqual(heard.voices, [], "the ear lost it once the grace after the settlement ran out");
   await store.say("rei", "after the settlement");
   const c = store.conversations();
   assert.equal(c.live.length, 1);
@@ -221,12 +221,12 @@ test("a settlement splits the thread — the same edge hearing has (POS-779)", a
 });
 
 test("the settlements the office keeps split a thread too, not only the newest (POS-779)", async () => {
-  const edges = [T0 + 1 * MIN, T0 + 2 * MIN];
+  const edges = [T0 + 1 * MIN, T0 + 200 * MIN];
   const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { settlements: () => edges });
   await store.say("rei", "epoch zero");
-  tick(90_000);
+  tick(90 * MIN); // past the hour of grace after the first edge (CORE-97)
   await store.say("rei", "epoch one");
-  tick(60_000);
+  tick(180 * MIN); // past the hour of grace after the second
   await store.say("rei", "epoch two");
   const c = store.conversations();
   assert.equal(c.live.length + c.closed.length, 3, "three settlements, three threads");
@@ -336,8 +336,8 @@ test("a closed conversation stays browsable, and survives a restart of the offic
   await store.say("rei", "goodnight then");
   await store.say("wright", "goodnight");
   tick(MIN);
-  settle(); // a settlement closes it (POS-779); silence alone no longer does
-  tick(MIN);
+  settle(); // a settlement closes it once the hour of grace runs out with no say (POS-779, CORE-97); silence alone no longer does
+  tick(61 * MIN);
   const c = store.conversations();
   assert.deepEqual(c.live, []);
   assert.equal(c.closed.length, 1);
@@ -349,7 +349,7 @@ test("a closed conversation stays browsable, and survives a restart of the offic
   // a second store over the same log is the office coming back up
   const fresh = bench({ rei: { x: 12, y: -8 } }, { log: path });
   fresh.clock.settledAt = T0 + MIN; // the same settlement, as the restarted office reads it
-  fresh.tick(2 * MIN);
+  fresh.tick(62 * MIN);
   const after = fresh.store.conversations();
   assert.equal(after.closed.length, 1);
   assert.deepEqual(after.closed[0].voices.map((v) => v.said), ["goodnight then", "goodnight"]);
@@ -530,8 +530,8 @@ test("arriving mid-conversation reads the room: hearing is empty, the conversati
   assert.deepEqual(heard.conversation.participants, ["rei", "wright"]);
   assert.deepEqual(heard.conversation.record.map((v) => v.said), ["the first course", "and the second"]);
 
-  settle(); // the settlement ends the conversation, as it ends hearing
-  tick(MIN);
+  settle(); // the settlement ends the conversation, as it ends hearing, once the hour of grace runs out (CORE-97)
+  tick(61 * MIN);
   const empty = await store.hear("late");
   assert.equal(empty.conversation, undefined);
   assert.match(empty.note, /nobody within earshot/);
@@ -975,7 +975,7 @@ test("POS-226: a voice from before the last settlement is unhearable; one spoken
   await store.say("rei", "before the settlement");
   tick(1 * MIN);
   settle();
-  tick(1 * MIN);
+  tick(61 * MIN); // the grace after the settlement (CORE-97) runs out with no say: the old room is closed
   await store.say("rei", "after the settlement");
   tick(5 * 60 * MIN);                             // five hours: far past any fade
   const r = await store.hear("wright");
@@ -990,6 +990,7 @@ test("POS-226: the default is the newest 20; `before` pages exactly 20 and stops
   const { store, tick, settle } = bench(at);
   for (let i = 1; i <= 5; i++) { await store.say("rei", `old ${i}`); tick(16_000); }
   settle();
+  tick(61 * MIN); // CORE-97: the old room closes at the hour, so the new says are a new room
   for (let i = 1; i <= 45; i++) { tick(16_000); await store.say("rei", `new ${String(i).padStart(2, "0")}`); }
   tick(16_000);
   const first = await store.hear("ear");
@@ -1038,6 +1039,7 @@ test("POS-226: the memory cap bounds how far back an ear can page, and the reply
   const { store, tick, settle } = bench({ ear: { x: 0, y: 0 }, rei: { x: 2, y: 0 } }, { memoryMax: 5 });
   for (let i = 1; i <= 3; i++) { await store.say("rei", `old ${i}`); tick(16_000); }
   settle();
+  tick(61 * MIN); // CORE-97: the old room closes at the hour
   for (let i = 1; i <= 4; i++) { tick(16_000); await store.say("rei", `new ${i}`); }
   let r = await store.hear("ear");
   assert.deepEqual(r.voices.map((v) => v.said), ["new 1", "new 2", "new 3", "new 4"]);

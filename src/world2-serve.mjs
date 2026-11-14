@@ -96,7 +96,7 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
-import { hearable } from "./hearing-window.mjs";
+import { hearable, roomOpen } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -1408,7 +1408,20 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     try { win = hearingWindow(at.ms); } catch { win = null; }
     const since = Number.isFinite(win?.since) ? win.since : null;
     // each voice carries its speaker's standing (POS-739): "visitor" for a berth, "resident" otherwise
-    const emissions = live.emissionsOfClass(rows).filter((e) => hearable(Date.parse(e.born_at), at.ms, since))
+    // CORE-97: a room still open across the settlement edge is heard whole. The rows are clustered with the ONE room policy
+    // (hearing-window.mjs roomOpen, through talk.clusterVoices) on the published edges; a row of an open room that began before
+    // the window's edge is hearable too. The 13 h bound still cuts what it cuts, and read_bound_disclosed says so.
+    const sounds = live.emissionsOfClass(rows);
+    const edges = publishedEdges({ settlements, hearingWindow: () => win, ms: at.ms }); // the window already read: one ask per instant
+    const carried = new Set();
+    if (since != null && edges.length) {
+      const spoken = sounds.map((e) => ({ at: Date.parse(e.born_at), x: e.x, y: e.y, aboard: Boolean(e.props?.aboard), e }));
+      for (const c of talk.clusterVoices(spoken, { earshotM: dials.earshot_m.value, boundaries: edges })) {
+        if (c.voices[0].at >= since || !roomOpen(c.latest, at.ms, edges)) continue;
+        for (const v of c.voices) carried.add(v.e);
+      }
+    }
+    const emissions = sounds.filter((e) => hearable(Date.parse(e.born_at), at.ms, since) || (carried.has(e) && Date.parse(e.born_at) <= at.ms))
       .map((e) => ({ ...e, standing: standingOf(e.source) }));
     const fellBack = talk.sayDialsDisclosure(dials);
     const body = {
