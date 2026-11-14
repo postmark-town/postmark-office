@@ -25,16 +25,17 @@
 //
 // ── NEVER ONTO A RED LEDGER ──────────────────────────────────────────────────
 //
-// When an event is due, the ledger is first judged by the mint's own arrival check (tools/stamp-verify-owed.mjs: owed mints and
-// settlements are not red; anything else the town verifier finds is). A red ledger is the mint's refusal too, and no completion
-// signs onto it (exit 4). Only when something is due: a quiet tick costs no verify of its own (the tick's lock hold stays as it was).
+// Every completion first asks the mint's own arrival predicate (src/event-sparks.mjs § ledgerArrivalRed, the same
+// tools/stamp-verify-owed.mjs call the mint makes: owed mints and settlements are not red), before anything is signed — at the
+// completion's own boundary, so neither this pass nor any other caller of completeEvent can bypass it. A red ledger is the mint's
+// refusal too: the pass stops at the first one (exit 4). With nothing due no completion runs, so a quiet tick costs no verify.
 //
 // Exit: 0 every due event completed or held; 1 a completion was refused (non-fatal, the tick goes on); 2 usage; 3 a dirty ledger;
 // 4 a red ledger.
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -66,13 +67,6 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (dry) { for (const r of due) console.log(JSON.stringify({ event: r.id, due: true, ends: r.ends })); return 0; }
   if (!due.length) return 0;
   const registry = arg(argv, "--registry");
-  const verify = spawnSync(process.execPath, [join(HERE, "..", "tools", "stamp-verify-owed.mjs"), "--repo", town, ...(registry ? ["--registry", registry] : [])],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  if (verify.status !== 0) {
-    process.stderr.write(`${verify.stdout ?? ""}${verify.stderr ?? ""}`);
-    console.error(`[event-sparks] the stamp ledger is red (the verify above names the line) — ${due.length} due event(s) wait; no completion signs onto it`);
-    return 4;
-  }
 
   const { completeEvent } = await import("../src/event-sparks.mjs");
   const { penTransaction } = await import("../src/write.mjs");
@@ -84,9 +78,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const keyPem = readFileSync(keyPath, "utf8");
   let refused = 0;
   for (const row of due) {
-    const out = await penTransaction(town, () => completeEvent(row, { clone: town, keyPem, env, now, date: townDay(), edges }));
-    if (out?.error) refused += 1;
+    const out = await penTransaction(town, () => completeEvent(row, { clone: town, keyPem, env, now, date: townDay(), edges, registry }));
     console.log(JSON.stringify(out));
+    if (out?.error?.reason === "ledger-red") {
+      console.error(`[event-sparks] the stamp ledger is red — ${due.length} due event(s) wait; no completion signs onto it`);
+      return 4;
+    }
+    if (out?.error) refused += 1;
   }
   return refused ? 1 : 0;
 }

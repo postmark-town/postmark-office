@@ -15,6 +15,8 @@
 // NO conversation the frame is the event's place and the ruled 60 m radius (120 × 120). A room that cannot be read is NOT "no
 // conversation": it is unavailable, and nothing falls back to the radius on its account.
 
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
@@ -335,6 +337,18 @@ export async function eventGalleryOf(q, evidence, { root = null } = {}) {
 // ledger's landing together (stamp-lines.mjs § landPlannedVia) — the ballot stake's own order (ballots-store.mjs § stakeInStore).
 
 const refusal = (code, defect, hint) => ({ error: { code, defect, hint } });
+
+/**
+ * THE MINT'S OWN ARRIVAL PREDICATE, asked as the mint asks it (deploy/office-keep.sh § the mint pass: tools/stamp-verify-owed.mjs
+ * over the town clone, with the tick's registry when it has one): the town's verifier, where "mints owed" and "settlement owed"
+ * are not red. Not a second verifier — the same call. Answers true when the ledger is red. As in the mint, the verifier names the
+ * line itself, to the journal (its output goes to this process's stderr), and no answer carries its words.
+ * The town's appendSigned does not check this itself (it parses, seals and signs), so the boundary asks before it signs.
+ */
+export function ledgerArrivalRed(clone, { registry = null } = {}) {
+  const tool = fileURLToPath(new URL("../tools/stamp-verify-owed.mjs", import.meta.url));
+  return spawnSync(process.execPath, [tool, "--repo", clone, ...(registry ? ["--registry", registry] : [])], { stdio: ["ignore", 2, 2] }).status !== 0;
+}
 const asAnswer = (e) => { if (e?.code && e?.defect) return refusal(e.code, e.defect, e.hint); throw e; };
 
 /** The town's engine and the ledger as it stands, for one act under the lock. */
@@ -485,11 +499,16 @@ async function freeSparkSlug(q, by, base) {
  * `planLeave` is the mark road's planner (world.mjs § planSparkLeave) and `roomsPlace` the World's room-set place (world.mjs §
  * sparkRoomsPlace, tools/spark.mjs § roomsPlace); a test hands its own of each where the World pin lacks the class.
  */
-export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, roomsPlace = undefined }) {
+export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, roomsPlace = undefined, registry = null }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   try {
     if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
     if (Date.parse(row.ends) > now) return held("not ended");
+    // 0 · NEVER ONTO A RED LEDGER (Rivet 20:11Z): before anything is read for it or signed, the ledger as it stands under the lock
+    //     is judged by the mint's own arrival predicate. Here, at the one boundary every caller passes, so no entry bypasses it.
+    if (ledgerArrivalRed(clone, { registry }))
+      return { error: { code: 409, reason: "ledger-red", defect: "the stamp ledger is red (the town's verifier names the line in the journal), so no completion signs onto it",
+        hint: "nothing was written; the mint refuses it too — the next tick asks again once the ledger is green" } };
     const pen = await import("./world2-pen.mjs");
     const store = await import("./events-store.mjs");
     const journal = await import("./world-journal.mjs");

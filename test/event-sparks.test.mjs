@@ -487,6 +487,26 @@ test("completion interrupted after its lines landed and before the store committ
   assert.equal((await postRow(row.id)).fields.completed.spark, `wright/${slug}`);
 });
 
+test("completion never signs onto a RED ledger: the mint's own arrival predicate, at the completion's own boundary, refuses before the first signature — no line, no commit, no claim, no receipt", async () => {
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet on red");
+  appendFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-11-14 · a line no key signed · wright → ada · 3\n");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qam", "a red line, committed");
+  assert.notEqual(verifies(dir).status, 0, "red to the town's own verifier");
+  assert.equal(S.ledgerArrivalRed(dir), true, "and to the mint's arrival predicate");
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  const calls = plannerCalls.length;
+  const out = await complete(dir, row, now); // a direct call: no pass in front of it
+  assert.equal(out.error?.reason, "ledger-red", JSON.stringify(out));
+  assert.match(out.error.defect, /the stamp ledger is red .* no completion signs onto it/);
+  assert.equal(ledgerText(dir), lines, "no line signed");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
+  assert.equal(plannerCalls.length, calls, "not even planned");
+  assert.equal((await claimOf(`wright/${row.id.split("/").slice(1).join("/")}`)).length, 0, "no spark claim");
+  assert.equal((await postRow(row.id)).fields.completed, undefined, "no receipt");
+  assert.equal(S.ledgerArrivalRed(townInABottle()), false, "a green ledger passes the same predicate");
+});
+
 test("completion never adopts or guesses: a return that is not its batch is refused, a ledger's spark id already held is refused, and a fresh id taken is suffixed", async () => {
   // a foreign return: the stake came home without its backing — not this completion's batch
   const dir = townInABottle();
@@ -543,7 +563,7 @@ test("the pass: a stamp ledger with lines nobody committed is not touched (exit 
   } finally { console.error = quiet; }
 });
 
-test("the pass never signs onto a RED ledger: with an event due it is judged by the mint's own arrival check and refused (exit 4); a quiet tick runs no verify", async () => {
+test("the pass never signs onto a RED ledger: an event due meets its completion's own arrival check and the pass stops (exit 4); a quiet tick runs no verify", async () => {
   const { main } = await import("../deploy/event-sparks-pass.mjs");
   const dir = townInABottle();
   appendFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-11-14 · a line no key signed · wright → ada · 3\n");
