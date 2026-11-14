@@ -303,37 +303,82 @@ test("R6 · the doorstep, through the actual call chain, still names every kind 
   assert.ok(bytesOf(text(d)) <= CAP_BYTES, `${bytesOf(text(d))} bytes`);
 });
 
-test("R8 · a single field over the cap, through the real dispatcher: cut with its exact bytes and where the whole text lives; the item stays identified and the walk goes on", async () => {
-  const huge = "庭の柵 café 🌱 ".repeat(1200);
-  const mk = (kind, mark) => ({ ...ALERT_ROWS[0], kind, about: { mark, body: huge } });
-  const rows = [mk("mark-taken", "r000/old-huge"), mk("escrow-on-missing-mark", "r001/ghost-huge"), ...ALERT_ROWS.slice(0, 3)];
-  const withHuge = { ...ctx, readers: { ...ctx.readers, alertsFor: async () => ({ alerts: rows, unread: [] }) } };
-  const read = (args) => householdApex({ read: "needs-you", args }, key, withHuge);
-  const first = await read({ part: "alerts" });
-  assert.ok(!first.error, JSON.stringify(first).slice(0, 300));
-  assert.ok(bytesOf(text(first)) <= CAP_BYTES, `${bytesOf(text(first))} bytes`);
-  const cutOf = (body) => /^(.*) \[…cut (\d+) bytes; (the whole text: (.*)|no read is verified to hold this field whole)\]$/s.exec(body);
-  const m = cutOf(first.rows[0].about.body);
-  assert.ok(m, "the first alert's body is cut with a marker");
-  assert.equal(m[3], "no read is verified to hold this field whole", "no verified opening for a retired mark's body: none is promised");
-  assert.equal(bytesOf(m[1]) + Number(m[2]), bytesOf(huge), "kept + cut = the field, exactly");
-  assert.deepEqual([first.rows[0].kind, first.rows[0].about.mark, first.rows[0].act.verb], ["mark-taken", "r000/old-huge", "world.stake"]);
-  // the whole walk: every alert once, each page under the cap, the escrow alert's body honestly without a source
-  const got = [];
-  let cursor = null;
-  for (let i = 0; i < 20; i++) {
-    const p = await read({ part: "alerts", ...(cursor ? { cursor } : {}) });
-    assert.ok(bytesOf(text(p)) <= CAP_BYTES, `page ${i}: ${bytesOf(text(p))}`);
-    got.push(...p.rows);
-    if (p.complete) break;
-    cursor = p.cursor;
+// ── CORE-96: a cut field's marker names a real read, and that read's canonical result IS the whole original string ──────────────
+//
+// The opening is the REST door: GET /household?<query> (server.mjs § GET /household: Object.fromEntries(url.searchParams) handed to
+// householdApex, authenticated, WITHOUT ctx.connector, so the canonical producer answers whole, unfolded and unpaged). For every
+// field family a page can cut, a synthetic over-cap string is injected at a producer (the real alerts.mjs shapes, the real holding
+// record, the real index, the real stance derivation; the same injection feeds both calls), the connector's page is read, its marker is
+// parsed, the named REST read is made the way server.mjs makes it, and the field is located in its answer by the marker's own
+// locator. The located string must equal the ENTIRE original: not its prefix, not a receipt, not a bodyless summary.
+const HUGE = (tag) => `${tag} ${"庭の柵 café 🌱 ".repeat(1100)}`;
+const MARKER_AT_END = /^(.*) \[…cut (\d+) bytes; the whole text: (.*)\]$/s;
+const leafStrings = (v, out = []) => { if (typeof v === "string") out.push(v); else if (v && typeof v === "object") Object.values(v).forEach((x) => leafStrings(x, out)); return out; };
+/** The marker's opening → the REST call server.mjs would make, and the field in its answer. */
+const resolveOpening = async (source, restCtx) => {
+  const [open] = source.split("; "); // the opening, then any provenance
+  const m = /^GET \/household\?(.*) → (.*)$/s.exec(open);
+  assert.ok(m, `a REST opening: ${source}`);
+  const qp = Object.fromEntries(new URLSearchParams(m[1]).entries()); // server.mjs: Object.fromEntries(url.searchParams.entries())
+  const rest = await householdApex(qp, key, restCtx);
+  assert.ok(!rest.error, `the REST read answers: ${JSON.stringify(rest).slice(0, 200)}`);
+  let cur = rest;
+  for (const t of m[2].matchAll(/\.?([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]|\[thing=("(?:[^"\\]|\\.)*")\]/g)) {
+    if (t[1] != null) cur = cur?.[t[1]];
+    else if (t[2] != null) cur = cur?.[Number(t[2])];
+    else cur = cur?.find((r) => r.thing === JSON.parse(t[3]));
   }
-  assert.deepEqual(got.map((r) => r.about.mark), rows.map((r) => r.about.mark), "no alert lost or doubled");
-  const e = cutOf(got[1].about.body);
-  assert.equal(e[3], "no read is verified to hold this field whole", "no source is promised where none exists");
-  // the real teaching block, through the dispatcher, fits the cap whole
-  const teach = await callRead("stances", { part: "teach" });
-  assert.ok(bytesOf(text(teach)) <= CAP_BYTES, `${bytesOf(text(teach))} bytes`);
+  return { value: cur, restBytes: bytesOf(JSON.stringify(rest)) };
+};
+
+test("R8 · every field family a page can cut: the marker's REST opening returns the ENTIRE original string", async () => {
+  const now = new Date("2026-11-14T06:00:00Z");
+  const { markTakenAlerts, escrowOnMissingAlerts } = await import("../src/alerts.mjs");
+  const real = stancesForHandles;
+  const viaStances = (mutate) => async (...a) => mutate(await real(...a));
+  // each family: where the huge string is injected, how the connector reads it, and the part/args to walk
+  const FAMILIES = [
+    ["alert about.body (mark-taken, the real producer shape)", "needs-you", { part: "alerts" }, (h) => ({ alertsFor: async () => ({ alerts: [...ALERT_ROWS.slice(0, 2), ...markTakenAlerts([{ slug: "r000/old-big", owner: "r000", body: h, opens_at: "2026-11-13T12:00:00.000Z" }], now)], unread: [] }) })],
+    ["alert about.body (escrow-on-missing-mark, the real producer shape)", "needs-you", { part: "alerts" }, (h) => ({ alertsFor: async () => ({ alerts: [...ALERT_ROWS.slice(0, 2), ...escrowOnMissingAlerts([{ mark: "r001/ghost-big", holder: "r001", n: 3, body: h }], () => false)], unread: [] }) })],
+    ["alert message", "needs-you", { part: "alerts" }, (h) => ({ alertsFor: async () => ({ alerts: [...ALERT_ROWS.slice(0, 2), { ...ALERT_ROWS[2], message: h }], unread: [] }) })],
+    ["bounce reason", "needs-you", { part: "unplaced_bounces" }, (h) => ({ mailAwaiting: (who) => ({ unplaced_bounces: who === "r000" ? [{ date: "2026-10-01", path: "p0", reason: "short" }, { date: "2026-10-02", path: "p1", reason: "short" }, { date: "2026-10-03", path: "p2", reason: h }] : [] }) })],
+    ["key ask asks_standing", "needs-you", { part: "key_asks" }, (h) => ({ claimState: async (_o, who) => ({ cosigned: false, asks_standing: who === "r000" ? "short" : h }) })],
+    ["likeness question cause", "needs-you", { part: "likeness_question" }, (h) => ({ likenessNeed: async () => ({ rows: [{ household: HOUSE, residents: ["r000"], cause: h, link: "https://example.invalid/likeness", hand_it_over: "x" }] }) })],
+    ["at-risk row body", "needs-you", { part: "stakes_at_risk" }, (h) => ({ stakesFor: async () => ({ next_settlement: null, rows: [{ mark: "r000/shed-a", class: "commons", escrow: 0, at_risk: true, body: "s" }, { mark: "r000/shed-b", class: "commons", escrow: 0, at_risk: true, body: "s" }, { mark: "r000/shed-c", class: "commons", escrow: 0, at_risk: true, body: h }] }) })],
+    ["set-down answer (the real holding record)", "stances", { part: "set_downs" }, (h) => ({ stances: viaStances((d) => { d.set_downs_awaiting[2].answer = h; return d; }) })],
+    ["take answer (the real holding record)", "stances", { part: "takes" }, (h) => ({ stances: viaStances((d) => { const t = d.awaiting_your_word.filter((r) => r.act === "take"); t[1].answer = h; return d; }) })],
+    ["standing row", "stances", { part: "standing" }, (h) => ({ stances: viaStances((d) => ({ ...d, standing: [{ on: "a/b", stance: "welcomed" }, { on: "c/d", stance: "opposed" }, { on: "e/f", stance: "welcomed", note: h }] })) })],
+    ["ground id", "stances", { part: "ground" }, (h) => ({ stances: viaStances((d) => ({ ...d, ground: ["r000/g-0", "r000/g-1", h] })) })],
+    ["teaching text", "stances", { part: "teach" }, (h) => ({ stances: viaStances((d) => ({ ...d, teach: { ...d.teach, any_latency: h, from: "LOGOS/the-response-function.md" } })) })],
+    ["stance row body (the real stance derivation)", "stances", {}, (h) => ({ stances: viaStances((d) => { for (const c of d.awaiting) if (c.mark === "brook/stone-3") c.body = h; return d; }) })],
+  ];
+  assert.equal(FAMILIES.length, 13);
+  for (const [name, read, args0, over] of FAMILIES) {
+    const huge = HUGE(name);
+    const readers = { ...ctx.readers, ...over(huge) };
+    const connectorCtx = { ...ctx, readers };
+    // the REST route's call: the flat query to householdApex, no connector, no slim, no strictFields (server.mjs § GET /household)
+    const restCtx = { clone: scratch, asOf: AS_OF, odb: ctx.odb, nowMs: ctx.nowMs, ix: ctx.ix, readers };
+    let found = null, pages = 0, args = { ...args0 };
+    for (; pages < 60 && !found; pages++) {
+      const page = await householdApex({ read, args }, key, connectorCtx);
+      assert.ok(!page.error, `${name}: ${JSON.stringify(page).slice(0, 240)}`);
+      assert.ok(bytesOf(text(page)) <= CAP_BYTES, `${name}: page ${pages} is ${bytesOf(text(page))} bytes`);
+      found = leafStrings(page).map((s) => MARKER_AT_END.exec(s)).find(Boolean) ?? null;
+      if (found || page.complete !== false || page.cursor == null) break;
+      args = { ...args0, cursor: page.cursor };
+    }
+    assert.ok(found, `${name}: a cut marker on a page`);
+    const [, kept, cutBytes, source] = found;
+    assert.equal(bytesOf(kept) + Number(cutBytes), bytesOf(huge), `${name}: kept + cut = the field, exactly`);
+    assert.ok(!/no read is verified/.test(source), `${name}: it names a read, never an absence claim`);
+    const { value } = await resolveOpening(source, restCtx);
+    assert.equal(value, huge, `${name}: the REST opening ${source.slice(0, 120)} returns the entire original string`);
+  }
+  // the identity of an item survives the cut: the alert row is still the alert (kind, mark, act), found by its own cursor
+  const withHuge = { ...ctx, readers: { ...ctx.readers, ...FAMILIES[0][3](HUGE("x")) } };
+  const p = await householdApex({ read: "needs-you", args: { part: "alerts", cursor: "2" } }, key, withHuge);
+  assert.deepEqual([p.rows[0].kind, p.rows[0].about.mark, p.rows[0].act.verb], ["mark-taken", "r000/old-big", "world.stake"]);
 });
 
 test("R7 · a caller that is not the connector reads the canonical answers of all three reads: whole, unfolded, unpaged", async () => {

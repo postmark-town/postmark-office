@@ -162,7 +162,7 @@ test("P9 · a stance row whose body alone is over the cap: the body is cut with 
   assert.equal(p.awaiting.length, 1, "the page is that one row");
   assert.deepEqual([p.awaiting[0].mark, p.awaiting[0].by, p.awaiting[0].on_your_ground], ["x/y", "x", ["r000/g"]], "identity stands");
   const { kept, cutBytes, source } = split(p.awaiting[0].body);
-  assert.equal(source, 'world { mark: "x/y" }', "the world's bare mark focus, by the row's own mark id");
+  assert.equal(source, 'GET /household?read=stances&cursor=0&limit=1 → awaiting[0].body; the mark itself: world { mark: "x/y" }', "the canonical REST stances read at this row's own cursor, and the mark's own read");
   assert.ok(original.startsWith(kept), "what is kept is the text's own beginning");
   assert.ok(!kept.includes("�"), "cut on a whole character");
   assert.equal(bytes(kept) + cutBytes, bytes(original), "kept bytes + cut bytes = the field's bytes, exactly");
@@ -185,13 +185,13 @@ test("P11 · an alert's nested about.body over the cap is cut, and plainly says 
   const taken = pageNeeds(needs([alert("mark-taken", "r000/old")]), { part: "alerts" });
   assert.ok(textBytes(taken) <= CAP_BYTES, `${textBytes(taken)}`);
   const t = split(taken.rows[0].about.body);
-  assert.equal(t.source, null, "no verified opening for a retired mark's body: none is promised (the world's focus answers a receipt for a missing mark)");
+  assert.equal(t.source, "GET /household?read=needs-you&household=h → alerts[0].about.body", "the canonical REST needs-you read, the alert's own row (a drafts list or a receipt is not the retired body)");
   assert.equal(bytes(t.kept) + t.cutBytes, bytes(big), "exact");
   assert.deepEqual([taken.rows[0].kind, taken.rows[0].about.mark, taken.rows[0].act.verb], ["mark-taken", "r000/old", "world.stake"], "the alert is still identified and actionable");
   const escrow = pageNeeds(needs([alert("escrow-on-missing-mark", "r001/ghost")]), { part: "alerts" });
   assert.ok(textBytes(escrow) <= CAP_BYTES);
   const e = split(escrow.rows[0].about.body);
-  assert.equal(e.source, null, "the mark is not in the world or the store: no existing read holds this body");
+  assert.equal(e.source, "GET /household?read=needs-you&household=h → alerts[0].about.body", "the other producer shape has the same opening: the alert row");
   assert.equal(bytes(e.kept) + e.cutBytes, bytes(big));
 });
 
@@ -201,11 +201,11 @@ test("P12 · a top-level message over the cap is cut too (the office composes it
   const p = pageNeeds({ read: "needs-you", household: "h", count: 1, alerts: [row] }, { part: "alerts" });
   assert.ok(textBytes(p) <= CAP_BYTES, `${textBytes(p)}`);
   const m = split(p.rows[0].message);
-  assert.equal(m.source, null);
+  assert.equal(m.source, "GET /household?read=needs-you&household=h → alerts[0].message");
   assert.equal(bytes(m.kept) + m.cutBytes, bytes(msg));
   const b = split(p.rows[0].about.body);
   assert.equal(bytes(b.kept) + b.cutBytes, 12000, "the second long field is counted by its own bytes");
-  assert.equal(b.source, null, "an alert's body has no verified opening");
+  assert.equal(b.source, "GET /household?read=needs-you&household=h → alerts[0].about.body");
 });
 
 test("P13 · the teaching block bypassed no fit: over the cap its longest strings are cut with where each lives; within the cap it is whole", () => {
@@ -225,9 +225,9 @@ test("P13 · the teaching block bypassed no fit: over the cap its longest string
     cutOnes += 1;
     const { kept, cutBytes, source } = split(field);
     assert.equal(bytes(kept) + cutBytes, bytes(original), `${name}: exact`);
-    if (name === "any_latency") assert.equal(source, "LOGOS/the-response-function.md in the world checkout");
-    if (name === "the_law_reaches") assert.equal(source, 'world { mark: "the-town/the-late-welcome" }');
-    if (name === "unruled") assert.equal(source, 'LOGOS/the-response-function.md in the world checkout and world { mark: "the-town/the-late-welcome" }');
+    if (name === "any_latency") assert.equal(source, "GET /household?read=stances → teach.any_latency; quoted from LOGOS/the-response-function.md in the world checkout");
+    if (name === "the_law_reaches") assert.equal(source, 'GET /household?read=stances → teach.after_it_is_published.the_law_reaches; quoted from world { mark: "the-town/the-late-welcome" }');
+    if (name === "unruled") assert.equal(source, 'GET /household?read=stances → teach.after_it_is_published.unruled; quoted from LOGOS/the-response-function.md in the world checkout and world { mark: "the-town/the-late-welcome" }');
   }
   assert.ok(cutOnes >= 1);
   // within the cap: whole, the same strings
