@@ -105,6 +105,13 @@ export async function printoutPair(q, { window, sinceWindow = null }) {
       `S${S.sealed_settlement} (window ${window}) is older than S${newer.sealed_settlement}, already printed at ${String(newer.printout_sha).slice(0, 12)}: a stale replay never moves canon backwards, so S${S.sealed_settlement} stays unprinted (the ruled gap)`);
   let P = null;
   if (sinceWindow != null) {
+    // THE CUTOVER'S BASE IS NAMED ONCE. Left in a unit's environment past the first printout, it would quietly
+    // measure every later settlement from the cutover; refused by name instead, so the alarm says to remove it.
+    const { rows: [printed] } = await q(
+      "SELECT sealed_settlement, window_id FROM world_snapshots WHERE printout_sha IS NOT NULL ORDER BY sealed_settlement DESC LIMIT 1");
+    if (printed)
+      throw new PrintoutRefusal("since-window-after-cutover",
+        `--since-window ${sinceWindow} names the cutover's base, and S${printed.sealed_settlement} (window ${printed.window_id}) is already printed: every printout since measures from the last one. Remove SETTLEMENT_SINCE_WINDOW from the unit's environment; nothing was printed`);
     P = await snapshotHeader({ query: q }, { window: sinceWindow });
     if (!P) throw new PrintoutRefusal("no-base", `--since-window ${sinceWindow} has no sealed snapshot`);
   } else {

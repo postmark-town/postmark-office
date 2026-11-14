@@ -280,15 +280,12 @@ const ROSTER = {
   "world2/tools/graph-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: graph-ingest.mjs" },
   "tools/arena-archive.mjs": { args: [], env: {}, code: 2, needle: "usage: arena-archive.mjs" },
   "world2/tools/ledger-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: WORLD2_PG_URL=" },
-  // No --world-repo: stops on usage before any git or Postgres (POS-142).
-  "world2/tools/marks-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: marks-ingest.mjs" },
   "world2/tools/pointer-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: pointer-ingest.mjs --world-repo" },
   // No connection named: stops before any Postgres (POS-302).
   "world2/tools/position-snapshot.mjs": { args: [], env: NO_PG, code: 2, needle: "no --pg-url, no PG* environment, and no WORLD2_PG_URL" },
   "world2/tools/replay-ingest.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage: replay-ingest.mjs" },
   // No --tree: stops on usage before any git read or Postgres connect (POS-242).
   "world2/tools/rehearse.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: rehearse.mjs" },
-  "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
   "world2/tools/return-past-takes.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: return-past-takes.mjs" },
   // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
   // opens any connection — it has no write mode at all.

@@ -48,7 +48,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { retireMarks } from "../world2/tools/materialize.mjs";
-import { WITHDRAW_CAUSE, retireFromSweep, retireOnlyFromFoldInput, slugsFromSweep, withdrawnSlugsFromSweep } from "../world2/tools/retire-unpublished.mjs";
+
+// The sweep-report readers (retire-unpublished.mjs: the unpublished and withdrawn channels, retireFromSweep, the
+// fold input's owed withdrawals) retired with the sweep at the settlement printout's cutover (POS-1025). The same two
+// doors out of canon are decided before the seal now, by settlement-decides.mjs (test/settlement-decides.test.mjs 1
+// and 2); `retireMarks`, the pen both call, keeps its proofs here.
 
 /**
  * A register, as a fake `q`. It answers exactly the two statements
@@ -160,32 +164,6 @@ test("retireMarks refuses without the window it rules at", async () => {
     /needs the window it rules at/);
 });
 
-// ── 7 · ONLY the unpublished channel is read ─────────────────────────────────
-//
-// The sweep has seven other array-valued channels and none of them is a
-// retirement. `dropped` is the sharpest: it is the-already-standing, a copy
-// that was never a conflict — the ORIGINAL still stands, so retiring by that id
-// would retire the survivor.
-test("only the unpublished channel becomes a retirement", () => {
-  const sweep = {
-    published: [{ id: "a/one" }],
-    unpublished: [{ id: "b/two" }, { id: "c/three" }],
-    left_drafted: [{ id: "d/four" }],
-    withdrawn: [{ id: "e/five" }],
-    quarantined: [{ id: "f/six" }],
-    suite_quarantined: [{ id: "g/seven" }],
-    dropped: [{ id: "h/eight" }],
-    rebased: [{ branch: "draft/x" }],
-  };
-  assert.deepEqual(slugsFromSweep(sweep), ["b/two", "c/three"]);
-});
-
-test("a sweep with no unpublished channel yields nothing rather than throwing", () => {
-  assert.deepEqual(slugsFromSweep({ published: [{ id: "a/one" }] }), []);
-  assert.deepEqual(slugsFromSweep({}), []);
-  assert.deepEqual(slugsFromSweep(null), []);
-});
-
 // ── 8 · the receipt names each slug retired and its cause ────────────────────
 test("the receipt names every slug and the door it left by", async () => {
   const { q } = register([standing("a/one"), standing("b/two")]);
@@ -199,61 +177,4 @@ test("the receipt names every slug and the door it left by", async () => {
     assert.equal(row.cause, "settlement-unpublish");
     assert.equal(row.window, 174);
   }
-});
-
-// ── 9 · THE WITHDRAWN CHANNEL IS THE OTHER DOOR OUT OF CANON (WLD-88) ────────
-//
-// A published mark its author withdrew leaves canon by the sweep's `withdrawn`
-// channel. Its store row must retire too, or it keeps holding ground and the
-// fold's carry writes it back the next crossing. It retires under its own
-// cause and is returned to no one's drafts: the author let it go (settled on
-// WLD-88, 2026-10-20).
-test("only the withdrawn channel becomes a withdrawal's retirement", () => {
-  const sweep = {
-    published: [{ id: "a/one" }], unpublished: [{ id: "b/two" }], left_drafted: [{ id: "d/four" }],
-    withdrawn: [{ id: "e/five" }], quarantined: [{ id: "f/six" }], dropped: [{ id: "h/eight" }],
-  };
-  assert.deepEqual(withdrawnSlugsFromSweep(sweep), ["e/five"]);
-  assert.deepEqual(slugsFromSweep(sweep), ["b/two"], "and the unpublish reader still reads its own channel only");
-  assert.deepEqual(withdrawnSlugsFromSweep({}), []);
-  assert.deepEqual(withdrawnSlugsFromSweep(null), []);
-});
-
-test("retireFromSweep retires the withdrawn under their own cause and returns none of them to drafts", async () => {
-  const { q, marks } = register([standing("b/two"), standing("current/the-bed")]);
-  const causes = [];
-  const wrapped = async (text, args) => {
-    if (/^UPDATE marks SET status = 'retired'/.test(text.trim())) causes.push([args[0], args[2]]);
-    return q(text, args);
-  };
-  const asked = [];
-  const returnDrafts = async (_q, { slugs }) => { asked.push(slugs); return { returned: [], kept: [], unreturned: [] }; };
-  const r = await retireFromSweep(wrapped, {
-    sweep: { unpublished: [{ id: "b/two" }], withdrawn: [{ id: "current/the-bed" }] }, windowId: 251, returnDrafts,
-  });
-
-  assert.deepEqual(causes, [["b/two", "settlement-unpublish"], ["current/the-bed", WITHDRAW_CAUSE]]);
-  assert.equal(WITHDRAW_CAUSE, "settlement-withdraw");
-  assert.deepEqual(asked, [["b/two"]], "only the taken go back to drafts");
-  assert.equal(r.count, 1, "`count` stays the unpublish door's, as every earlier receipt read it");
-  assert.equal(r.withdrawn.count, 1);
-  assert.deepEqual(r.withdrawn.retired.map((x) => [x.slug, x.window, x.cause]), [["current/the-bed", 251, WITHDRAW_CAUSE]]);
-  assert.equal(marks.get("current/the-bed").status, "retired");
-});
-
-test("an owed withdrawal retirement from the fold input retires as settlement-withdraw, returns to no drafts, and is named", async () => {
-  assert.deepEqual(retireOnlyFromFoldInput({ selection: { withdrawn_owed: { retire_only: ["current/the-bed", "", 7] } } }), ["current/the-bed"]);
-  assert.deepEqual(retireOnlyFromFoldInput({}), [], "a fold input from before the field owes nothing");
-  assert.deepEqual(retireOnlyFromFoldInput(null), []);
-
-  const { q, marks } = register([standing("current/the-bed")]);
-  const asked = [];
-  const r = await retireFromSweep(q, {
-    sweep: { unpublished: [], withdrawn: [] }, windowId: 252, retireOnly: ["current/the-bed"],
-    returnDrafts: async (_q, { slugs }) => { asked.push(slugs); return { returned: [], kept: [], unreturned: [] }; },
-  });
-  assert.deepEqual(r.withdrawn.retired.map((x) => [x.slug, x.window, x.cause]), [["current/the-bed", 252, WITHDRAW_CAUSE]]);
-  assert.deepEqual(r.withdrawn.retire_only, ["current/the-bed"]);
-  assert.deepEqual(asked, [[]], "nothing goes back to drafts");
-  assert.equal(marks.get("current/the-bed").status, "retired");
 });

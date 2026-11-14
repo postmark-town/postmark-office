@@ -338,25 +338,26 @@ export const CLASS_LAYER_HEADS_SQL = `
  * folds. The store has three readings of "which commit", written by pens on
  * their own timers, and the clearing ingests none of them itself:
  *
- *   world-marks  projection_heads, moved by marks-ingest (:12/:27/:42/:57), the
- *                commit the `marks` rows were blessed at;
+ *   world-marks  projection_heads, moved by the settlement's record of its own
+ *                printout (095 § record_printout, POS-1025; marks-ingest's until
+ *                the printout cutover), the commit the `marks` rows were printed at;
  *   world-law    projection_heads, moved by law-ingest (:04/:19/:34/:49), the
  *                clearing's law pin;
  *   door         the newest settlement whose commit law_projection holds:
  *                src/law-classes.mjs § LAW_AT_BLESSING_SQL, the pin the doors
  *                read classes at, and so the form the door writes new claims in.
  *
- * Both pens read the newest settlement tag's peeled commit (marks-ingest
- * `--ref blessed` → src/world-branches.mjs § blessed; world2-ingest.sh `law` →
+ * All three name the newest settlement's commit (the printout records the commit
+ * its settlement/S<n> tag stands on; world2-ingest.sh `law` →
  * world2-refresh-clone.sh `world-blessed`, then law-ingest's main run moves the
- * pin), so at a settlement all three are one sha and the chain answers.
+ * pin), so once the law has caught up all three are one sha and the chain answers.
  *
  * THEY PART IN BOTH DIRECTIONS, and either way one layer is wrong for some rows:
  *   · the LAW behind (a bless the law timer has not reached, a lossy law refused
  *     whole, POS-619, a held pin, POS-635, a parked unit): the pre-W2 rulebook,
  *     where `thing` extends `mark`, read over W2 rows makes them no ground (B1);
- *   · the MARKS behind (marks-ingest REFUSED on a STOP or a failed statement,
- *     likeliest right after the W2 bless) while the door writes the new form at
+ *   · the MARKS behind (a printout not recorded: its record refused, or a stale
+ *     replay left unprinted, POS-1025) while the door writes the new form at
  *     W2's pin: the old rulebook read at world-marks over new-form claims makes
  *     a ✦0 `kind: thing` on its own parcel commons, refused escrow-absent (B2).
  * So a skew is null: the place answers, which agrees with the chain wherever the

@@ -412,7 +412,6 @@
   "test/world2-ledger-names.test.mjs": 0.1,
   "test/world2-live-reads.test.mjs": 0.2,
   "test/world2-mark-render.test.mjs": 0.1,
-  "test/world2-marks-ingest.test.mjs": 17.7,
   "test/world2-materialize-grain.test.mjs": 0.2,
   "test/world2-my-marks-reads.test.mjs": 0.6,
   "test/world2-pen-flip-falsifier.test.mjs": 0.2,

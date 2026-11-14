@@ -217,6 +217,9 @@ test("4 · EVERY SETTLEMENT IS PRINTED: one that changed nothing is an EMPTY pri
   const [S3] = await read("SELECT sealed_settlement FROM world_snapshots WHERE window_id = $1", [WIN + 2]);
   assert.equal(S3.sealed_settlement, S2.sealed_settlement + 1, "every seal is numbered, a quiet one too");
   const head = git(WORLD, "rev-parse", "HEAD").trim();
+  // the cutover's base, left in a unit's environment past the first printout, is refused by name, nothing printed
+  await assert.rejects(asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 2, sinceWindow: WIN, dryRun: true })),
+    (e) => e.reason === "since-window-after-cutover" && /Remove SETTLEMENT_SINCE_WINDOW/.test(e.detail));
   const dry = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 2, dryRun: true }));
   assert.deepEqual([dry.status, dry.quiet], ["dry", true]);
   assert.equal(git(WORLD, "status", "--porcelain", "--", "WORLD").trim(), "", "and it wrote nothing");

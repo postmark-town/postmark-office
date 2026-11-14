@@ -1,15 +1,15 @@
 [Unit]
-Description=Postmark settlement — the mechanical sweep, box-side (the keeper keeps the judgment lane)
+Description=Postmark settlement — the printout of the sealed snapshot, its settlement/S<n> tag and its record (POS-1025)
 
 [Service]
 Type=oneshot
 # Same user as every other office lane; the clones and push credentials are
-# meepo's. Exit 0 published/quiet · 1 refused (keeper's finding, no retry) ·
-# 2 race (lease refused — safe to rerun).
+# meepo's. Exit 0 published/quiet · 1 refused (a printout refused, or no
+# docket: nothing published, alarmed) · 2 race (lease refused — safe to rerun).
 User=meepo
 EnvironmentFile=/etc/postmark-office.env
-# WORLD2_CLEARING_URL — the clearing pen the retire step and the store-source
-# crossing hold. ONE file, shared with postmark-world2-clearing.service (office
+# WORLD2_CLEARING_URL — the clearing pen the printout reads the seal with and
+# records it through (095 § record_printout). ONE file, shared with postmark-world2-clearing.service (office
 # #26, 2026-09-12); it replaces the per-unit drop-in that carried the URL inline
 # and that the 09-11 rotation reached while the candle's copy went stale.
 EnvironmentFile=-/etc/postmark-world2-clearing.env

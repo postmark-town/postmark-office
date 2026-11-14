@@ -549,18 +549,11 @@
     },
     {
       "unit": "postmark-world2-marks-ingest.timer",
-      "label": "the World 2.0 marks pen",
-      "stage": "live",
-      "activation_owner": "Keemin — RULED 2026-09-23 18:4x EDT on POS-142: 'the class fix goes — a marks ingest at every bless, then prod's fold flips to the store — this week, no separate sitting'. The store had no ingest for the world repo's marks: door-made writes reach it through the clearing, every file-side change after the 08-28 seed did not, and PR #173's rows fold differed from the published file by 7 missing marks and ~50 stale rows. Unit source: deploy/postmark-world2-marks-ingest.{service,timer}, script deploy/world2-marks-ingest.sh, tool world2/tools/marks-ingest.mjs. Installed by Wright's hand, dev sandbox first.",
-      "cadence": "every 15 minutes, :12/:27/:42/:57 UTC — five minutes after the office tick that fetches a fresh settlement tag; the tool acts only on a new blessing and is a no-op between them, so the bless is the trigger and the clock is how the box notices it",
-      "cadence_source": "systemctl show postmark-world2-marks-ingest.timer -p TimersCalendar",
-      "heartbeat": {
-        "kind": "state_file",
-        "path": "/srv/world2-lab/state/ingest-marks.json",
-        "stamp_field": "at",
-        "stale_after_minutes": 45
-      },
-      "stale_means": "The store stops learning the world repo's own changes, and the rows fold drifts from the published file one crossing at a time — the exact silence POS-142 measured (7 marks no row held, ~50 stale rows, and nothing anywhere red). Every fire writes the state file, the no-op ones included, so a stale `at` means the pen is not running, not that nothing was blessed. Read `status` beside the stamp: `failed` with a fresh `at` is a STOP or a refused write, and `receipt`/`detail` name which; a STOP is a fact the row shape cannot hold and wants a person, never a retry. The allowance is 45 minutes, three fires: one missed fire is weather, three is the rail."
+      "label": "the World 2.0 marks pen, retired",
+      "stage": "retired",
+      "activation_owner": "Retired by POS-1025, the settlement printout (Darko's go, 'Printout only', 2026-11-13; the brief retires marks-ingest, its wrappers and units at the paired cutover, and the build disposition makes it one retirement with no legacy flag), the unit files, its script and its tool removed from the release in the same change; the box's retire steps are Jetto's. It was Keemin's ruling of 2026-09-23 on POS-142 ('a marks ingest at every bless, then prod's fold flips to the store'), installed by Wright's hand.",
+      "retired_because": "The store is the marks' record and the world's files are printed from it (POS-1025): the settlement prints its sealed snapshot onto world main, and nothing reads the files back into the store. The world-marks head this pen kept is advanced by the settlement's own record of its printout (095 § record_printout), at the commit its settlement/S<n> tag stands on. A change a person must make to a resident's mark goes through the operator's repair act (household { do: \"repair-mark\" }), through the clearing; law and class marks keep law-ingest.",
+      "retire_steps": "DEPLOY.md § The settlement printout (095), its cutover: sudo systemctl disable --now postmark-world2-marks-ingest.timer, remove both unit files and the office-tree drop-in directory (/etc/systemd/system/postmark-world2-marks-ingest.service.d), remove /srv/world2-lab/ops/world2-marks-ingest.sh, daemon-reload"
     },
     {
       "unit": "postmark-world2-notary.timer",
@@ -1024,23 +1017,13 @@
         "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
       },
       {
-        "id": "world2-marks-ingest",
-        "unit": "postmark-world2-marks-ingest.service",
-        "label": "the World 2.0 marks pen's office tree",
-        "env_key": "WORLD2_OFFICE",
-        "require_env": "/etc/systemd/system/postmark-world2-marks-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-        "must_be": "release",
-        "why": "marks-ingest.mjs execs out of this tree and writes `marks` and `claims` through materialize.mjs — the same pen shape the clearing uses. A marks pen on an old tree writes rows in a shape the deployed clearing and fold no longer read. require_env rather than a default, as on the law pen: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
-        "activation_owner": "Keemin — the ingest is his ruling of 2026-09-23 (POS-142); the drop-in and this row are the same install, by Wright's hand."
-      },
-      {
         "id": "world2-ops-scripts",
         "kind": "file_copy",
         "label": "the World 2.0 ops scripts on the box",
         "path": "/srv/world2-lab/ops",
         "from": "deploy",
-        "match": "^(?!town-index-ingest\\.sh$).*\\.sh$",
-        "retired_copies": "town-index-ingest.sh is not compared here since POS-341 (Darko 2026-10-20 15:38): postmark-town-index.service runs the release copy, /srv/postmark-office/deploy/town-index-ingest.sh, the same file the ferry runs, so the copy in this directory is execed by nothing. It stays on the box until Wright retires it by hand, and this row must not redden on it meanwhile.",
+        "match": "^(?!(town-index-ingest|world2-marks-ingest)\\.sh$).*\\.sh$",
+        "retired_copies": "town-index-ingest.sh is not compared here since POS-341 (Darko 2026-10-20 15:38): postmark-town-index.service runs the release copy, /srv/postmark-office/deploy/town-index-ingest.sh, the same file the ferry runs, so the copy in this directory is execed by nothing. It stays on the box until Wright retires it by hand, and this row must not redden on it meanwhile. world2-marks-ingest.sh is not compared since POS-1025: it retired with its unit at the settlement printout's cutover, the release carries it no more, and the box's copy goes with the unit's retire steps (DEPLOY.md § The settlement printout (095)).",
         "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
         "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
         "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."
