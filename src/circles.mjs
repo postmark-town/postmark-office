@@ -26,8 +26,6 @@ import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say
 export const CIRCLE_BUDGET_BYTES = 8192;
 /** How much of a circle's opening say its stub quotes. A stub is a pointer, not a transcript: `read` opens the whole circle. */
 export const STUB_OPENER_CHARS = 80;
-/** How near a handle-plus-time `reply_to` must land to a say by that handle (either side), when the instant is not exact. */
-export const REPLY_TIME_SLACK_MS = 60_000;
 
 /**
  * WHAT THE BUDGET MEASURES (CORE-82, agreed 16:22:47Z): the serialized JSON text a caller actually receives in MCP content, with
@@ -409,8 +407,8 @@ const nameRe = (handle) => new RegExp(`(^|[^a-z0-9_.-])${handle.toLowerCase().re
  * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` is the room the speaker is speaking into — the same room
  * is the earshot rule (call 21: "yes to room, no to settlement"), so a say outside it is refused, never linked. `replyTo` is:
  *   · an act number (or its digits) — that say, if it is in this room;
- *   · `{ handle, at }` — that resident's say at that instant (ISO or ms), the exact instant first, else the nearest within
- *     REPLY_TIME_SLACK_MS; two equally near is refused with both ids, never guessed;
+ *   · `{ handle, at }` — that resident's say at EXACTLY that instant (ISO or ms, normalized to ms): none, or more than one, is
+ *     refused by name — a nearby say is never chosen;
  *   · absent — NAME-LINKING: if the words name someone who has spoken in this room (their handle, as a word), the say links to
  *     that person's latest say here, and the receipt discloses it (`how: "name"`). The first name in the words wins.
  * Returns `{ id, how, handle, at_ms }`, `{ refused: { defect, hint } }`, or null (a top-circle say).
@@ -442,14 +440,13 @@ export function resolveReplyTo(roomVoices, { replyTo = null, speaker = null, tex
     const theirs = threaded.filter((v) => v.handle === handle);
     if (!theirs.length)
       return refuse(`${handle} has not spoken in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21); listen with say {} to see who is talking here");
+    // THE EXACT INSTANT, never a nearby one (CORE-82 read, Rivet 18:18Z): the rulings say handle plus time, and the say read gives
+    // every line its `at` and `at_ms` — the same instant, normalized to ms here. No say at it, or two, is refused; none is guessed.
     const exact = theirs.filter((v) => v.at === t);
     if (exact.length === 1) return found(exact[0], "handle_time");
-    const near = theirs.map((v) => ({ v, d: Math.abs(v.at - t) })).filter((c) => c.d <= REPLY_TIME_SLACK_MS).sort((a, b) => a.d - b.d);
-    if (!near.length)
-      return refuse(`${handle} said nothing in this room within a minute of ${iso(t)}`, "pass the instant the say read showed (`at` or `at_ms`), or the say's id");
-    if (near.length > 1 && near[0].d === near[1].d)
-      return refuse(`${handle} spoke twice equally near ${iso(t)} (says ${sayIdOf(near[0].v.id)} and ${sayIdOf(near[1].v.id)})`, "pass the id of the one you mean");
-    return found(near[0].v, "handle_time");
+    if (exact.length > 1)
+      return refuse(`${handle} has ${exact.length} says at exactly ${iso(t)} (${exact.map((v) => sayIdOf(v.id)).join(", ")})`, "pass the id of the one you mean");
+    return refuse(`${handle} said nothing in this room at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
   }
   const id = sayIdOf(asked);
   if (id == null) return refuse("reply_to is a say's id (a whole number) or { handle, at }", "the ids ride on every line of the say read as `id`");
@@ -486,12 +483,17 @@ export function findConversation(clusters, { circle = null, room = null, after =
         ? "not in this office's memory of the town's talk (it keeps the last voices it heard); the record, where this office reads it, may hold it"
         : "no conversation in the record holds it" };
   const t = thread(hit);
-  if (id == null) {
-    const folded = t.voices.length < t.voice_count;
-    return { ...asked, history: folded ? "folded" : "complete", source, thread: t,
-      ...(folded ? { note: `this room has ${t.voice_count} says and this answer carries the newest ${t.voices.length}; ?voices=<n> carries more, and ?circle=<id> reads one circle whole` } : {}) };
-  }
   const { voices: _lines, ...header } = t;
+  if (id == null) {
+    // THE KEYLESS ROOM (CORE-82 read, Rivet 18:18Z): a spectator's view of the room from the same producer as `say {}` — no own
+    // path (nobody is reading as a speaker), every top circle a stub in the order it started, old talk as its timeline, broken
+    // parents named, and every circle opened by ?circle=<id> (paged by &after=). The browser never rebuilds a tree from a flat feed.
+    const circles = circleView(hit.voices, { caller: null, budget, measure: (v) => measure({ ...asked, source, room: header, circles: v }) });
+    const folded = Boolean(circles.more_circles?.length || circles.timeline_folded);
+    return { ...asked, history: circles.broken ? "unavailable" : folded ? "folded" : "complete", source, room: header, circles,
+      ...(circles.broken ? { note: "some replies here answer says this read does not hold (named in circles.broken); everything else is served" } : {}),
+      ...(folded && !circles.broken ? { note: "more circles than fit: each id in circles.more_circles opens with ?circle=<id>" } : {}) };
+  }
   const page = circleRead(hit.voices, id, { after, budget, measure: (p) => measure({ ...asked, source, room: header, circle_read: p }) });
   if (page.refused) return { ...asked, history: "unavailable", source, refused: page.refused };
   return { ...asked, history: page.broken ? "unavailable" : page.complete ? "complete" : "folded", source, room: header, circle_read: page };

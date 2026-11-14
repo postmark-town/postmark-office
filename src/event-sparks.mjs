@@ -235,6 +235,66 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   };
 }
 
+// ── THE SPARK, AS THE SITE READS IT (POS-1035 → CORE-82: identity, accepted children, picture and credit) ──
+//
+// ACCEPTANCE IS THE STORE'S, not a classifier's: a spark is accepted when it stands in `marks` (its claim locked through ordinary
+// acceptance; status 'standing'). A pending, refused or retracted claim is not, and a draft is the household's own. So the gallery
+// and a circle's children are read from standing marks only. CREDIT is the maker — the mark's own `by` (owner) and household; the
+// PICTURE is the spark's own `picture` property, as the maker gave it. Nothing is inferred: a property absent is absent.
+// THE SPINE (WLD-173, Darko 10:46): a spark stands under every circle on its `circle_path`; `on` is the circle it ties to (the
+// path's end), `below` every deeper one. Its own `parent_spark` link is shown as itself and never moves it in the tree.
+
+export const STANDING_SPARKS_SQL = "SELECT slug, owner, household, body, locked_window, data FROM marks WHERE kind = 'spark' AND status = 'standing'";
+
+/** One accepted spark as the site reads it: its id, the maker's credit, its words, its place, its time and its own properties. */
+export function sparkView(m) {
+  const d = m?.data && typeof m.data === "object" ? m.data : {};
+  const pick = (k) => (d[k] === undefined || d[k] === null || d[k] === "" ? {} : { [k]: d[k] });
+  return {
+    id: m.slug,
+    credit: { by: m.owner ?? d.by ?? null, household: m.household ?? d.household ?? null },
+    body: m.body ?? null,
+    accepted: true,
+    ...(m.locked_window != null ? { accepted_window: Number(m.locked_window) } : {}),
+    ...pick("picture"), ...pick("image_prompt"), ...pick("recounting"),
+    ...pick("experienced_at"), ...pick("experienced_until"),
+    ...pick("room"), ...pick("event"), ...pick("circle"), ...pick("circle_path"), ...pick("acts"), ...pick("present"),
+    ...(d.parent_spark ? { own_link: d.parent_spark } : {}),
+  };
+}
+
+/** The accepted sparks under one circle, by the spine: `on` it (its path ends there) and `below` it (deeper on its path). */
+export function sparksOfCircle(standing, circleId) {
+  const on = [], below = [];
+  for (const m of standing ?? []) {
+    const path = Array.isArray(m?.data?.circle_path) ? m.data.circle_path.map(Number) : null;
+    if (!path || !path.includes(Number(circleId))) continue;
+    (path.at(-1) === Number(circleId) ? on : below).push(sparkView(m));
+  }
+  return { on, below };
+}
+
+/** The accepted sparks under a circle, read from the store (`q` is a client or pool): standing marks whose path names it. */
+export async function acceptedSparksOfCircle(q, circleId) {
+  const { rows } = await q.query(`${STANDING_SPARKS_SQL} AND data->'circle_path' @> $1::jsonb`, [JSON.stringify([Number(circleId)])]);
+  return sparksOfCircle(rows, circleId);
+}
+
+/**
+ * An event's own spark, by the identity its completion recorded (`fields.completed.spark`): accepted (standing) with its view,
+ * or `{ id, accepted: false, status }` while its claim waits on acceptance (or was refused). Null before the event completes.
+ */
+export async function eventSparkOf(q, row) {
+  const id = row?.fields?.completed?.spark;
+  if (!id) return null;
+  const { rows: [m] } = await q.query(`${STANDING_SPARKS_SQL} AND slug = $1`, [String(id)]);
+  if (m) return sparkView(m);
+  const [by, ...leaf] = String(id).split("/");
+  const { rows: [c] } = await q.query(
+    "SELECT status FROM claims WHERE claimant = $1 AND slug = $2 AND status <> 'draft' ORDER BY submitted_at DESC LIMIT 1", [by, leaf.join("/")]);
+  return { id: String(id), accepted: false, status: c?.status ?? "unknown" };
+}
+
 // ── THE EXECUTOR (POS-1035): the hosting stake and its whole return, under the town lock ──
 //
 // Spawned by the doors (events-store.mjs § viaStakeExec) through execUnderTownLock, as every office act that signs a ledger line

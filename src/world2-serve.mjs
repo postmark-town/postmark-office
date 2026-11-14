@@ -88,6 +88,7 @@ import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
 import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
+import { acceptedSparksOfCircle } from "./event-sparks.mjs"; // POS-1035: the accepted sparks under a circle
 import * as apex from "../world2/tools/apex-reads.mjs";
 import * as stakeRead from "../world2/tools/stake-reads.mjs";
 import * as portfolio from "../world2/tools/portfolio-reads.mjs";
@@ -829,6 +830,11 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     find: findOf(searchParams), // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
   });
   if (body.find?.refused) return { code: 422, body: { error: "bounce", ...body.find.refused } };
+  // POS-1035 (CORE-82): a circle read carries the ACCEPTED sparks under it — standing marks only, by the spine (on it / below it)
+  if (body.find?.circle_read) {
+    try { body.find.sparks = await acceptedSparksOfCircle(p, body.find.circle); }
+    catch { body.find.sparks = null; body.find.sparks_note = "the sparks under this circle could not be read just now; this is not a circle with none"; }
+  }
   const ungroupedLine = ungrouped
     ? `${ungrouped} of the ${derived.voices.length} voices come before the oldest settlement this office has read (${new Date(edges[0]).toISOString()}), so their settlement is unknown and they are not grouped`
     : null;

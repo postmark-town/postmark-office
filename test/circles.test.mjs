@@ -175,7 +175,8 @@ test("reply_to resolution: by id, by handle plus time, by a name in the words â€
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: 50105 }), { id: 50105, how: "id", handle: "claran", at_ms: at(5) });
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: "50105" }).id, 50105, "the digits of an id");
   assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: "2026-11-14T20:03:00Z" } }).id, 50102, "the exact instant");
-  assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).id, 50102, "the nearest within a minute");
+  assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) } }).id, 50102, "the exact instant as at_ms");
+  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).refused.defect, /said nothing in this room at exactly/, "a nearby say is never chosen (CORE-82 read)");
   assert.equal(C.resolveReplyTo(r.slice(0, 10), { speaker: "vesper", text: "Claran, â€¦the Borrowed-Hand Moth." }).id, 50110, "Vesper's line (call 3): linked by name to Claran's latest");
   assert.equal(C.resolveReplyTo(r, { speaker: "vesper", text: "Claran, â€¦" }).how, "name");
   assert.equal(C.resolveReplyTo(r, { speaker: "claran", text: "claran here, talking about myself" }), null, "your own name links nothing");
@@ -183,10 +184,10 @@ test("reply_to resolution: by id, by handle plus time, by a name in the words â€
   assert.equal(C.resolveReplyTo(r, { text: "nobody named" }), null, "no reply_to and no name: a top circle");
   assert.match(C.resolveReplyTo(r, { replyTo: 99 }).refused.defect, /say 99 is not in the room you are speaking into/);
   assert.match(C.resolveReplyTo(r, { replyTo: { handle: "nobody", at: at(1) } }).refused.defect, /has not spoken in the room/);
-  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(30) } }).refused.defect, /said nothing in this room within a minute/);
+  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(30) } }).refused.defect, /said nothing in this room at exactly/);
   assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth" } }).refused.defect, /needs both/);
-  const twice = [...r, { id: 50200, handle: "seth", at: at(3) + 40_000, text: "again", x: 0, y: 0 }];
-  assert.match(C.resolveReplyTo(twice, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).refused.defect, /spoke twice equally near/, "a tie is refused, never guessed");
+  const twice = [...r, { id: 50200, handle: "seth", at: at(3), text: "again", x: 0, y: 0 }];
+  assert.match(C.resolveReplyTo(twice, { replyTo: { handle: "seth", at: at(3) } }).refused.defect, /has 2 says at exactly/, "two at one instant is refused, never guessed");
 });
 
 test("named history past the first page: ?circle= finds a circle in any cluster, ?room= a thread, each saying complete, folded or unavailable", () => {
@@ -201,8 +202,16 @@ test("named history past the first page: ?circle= finds a circle in any cluster,
   assert.equal(paged.history, "folded");
   assert.ok(paged.circle_read.next);
   const byRoom = C.findConversation(clusters, { room: `t${at(1)}-pica` }, { thread, source: "record" });
-  assert.equal(byRoom.history, "folded", "the thread carries 2 of its 14 lines");
-  assert.match(byRoom.note, /\?voices=/);
+  // the keyless room is the spectator's circle view (CORE-82 read): its header, every top circle a stub in start order, coverage said
+  assert.equal(byRoom.history, "complete");
+  assert.equal("voices" in byRoom.room, false, "the header, not a capped flat feed");
+  assert.deepEqual(byRoom.circles.elsewhere.map((s) => [s.circle, s.says, s.read.circle]), [[50101, 10, 50101], [50107, 3, 50107], [50114, 1, 50114]]);
+  assert.equal(byRoom.circles.yours, null);
+  assert.deepEqual(byRoom.circles.lines, []);
+  const crowded = C.findConversation(clusters, { room: `t${at(1)}-pica` }, { thread, source: "record", budget: 1 });
+  assert.equal(crowded.history, "folded");
+  assert.ok(crowded.circles.more_circles.length >= 1, "circles past the target are named by id, each its own ?circle= call");
+  assert.match(crowded.note, /circles\.more_circles/);
   const missing = C.findConversation(clusters, { circle: 1 }, { thread, source: "memory" });
   assert.equal(missing.history, "unavailable");
   assert.match(missing.note, /not in this office's memory/);

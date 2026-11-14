@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, EVENT_SPARK_BACKING, eventStakeOn } from "./event-sparks.mjs"; // POS-1035: an event's window, room and who came; its stake
+import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn } from "./event-sparks.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
  * The settlements this office has published (ms), where a conversation splits — world.mjs's one reader of them, asked lazily so
@@ -1143,7 +1143,11 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         let edges = [];
         try { edges = (await settlements()) ?? []; } catch { edges = []; }
         const evidence = await eventEvidence(client, row, { now, edges });
-        if (evidence) view.evidence = evidence;
+        if (evidence) {
+          // its own spark, by the identity its completion recorded: accepted (standing) or waiting on acceptance; null before it ends
+          evidence.spark = await eventSparkOf(client, row);
+          view.evidence = evidence;
+        }
       }
       return { as_of: new Date(now).toISOString(), event: view };
     }

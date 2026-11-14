@@ -145,3 +145,34 @@ test("a spark DRAFT stays on the household's private road: its own household rea
   const { rows: marks } = await owner.query("SELECT slug FROM marks");
   assert.ok(!marks.some((m) => String(m.slug).includes("quiet")), "and no mark row holds it");
 });
+
+test("THE SITE'S SPARKS (CORE-82): accepted = standing in marks; a circle's sparks by the spine (on / below); credit is the maker, the picture is the spark's own; an event's spark by its recorded identity", async () => {
+  const { rows: [w] } = await owner.query("SELECT id FROM windows ORDER BY id DESC LIMIT 1");
+  const mark = async (slug, owner_, data, status = "standing") => owner.query(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+     VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), $6, $7, $8)`,
+    [slug, owner_, `${owner_}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), status, w.id, JSON.stringify(data)]);
+  await mark("pica/x-on-a", "pica", { kind: "spark", recounting: "x", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50101, circle_path: [50101], picture: "https://example.invalid/x.jpg" });
+  await mark("seth/y-on-a", "seth", { kind: "spark", recounting: "y", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50101, circle_path: [50101], parent_spark: "pica/x-on-a" });
+  await mark("amia/z-on-b", "amia", { kind: "spark", recounting: "z", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50105, circle_path: [50101, 50105] });
+  await mark("liv/gone", "liv", { kind: "spark", recounting: "g", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50101, circle_path: [50101] }, "retired");
+  // a spark still waiting on acceptance is a claim, not a mark: never in the collection
+  await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
+    VALUES ($1, 'mark', 'noe', 'noe-house', 'pending', 'waiting', $2, 1, $3, 'w-pending')`,
+    [w.id, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), JSON.stringify({ kind: "spark", circle: 50101, circle_path: [50101] })]);
+
+  const a = await S.acceptedSparksOfCircle(owner, 50101);
+  assert.deepEqual(a.on.map((s) => s.id).sort(), ["pica/x-on-a", "seth/y-on-a"], "X and Y stand on A");
+  assert.deepEqual(a.below.map((s) => s.id), ["amia/z-on-b"], "Z (on reply circle B) shows below A — nothing orphaned");
+  assert.ok(![...a.on, ...a.below].some((s) => s.id === "liv/gone" || s.id === "noe/w-pending"), "retired and pending are not accepted");
+  const x = a.on.find((s) => s.id === "pica/x-on-a");
+  assert.deepEqual(x.credit, { by: "pica", household: "pica-house" }, "credit is the maker");
+  assert.equal(x.picture, "https://example.invalid/x.jpg", "the picture is the spark's own property");
+  assert.equal(x.accepted, true);
+  assert.equal(a.on.find((s) => s.id === "seth/y-on-a").own_link, "pica/x-on-a", "its own link is shown as itself, never as placement");
+  assert.deepEqual((await S.acceptedSparksOfCircle(owner, 50105)).on.map((s) => s.id), ["amia/z-on-b"]);
+
+  assert.equal(await S.eventSparkOf(owner, { fields: {} }), null, "before completion: no spark");
+  assert.equal((await S.eventSparkOf(owner, { fields: { completed: { spark: "pica/x-on-a" } } })).accepted, true);
+  assert.deepEqual(await S.eventSparkOf(owner, { fields: { completed: { spark: "noe/w-pending" } } }), { id: "noe/w-pending", accepted: false, status: "pending" });
+});
