@@ -155,8 +155,9 @@ test("R1 · every group stub's open call, followed through the dispatcher, is de
       const r = await callRead("stances", { ...args, ...(cursor ? { cursor } : {}) });
       const t = bytesOf(text(r));
       // only a page holding a mark whose own row outweighs half a page may exceed the cap (no limit narrows one row; the answer says limit: 1 reads it alone)
-      if (!r.awaiting.some((row) => rowBytes(row) > HEAVY_ROW_BYTES)) assert.ok(t <= 10000, `${g.by} page ${pages}: ${t} bytes is over the connector's cap (limit ${args.limit})`);
-      else heavy += 1;
+      const heavyRows = r.awaiting.filter((row) => rowBytes(row) > HEAVY_ROW_BYTES);
+      assert.ok(t - heavyRows.reduce((n, row) => n + rowBytes(row), 0) <= 10000, `${g.by} page ${pages}: ${t} bytes, less its heavy marks, is over the connector's cap (limit ${args.limit})`);
+      if (heavyRows.length) heavy += 1;
       assert.ok(r.awaiting.length <= args.limit);
       for (const row of r.awaiting) { assert.equal(row.by, g.by); assert.equal(row.on_your_ground[0], g.over); seen.push(row.mark); }
       cursor = r.cursor; pages += 1;
@@ -178,10 +179,10 @@ test("R2 · the walk and the cursor the answer names cover the marks no group na
   let cursor = null, pages = 0, heavyPages = 0;
   do {
     const r = await callRead("stances", { ...args, ...(cursor ? { cursor } : {}) });
-    // a page is over the cap only where it carries one of the marks whose own row outweighs half a page (the 120-fold body of a stream's first mark): no limit can narrow a single row
-    const heavy = r.awaiting.some((row) => rowBytes(row) > HEAVY_ROW_BYTES);
-    if (!heavy) assert.ok(bytesOf(text(r)) <= 10000, `walk page ${pages}: ${bytesOf(text(r))} bytes (limit ${args.limit})`);
-    else heavyPages += 1;
+    // a page is over the cap only by the marks whose own row outweighs half a page (the 120-fold body of a stream's first mark): no limit can narrow a single row, so it is measured without them
+    const heavyRows = r.awaiting.filter((row) => rowBytes(row) > HEAVY_ROW_BYTES);
+    assert.ok(bytesOf(text(r)) - heavyRows.reduce((n, row) => n + rowBytes(row), 0) <= 10000, `walk page ${pages}: ${bytesOf(text(r))} bytes, less its heavy marks (limit ${args.limit})`);
+    if (heavyRows.length) heavyPages += 1;
     for (const row of r.awaiting) seen.push(row);
     cursor = r.cursor; pages += 1;
     assert.ok(pages < 80, `limit ${args.limit} cursor ${cursor} rows ${seen.length} open ${w.groups_more.open.slice(0,90)}`);
