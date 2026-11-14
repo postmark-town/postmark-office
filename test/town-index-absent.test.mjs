@@ -13,7 +13,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -22,7 +22,7 @@ import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
-import { overlayRegistry, overlayCard, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
+import { overlayRegistry, overlayCard, overlayHomeImages, homeImagesOf, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
@@ -216,7 +216,9 @@ const pristine = (was) => {
   if (gone.size) { try { was = JSON.stringify(dropSteps(JSON.parse(was))); } catch { /* not JSON: nothing to drop */ } }
   const card = readFileSync(join(TOWN, "WHITE_PAGES", "wright", "ADDRESS.md"), "utf8");
   const fields = { architecture: frontMatterScalar(card, "architecture"), note: frontMatterScalar(card, "note") };
-  return overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields });
+  // and the card's `homeImages` are the image files under wright's HOME/ in the pinned town (POS-1031: wright-at-la-cave.jpg arrived after the recorded town)
+  const images = homeImagesOf("wright", readdirSync(join(TOWN, "WHITE_PAGES", "wright", "HOME")));
+  return overlayHomeImages(overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields }), { handle: "wright", images });
 };
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
 // `asked` is the town clock's crossing read just before the ask

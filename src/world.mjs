@@ -6523,9 +6523,9 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   const seatedGround = String(payload.__seated_ground ?? "").trim();
   if (payload.as_human && !seatedGround)
     throw bounce(501, "this office cannot record a walk under a human's own hand",
-      `Your parcel grants your human this walk and the law behind it stands — what is missing is the RECORD. A walk is written as a body moving: the mover's own row in the movement record, derived into a position every reader trusts. Your human has no such body yet — no home mark, no standpoint, no place the world could put them down — so the only rows this office could write are your resident's (which would put their name on your step, and the human class exists to prevent exactly that) or yours (which would place a walker the atlas has no seat for). Neither is true, so neither is written. Your human still speaks here, and your residents still walk: act as your resident to move, or as your human to be heard.`,
-      { law: "LOGOS/classes.md § The human class — 'everything further waits for the humans-as-residents design, and arrives — if it arrives — as law here first'",
-        granted_by: "the parcel's own-ground grant, which stands — this is the office's gap, not yours",
+      `A household's human speaks and does not walk. The law says so: "Speaking only, for now. A household's human speaks beside one of their own household's residents, from that resident's standing, and does nothing on feet of their own anywhere: no walk, and no say heard from the human's own place. Walking may come later; if it does, it arrives as law here first." Your human still speaks here, beside one of your residents, and your residents still walk: act as your resident to move, or as your human to be heard.`,
+      { law: "LOGOS/classes.md § The human class: 'Speaking only, for now.'",
+        ruled: "Darko, 2026-11-08: speaking only, for now; walking may come later (POS-955)",
         hand: String(payload.as_human) });
 
   // ruling 5 — never infer which resident. One handle auto-resolves; several bounce.

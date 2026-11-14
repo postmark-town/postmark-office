@@ -1052,8 +1052,13 @@ export async function callTool(name, args, ctx) {
       // `worldWriteBudget` is the live bouncer's own read, injected by the
       // server (POS-139): the standing read states the world-write budget
       // rather than leaving the 429 to be the only place it is ever said.
+      // CORE-88: `connector: true` is THE CONNECTOR'S OWN CALL, not a read the office makes for itself. `slim` is set for every
+      // household call (the doorstep's nested ones too), and `door: "mcp"` rides the ctx a nested call inherits, so neither says
+      // who is asking; `nested` does (the doorstep and town arms set it). Only the connector's top-level call gets its long
+      // answers in pages; REST and the office's own reads keep the canonical answers.
       return householdApex(args, key, { db, clone, odb, pen, rdb, canWrite, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget,
-        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}) }); // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}), // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" && !ctx.nested ? { connector: true } : {}) }); // CORE-88: the connector's own call (see above)
     }
     case "doorstep": {
       // POS-632 PR-6. The doorstep draws from the three doors through this very
@@ -1065,7 +1070,7 @@ export async function callTool(name, args, ctx) {
       const { unreadFor } = await import("./unread-store.mjs");
       const { nextStepsFor } = await import("./queries.mjs");
       return doorstepApex(args, key, {
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // the office reading for itself: the canonical answers, never a connector page (CORE-88)
         unread: async (h) => (await unreadFor([h], { ix })).get(h) ?? [],
         steps: async (h) => (await nextStepsFor(h, clone, { own: Boolean(key?.handles?.has?.(h)), key, ix, odb, asOf }))?.steps ?? null,
         marksOf: async (ids) => (await import("./world.mjs")).markRows(ids), // a mark a line names, whole (Darko 22:33)
@@ -1080,7 +1085,7 @@ export async function callTool(name, args, ctx) {
         clone, // the town apex gates its one act on standing, and reads the ledger from here
         schemas: flatPropsMap(), schemaRequired: flatRequiredMap(),
         ...(ctx.door === "mcp" ? { readShape: doorShape("town") } : {}), // POS-486: the MCP door's shape only; REST /town/apex comes here without it
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // nested: not the connector's own call (CORE-88)
       });
     }
     case "update_address_body": case "update_address_fields":

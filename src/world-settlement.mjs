@@ -70,7 +70,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { firstClaimedBySlug, snapshotFoldArgs } from "./world-snapshot.mjs";
+import { firstClaimedBySlug, snapshotFoldArgs, withClaimedAt } from "./world-snapshot.mjs";
 import { TOWN_CLONES, leaseEntry, ownedRoot, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
 import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -965,6 +965,25 @@ async function overlapsAt(worldRepo, sha) {
   return GEOMETRY.get(sha);
 }
 
+// THE ENGINE'S PER-CELL SENIORITY AT THE SAME LAW (POS-571): world consent.mjs §
+// firstCoverOrder, read at the sha `overlapsAt` reads, so the label weighs who
+// came first on the shared cells as that settlement's own fold did. Null when the
+// law predates it (or it cannot be read): that fold read the whole-mark order,
+// and so does the label.
+const FIRST_COVER = new Map();
+async function firstCoverAt(worldRepo, sha) {
+  if (!FIRST_COVER.has(sha)) {
+    let order = null;
+    try {
+      const { materializeAtRef } = await import("./world-branches.mjs");
+      const c = await import(pathToFileURL(join(materializeAtRef(worldRepo, sha, "tools"), "tools", "consent.mjs")).href);
+      order = typeof c.firstCoverOrder === "function" ? c.firstCoverOrder : null;
+    } catch { order = null; }
+    FIRST_COVER.set(sha, order);
+  }
+  return FIRST_COVER.get(sha);
+}
+
 /**
  * The served marks, labelled (§ labelMarks): `{ marks }`, or `{ unread }` when
  * the cutover, the versions or the words could not be read — a label nobody
@@ -1009,9 +1028,20 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     // reads it (world-snapshot.mjs § firstClaimedBySlug: the origin claim). A
     // thing is not ground, its class read off this World's own class nodes
     // (extendsFromMarks, as the positioned set above reads them).
-    const { elderByFirstLaid } = await import("./town-stance.mjs");
+    // And on the shared cells (POS-571): copies of the served marks, decorated with
+    // the first-laid facts the fold reads (world-snapshot.mjs § withClaimedAt: the
+    // first claim and, where its geometry changed, the footprints), asked through
+    // the one combinator the inbox and the door use (town-stance.mjs §
+    // elderByFirstCover). The copies stay here; the labelled marks are the served ones.
+    const { elderByFirstLaid, elderByFirstCover } = await import("./town-stance.mjs");
     const { isThingMark } = await import("./held.mjs");
-    const elder = elderByFirstLaid(await firstClaimedBySlug(p, ids));
+    const decorated = await withClaimedAt(p, (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => ({ ...m })));
+    const recordById = new Map(decorated.map((m) => [String(m.id), m]));
+    const elder = elderByFirstCover({
+      firstCoverOrder: await firstCoverAt(worldRepo, header.law_sha),
+      recordOf: (m) => recordById.get(String(m?.id)) ?? m,
+      wholeMark: elderByFirstLaid(await firstClaimedBySlug(p, ids)),
+    });
     const thingOpts = { classOf: markClassOf, extendsOf: extendsFromMarks(world.marks ?? []) };
     const marks = await labelMarks(world.marks ?? [], {
       townWords: words.townWords, cutover, versions: read.versions, words: words.words,

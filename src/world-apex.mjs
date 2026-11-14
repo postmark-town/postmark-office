@@ -53,6 +53,7 @@ import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, 
 import { explainAnswer, explainPath, encodeCursor, decodeCursor, CURSOR_RENAMES_UNTIL, moreLine } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table; the one cursor; the more line
 import { entityKindOf, investigateResident, RECENT_SQL, RECENT_CAP } from "./world-investigate-entity.mjs"; // POS-632 PR-4: the entity read
 import { PUBLIC_ACTS as PUBLIC_ACTS_FOR_INVESTIGATE, ACTIVE_WINDOW_MS as ACTIVE_WINDOW_FOR_INVESTIGATE } from "./world-read-v2.mjs"; // POS-632 PR-4: the entity read's public acts and window
+import { SOURCE_ACT_READ, readSourceAct } from "./source-act.mjs"; // WLD-146: the Worldkeeper reads one source act
 import { join } from "node:path";
 
 import {
@@ -3992,6 +3993,10 @@ async function apexReadAction(args, key, ctx = {}) {
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope))) {
     return bounce(422, "`args` must be an object", `narrowing fields ride inside it — world { read: "${action}", args: { … } }`);
   }
+  // THE WORLDKEEPER'S SOURCE-ACT READ (WLD-146): the act behind one STATE/log
+  // seq, for the keeper's own hand only. Like find, it performs nothing and
+  // belongs to no ground, so it is answered before any standpoint is taken.
+  if (action === SOURCE_ACT_READ) return readSourceAct(envelope ?? {}, key, { handle: args.handle });
 
   // ── FIND: THE ONE READ WITH NO ACT BEHIND IT (2026-09-26) ──────────────────
   //
@@ -4389,7 +4394,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // before the seam can see it. The human class shipped behind a door that
     // refused to pass its own word through: found live on the dungeon stage,
     // the night the first embodied act was actually attempted.
-    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand, honoured only where the ground's class grants them feet (LOGOS/classes.md § The human class); the act records under the human's hand, never the resident's." },
+    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand: speaking only, for now, beside one of your household's residents and from that resident's standing; walking may come later (LOGOS/classes.md § The human class). The act records under the human's hand, never the resident's." },
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see, in the town's own words: a resident's mark is named there by its author and id, never quoted (its body is `nearby[].body`, or mark: \"<id>\"); omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).

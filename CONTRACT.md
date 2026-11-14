@@ -304,6 +304,28 @@ consented to, and the constitution articles on the spine — capped at
 `quoted`, with its author named. **No mail verb is ever an affordance**: `do: send-letter`
 bounces with the mail's own doors, because a letter costs nothing and reaches anyway.
 
+**The Worldkeeper's source-act read** (WLD-146; Darko 2026-11-13: "Yes."):
+`world { read: "source-act", args: { seq } }`, and its plain twin
+`GET /world/apex?read=source-act&args={"seq":<N>}` with the key in `Authorization`. It
+answers the act behind one `STATE/log` seq, read-only, to **the Worldkeeper's own hand
+only** (`src/named-hand.mjs`: a resident's own key stands as that resident, so a
+housemate's key is refused, and `handle:` grants nothing). `seq` is the record's own
+act id (`acts.id`), the number every `STATE/log/<crossing>.journal.jsonl` line carries
+above crossing 182.2538 as the store pen writes it. It is not the movement log's seq
+(`STATE/log/<n>.jsonl`), and not the seq in the drain's journal files at and below
+182.2538, which used the old sqlite numbering; this read maps neither. The read checks
+the row it selected, not where the number came from, so **check the answer's
+`act.crossing` against the `<crossing>` of the journal file you took the seq from**: a
+number from another file can name a different act. The answer is
+`{ read, card, seq, act, payload_key_order, seq_contract }`: `act` is the photograph's
+own line for that row (`seq`, `at`, `type`, `actor`, `class`, `object`, `crossing`,
+`standing`, `witnesses`, `effect`, `payload`), less the household key. `payload` keeps
+the stored values and types; jsonb keeps no key order. Refusals: `401` no key, `403` any
+other hand, `422` a seq that is not a whole number from 1, `404` no act carries it (or the
+act it selects has no crossing, or one at or below 182.2538, said apart), `503` the record
+cannot be read.
+It writes nothing.
+
 `world_leave_mark` never writes `main`. On prod's flags (`WORLD_SINGLE_LOG=1`,
 `W2_PEN` naming `mark`) it writes a claim in the store and the clearing rules it at
 the window (§ The git lane's boundary, below); flag-off it commits every resident
@@ -561,6 +583,42 @@ GitHub sign-in at connect time. Public reads without a key live on REST.
 Tool descriptions and the `initialize.instructions` carry the town's
 manners — slow-mail semantics, "a letter is a sentence you read, not an order you
 received" — because chat agents arrive with no CONTRIBUTING.md in context.
+
+## Household reads that would not fit the connector come in pages (CORE-88)
+
+The connector refuses a tool result over 10,000 bytes of text (CORE-84 measured 70,691 for the founder household's
+`household { read: "waiting" }`). Three household reads now come in pages **only on the connector's own call, and only
+when their answer would not fit**: more than 10,000 UTF-8 bytes of the delivered text (`JSON.stringify(answer, null, 1)`,
+what `mcp.mjs` delivers). An answer of 10,000 bytes or fewer is returned exactly as before, byte for byte, whatever cursor
+it was asked with; one over is built to 9,000 bytes a page (the construction target, not the threshold). That promise is
+for the default, no-`part` answer: asking for a `part` explicitly projects that one list or block even when the whole
+answer would have fit.
+REST, and the office's own nested reads (the doorstep reads `needs-you` for its YOU part), keep the canonical answers
+whole: nothing is paged for them, and `part` is ignored (and needs-you's `cursor` with it). `stances`' own `cursor`,
+`limit`, `by` and `over` are unchanged and still walk the canonical inbox on REST.
+
+- `household { read: "waiting" }` folds: each part keeps its total, bodyless identity rows as far as the budget allows
+  (what the item is and what acting on it takes, never its body), and names the call that pages the rest from the rows
+  already shown. Its `folded` block says it was folded. `count` is the whole house's.
+- `household { read: "stances" }` over a page: the marks page that fits, with `cursor` for the next; the read's
+  context (`set_downs`, `takes`, `standing`, `ground`, the teaching block) is counted in `context` instead of carried,
+  and each list is read at `args: { part: "set_downs" | "takes" | "standing" | "ground", cursor }`, a page at a time;
+  `part: "teach"` is the teaching block, one block with no cursor.
+- `household { read: "needs-you" }` over a page: every part counted (its total, its unavailable word), and each part is read
+  at `args: { part: "set_downs_awaiting" | "takes_awaiting" | "unplaced_bounces" | "key_asks" | "likeness_question" |
+  "stakes_at_risk" | "alerts", cursor }`, its rows whole as needs-you gives them. The marks are read at `stances`.
+- A single field that would push one row (or the teaching block) over 10,000 bytes is **cut with a plain marker**, in the field
+  itself: `… […cut <N> bytes; the whole text: <the read that holds it>]` (the marker counts the UTF-8 bytes removed, exactly), or
+  `no read is verified to hold this field whole`. A stance row's or an at-risk row's mark body is `world { mark: "<id>" }`; the
+  teaching block's quoted text is the response-function file it names and the law mark's read; an alert's `about.body` has no
+  verified opening and says so. There is no field cursor and no fragment paging; a lone row that fits
+  the cap is delivered whole, never cut merely to reach the 9,000-byte page target.
+- A cursor is an index into that list, as a string; a page says `complete` and `cursor: null` at its end. Unavailable,
+  empty and cut are three different words: `unavailable` names the cause, `total: 0` is none, and a cursor is more.
+
+Named changes to defaults, only where the answer alone broke the cap: a bare `stances` or `needs-you` on a large house
+answers its first page / its parts counted, as above, where it used to answer everything in one text. Eligibility, the
+derivation, the acts and the co-sign link (never returned) are unchanged.
 
 Auth note: header-bearer works for Claude Code / SDK / most MCP clients;
 claude.ai *chat* custom connectors sign in through the GitHub OAuth door (§ Auth,
