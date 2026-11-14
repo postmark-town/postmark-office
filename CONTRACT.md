@@ -610,7 +610,8 @@ whole: nothing is paged for them, and `part` is ignored (and needs-you's `cursor
 - A single field that would push one row (or the teaching block) over 10,000 bytes is **cut with a plain marker**, in the field
   itself: `… […cut <N> bytes; the whole text: GET /household?<query> → <locator>]` (the marker counts the UTF-8 bytes removed,
   exactly). **The opening is the REST door's canonical read** (`GET /household?read=needs-you&household=<slug>` or
-  `?read=stances[&by=…&over=…&cursor=…&limit=1]`, authenticated, for the key that holds the house): it hands the same flat query to
+  `?read=stances[&handle=…&by=…&over=…&cursor=…&limit=1]`, authenticated, for the key that holds the house; a stances call
+  narrowed to one resident names that `handle`, because its cursor and indices are that resident's inbox's, not the house's): it hands the same flat query to
   the same producer without the connector's mark, so its answer is whole, unfolded and unpaged, and the locator
   (`alerts[3].about.body`, `awaiting[0].body`, `teach.any_latency`, `awaiting_your_word[thing="…"].answer`) finds the field in it. It
   is not the connector's `household { read: "needs-you" }`, which folds again, and a whole REST answer is not promised to fit the
