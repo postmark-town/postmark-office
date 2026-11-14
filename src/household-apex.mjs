@@ -1546,13 +1546,16 @@ async function householdWaiting(key, ctx) {
   const scope = await glanceScope(key, ctx);
   if (scope.refused) return bounce(...scope.refused);
   const { ix, hb, ashore } = scope;
-  const { stancesForHandles } = await import("./world-stance.mjs");
+  const { stancesForHandles } = ctx.readers?.stances ? { stancesForHandles: ctx.readers.stances } : await import("./world-stance.mjs");
   const stances = ashore.length ? await stancesForHandles(ashore, { limit: 100, setDowns: true }) : { stances_awaiting: 0, awaiting: [] };
-  const needs = await hb.needsYou({}, { key, clone: ctx.clone, odb: ctx.odb, asOf: ctx.asOf, ix, readers: { stances: async () => stances } });
+  // `ctx.readers` is needsYou's own seam (house-bundle.mjs § needsYou), handed through so a falsifier can fill a large house
+  const needs = await hb.needsYou({}, { key, clone: ctx.clone, odb: ctx.odb, asOf: ctx.asOf, ix, readers: { ...ctx.readers, stances: async () => stances } });
   if (needs?.refused) return bounce(...needs.refused);
   const v2 = await import("./household-read-v2.mjs");
-  return { ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
-    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) };
+  // CORE-88: folded to the connector's budget when it does not fit (household-waiting-budget.mjs); a house that fits reads what it always read
+  const { foldWaiting } = await import("./household-waiting-budget.mjs");
+  return foldWaiting({ ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
+    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) });
 }
 
 /**
