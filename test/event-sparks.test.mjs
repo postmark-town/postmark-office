@@ -261,6 +261,20 @@ test("an interrupted staked post rolls back its coupled changes: the line it sig
   assert.equal(await liquidOf(dir, "wright"), 25);
 });
 
+test("a staked event's words are checked BEFORE money moves (Rivet 18:39Z): an invitation or title its spark's record could not carry is refused, plainly, and nothing is written", async () => {
+  const dir = townInABottle();
+  const before = ledgerText(dir);
+  await assert.rejects(postAtTown({ ...eventArgs("Sorbet #2"), body: "on the counter" }, keyOf("wright"), { env: stakeEnv(dir) }),
+    (e) => e.code === 422 && /title would not survive as its spark's record: a # is read/.test(e.defect));
+  await assert.rejects(postAtTown({ ...eventArgs("Sorbet night"), body: "line one\nline two" }, keyOf("wright"), { env: stakeEnv(dir) }),
+    (e) => e.code === 422 && /invitation would not survive/.test(e.defect));
+  assert.equal(ledgerText(dir), before, "no stamp moved");
+  const posted = await postAtTown(eventArgs("Sorbet evening"), keyOf("wright"), { env: stakeEnv(dir) });
+  const { amendAtTown } = await import("../src/events-store.mjs");
+  await assert.rejects(amendAtTown({ post: posted.post.id, title: "Sorbet #3" }, keyOf("wright"), { env: stakeEnv(dir) }),
+    (e) => e.code === 422 && /title would not survive/.test(e.defect), "an amendment is held to the same line");
+});
+
 test("legacy: with the switch off an event posts free and cancels free — no stake, no line (events scheduled before this ships stay free)", async () => {
   const dir = townInABottle();
   const before = ledgerText(dir);

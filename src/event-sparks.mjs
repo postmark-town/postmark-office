@@ -31,6 +31,22 @@ export const EVENT_STAKE = 20;
 export const EVENT_SPARK_BACKING = 1;
 export const eventStakeOn = (env = process.env) => String(env?.EVENT_STAKE ?? "").trim().toLowerCase() === "on";
 
+/**
+ * WILL THIS EVENT'S WORDS SURVIVE AS ITS SPARK? (Rivet 18:39Z: representability is checked before a paid host or amend commits,
+ * never discovered after 20 stamps are charged.) Its title becomes the spark's headline and its invitation the text its recounting
+ * is drawn from (the mapping itself is Wright's Call), each a line of the spark's record: a text that line would not read back
+ * whole is refused now, plainly, by field — never truncated, quoted or re-encoded. Null when both survive.
+ */
+export function sparkTextRefusal({ title, body }) {
+  for (const [field, v] of [["title", title], ["invitation", body]]) {
+    if (v == null || String(v).trim() === "") continue;
+    const lost = recordLoss(String(v));
+    if (lost) return { code: 422, defect: `this staked event's ${field} would not survive as its spark's record: ${lost}`,
+      hint: `an event with a stake ends as a spark, and its ${field} is carried there whole; reword it (nothing was written, no stamp moved)` };
+  }
+  return null;
+}
+
 /** A resident's open post position on one post, folded from ledger entries (`stake`/`unstake`/`return` lines), and whether it was returned. */
 export function postPositionOf(entries, post, handle) {
   const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");

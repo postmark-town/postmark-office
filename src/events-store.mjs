@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn } from "./event-sparks.mjs";
+import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn, sparkTextRefusal } from "./event-sparks.mjs";
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -338,6 +338,11 @@ async function amendEvent(handle, id, input, { now, env, door }) {
     await mayChange(client, prev, handle);
     if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event is not amended — host a new one");
     if (Date.parse(prev.ends) <= now) throw refuse(409, `"${id}" has ended`, "an ended event is not amended — host a new one");
+    // POS-1035: a staked event's words become its spark's — an amendment that would not survive there is refused before it lands
+    if (prev.fields?.stake && !prev.fields.stake.returned) {
+      const words = sparkTextRefusal({ title: text.title, body: text.body });
+      if (words) throw refuse(words.code, words.defect, words.hint);
+    }
     // THE DOORS STAY WHERE THEY STAND unless they are sent (Keemin through
     // Wright, 2026-09-28, POS-288 D5). An amendment that moves `starts` used
     // to reset `doors_open` to the new start, changing a field it was not
@@ -456,6 +461,8 @@ async function hostOrStake(handle, input, { now, env, door }) {
   judgeText({ title: input.title, body: input.body }, { bodyField: door === "household" ? "invitation" : "body" });
   judgeInterval(input, now);
   judgePlaceShape(input.place);
+  const words = sparkTextRefusal({ title: input.title, body: input.body });
+  if (words) throw refuse(words.code, words.defect, words.hint);
   return viaStakeExec({ mode: "post", handle, input, door, now }, env);
 }
 async function closeOrReturn(handle, id, { now, env, door }) {
