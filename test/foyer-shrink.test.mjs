@@ -298,7 +298,12 @@ const REST_CEILING = 28_800;
 // POS-730 (2026-11-07, RULED by Darko 21:31 EST on 11-06 in the picker, POS-730/b, "Raise to 9,216"; Wright AUTH 02:31Z): the letter-note
 // act card joins the connector's bare roster (about 121 B), so SLIM_CEILING to 9,216 (+128), superseding POS-911's 9,088; REST_CEILING
 // stays 28,672. Measured by F5c below on the final wording (not trimmed to fit): connector bare 9,159 B UTF-8 (+121 B over the 9,038 B before the card), REST bare 28,611 B.
-const SLIM_CEILING = 9_216;
+// WLD-28 (2026-11-13, RULED by Darko 22:08Z, authenticated, relayed by Rivet 23:38Z): the connector's hard cap is exactly 10,000 bytes
+// (not 10 KiB, not 9,344), superseding POS-730/b's 9,216; REST_CEILING stays 28,800. The Sunday train refresh merged WLD-28's `settings`
+// read line into Hearth v2's `day` and `hearth` lines, each under 9,216 alone. Measured by F5c below on the final wording (not trimmed to
+// fit): connector bare 9,172 B at the merge base 7d430077, 9,216 B at WLD-28's b6b5c07e (+44), 9,215 B at the train's 273606ee (+43),
+// 9,259 B merged (+87); REST bare 28,793 B. It still sits far below the unabridged answer, so losing the abridgement trips it at once.
+const SLIM_CEILING = 10_000;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
