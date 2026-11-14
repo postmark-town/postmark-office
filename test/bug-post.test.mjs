@@ -249,7 +249,8 @@ function bugTables() {
       const rows = [...posts.values()].filter((r) => r.id.startsWith(pre)).map((r) => ({ id: r.id, state: r.state, ends: r.ends }));
       return { rows, rowCount: rows.length };
     }],
-    [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
+    // POS-942: the bug class's rows carry their body (household-posts.mjs § BODY_CLASSES), so the read may ask for it
+    [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act(?:, body)? FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
       const rows = byClass(p[0]);
       return { rows, rowCount: rows.length };
     }],
@@ -591,6 +592,10 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
   assert.deepEqual(one.fields, { steps: "Twice.", size: "S", critter: "Stickle", named_by: "finn", links: { fixed: FIXED_BY_FINN } });
   const single = await postsAtOffice({ class: "bug", post: "ada/the-door-sticks" }, { now: NOW, roll: ROLL });
   assert.equal(single.post.state, "reported");
+  // POS-942: the reporter's own words are on the public read, the list's rows and one post alike, exactly as posted
+  assert.equal(one.body, BUG.body, "the list row carries the body");
+  assert.equal(single.post.body, BUG.body, "and so does one post, read by its id");
+  assert.ok(r.posts.every((p) => typeof p.body === "string"), "every bug row on the page has a body field");
 
   const out = await dryRun(pen);
   assert.equal(out.equal, true, out.drift.join("\n"));
