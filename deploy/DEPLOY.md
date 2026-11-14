@@ -647,6 +647,25 @@ Most of `office-keep.sh` is deliberately non-fatal: a step that fails prints a l
 - **Accepted limitation:** starting `postmark-office-keep.service` itself by hand is recorded as **scheduled**, because the unit cannot tell who started it, and there is deliberately no `INVOCATION_ID` or `LastTrigger` detection. Use the by-hand unit instead. `/etc/postmark-office.env` must not set `POSTMARK_KEEP_SOURCE`: an `EnvironmentFile=` value overrides the unit's `Environment=` line.
 - **Install day:** copy both units, as in One-time setup step 3 (the by-hand unit is copied, never enabled). Until the first receipt is written at `history_path`, this row is **expected** to show ALARM-outcome ("empty or unreadable"). The first scheduled tick after the release clears it, if every step is `ok`.
 
+### A lost mint push no longer wedges the town clone (POS-1030)
+
+On 2026-11-13 the tick's mint commit lost its push race (15:24Z), stayed in the town clone ahead of main, and every later tick's `pull --ff-only` refused until a hand reset the clone (16:02Z). From this change, `office-keep.sh` records its own mint commit and that commit's parent in the clone's git directory, as `office-keep-unlanded`, before it pushes. A push that answers no is settled from a fresh fetch (§ THE TICK'S OWN UNLANDED COMMIT in the script):
+
+| What the fetch shows | What the tick does | Receipt |
+|---|---|---|
+| main holds the commit (the push landed and its answer was lost) | nothing more; it is never minted again | `push` ok `landed-unacked` |
+| main does not hold it, and HEAD is still exactly that commit | `reset --keep` to its parent; the rows re-derive on the next tick, on main's tail; a signed line is never rebased | `push` refused `push-failed`, `rollback` ok `unmade` |
+| the fetch or a read failed | the commit is **kept**, with its record | `rollback` refused `unconfirmed` |
+| another writer committed on top of it in the clone | **kept**; nothing of the other writer's is touched | `rollback` refused `moved` |
+
+The next tick settles any record **before** its pull (`pull` ok `unmade` or `landed-unacked`). While a record stays unsettled, the tick signs no new line: `mint` refused `prereq:unlanded`, and three such scheduled ticks raise the keep row's alarm.
+
+- **Nothing to install.** This is code only: no unit, environment, store or migration change.
+- **The record is the tick's own.** Don't delete `/srv/postmark-office/town-clone/.git/office-keep-unlanded` while the commit it names is still in the clone. Doing so turns a commit the tick would settle into one only a hand can. If a hand does repair the clone (resetting the commit away, as on 11-13), the next tick finds the commit gone and clears the record itself (`pull` ok `gone`).
+- **On `unconfirmed` or `moved` for more than one tick:** `git -C /srv/postmark-office/town-clone log -2` and `cat .git/office-keep-unlanded` name the commit and its parent. `moved` means a write outside the town lock committed on top of the tick's commit. That is a hand repair under `town.lock`, as on 11-13; keep the tick's commit on a branch, never rebase it.
+- **What the deploy does not settle:** a tick commit stranded **before** this release has no record, so the new tick doesn't treat it as its own. Its pull refuses as before, and the sentinel's `town_clone` probe names it. Run `git -C /srv/postmark-office/town-clone status -sb` once after the deploy. It should show no `ahead`.
+- **Rollback:** revert the code. The old script never reads the record, so a leftover one changes nothing. Remove it only once `git status -sb` shows the clone level with main.
+
 ### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
 
 Part 5b (built on w42 as office #433, re-landed on w43) deleted `postmark-office-rehydrate.{service,timer}`, `deploy/office-rehydrate.sh` and the transitional `deploy/office-tick.sh` from the repo, and moved the rehydrate's world hydration (the store's world graph snapshot; `world.db` is retired since switch 3, office #294) into the keeping tick as `deploy/office-world-hydrate.sh`. A code deploy never removes an installed unit, so the box keeps firing the old rehydrate until these steps run. Every step is on the box, as root. **Wright or Darko runs them; no lane does.**

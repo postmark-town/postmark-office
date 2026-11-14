@@ -71,14 +71,28 @@ const outcome = async (n) => {
 const plain = (name, effect = "") => `${PRELUDE}\ntrail(${JSON.stringify(name)});\n${effect}\nawait outcome(${JSON.stringify(name)});\n`;
 
 const TOWN_TOOLS = {
+  // A line written "<row> after:<the line before it>" is a CHAINED line (POS-1030): it stands for a signed
+  // line, whose seal chains to the line before it, so a chained line moved onto another tail (a rebase) or
+  // written twice reads red here, as a re-sealed line would to the town's verifier.
   "tools/stamp-verify.mjs": `${PRELUDE}
 import { readFileSync } from "node:fs";
 trail("verify");
-const bad = readFileSync(${JSON.stringify(LEDGER)}, "utf8").split("\\n").findIndex((l) => l.includes("RED"));
+const lines = readFileSync(${JSON.stringify(LEDGER)}, "utf8").split("\\n");
+const bad = lines.findIndex((l) => l.includes("RED"));
 if (bad !== -1) { console.log("stamp-ledger verification FAILED: line " + (bad + 1)); process.exit(1); }
+const unchained = lines.findIndex((l, i) => l.includes(" after:") && l.slice(l.indexOf(" after:") + 7) !== lines[i - 1]);
+if (unchained !== -1) { console.log("stamp-ledger verification FAILED: line " + (unchained + 1) + " does not chain to the line before it"); process.exit(1); }
 `,
+  // STUB_OWED is the derivation: each named payment the ledger does not yet hold is appended once, chained
+  // to the tail it was decided on; one the ledger already holds is owed no more.
   "tools/stamp-mint.mjs": plain("mint", `
-if (process.env.STUB_APPEND) for (const r of process.env.STUB_APPEND.split("|")) appendFileSync(${JSON.stringify(LEDGER)}, r + "\\n");`),
+import { readFileSync } from "node:fs";
+if (process.env.STUB_APPEND) for (const r of process.env.STUB_APPEND.split("|")) appendFileSync(${JSON.stringify(LEDGER)}, r + "\\n");
+if (process.env.STUB_OWED) for (const r of process.env.STUB_OWED.split("|")) {
+  const held = readFileSync(${JSON.stringify(LEDGER)}, "utf8").split("\\n").filter(Boolean);
+  if (held.some((l) => l.startsWith(r + " after:"))) continue;
+  appendFileSync(${JSON.stringify(LEDGER)}, r + " after:" + held[held.length - 1] + "\\n");
+}`),
   "tools/household-keys.mjs": plain("hhkeys", `
 if (!(process.env.STUB_FAIL || "").split(",").includes("hhkeys")) console.log(JSON.stringify({ split_households: [], shared_keys: [] }));`),
 };
@@ -102,8 +116,22 @@ import { writeFileSync } from "node:fs";
 const town = process.argv[process.argv.indexOf("--town") + 1];
 if (process.env.STUB_WELCOME) appendFileSync(join(town, ${JSON.stringify(LEDGER)}), process.env.STUB_WELCOME + "\\n");
 if (process.env.STUB_LOCK_INDEX) writeFileSync(join(town, ".git", "index.lock"), "");`),
-  // Bring a neighbour's pass (POS-816), after the welcome pass
-  "deploy/invite-pass.mjs": plain("invite"),
+  // Bring a neighbour's pass (POS-816), after the welcome pass. STUB_OTHER_WRITER makes it the moment
+  // another writer (the Bug Catcher, 2026-11-13 15:24Z) lands a chained line on the town's main, from its
+  // own clone, after this tick's pull and before its push: the tick's push then loses the race.
+  "deploy/invite-pass.mjs": plain("invite", `
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+if (process.env.STUB_OTHER_WRITER) {
+  const g = (...a) => execFileSync(${JSON.stringify(which("git") ?? "git")}, a, { stdio: "ignore" });
+  const w = process.env.STUB_CALLS + ".other-" + process.pid;
+  g("clone", "-q", process.env.STUB_ORIGIN, w);
+  const held = readFileSync(join(w, ${JSON.stringify(LEDGER)}), "utf8").split("\\n").filter(Boolean);
+  appendFileSync(join(w, ${JSON.stringify(LEDGER)}), process.env.STUB_OTHER_WRITER + " after:" + held[held.length - 1] + "\\n");
+  g("-C", w, "commit", "-qam", "bugcatcher: another writer's line");
+  g("-C", w, "push", "-q");
+}`),
   "tools/bug-stage-plan.mjs": plain("bugstage"),
   "tools/ballots-backfill.mjs": plain("ballots"),
   // STAMP_LINES=store: the store's mint pass appends and commits its own lines
@@ -242,6 +270,7 @@ function envFor(fx, extra = {}) {
     OFFICE_KEEP_LOG: join(fx.harbor, "office-keep.jsonl"),
     HOUSEHOLD_KEYS_LOG: join(fx.harbor, "household-keys.jsonl"),
     STUB_CALLS: join(fx.root, "calls.txt"), STUB_HANG_MARK: join(fx.root, "hanging"),
+    STUB_ORIGIN: fx.origin, STUB_PUSHED_MARK: join(fx.root, "pushed"),
     ...extra,
   };
 }
@@ -443,14 +472,16 @@ test("mint · the commit is refused: commit-failed, rolled back, push and sync n
   assert.equal(status(fx), "");
 });
 
-test("mint · the push fails AFTER the commit: commit ok, push refused, the local commit stays (no roll-back), sync notrun", { skip }, () => {
+test("mint · the push fails AFTER the commit: commit ok, push refused, the commit unmade to the head it was made on (POS-1030), sync notrun", { skip }, () => {
   const fx = fixture();
   const pushed = fx.g("-C", fx.origin, "rev-parse", "main");
   const r = run(fx, { ...OWED, STUB_REJECT_PUSH: "1" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(steps(receipt(fx)), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "ok:not-needed" });
+  assert.equal(fx.g("-C", fx.town, "rev-parse", "HEAD"), pushed, "the unlanded commit is unmade: the clone is back where it arrived");
+  assert.deepEqual(steps(receipt(fx)), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "ok:unmade" });
   assert.equal(fx.g("-C", fx.origin, "rev-parse", "main"), pushed, "origin did not move");
-  assert.notEqual(fx.g("-C", fx.town, "rev-parse", "HEAD"), pushed, "the local commit is kept, as before");
+  assert.equal(status(fx), "");
+  assert.equal(unlandedRecord(fx), null, "nothing is left to settle");
 });
 
 test("mint · STAMP_LINES=store: the store's mint and the sync are recorded; a failed sync is sync-failed", { skip }, () => {
@@ -466,6 +497,189 @@ test("mint · STAMP_LINES=store: the store's mint and the sync are recorded; a f
   const failed = fixture();
   run(failed, { STAMP_LINES: "store", STUB_APPEND: "store row 3", STUB_FAIL: "mint-run" });
   assert.equal(steps(receipt(failed)).mint, "refused:mint-failed");
+});
+
+// ── POS-1030: THE TICK'S LOST PUSH NEVER WEDGES THE CLONE ───────────────────
+//
+// 2026-11-13 15:24Z: the tick minted two owed bug-stage payments (2 → little-bird, 3 → wayward-archivist),
+// committed them, and lost its push race to the Bug Catcher. The commit stayed in the clone ahead of main,
+// every later tick's `pull --ff-only` refused, and the clone was wedged until a hand reset it at 16:02Z.
+// Each test below runs two ticks where the incident needed a hand between them: the first loses (or cannot
+// confirm) its push, and the second must land each owed payment once, on main's tail, beside the other
+// writer's line. KEEP_BASELINE_REF=<the train's sha> is the control: the train's script leaves the clone
+// diverged (the first assertion each test makes), and its next tick's pull refuses.
+
+const PAYMENTS = { STUB_OWED: "2 → little-bird|3 → wayward-archivist" };
+const ORIGIN_LEDGER = (fx) => fx.g("-C", fx.origin, "show", `main:${LEDGER}`).split("\n").filter(Boolean);
+const ledgerOf = (fx) => readFileSync(join(fx.town, LEDGER), "utf8");
+/** The clone against the town's main, after a fresh fetch: how many commits it holds that main does not, and the reverse. */
+function divergence(fx) {
+  fx.g("-C", fx.town, "fetch", "-q", "origin");
+  const [behind, ahead] = fx.g("-C", fx.town, "rev-list", "--left-right", "--count", "origin/main...HEAD").trim().split(/\s+/).map(Number);
+  return { ahead, behind };
+}
+/** The tick's record of a mint commit not yet known to have landed (office-keep.sh § the tick's own unlanded commit), or null. */
+function unlandedRecord(fx) {
+  const p = join(fx.town, ".git", "office-keep-unlanded");
+  return existsSync(p) ? readFileSync(p, "utf8").trim() : null;
+}
+/** Another writer lands a chained line on the town's main from its own clone, between two ticks. */
+function otherWriterLands(fx, row) {
+  const w = join(fx.root, `other-${++seq}`);
+  fx.g("clone", "-q", fx.origin, w);
+  const held = readFileSync(join(w, LEDGER), "utf8").split("\n").filter(Boolean);
+  writeFileSync(join(w, LEDGER), `${held.join("\n")}\n${row} after:${held[held.length - 1]}\n`);
+  fx.g("-C", w, "commit", "-qam", "bugcatcher: another writer's line");
+  fx.g("-C", w, "push", "-q");
+}
+/** The git the tick runs, with the box's network faults on demand: a push whose acknowledgement is lost after the remote took it, a fetch that fails once a push was tried, a push that hangs, and another writer committing on top just before the push. */
+function gitWithFaults(fx) {
+  unlinkSync(join(fx.bin, "git"));
+  write(fx.bin, { git: `#!/bin/sh
+real=${JSON.stringify(which("git"))}
+sub="$1"; [ "$1" = "-C" ] && sub="$3"
+if [ "$sub" = fetch ] && [ -n "$STUB_FETCH_FAIL_AFTER_PUSH" ] && [ -f "$STUB_PUSHED_MARK" ]; then echo "fatal: stub: the network is down" >&2; exit 128; fi
+if [ "$sub" = push ]; then
+  if [ -n "$STUB_PUSH_HANG" ]; then echo x >> "$STUB_HANG_MARK"; sleep 20; fi
+  if [ -n "$STUB_PUSH_ON_TOP" ]; then "$real" commit -q --allow-empty -m "another writer's commit, on top"; fi
+  "$real" "$@"; rc=$?
+  echo pushed >> "$STUB_PUSHED_MARK"
+  if [ -n "$STUB_PUSH_ACK_LOST" ]; then echo "fatal: stub: the remote end hung up unexpectedly" >&2; exit 128; fi
+  exit $rc
+fi
+exec "$real" "$@"
+` }, 0o755);
+}
+const NOTHING_OWED = { verify: "ok:no-change", commit: "ok:no-change", push: "ok:no-change", sync: "ok:no-change" };
+
+test("POS-1030 · a push that loses its race: the tick's own commit is unmade, and the next tick lands each owed payment once, beside the other writer's line", { skip }, () => {
+  const fx = fixture();
+  const arrived = fx.g("-C", fx.town, "rev-parse", "HEAD").trim();
+  const r1 = run(fx, { ...PAYMENTS, STUB_OTHER_WRITER: "the bug catcher's line" });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 1 }, "the clone holds nothing the town's main does not: it is behind, never diverged");
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "ok:unmade" });
+  assert.equal(fx.g("-C", fx.town, "rev-parse", "HEAD").trim(), arrived, "unmade to the head the pass was made on");
+  assert.equal(status(fx), "");
+  assert.equal(unlandedRecord(fx), null);
+  assert.match(r1.stderr, /PUSH LOST .* UNMADE/);
+  assert.deepEqual(ORIGIN_LEDGER(fx), ["row 1", "row 2", "the bug catcher's line after:row 2"], "the other writer's line stands, and none of the tick's");
+
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), GREEN, "the next tick pulls, mints and lands as any green tick");
+  assert.deepEqual(ORIGIN_LEDGER(fx), [
+    "row 1", "row 2", "the bug catcher's line after:row 2",
+    "2 → little-bird after:the bug catcher's line after:row 2",
+    "3 → wayward-archivist after:2 → little-bird after:the bug catcher's line after:row 2",
+  ], "each owed payment once, decided again on main's new tail, never the old commit rebased");
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 0 });
+});
+
+test("POS-1030 · a push the remote took but whose answer was lost: the push is done, and nothing is minted again", { skip }, () => {
+  const fx = fixture();
+  gitWithFaults(fx);
+  const r1 = run(fx, { ...PAYMENTS, STUB_PUSH_ACK_LOST: "1" });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 0 });
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "ok:landed-unacked" }, "local failure is not proof that nothing landed");
+  assert.equal(unlandedRecord(fx), null);
+  const landed = ORIGIN_LEDGER(fx);
+  assert.equal(landed.length, 4);
+
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), { ...GREEN, ...NOTHING_OWED }, "the next tick owes nothing");
+  assert.deepEqual(ORIGIN_LEDGER(fx), landed, "no payment twice");
+});
+
+test("POS-1030 · a lost push that cannot be confirmed is KEPT, and the next tick settles it before its pull: unmade, then each payment once", { skip }, () => {
+  const fx = fixture();
+  gitWithFaults(fx);
+  const arrived = fx.g("-C", fx.town, "rev-parse", "HEAD").trim();
+  const r1 = run(fx, { ...PAYMENTS, STUB_REJECT_PUSH: "1", STUB_FETCH_FAIL_AFTER_PUSH: "1" });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "refused:unconfirmed" });
+  const kept = fx.g("-C", fx.town, "rev-parse", "HEAD").trim();
+  assert.equal(fx.g("-C", fx.town, "rev-parse", "HEAD^").trim(), arrived, "the uncertain commit is kept, on the head it was made on");
+  assert.equal(unlandedRecord(fx), `${kept} ${arrived}`, "and recorded as the tick's");
+  assert.match(r1.stderr, /PUSH NOT CONFIRMED \(unconfirmed\)/);
+
+  otherWriterLands(fx, "the bug catcher's line");
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), { ...GREEN, pull: "ok:unmade" });
+  assert.equal(unlandedRecord(fx), null);
+  assert.deepEqual(ORIGIN_LEDGER(fx), [
+    "row 1", "row 2", "the bug catcher's line after:row 2",
+    "2 → little-bird after:the bug catcher's line after:row 2",
+    "3 → wayward-archivist after:2 → little-bird after:the bug catcher's line after:row 2",
+  ]);
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 0 });
+});
+
+test("POS-1030 · a push that landed but could not be confirmed is kept, and the next tick finds it on main: nothing is minted again", { skip }, () => {
+  const fx = fixture();
+  gitWithFaults(fx);
+  const r1 = run(fx, { ...PAYMENTS, STUB_PUSH_ACK_LOST: "1", STUB_FETCH_FAIL_AFTER_PUSH: "1" });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "refused:unconfirmed" });
+  const landed = ORIGIN_LEDGER(fx);
+  assert.equal(landed.length, 4, "the remote took it");
+
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), { ...GREEN, ...NOTHING_OWED, pull: "ok:landed-unacked" });
+  assert.equal(unlandedRecord(fx), null);
+  assert.deepEqual(ORIGIN_LEDGER(fx), landed, "no payment twice");
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 0 });
+});
+
+test("POS-1030 · another writer's commit on top of the unlanded one is never taken away: kept, named, and no new line is signed onto it", { skip }, () => {
+  const fx = fixture();
+  gitWithFaults(fx);
+  const r1 = run(fx, { ...PAYMENTS, STUB_REJECT_PUSH: "1", STUB_PUSH_ON_TOP: "1" });
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "refused:moved" });
+  assert.equal(fx.g("-C", fx.town, "log", "-1", "--format=%s").trim(), "another writer's commit, on top", "the other writer's commit stands");
+  const ledger = ledgerOf(fx);
+
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), {
+    ...GREEN, mint: "refused:prereq:unlanded", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
+    verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun",
+  });
+  assert.equal(ledgerOf(fx), ledger, "nothing appended onto a tail main may never hold");
+  assert.match(r2.stderr, /could not be settled \(moved\): it is KEPT/);
+});
+
+test("POS-1030 · STAMP_LINES=store: only the shell's commit is unmade; the runner's landed mint and its rows stand", { skip }, () => {
+  const fx = fixture();
+  const r = run(fx, { STAMP_LINES: "store", STUB_APPEND: "store row 3", STUB_WELCOME: "welcome row 4", STUB_OTHER_WRITER: "the bug catcher's line" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 1 });
+  assert.deepEqual(steps(receipts(fx)[0]), { ...GREEN, push: "refused:push-failed", sync: "notrun", rollback: "ok:unmade" });
+  assert.equal(fx.g("-C", fx.town, "log", "-1", "--format=%s").trim(), "mint: store pass", "the clone stands at the runner's commit, the earlier owned stage");
+  assert.deepEqual(ORIGIN_LEDGER(fx), ["row 1", "row 2", "store row 3", "the bug catcher's line after:store row 3"], "the runner's row landed and stays; the welcome row re-derives next tick");
+  assert.equal(calls(fx).includes("sync"), false, "the store is not told of lines main does not hold");
+});
+
+test("POS-1030 · a tick stopped between its commit and its push leaves the record, and the next tick settles it", { skip }, async () => {
+  const fx = fixture();
+  gitWithFaults(fx);
+  const arrived = fx.g("-C", fx.town, "rev-parse", "HEAD").trim();
+  const r1 = await runStopped(fx, { ...PAYMENTS, STUB_PUSH_HANG: "1" });
+  assert.equal(r1.code, 143, r1.stderr);
+  const kept = fx.g("-C", fx.town, "rev-parse", "HEAD").trim();
+  assert.equal(unlandedRecord(fx), `${kept} ${arrived}`, "the commit was recorded before the push began");
+
+  otherWriterLands(fx, "the bug catcher's line");
+  const r2 = run(fx, PAYMENTS);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.deepEqual(steps(receipts(fx)[1]), { ...GREEN, pull: "ok:unmade" });
+  assert.equal(ORIGIN_LEDGER(fx).filter((l) => l.startsWith("2 → little-bird")).length, 1);
+  assert.deepEqual(divergence(fx), { ahead: 0, behind: 0 });
 });
 
 test("fatal · the pull fails: the tick fails with git's code, and its receipt says pull refused and nothing after it ran", { skip }, () => {
