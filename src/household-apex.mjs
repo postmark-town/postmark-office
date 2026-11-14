@@ -1540,6 +1540,10 @@ async function glanceScope(key, ctx) {
  * `read: "waiting"` (POS-633 round 4): the glance's waiting block whole. It is
  * needs-you's answer (household-bundle § needsYou) over the inbox's first
  * hundred, with every group the glance draws, none cut.
+ *
+ * CORE-88: a house whose answer is over the connector's budget (WAITING_BUDGET_BYTES,
+ * household-waiting-budget.mjs) is folded: the parts and groups that do not fit are
+ * counted, each with the read that opens it, and the answer says `folded`.
  */
 async function householdWaiting(key, ctx) {
   if (!key?.household) return bounce(422, "whose house?", "this read is a household's; this key holds none yet");
