@@ -197,7 +197,44 @@ test("FIRST-DAY.md and PROMISES.md: the shelf lists eight docs, and each answers
   const takes = TOOLS.find((t) => t.name === "read_docs").inputSchema.properties.doc.enum;
   assert.ok(takes.includes("first-day"), "town { read: \"docs\", args: { doc: \"first-day\" } } is a name the door takes");
   assert.ok(takes.includes("promises"), "town { read: \"docs\", args: { doc: \"promises\" } } is a name the door takes");
-  assert.equal(takes.length, 9, "nine names, one per doc on the shelf (hearth-setup, POS-1020)");
+  assert.equal(takes.length, 10, "ten names, one per doc on the shelf (hearth-setup, POS-1020; agents, CORE-53)");
+});
+
+// ── CORE-53: the repo map at the agent door. AGENTS.md is the town's page for an agent arriving, and its "The five public repos" section says what each
+// public repo holds; it is served whole as `agents` from the town checkout, the way hearth-setup is, and the office keeps no copy of its words. THE FALSIFIERS:
+// drop "AGENTS.md" from OFFICE_DOCS (the body is not served), the key from DOC_NAMES (the door refuses the name), the door's pointers (the listing, read_docs,
+// the town apex), or serve a constant instead of the file (the sentinel goes missing).
+test("CORE-53 · agents: the town's AGENTS.md is served whole, listed, takable, and pointed at from the door", async () => {
+  const dir = town();
+  const SENTINEL = "invented-sentinel-c53: postmark-world holds every mark.";
+  const AGENTS = `# AGENTS.md\n\n## The five public repos (all readable without an account)\n\n${SENTINEL}\n`;
+  writeFileSync(join(dir, "AGENTS.md"), AGENTS);
+  const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  git("add", "-A");
+  git("-c", "user.name=f", "-c", "user.email=f@t.invalid", "commit", "-q", "-m", "the agents page");
+  const s = await indexStoreFromTown(dir, { db: "ledger_docs_agents" });
+  stores.push(s);
+  const served = await storeRead(s, docsFromStore);
+  assert.deepEqual(served.docs.AGENTS, { body: AGENTS.trim(), path: "AGENTS.md" }, "GET /town/docs serves the file whole, in the reader's own shape");
+
+  const one = docsAnswer(served, "agents");
+  assert.deepEqual(one, { as_of: served.as_of, doc: "agents", path: "AGENTS.md", body: served.docs.AGENTS.body });
+  assert.ok(one.body.includes(SENTINEL), "the repo map's sentence is in the served doc, whole");
+  const bare = docsAnswer(served);
+  assert.equal(bare.docs.find((d) => d.doc === "agents").path, "AGENTS.md", "the shelf lists it");
+  assert.match(bare.open, /doc: "agents" is for an agent arriving: what you can do here, and the five public repos and what each holds/, "and says what it is, while it is on the shelf");
+
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const read = TOOLS.find((t) => t.name === "read_docs");
+  assert.ok(read.inputSchema.properties.doc.enum.includes("agents"), "a name the door takes");
+  assert.match(read.description, /agents \(for an agent arriving: what you can do here, and the five public repos and what each holds\)/, "and the door's own words name it");
+  const apex = readFileSync(new URL("../src/town-apex.mjs", import.meta.url), "utf8");
+  assert.equal(apex.split("agents (for an agent arriving: what you can do here, and the five public repos and what each holds)").length - 1, 2, "the town apex names it in its blurb and its description");
+
+  // no file on the shelf: no pointer that cannot lead anywhere, and the name answers as an absent doc
+  const none = docsAnswer({ as_of: "x", docs: { STAMPS: { path: "STAMPS.md", body: "s" } } });
+  assert.doesNotMatch(none.open, /doc: "agents"/);
+  assert.equal(docsAnswer({ as_of: "x", docs: {} }, "agents"), null);
 });
 
 // ── POS-1020: the Hearth setup prompt is read whole through the existing docs door, from the town's ONE authored file (POS-1019's HEARTH-SETUP.md) ──

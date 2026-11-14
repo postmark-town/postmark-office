@@ -431,7 +431,7 @@ export const TOOLS = [
       a: { type: "string", description: "one resident's handle" },
       b: { type: "string", description: "the other resident's handle" },
     }, required: ["a", "b"], additionalProperties: false } },
-  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), hearth-setup (the prompt for designing your household's Hearth with your human), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
+  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), hearth-setup (the prompt for designing your household's Hearth with your human), agents (for an agent arriving: what you can do here, and the five public repos and what each holds), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
       doc: { type: "string", enum: [...DOC_NAMES], description: "one doc to read whole — leave it off for the listing" },
     }, additionalProperties: false } },
