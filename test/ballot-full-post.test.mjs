@@ -185,6 +185,58 @@ test("1 · only a town hand's own credential puts a ballot up, and posts?class=b
   assert.equal(fileOf(dir, t).status, "submissions");
 });
 
+// ── 1b · Rei's own hand (POS-1039) ──────────────────────────────────────────
+//
+// Darko, CON-20, 2026-11-14 08:47 EST: "Add Rei's hand first." Rei places every ballot act herself; nobody
+// places one for her. Her agent's OWN key (it stands as rei and no other, POS-389) carries a ballot through
+// every verb by the same door and the same caller check as any hand, and the store records her hand on each act.
+// Nothing about the key widens: it still cannot stand as wright, a key that does not hold rei cannot name her,
+// a housemate's own key cannot borrow her, and a resident who is no hand is refused at every verb.
+// THE FLIP: without "rei" in BALLOT_HANDS her post is the 403 "only the town's hands put up and carry its ballots".
+
+// wright's agent's own key, in the same house: it stands as wright, never as its housemate rei
+const WRIGHT_AGENT = { household: "keemin", handles: new Set(["wright", "rei"]), heldBy: "resident", claimedHandle: "wright" };
+
+test("1b · Rei's own claimed hand puts a ballot up, advances, amends and closes it, each act recorded as hers (POS-1039)", async () => {
+  const t = "hearth-rei";
+  const dir = town();
+  process.env.TOWN_CLONE = dir;
+  const id = ballotPostId(t);
+  const up = { class: "ballot", topic: t, title: "Postmark's default Hearth", choices: [{ name: "default", credit: "Postmark", note: "the Hearth every house starts in" }] };
+
+  // the fences stand: no key may name rei unless it holds her as its own hand, and a resident who is no hand is refused
+  await refusedWith(postAtTown({ ...up, handle: "rei" }, ADA), 403, /"rei" is not one of your residents/);
+  await refusedWith(postAtTown({ ...up, handle: "rei" }, WRIGHT_AGENT), 403, /not this key's own hand/);
+  await refusedWith(postAtTown(up, ADA), 403, /only the town's hands/);
+  assert.equal(existsSync(join(dir, "WHITE_PAGES", `ballot-${t}.json`)), false, "a refused act writes no file");
+
+  // her own key, through the town door: post, advance, amend, close
+  const a = await postAtTown(up, REI_AGENT);
+  assert.equal(a.hand, "rei");
+  assert.match(a.receipt, /by rei's hand/);
+  assert.deepEqual([a.post.id, a.post.author, a.post.state], [id, "postmark-pen", "submissions"], "the post stays the town's, authored by the pen");
+  const adv = await advanceAtTown({ post: id, to: "staking" }, REI_AGENT);
+  assert.deepEqual([adv.hand, adv.post.state, fileOf(dir, t).status], ["rei", "staking", "staking"]);
+  const am = await amendAtTown({ post: id, choices: [{ name: "ledger", credit: "Postmark", note: "a quiet single column" }] }, REI_AGENT);
+  assert.equal(am.hand, "rei");
+  assert.deepEqual(fileOf(dir, t).candidates, ["default", "ledger"]);
+  assert.equal(fileOf(dir, t).cap_per_household_per_candidate, 20, "the cap is unchanged");
+  // still never as wright, and the household key (which holds both) may name her too
+  await refusedWith(amendAtTown({ post: id, title: "as wright", handle: "wright" }, REI_AGENT), 403, /not this key's own hand/);
+  const named = await amendAtTown({ post: id, title: "Postmark's default Hearth (named)", handle: "rei" }, HANDS);
+  assert.equal(named.hand, "rei");
+  // a resident who is no hand still moves nothing
+  await refusedWith(closeAtTown({ post: id }, ADA), 403);
+  const c = await closeAtTown({ post: id }, REI_AGENT);
+  assert.deepEqual([c.hand, c.post.state, fileOf(dir, t).status], ["rei", "closed", "closed"]);
+
+  // the record: every act the pen's, each carrying rei's hand; the post's history says so
+  assert.deepEqual((await ballotActs(t)).map((x) => [x.actor, x.action, x.payload.hand]),
+    [["postmark-pen", "post", "rei"], ["postmark-pen", "advance", "rei"], ["postmark-pen", "amend", "rei"], ["postmark-pen", "amend", "rei"], ["postmark-pen", "close", "rei"]]);
+  const p = (await postsAtOffice({ class: "ballot", post: id }, { townClone: dir })).post;
+  assert.ok(p.history.every((h) => h.hand === "rei"), JSON.stringify(p.history));
+});
+
 // ── 2 · the money path ──────────────────────────────────────────────────────
 
 test("2 · a credited choice joins while staking runs; direct and mail stakes land on old and new; post, engine and verifier agree; the 20 is shared by one household and the close returns everything", async () => {
