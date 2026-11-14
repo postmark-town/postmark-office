@@ -84,14 +84,25 @@ test("over the budget: your own path stays whole, other branches fold first — 
   assert.equal(served, 10, "every say of the circle is either a line or counted in a fold — nothing cut silently");
 });
 
-test("an own path larger than the budget is served whole and says so; stubs that do not fit are named by id", () => {
-  const v = C.circleView(room(), { caller: "claran", budget: 400 });
-  for (const id of [50101, 50105, 50106, 50110, 50111]) assert.ok(ids(v.lines).includes(id));
-  assert.equal(v.budget.over, true);
-  assert.match(v.budget.note, /your own path is larger than the budget, so it is served whole/);
-  assert.ok(v.budget.used > 400);
+test("an own path larger than the budget is PAGED in its own order (Wright 17:38:11Z): counts whole, the continuation named, nothing cut", () => {
+  const v = C.circleView(room(), { caller: "claran", budget: 1800 });
+  const path = [50101, 50105, 50106, 50110, 50111];
+  assert.equal(v.own_path.paged, true);
+  assert.equal(v.own_path.says, 5, "the count is the whole path");
+  assert.equal(v.own_path.shown, v.lines.length);
+  assert.ok(v.lines.length < 5 && v.lines.length >= 1);
+  assert.deepEqual(ids(v.lines), path.slice(0, v.lines.length), "served from the top, in the path's own order");
+  assert.deepEqual(v.own_path.next, { circle: 50101, after: v.lines.at(-1).id });
+  assert.ok(v.budget.used <= 1800 && !v.budget.over, "paged to fit: the page is inside the target, and own_path says it is paged");
+  // the continuation reads on in the same order and reaches the rest of the path
+  let seen = ids(v.lines), next = v.own_path.next;
+  while (next) { const p = C.circleRead(room(), next.circle, { after: next.after, budget: 1800 }); seen = [...seen, ...ids(p.lines)]; next = p.next; }
+  for (const id of path) assert.ok(seen.includes(id), `path say ${id} is reachable`);
   const named = [...v.elsewhere.map((s) => s.circle), ...(v.more_circles ?? [])].sort();
   assert.deepEqual(named, [50107, 50114], "every other circle is a stub or an id — never dropped");
+  const tiny = C.circleView(room(), { caller: "claran", budget: 1 });
+  assert.equal(tiny.lines.length, 1, "always at least one line");
+  assert.equal(tiny.budget.over, true);
 });
 
 test("one circle whole, paged: the path above as context, depth-first, `next` until complete", () => {
@@ -324,15 +335,22 @@ test("the say door: the default read stays near the budget as MCP text, measured
   const v = r.conversation.circles;
   assert.equal(v.budget.bytes, 8192);
   assert.equal(v.budget.used, C.mcpBytes(final), "`used` is the final reply as the door serves it, as MCP text");
-  assert.ok(v.budget.used <= 8192 || v.budget.over, "inside the budget, or it says it is not");
-  // the strand's own path is the whole chain: served whole and over the hard cap — the measured conflict, reported, never cut
-  assert.equal(v.budget.over, true);
-  assert.ok(v.budget.used > 10_000, `measured ${v.budget.used} bytes over the 10,000-byte connector cap`);
+  // a long own path (16 says here; it measured 11,806 bytes whole) is PAGED inside the target now (Wright 17:38:11Z), never cut
+  assert.ok(v.budget.used <= 8192, `the final reply is inside the target: ${v.budget.used} bytes`);
+  assert.equal(v.own_path.paged, true);
   const idx = C.circleIndex(store._voices());
   const mine = store._voices().filter((x) => x.handle === "r29").at(-1);
   const path = idx.pathOf(mine.id);
   assert.ok(path.length > 10);
-  for (const id of path) assert.ok(v.lines.some((l) => l.id === id), `own path say ${id} is served — nothing of it was cut`);
+  assert.equal(v.own_path.says, path.length, "the count is the whole path");
+  let seen = v.lines.map((l) => l.id);
+  for (let next = v.own_path.next; next;) {
+    const p = await store.hear("r29", { circleAsk: next, doorExtra: async () => extra });
+    assert.ok(p.circle.budget.used <= 10_000, "every continuation page is under the hard cap");
+    seen = [...seen, ...p.circle.lines.map((l) => l.id)];
+    next = p.circle.next;
+  }
+  for (const id of path) assert.ok(seen.includes(id), `own path say ${id} is reachable by the continuation — nothing of it was cut`);
   // a nonce receipt's trailing fields are counted too
   tick();
   const said = await store.say("r29", "and one more, kept by a nonce", { nonce: "n-1", doorExtra: async () => extra });

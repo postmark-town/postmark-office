@@ -215,7 +215,6 @@ export function circleView(voices, { caller = null, budget = CIRCLE_BUDGET_BYTES
   };
 
   // ── your circle: the kept path, then whole branches newest-active first, folding what does not fit ──
-  let keptBytes = 0;
   if (yours != null) {
     const tree = index.subtree(yours);
     const keep = new Set();
@@ -239,7 +238,6 @@ export function circleView(voices, { caller = null, budget = CIRCLE_BUDGET_BYTES
     const assemble = () => tree.filter(({ v }) => shown.has(sayIdOf(v.id)))
       .map(({ v, depth }) => lineOf(v, { depth, ...(v.handle === caller ? { you: true } : {}) }));
     view.lines = assemble();
-    keptBytes = measure(view); // the kept path alone, before any branch, fold or stub
     // fold everything not on the path, then unfold whole branches newest-active first while the view stays inside the budget
     const folds = new Map(branches.map((b) => [b.top, b]));
     const foldStub = (b) => ({ ...circleStub(index, b.top), under: b.under });
@@ -287,8 +285,20 @@ export function circleView(voices, { caller = null, budget = CIRCLE_BUDGET_BYTES
     elsewhere: view.elsewhere.length + more.length,
     ...(view.timeline ? { timeline: index.timeline.length } : {}),
   };
-  view.budget = budgetBlock(view, budget, measure, keptBytes > budget
-    ? "your own path is larger than the budget, so it is served whole rather than cut: everything else is folded"
+  // YOUR OWN PATH, PAGED WHEN IT CANNOT FIT (Wright 17:38:11Z, settled): other branches have already folded; if the view is still
+  // over the target, the path's lines are served in their own order up to the target (always at least one), and `own_path` says
+  // it is paged — how many says it holds, how many are here, and the call that continues it. Nothing is cut silently; the counts
+  // stay whole. The continuation reads the same circle on, depth-first (circleRead), from the last line served here.
+  if (yours != null && measure(view) > budget && view.lines.length > 1) {
+    const all = view.lines;
+    const page = (n) => ({ ...view, lines: all.slice(0, n), own_path: { paged: true, says: all.length, shown: n, next: { circle: yours, after: all[n - 1].id } } });
+    let n = all.length - 1;
+    while (n > 1 && measure(page(n)) > budget) n -= 1;
+    Object.assign(view, page(n));
+    view.counts.lines = n;
+  }
+  view.budget = budgetBlock(view, budget, measure, view.own_path?.paged
+    ? "your own path is larger than the budget, so it is paged: `own_path.next` continues it in order"
     : "the folds and stubs alone are larger than the budget; each still names the call that opens it");
   return view;
 }

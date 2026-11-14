@@ -42,13 +42,14 @@ export const CORE_FIELDS = Object.freeze(["kind", "by", "tier", "date", "at", "e
  * `properties` (the caller's object) → the fields to write, or `{ refused: { code, defect, hint } }`. `own` is the class's own
  * property names (a Set or array). Absent `properties` carries nothing.
  */
-export function carriedProperties(klass, properties, own) {
+export function carriedProperties(klass, properties, own, { spark = klass === SPARK_CLASS } = {}) {
   if (properties === undefined || properties === null) return { fields: {} };
   const no = (defect, hint) => ({ refused: { code: 422, defect, hint } });
   if (typeof properties !== "object" || Array.isArray(properties)) return no("properties is an object of the class's own properties, by name", "properties: { <name>: <value>, … }");
   const names = new Set(own ?? []);
   const given = { ...properties };
-  if (klass === SPARK_CLASS && given.parent !== undefined) {
+  // `spark` is the World's answer for this class (world.mjs § sparkByWorld), handed in; the name alone is the default for a caller with none
+  if (spark && given.parent !== undefined) {
     if (given.parent_spark !== undefined) return no("parent and parent_spark name the same link", "send parent: \"<by>/<slug>\" — the record stores it as parent_spark");
     given.parent_spark = given.parent;
     delete given.parent;

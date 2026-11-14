@@ -52,7 +52,7 @@ import { berthHandleOf, isBerthHandle, withStanding } from "./speaker-standing.m
 import { harborWritesOpen, HARBOR_BOUNCE } from "./harbor-gate.mjs"; // POS-739: a harbor household walks as its berth, no other way
 import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, classOwnProperties, departurePace, freeCellIn } from "./world-classes.mjs";
-import { SPARK_CLASS, carriedProperties } from "./event-sparks.mjs"; // POS-1035: WLD-173's office half — properties by name, the spark's form
+import { carriedProperties } from "./event-sparks.mjs"; // POS-1035: WLD-173's office half — properties carried by name
 // The classes whose fields this door picks by hand (the bounty's ask, a chest's contents, a candy's label, a thing's holding word):
 // they keep their own named fields; every other class carries its law-declared properties through `properties`.
 const HAND_PICKED_CLASSES = Object.freeze(["bounty", "chest", "candy", "thing"]);
@@ -144,6 +144,22 @@ function engineDir() {
 }
 
 const engineImport = (file) => import(pathToFileURL(join(engineDir(), "tools", file)));
+
+// IS THIS A SPARK? THE WORLD'S ANSWER, NEVER THE OFFICE'S (POS-1035, placement A; World #391 at ad3ad54a). The World owns the
+// spark class and its place rules: `tools/mark-kind.mjs § isSparkIn` over the class index of the marks in hand. An engine that
+// does not yet export it (before #391 lands at the blessed ref) answers no — a spark is then refused as any unknown placement is,
+// never placed by a rule this office made up. `sparkWorld()` hands back the engine's spark helpers too, or null.
+async function sparkWorld() {
+  try {
+    const [mk, sp, fold] = await Promise.all([engineImport("mark-kind.mjs"), engineImport("spark.mjs").catch(() => null), engineImport("marks-fold.mjs").catch(() => ({}))]);
+    return typeof mk.isSparkIn === "function" ? { mk, sp, fold } : null;
+  } catch { return null; }
+}
+async function sparkByWorld(m, marks) {
+  const w = await sparkWorld();
+  if (!w) return false;
+  try { return w.mk.isSparkIn(m, typeof w.mk.kindIndexOf === "function" ? w.mk.kindIndexOf(marks ?? []) : null) === true; } catch { return false; }
+}
 
 async function mods() {
   if (_mods) return _mods;
@@ -4748,7 +4764,9 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     }
 
     // ── the parent, as a lookup ──────────────────────────────────────────────
-    if (!isSited(clean, classExtendsOf())) { // a description; `kind: thing` stands by its class (the door's § THE FORM IT IS WRITTEN IN)
+    // A SPARK IS NO DESCRIPTION (World #391: mark-kind.mjs § isSparkIn / standingOf answer `spark` before this generic branch): it
+    // stands in its own frame and needs no parent to describe. The World answers which records are sparks; this office never does.
+    if (!isSited(clean, classExtendsOf()) && !(await sparkByWorld(clean, canon.marks))) { // a description; `kind: thing` stands by its class (the door's § THE FORM IT IS WRITTEN IN)
       const parent = liveById.get(clean.parent_id) ?? canon.byId.get(clean.parent_id);
       if (!parent) throw bounce(422, `no mark "${clean.parent_id}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
       if (!isSited(parent, classExtendsOf())) throw bounce(422, `"${clean.parent_id}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
@@ -5416,12 +5434,13 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // which is where every door-written carrier came from. Standing is the one
   // walk's verdict over the ground; nothing here writes or forwards the field.
   if (tier !== undefined) throw bounce(422, "tier: is not a field", "standing is derived from the ground your mark stands on — drop tier and the walk will answer it");
+  // A SPARK, as the World answers it (sparkByWorld above: its mark-kind.mjs § isSparkIn over the canon's class index) — asked once
+  const isSpark = klass !== undefined && await sparkByWorld({ kind: String(klass) }, canonForGuards()?.marks ?? []);
   if (kind === "sited" || kind === "parcel") {
     if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) throw bounce(422, "sited/parcel marks need at {x,y}", "grid meters east/south of the Origin");
     // A SPARK'S FRAME MAY BE A POINT OR A LINE (POS-1035 frozen frame; Bevel 16:25:14Z): a real single-point room keeps its explicit
     // zero width/height, never padded. Its frame is the event's or the circle's, not ground it stands on.
-    const sparkFrame = klass !== undefined && lineageOf(String(klass), classExtendsOf()).includes(SPARK_CLASS);
-    if (kind === "sited" && sparkFrame) {
+    if (kind === "sited" && isSpark) {
       if (!extent || !Number.isFinite(Number(extent.w)) || !Number.isFinite(Number(extent.h)) || Number(extent.w) < 0 || Number(extent.h) < 0)
         throw bounce(422, "a spark needs an extent {w,h}, each 0 or more", "its frame: the room's bounds, or 120×120 (the 60 m radius) with no conversation");
     } else if (kind === "sited" && (!extent || !(Number(extent.w) || Number(extent.h)))) throw bounce(422, "a sited mark needs an extent {w,h}", "its footprint in grid meters");
@@ -5594,7 +5613,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     if (klass === undefined || HAND_PICKED_CLASSES.includes(String(klass)))
       throw bounce(422, klass === undefined ? "properties belong to a classed mark" : `class ${klass}'s fields are its own named fields, not properties`,
         klass === undefined ? "send kind: \"<class>\" with the class's properties" : "send them as the fields this card names");
-    const c = carriedProperties(String(klass), payload.properties, Object.keys(classOwnProperties(String(klass))));
+    const c = carriedProperties(String(klass), payload.properties, Object.keys(classOwnProperties(String(klass))), { spark: isSpark });
     if (c.refused) throw bounce(c.refused.code, c.refused.defect, c.refused.hint);
     carried = c.fields;
   }
@@ -5704,7 +5723,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   const extendsOfClass = classExtendsOf();
   // A SPARK is written in the new form too (WLD-173: `kind: spark`, no `class:` line), though it is not sited: its frame is no ground.
   const newForm = klass !== undefined && kind === "sited" && ((isSited({ kind: String(klass) }, extendsOfClass)
-    && !lineageOf(String(klass), extendsOfClass).includes("parcel")) || lineageOf(String(klass), extendsOfClass).includes(SPARK_CLASS));
+    && !lineageOf(String(klass), extendsOfClass).includes("parcel")) || isSpark);
   const { class: _spelled, ...ownFields } = classFields;
   const clean = { slug, kind: newForm ? String(klass) : kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
     ...(newForm ? ownFields : classFields), ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
@@ -5718,6 +5737,19 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // rule on it (the ground question is a canon question). The ledger move is
     // still the stake verb's; this is the declaration saying what was asked for.
     ...(payload.stamps === undefined || payload.stamps === null ? {} : { stamps: stakeLands }) };
+  // A SPARK IS PRE-CHECKED BY THE WORLD'S OWN RULE (World #391 tools/spark.mjs § sparkProblems: the required recounting and
+  // experienced_at, the frame, the circle spine, a standalone spark's locked radius read off the class), before anything is
+  // written. The record-line round trip stays this door's own check (properties, above): the World's lint is not serialization.
+  if (isSpark) {
+    const w = await sparkWorld();
+    if (typeof w?.sp?.sparkProblems === "function") {
+      const radiusM = typeof w.sp.sparkRadiusM === "function" ? w.sp.sparkRadiusM(canonForGuards()?.marks ?? []) : null;
+      const isDate = typeof w.fold?.isValidMarkDate === "function" ? w.fold.isValidMarkDate : (s) => Number.isFinite(Date.parse(String(s)));
+      const problems = w.sp.sparkProblems({ ...clean, id: `${by}/${slug}` }, { radiusM, isDate });
+      if (problems.length) throw bounce(422, problems[0], problems.length > 1 ? `and: ${problems.slice(1).join("; ")}` : "the World's spark class says what a spark carries (tools/spark.mjs)");
+    }
+  }
+
   // ── THE MISTS ON THE PLACEMENT RECEIPT (WLD-38; was POS-468 B's veto) ─────
   // A sited or parcel mark's whole ground (its outline, else its box) is asked
   // the Mists forecast here, after every other judgment and before either pen
