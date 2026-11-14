@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
+import { CAP_BYTES, pageStances, textBytes } from "../src/household-read-page.mjs";   // the consumer's own unit and page, read-only here (CORE-95)
 import { CLASS_MARK, ACTION_LEAVE, readJournal } from "../src/world-journal.mjs";
 // ── THE SKETCHES ARE SEEDED, NOT WRITTEN BY A DOOR (G1 / POS-156) ──────────
 //
@@ -796,6 +797,38 @@ test("CORE-95: a quote over the bound is cut at a whole character, ends in a pla
   assert.ok(!teach.after_it_is_published.unruled.includes(long), "and not the whole over-long text");
   assert.equal(teach.after_it_is_published.law_mark, "the-town/the-late-welcome", "law-mark provenance intact");
   assert.equal(teach.after_it_is_published.the_law_reaches, LATE_WELCOME_SAYS, "the late-welcome mark is not trimmed");
+});
+
+// WRIGHT, CORE-88 fit, 2026-11-14 16:18Z: "Please size the per-quote bound so a teaching answer with its usual number of quotes plus its own
+// fields stays under 10,000. Measure how many quotes one answer carries at most, and set the bound from that … with a test asserting the
+// whole answer's bytes." The answer is what the consumer sends: {read, part, law, teach} through the real pageStances (which cuts again only
+// if the answer does not fit), measured in the connector's own unit (JSON.stringify(…, null, 1), UTF-8). So this asserts the PRODUCER's markers
+// are what reach the reader: the consumer's page is the producer's teach, unchanged.
+test("CORE-95: the WHOLE teaching answer, with its fields and envelope, is under 10,000 serialized bytes with the producer's markers kept — nothing is cut a second time", async () => {
+  // JSON escapes (" and \) and multibyte text in every quote, ~25 KB each, so all three quotes are cut at the producer
+  const esc = (n) => Array.from({ length: n }, (_, i) => ["é", "—", "🙂", '"', "\\", "a", "b c"][i % 7]).join("");
+  const w = writeLaw("world-whole-answer", { a: esc(12000), b: esc(12000) });
+  const late = "🙂".repeat(150);                       // the late-welcome body at its valid worst: a mark body is at most 150 characters, here all 4-byte
+  const teach = stanceTeach(w, { lateWelcome: late });
+  const { law } = await stanceShadow(repo, houseA, { dbPath });   // the read's real `law` line
+  const answer = { awaiting: [], law, teach };
+  const page = pageStances(answer, { part: "teach" });
+  assert.deepEqual(page, { read: "stances", part: "teach", law, teach }, "the consumer returns the producer's teach untouched: no second cut, the producer's markers are what is sent");
+  const bytes = textBytes(page);
+  assert.ok(bytes < CAP_BYTES, `the whole teaching answer is ${bytes} serialized UTF-8 bytes (< ${CAP_BYTES})`);
+  assert.equal(Buffer.byteLength(JSON.stringify(page, null, 1), "utf8"), bytes, "in the connector's own unit (mcp.mjs § contentFor)");
+  // the producer's markers, on all three quotes and in the unruled text's copy of the third
+  for (const f of ["what_opposed_does", "until_you_speak", "any_latency"]) assert.ok(MARKER.test(page.teach[f]), `${f}: the producer's cut marker is what is sent`);
+  assert.ok(page.teach.after_it_is_published.unruled.includes(page.teach.any_latency), "the unruled text carries the bounded any_latency");
+  assert.ok(!/…cut|\[…cut/.test(JSON.stringify(page)), "and no consumer cut marker anywhere");
+  // the late-welcome mark is whole, twice (its own field and inside the unruled text), and the unruled wording is intact
+  assert.equal(page.teach.after_it_is_published.the_law_reaches, late);
+  assert.ok(page.teach.after_it_is_published.unruled.includes(late));
+  assert.match(page.teach.after_it_is_published.unruled, /UNRULED PAIR/);
+  // the arithmetic the constant rests on: four copies of a quote (three fields + the third inside unruled) plus everything else
+  const q = ["what_opposed_does", "until_you_speak", "any_latency"].map((f) => jsonBytes(page.teach[f]));
+  const overhead = bytes - (q[0] + q[1] + 2 * q[2]);
+  assert.ok(4 * RESPONSE_QUOTE_MAX_BYTES + overhead < CAP_BYTES, `4 x ${RESPONSE_QUOTE_MAX_BYTES} + the measured ${overhead} bytes of everything else (envelope, law, from, late-welcome x2, unruled words) stays under ${CAP_BYTES}`);
 });
 
 test("CORE-95 CONTROLS: a quote at exactly the bound is verbatim, one byte more is cut, and a missing anchor is still disclosed", () => {

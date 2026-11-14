@@ -179,11 +179,22 @@ const plain = (s) => s.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
 // The anchors slice a sentence out of a file a World PR can rewrite, so a quote's length is the file's, not this door's. Each quote
 // `responseFunctionSays` returns (opposed, neutral_and_revisable, any_latency; the third is the one `stanceTeach`'s unruled text reuses)
 // is therefore bounded HERE, at its producer: JSON-encoded as a value (JSON.stringify of the string, its quotes and escapes counted) it
-// is at most RESPONSE_QUOTE_MAX_BYTES of UTF-8, marker included. That is the connector's own 10,000-byte ceiling on a tool result's text
-// (household-read-page.mjs CAP_BYTES, mcp.mjs § contentFor), not a new number; it bounds each producer quote, not the whole teaching
-// object or any caller's answer. A quote that fits is returned verbatim. One that does not keeps a whole-character prefix and a plain
-// marker, so a cut prefix is never passed off as the full law: it counts the source text's UTF-8 bytes it removed and names the file.
-export const RESPONSE_QUOTE_MAX_BYTES = 10000;
+// is at most RESPONSE_QUOTE_MAX_BYTES of UTF-8, marker included. A quote that fits is returned verbatim. One that does not keeps a
+// whole-character prefix and a plain marker, so a cut prefix is never passed off as the full law: it counts the quote's UTF-8 bytes it
+// removed and names the file.
+//
+// THE NUMBER IS SIZED SO THE WHOLE TEACHING ANSWER FITS THE CONNECTOR (Wright, CORE-88 fit, 2026-11-14 16:18Z: "size the per-quote
+// bound so a teaching answer with its usual number of quotes plus its own fields stays under 10,000"). The answer the consumer sends
+// (`household { read: "stances", part: "teach" }`: {read, part, law, teach}, as household-read-page.mjs teachPage builds it and mcp.mjs
+// § contentFor serialises it, JSON.stringify(…, null, 1) in UTF-8) carries FOUR copies of a producer quote: `what_opposed_does`,
+// `until_you_speak`, `any_latency`, and `any_latency` again inside the unruled text. Everything else in it (the envelope, the law
+// line, `from`, the late-welcome body twice (`the_law_reaches` and inside `unruled`) at its worst, the unruled text's own words,
+// the marks and the nested-quote escapes) measured 2,223 bytes with the late-welcome body at its valid worst, 150 characters of 4-byte
+// text. CAP_BYTES 10,000 - 2,223 = 7,777 over 4 copies = 1,944 per quote; the constant is 1,900 (a 177-byte margin on the whole answer
+// at the worst: 4 x 1,900 + 2,223 = 9,823). A live quote is a sentence or two (about 200 bytes), so normal teaching is far under it
+// and verbatim. It bounds each producer quote; test/world-stance.test.mjs asserts the whole answer. If a fifth quote copy or a longer
+// field is ever added to the teaching answer, this number is the one to re-derive.
+export const RESPONSE_QUOTE_MAX_BYTES = 1900;
 const jsonBytes = (s) => Buffer.byteLength(JSON.stringify(s), "utf8");
 const cutMarker = (removedBytes) => ` [cut: ${removedBytes} bytes of this quote are not shown; the whole text is in ${RESPONSE_FUNCTION_FILE.replace(/\\/g, "/")} in the World checkout]`;
 
@@ -212,8 +223,9 @@ export function boundQuote(quote, max = RESPONSE_QUOTE_MAX_BYTES) {
  * the record no longer contains.
  *
  * THE BOUND (CORE-95): every quote returned here (`what_opposed_does`,
- * `until_you_speak`, `any_latency`) is at most RESPONSE_QUOTE_MAX_BYTES (10,000)
- * UTF-8 bytes JSON-encoded as a value, marker included. A longer one is cut at a
+ * `until_you_speak`, `any_latency`) is at most RESPONSE_QUOTE_MAX_BYTES (1,900,
+ * sized so the whole teaching answer stays under 10,000) UTF-8 bytes
+ * JSON-encoded as a value, marker included. A longer one is cut at a
  * whole character and ends in a plain marker saying how many bytes were cut and
  * that the whole text is in LOGOS/the-response-function.md (`boundQuote`).
  */
