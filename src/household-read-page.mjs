@@ -249,14 +249,14 @@ export function pageNeeds(answer, args = {}) {
 }
 
 /**
- * Where a needs-you row's long field lives whole, by part. A mark's body is the world's bare mark focus. An alert's `about.body` is
- * the mark's body too, except for escrow-on-missing-mark, whose mark is not in the world or the store (alerts.mjs): no existing read
- * holds that body whole, and it is said so. Fields the office composes itself (a message, a reason) have no other copy.
+ * Where a needs-you row's long field lives whole, by part. An at-risk row's body is a published mark's: the world's bare mark focus.
+ * An alert's `about.body` has NO verified opening, so none is promised: a mark-taken alert's mark has left the world (the focus
+ * answers a receipt for a missing mark, world.mjs § worldInvestigate, not the stored body), and an escrow-on-missing-mark alert's
+ * mark is in neither the world nor the store (alerts.mjs). Fields the office composes itself (a message, a reason) have no other copy.
  */
 function needsSource(part) {
   return (path, row) => {
     const p = path.join(".");
-    if (part === "alerts" && p === "about.body") return row?.kind === "escrow-on-missing-mark" ? null : markSource(row?.about?.mark);
     if (part === "stakes_at_risk" && p === "body") return markSource(row?.mark);
     return null;
   };

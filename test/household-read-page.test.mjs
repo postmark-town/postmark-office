@@ -178,14 +178,14 @@ test("P10 · a lone row that fits the cap goes out whole, even past the 9,000 pa
   assert.equal(p.awaiting[0].body, original, "the body is whole");
 });
 
-test("P11 · an alert's nested about.body over the cap is cut: its mark's read where there is one, and plainly no read where there is none", () => {
+test("P11 · an alert's nested about.body over the cap is cut, and plainly says no existing read holds it (neither kind has a verified opening)", () => {
   const big = "庭".repeat(4000);
   const alert = (kind, mark) => ({ kind, severity: "act", about: { mark, body: big }, message: "m", act: { verb: "world.stake", args: { mark } }, since: "d", until: null });
   const needs = (rows) => ({ read: "needs-you", household: "h", residents: ["r000"], as_of: "x", count: rows.length, alerts: rows, alerts_unread: [] });
   const taken = pageNeeds(needs([alert("mark-taken", "r000/old")]), { part: "alerts" });
   assert.ok(textBytes(taken) <= CAP_BYTES, `${textBytes(taken)}`);
   const t = split(taken.rows[0].about.body);
-  assert.equal(t.source, 'world { mark: "r000/old" }');
+  assert.equal(t.source, null, "no verified opening for a retired mark's body: none is promised (the world's focus answers a receipt for a missing mark)");
   assert.equal(bytes(t.kept) + t.cutBytes, bytes(big), "exact");
   assert.deepEqual([taken.rows[0].kind, taken.rows[0].about.mark, taken.rows[0].act.verb], ["mark-taken", "r000/old", "world.stake"], "the alert is still identified and actionable");
   const escrow = pageNeeds(needs([alert("escrow-on-missing-mark", "r001/ghost")]), { part: "alerts" });
@@ -205,7 +205,7 @@ test("P12 · a top-level message over the cap is cut too (the office composes it
   assert.equal(bytes(m.kept) + m.cutBytes, bytes(msg));
   const b = split(p.rows[0].about.body);
   assert.equal(bytes(b.kept) + b.cutBytes, 12000, "the second long field is counted by its own bytes");
-  assert.equal(b.source, 'world { mark: "r000/a" }');
+  assert.equal(b.source, null, "an alert's body has no verified opening");
 });
 
 test("P13 · the teaching block bypassed no fit: over the cap its longest strings are cut with where each lives; within the cap it is whole", () => {

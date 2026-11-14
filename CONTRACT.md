@@ -587,8 +587,9 @@ whole: nothing is paged for them, and `part` is ignored (and needs-you's `cursor
   "stakes_at_risk" | "alerts", cursor }`, its rows whole as needs-you gives them. The marks are read at `stances`.
 - A single field that would push one row (or the teaching block) over 10,000 bytes is **cut with a plain marker**, in the field
   itself: `… […cut <N> bytes; the whole text: <the read that holds it>]` (the marker counts the UTF-8 bytes removed, exactly), or
-  `no existing read holds this field whole`. A mark's body is `world { mark: "<id>" }`; the teaching block's quoted text is the
-  response-function file it names and the law mark's read. There is no field cursor and no fragment paging; a lone row that fits
+  `no existing read holds this field whole`. A stance row's or an at-risk row's mark body is `world { mark: "<id>" }`; the
+  teaching block's quoted text is the response-function file it names and the law mark's read; an alert's `about.body` has no
+  verified opening and says so. There is no field cursor and no fragment paging; a lone row that fits
   the cap is delivered whole, never cut merely to reach the 9,000-byte page target.
 - A cursor is an index into that list, as a string; a page says `complete` and `cursor: null` at its end. Unavailable,
   empty and cut are three different words: `unavailable` names the cause, `total: 0` is none, and a cursor is more.

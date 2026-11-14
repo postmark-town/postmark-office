@@ -315,7 +315,7 @@ test("R8 · a single field over the cap, through the real dispatcher: cut with i
   const cutOf = (body) => /^(.*) \[…cut (\d+) bytes; (the whole text: (.*)|no existing read holds this field whole)\]$/s.exec(body);
   const m = cutOf(first.rows[0].about.body);
   assert.ok(m, "the first alert's body is cut with a marker");
-  assert.equal(m[4], 'world { mark: "r000/old-huge" }');
+  assert.equal(m[3], "no existing read holds this field whole", "no verified opening for a retired mark's body: none is promised");
   assert.equal(bytesOf(m[1]) + Number(m[2]), bytesOf(huge), "kept + cut = the field, exactly");
   assert.deepEqual([first.rows[0].kind, first.rows[0].about.mark, first.rows[0].act.verb], ["mark-taken", "r000/old-huge", "world.stake"]);
   // the whole walk: every alert once, each page under the cap, the escrow alert's body honestly without a source
