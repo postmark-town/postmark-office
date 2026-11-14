@@ -1,12 +1,13 @@
-// settlement-receipt-reason.test.mjs — the receipt names why each unpublished or returned mark went (POS-937/a).
+// settlement-receipt-reason.test.mjs — the receipt names why each mark that went, went (POS-937/a; POS-1025).
 //
-// Wright, 2026-11-07 15:53:23Z: for each mark the receipt reports as returned or unpublished, the writer
-// reads the town's WHITE_PAGES/stamp-ledger.md for that mark's newest `for: unstake` line and names the
-// date, the line number and who withdrew; with none, it says "no stake withdrawal on the ledger". No store
-// change, no carry-through from the world, no judgment. An unread ledger is not an empty one.
+// Wright, 2026-11-07 15:53:23Z: for each mark the receipt reports as gone, the writer reads the town's
+// WHITE_PAGES/stamp-ledger.md for that mark's newest `for: unstake` line and names the date, the line
+// number and who withdrew; with none, it says "no stake withdrawal on the ledger". No store change, no
+// carry-through from the world, no judgment. An unread ledger is not an empty one.
 //
-// This drives the actual writer (deploy/settlement-receipt.mjs) over invented reports and a temporary
-// ledger, the way settlement-receipt-retired.test.mjs composes a receipt. Invented residents and marks only.
+// Since the printout (POS-1025) the marks that went are the printout's `removed` (the clearing retired
+// them before its seal), listed as `removed`. This drives the actual writer (deploy/settlement-receipt.mjs)
+// over an invented printout report and a temporary ledger. Invented residents and marks only.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -20,20 +21,25 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RECEIPT = join(ROOT, "deploy", "settlement-receipt.mjs");
 const SIG = "S".repeat(86);
 const unstake = (date, mark, who, n = 1) => `- ${date} · stake:world-mark/${mark} → ${who} · ${n} · for: unstake · sig: ${SIG}`;
+const pathOf = (slug) => `WORLD/marks/${slug}/mark.md`;
 
 /** Compose a receipt the way settlement-auto.sh's `report` function does, with a town snapshot holding `ledgerLines` (or none). */
-function compose({ sweep = { published: [], unpublished: [] }, retire = undefined, ledgerLines = null, snapshot = true, ledgerPath = true } = {}) {
+function compose({ written = [], removed = [], printout = undefined, ledgerLines = null, snapshot = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "receipt-reason-"));
   try {
     const env = { ...process.env, SETTLEMENT_STATUS: "published", SETTLEMENT_AT: "2026-11-07T17:45:00Z" };
     delete env.SETTLEMENT_TOWN_SNAPSHOT;
     const put = (name, body) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(body)); return p; };
-    env.SETTLEMENT_SWEEP_JSON = put("sweep.json", sweep);
-    if (retire !== undefined) env.SETTLEMENT_RETIRE_JSON = put("retire.json", retire);
+    env.SETTLEMENT_PRINTOUT_JSON = put("printout.json", printout ?? {
+      status: "printed", settlement: 214, window: 213,
+      written: written.map((id) => ({ id, path: pathOf(id) })),
+      removed: removed.map((r) => (typeof r === "string" ? { slug: r, path: pathOf(r) } : r)),
+      reframed: [], summary: { written: written.length, removed: removed.length, reframed: 0 },
+    });
     if (snapshot) {
       const town = join(dir, "town");
       mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
-      if (ledgerLines !== null && ledgerPath) writeFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), ledgerLines.join("\n") + "\n");
+      if (ledgerLines !== null) writeFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), ledgerLines.join("\n") + "\n");
       env.SETTLEMENT_TOWN_SNAPSHOT = town;
     }
     return JSON.parse(execFileSync(process.execPath, [RECEIPT], { encoding: "utf8", env }));
@@ -45,22 +51,22 @@ function compose({ sweep = { published: [], unpublished: [] }, retire = undefine
 const HEADER = ["# stamp-ledger — the town's stamps, witnessed", "", "Machine-first, append-only.", ""]; // 4 physical lines before the first entry
 const entryOf = (r, mark) => r.stake_withdrawals.find((e) => e.mark === mark);
 
-test("an unpublished mark gets its NEWEST matching unstake: date, physical 1-based line, and who actually withdrew", () => {
+test("a removed mark gets its NEWEST matching unstake: date, physical 1-based line, and who actually withdrew", () => {
   const ledger = [
     ...HEADER,
     unstake("2026-10-01", "ana-one/the-lamp", "ana-one"),            // line 5: an older unstake of the same mark
     "- 2026-10-02 · MINT → ren-two · 1 · for: letter-1 (sent) · sig: " + SIG,
     unstake("2026-10-28", "ana-one/the-lamp", "bo-three", 2),        // line 7: the newest, by another hand than the owner
   ];
-  const r = compose({ sweep: { unpublished: [{ id: "ana-one/the-lamp" }] }, ledgerLines: ledger });
+  const r = compose({ removed: ["ana-one/the-lamp"], ledgerLines: ledger });
   assert.deepEqual(r.stake_withdrawals, [{
-    mark: "ana-one/the-lamp", listed_as: ["unpublished"], found: true, date: "2026-10-28", line: 7, by: "bo-three",
+    mark: "ana-one/the-lamp", listed_as: "removed", found: true, date: "2026-10-28", line: 7, by: "bo-three",
     said: "stake withdrawn 2026-10-28 by bo-three (stamp-ledger.md line 7)",
   }]);
 });
 
 test("the withdrawer is the ledger's, never inferred from the mark's owner", () => {
-  const r = compose({ sweep: { unpublished: [{ id: "ana-one/the-lamp" }] }, ledgerLines: [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "cy-four")] });
+  const r = compose({ removed: ["ana-one/the-lamp"], ledgerLines: [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "cy-four")] });
   assert.equal(entryOf(r, "ana-one/the-lamp").by, "cy-four");
 });
 
@@ -76,41 +82,33 @@ test("siblings and other kinds never match: a longer slug, another owner, a post
     `- 2026-10-08 · ana-one → stake:world-mark/ana-one/the-lamp · 1 · via: api · sig: ${SIG}`,   // the stake going IN
     `- 2026-10-09 · stake:world-mark/ana-one/the-lamp → ana-one · 0 · for: unstake · sig: ${SIG}`, // a zero amount is no line
   ];
-  const r = compose({ sweep: { unpublished: [{ id: mark }] }, ledgerLines: ledger });
-  assert.deepEqual(entryOf(r, mark), { mark, listed_as: ["unpublished"], found: false, date: null, line: null, by: null, said: "no stake withdrawal on the ledger" });
+  const r = compose({ removed: [mark], ledgerLines: ledger });
+  assert.deepEqual(entryOf(r, mark), { mark, listed_as: "removed", found: false, date: null, line: null, by: null, said: "no stake withdrawal on the ledger" });
 });
 
 test("no match says the exact sentence; a mark that has one beside one that has none each get their own answer", () => {
   const ledger = [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "ana-one")];
-  const r = compose({ sweep: { unpublished: [{ id: "ana-one/the-lamp" }, { id: "dee-five/the-door" }] }, ledgerLines: ledger });
+  const r = compose({ removed: ["ana-one/the-lamp", "dee-five/the-door"], ledgerLines: ledger });
   assert.equal(entryOf(r, "ana-one/the-lamp").found, true);
   assert.equal(entryOf(r, "dee-five/the-door").said, "no stake withdrawal on the ledger");
   assert.equal(entryOf(r, "dee-five/the-door").found, false);
 });
 
-test("returned and retired marks are named too, each once, with how the receipt lists them", () => {
-  const ledger = [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "ana-one"), unstake("2026-10-31", "bo-three/the-gate", "bo-three")];
-  const r = compose({
-    sweep: { unpublished: [{ id: "ana-one/the-lamp" }] },
-    retire: { ran: true, count: 2, retired: [{ slug: "ana-one/the-lamp" }, { slug: "bo-three/the-gate" }], already_retired: [], absent: [],
-      drafts: { returned: [{ slug: "bo-three/the-gate" }], kept: [], unreturned: [] } },
-    ledgerLines: ledger,
-  });
-  assert.equal(r.stake_withdrawals.length, 2, "one entry per mark, not per list");
-  assert.deepEqual(entryOf(r, "ana-one/the-lamp").listed_as, ["unpublished", "retired"]);
-  assert.deepEqual(entryOf(r, "bo-three/the-gate").listed_as, ["retired", "returned"]);
-  assert.equal(entryOf(r, "bo-three/the-gate").line, 6);
-  // the existing fields keep their meaning
-  assert.deepEqual(r.retired.slugs, ["ana-one/the-lamp", "bo-three/the-gate"]);
-  assert.deepEqual(r.retired.drafts.returned, ["bo-three/the-gate"]);
+test("only marks the printout actually removed are named: a removal with nothing on main to remove names no one", () => {
+  const ledger = [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "ana-one")];
+  const r = compose({ removed: ["ana-one/the-lamp", { slug: "bo-three/the-gate", path: null, note: "not on main: nothing to remove" }], ledgerLines: ledger });
+  assert.deepEqual(r.stake_withdrawals.map((e) => e.mark), ["ana-one/the-lamp"]);
   assert.equal(r.channels.unpublished, 1);
+  // the printout block still carries both, with the note, for the keeper
+  assert.deepEqual(r.printout.removed.map((g) => g.id), ["ana-one/the-lamp", "bo-three/the-gate"]);
+  assert.equal(r.printout.removed[1].note, "not on main: nothing to remove");
 });
 
 test("AN UNREAD LEDGER IS NOT AN EMPTY ONE: no snapshot, or no ledger file in it: found is null and the sentence says so", () => {
-  const sweep = { unpublished: [{ id: "ana-one/the-lamp" }] };
+  const removed = ["ana-one/the-lamp"];
   for (const [name, r] of [
-    ["no town snapshot", compose({ sweep, snapshot: false })],
-    ["a snapshot with no ledger file", compose({ sweep, snapshot: true, ledgerLines: null })],
+    ["no town snapshot", compose({ removed, snapshot: false })],
+    ["a snapshot with no ledger file", compose({ removed, snapshot: true, ledgerLines: null })],
   ]) {
     const e = entryOf(r, "ana-one/the-lamp");
     assert.equal(e.found, null, name);
@@ -118,19 +116,25 @@ test("AN UNREAD LEDGER IS NOT AN EMPTY ONE: no snapshot, or no ledger file in it
     assert.doesNotMatch(e.said, /no stake withdrawal on the ledger/, `${name}: never called an empty ledger`);
     assert.deepEqual([e.date, e.line, e.by], [null, null, null], name);
   }
-  assert.match(entryOf(compose({ sweep, snapshot: false }), "ana-one/the-lamp").said, /no town snapshot/);
-  assert.match(entryOf(compose({ sweep, ledgerLines: null }), "ana-one/the-lamp").said, /could not be read in the town snapshot \(ENOENT\)/);
+  assert.match(entryOf(compose({ removed, snapshot: false }), "ana-one/the-lamp").said, /no town snapshot/);
+  assert.match(entryOf(compose({ removed, ledgerLines: null }), "ana-one/the-lamp").said, /could not be read in the town snapshot \(ENOENT\)/);
 });
 
-test("a crossing that returned or unpublished nothing names no one, reads no ledger and adds no key; the receipt keeps every other field as before", () => {
-  const r = compose({ sweep: { published: ["ana-one/x"], unpublished: [] }, snapshot: false });
-  assert.equal("stake_withdrawals" in r, false, "a zero-return receipt is exactly as it was");
-  assert.equal(r.channels.published, 1);
-  assert.equal(r.channels.unpublished, 0);
-  assert.equal(r.retired.ran, false);
+test("a printout that removed nothing names no one, reads no ledger and adds no key", () => {
+  const r = compose({ written: ["ana-one/x"], snapshot: false });
+  assert.equal("stake_withdrawals" in r, false, "a zero-removal receipt carries no such key");
+  assert.deepEqual(r.channels, { published: 1, unpublished: 0, reframed: 0 });
 });
 
-test("a ledger with CRLF endings and a mark listed as a bare string still matches, on the same physical line", () => {
-  const r = compose({ sweep: { unpublished: ["ana-one/the-lamp"] }, ledgerLines: [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "ana-one") + "\r"] });
+test("a refused printout names no one and counts nothing: a refusal never reads as a quiet zero", () => {
+  const r = compose({ printout: { status: "refused", refused: "reframe-refused", detail: "…" }, snapshot: false });
+  assert.equal("stake_withdrawals" in r, false);
+  assert.equal(r.channels, null);
+  assert.equal(r.class, "printout-refused");
+  assert.equal(r.printout.status, "refused");
+});
+
+test("a ledger with CRLF endings still matches, on the same physical line", () => {
+  const r = compose({ removed: ["ana-one/the-lamp"], ledgerLines: [...HEADER, unstake("2026-10-30", "ana-one/the-lamp", "ana-one") + "\r"] });
   assert.deepEqual([entryOf(r, "ana-one/the-lamp").found, entryOf(r, "ana-one/the-lamp").line], [true, 5]);
 });

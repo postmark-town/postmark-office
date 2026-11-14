@@ -143,10 +143,11 @@ export function dryLegEnv({ tree, url, townRepo, worldRepo, dryDir, path = proce
     SETTLEMENT_CLONE: join(dryDir, "sweep"),
     SETTLEMENT_REPORT: join(dryDir, "settlement-dry.json"),
     SETTLEMENT_DRY: "1",
-    SETTLEMENT_SOURCE: "store",
     STATE_LOG_SOURCE: "store",
     WORLD2_PG: "1",
     WORLD2_PG_URL: asPen(url, "office_api"),
+    // POS-1025: the printout reads the sealed snapshot as the clearing's pen; dry, it records nothing.
+    WORLD2_CLEARING_URL: asPen(url, "clearing_job"),
   };
 }
 
@@ -170,12 +171,18 @@ export function runDryLeg({ tree, env, spawn = spawnSync }) {
   const tail = `${r.stderr ?? ""}`.trim().split("\n").filter(Boolean).slice(-6);
   if (!receipt) return { ran: true, ok: false, exit: r.status, ms: Date.now() - t0, reason: "the crossing wrote no receipt", tail };
   if (receipt.dry !== true) return { ran: true, ok: false, exit: r.status, ms: Date.now() - t0, reason: "the receipt does not say dry: true — this was not a rehearsal", tail };
+  // POS-1025/c: after the seal harm only raises an alarm, so a crossing that would publish over harm
+  // still crosses — and a REHEARSAL that finds it has not passed. `ok` says both.
+  const crossed = r.status === 0 && (receipt.status === "published" || receipt.status === "quiet");
+  const harmed = receipt.harm != null && receipt.harm.ok === false;
   return {
     ran: true,
-    ok: r.status === 0 && (receipt.status === "published" || receipt.status === "quiet"),
+    ok: crossed && !harmed,
+    ...(crossed && harmed ? { reason: "the crossing would publish, and its harm gate named harm over the printout (an alarm, POS-1025/c)" } : {}),
     exit: r.status, ms: Date.now() - t0, receipt_path: env.SETTLEMENT_REPORT,
     status: receipt.status, detail: receipt.detail, withheld: receipt.withheld ?? [],
-    channels: receipt.channels ?? null, retired: receipt.retired ?? null,
+    settlement: receipt.settlement ?? null, channels: receipt.channels ?? null,
+    printout: receipt.printout ?? null, tag: receipt.tag ?? null,
     harm: receipt.harm ?? null, suite: receipt.suite ?? null, tail,
   };
 }

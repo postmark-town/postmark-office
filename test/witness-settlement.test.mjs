@@ -315,7 +315,7 @@ test(`THE CROSSING DIES AFTER OPENING (set -eu, before any report): the run is s
 
 test(`THE CROSSING, DRY: a dry run decides nothing and is witnessed as nothing${crossingSkip ? ` (${crossingSkip})` : ""}`, { skip: crossingSkip }, () => {
   const fx = crossingFixture();
-  runCrossing(fx, { SETTLEMENT_DRY: "1", SETTLEMENT_SOURCE: "store", SETTLEMENT_CLONE: join(fx.root, "dry-sweep") });
+  runCrossing(fx, { SETTLEMENT_DRY: "1", SETTLEMENT_CLONE: join(fx.root, "dry-sweep") });
   assert.equal(spawnSync("git", ["-C", fx.townOrigin, "rev-parse", "--verify", "-q", "main:WITNESS/records"]).status === 0, false, "no record");
   assert.ok(!existsSync(fx.owed) || readdirSync(fx.owed).length === 0, "and nothing owed");
 });

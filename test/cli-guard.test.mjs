@@ -223,7 +223,6 @@ const ROSTER = {
   "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
-  "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
@@ -335,6 +334,10 @@ const ROSTER = {
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
   "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
+  // POS-1025: the printout refuses a missing mode before it reads a seal or opens a store.
+  "world2/tools/settlement-printout.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-printout.mjs print" },
+  // POS-1025: the cutover's one copy of the registry refuses with no --world-repo before it reads a file or a store.
+  "world2/tools/publications-seed.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: publications-seed.mjs --world-repo" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────

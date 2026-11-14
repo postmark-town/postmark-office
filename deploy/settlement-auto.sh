@@ -461,7 +461,7 @@ if [ "$PRINT_STATUS" = "printed" ] || [ "$PRINT_STATUS" = "dry" ]; then
     HARM_RED=1
     cat "$WORK/harm.err" >&2
     if [ "$HARM_RC" != "1" ] || [ ! -s "$HARM_JSON" ]; then
-      node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({ran:false,could_not_gate:process.argv[2]},null,1)+"\n")' "$HARM_JSON" "$(head -c 300 "$WORK/harm.err" | tr '\n"' ' .')"
+      node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({ran:false,could_not_gate:process.argv[2].trim()||"the gate exited "+process.argv[3]+" with no report"},null,1)+"\n")' "$HARM_JSON" "$(head -c 300 "$WORK/harm.err" | tr '\n"' ' .')" "$HARM_RC"
     fi
     echo "[settlement-auto] HARM NAMED, OR THE GATE COULD NOT GATE — reported and escalated after the receipt; the printout stands (POS-1025/c)" >&2
   fi

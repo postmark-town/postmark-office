@@ -6,8 +6,9 @@ Type=oneshot
 User=meepo
 EnvironmentFile=/etc/postmark-office.env
 # The settlement unit's second file, so the rehearsal reads the environment the
-# crossing reads — SETTLEMENT_SOURCE decides which path it rehearses (2026-09-25:
-# it rehearsed git while the box crossed from the store). Optional, as there.
+# crossing reads: WORLD2_CLEARING_URL, the pen the printout reads the sealed
+# snapshot with (POS-1025; dry, it writes nothing). Optional, as there: without
+# it the rehearsal's printout says so and the verdict is a would-refuse.
 EnvironmentFile=-/etc/postmark-world2-clearing.env
 WorkingDirectory=/srv/postmark-office
 ExecStart=/bin/sh /srv/postmark-office/deploy/settlement-shadow.sh
