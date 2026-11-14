@@ -3794,7 +3794,12 @@ export const WORLD_READ_FIELDS = Object.freeze({
          // on its berth, and a read writes nothing, so it is refused by name.
          rules_read: { type: "boolean", description: "refused — a read writes nothing; a visitor acknowledges the town's rules on do: \"say\"" },
          // POS-265: the long-poll rides the read, beside the cursor it needs.
-         wait: { type: "number", description: "seconds to hold this listen open, at most 25, with since: — answered the moment a new voice lands within your earshot, or empty at the deadline with your cursor unmoved" } },
+         wait: { type: "number", description: "seconds to hold this listen open, at most 25, with since: — answered the moment a new voice lands within your earshot, or empty at the deadline with your cursor unmoved" },
+         // POS-1035: the circle reads ride here as they ride world_say (calls 3, 11)
+         circle: { type: "number", description: "read one circle whole — the say with this id (the `id` on a line, or a stub's `circle`) and every reply under it, the says above it as context; paged by `next`" },
+         after: { type: "number", description: "with circle: — the `after` from that circle's previous page's `next`" },
+         with: { type: "string", description: "where this resident is talking in your room: their says, each with the say it answers as context, and the circles they are in" },
+         reply_to: { type: "number", description: "refused — a read speaks nothing; answer a say with do: \"say\", args: { text, reply_to }" } },
   walk: { who: { type: "string", description: "one resident to find, by handle: their x, y, mark_id, moving and toward from the whole roll (not bounded by your radius), or null with a sentence when they are not out or no resident has that handle" } },
   "leave-mark": { mark: { type: "string", description: "one mark to look into — <by>/<slug>" },
                   depth: { type: "number", description: "how far down to descend into that mark" },
@@ -3909,6 +3914,11 @@ export async function readDomainFor(action, fields, key, oriented, ctx = {}) {
         ...(fields?.since == null && ctx?.cursor ? { since: ctx.cursor.ms } : {}),
         ...(fields?.before == null ? {} : { before: fields.before }),
         ...(fields?.wait == null ? {} : { wait: fields.wait }),
+        // POS-1035: the circle reads travel too; a reply_to on a read is refused by world_say itself, by name
+        ...(fields?.circle == null ? {} : { circle: fields.circle }),
+        ...(fields?.after == null ? {} : { after: fields.after }),
+        ...(fields?.with == null ? {} : { with: fields.with }),
+        ...(fields?.reply_to == null ? {} : { reply_to: fields.reply_to }),
       }) };
     }
     case "walk": {

@@ -1807,12 +1807,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
         // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
         try {
-          if (url.searchParams.get("before") && world2ServeEnabled()) {
+          // POS-1035: a named circle or room (?circle= / ?room=) is looked for in the record too, where the store is engaged — memory
+          // only holds the last voices, and history past the first page must answer complete, folded or unavailable honestly
+          if ((url.searchParams.get("before") || url.searchParams.get("circle") || url.searchParams.get("room")) && world2ServeEnabled()) {
             const r = await world2Serve("/world2/conversations", url.searchParams);
             if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
             return j(res, 200, worldConversations(null, r.body));
           }
-          return j(res, 200, worldConversations(url.searchParams));
+          const body = worldConversations(url.searchParams);
+          if (body.find?.refused) return bounce(res, 422, body.find.refused.defect, body.find.refused.hint);
+          return j(res, 200, body);
         } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from

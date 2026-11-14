@@ -62,6 +62,58 @@ import {
   judgeText, judgeRsvp, challengeWebhook, harnessPlan, applyPostAct, eventView, calendarFrom, slugFromTitle,
   judgeAnnouncement, announceMax, ANNOUNCE_MAX_ENV,
 } from "./events.mjs";
+import { eventEvidence } from "./event-sparks.mjs"; // POS-1035: an event's window, room and who came, from the record
+
+/**
+ * The settlements this office has published (ms), where a conversation splits — world.mjs's one reader of them, asked lazily so
+ * this module never boots the world to read a calendar; a read that cannot get them groups the window as one settlement and says so.
+ */
+async function publishedSettlements() {
+  const { settlementsKnown } = await import("./world.mjs");
+  return settlementsKnown();
+}
+
+/** How many ended events one page of the lasting list carries (POS-1035, calls 13 and 25). */
+export const PAST_PAGE = 40;
+
+/**
+ * THE LASTING EVENT LIST (POS-1035; calls 13, 25): every ended event the record holds, newest end first, paged — past the
+ * calendar's seven days, so the site's list of past events can reach them all. The recent calendar is unchanged and stays short.
+ * `before` is the `next.before` of the page before (the last event's `ends`); events tied on that instant ride the same page.
+ */
+async function pastEvents(client, fields, now) {
+  const raw = fields?.before;
+  const before = raw == null || raw === "" ? now : Date.parse(String(raw));
+  if (!Number.isFinite(before)) throw refuse(422, `"${raw}" is not a cursor`, "before: the `next.before` the previous page gave you (an ISO instant)");
+  const { rows } = await client.query(
+    `SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends < $2 AND ends <= $3 ORDER BY ends DESC, id LIMIT $4`,
+    [EVENT_CLASS, new Date(before).toISOString(), new Date(now).toISOString(), PAST_PAGE + 1]);
+  let page = rows.map(rowOf);
+  let more = page.length > PAST_PAGE;
+  if (more) {
+    page = page.slice(0, PAST_PAGE);
+    const lastEnds = page.at(-1).ends;
+    // keep every event tied on the cut instant, so a cursor never skips one
+    const { rows: tied } = await client.query(
+      `SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends = $2 AND NOT (id = ANY($3)) ORDER BY id`,
+      [EVENT_CLASS, lastEnds, page.map((r) => r.id)]);
+    page = [...page, ...tied.map(rowOf)];
+    const { rows: [{ n }] } = await client.query("SELECT count(*)::int AS n FROM posts WHERE class = $1 AND ends < $2", [EVENT_CLASS, new Date(lastEnds).toISOString()]);
+    more = n > 0;
+  }
+  const byEvent = new Map();
+  if (page.length) {
+    const { rows: rs } = await client.query(
+      "SELECT post, handle FROM responses WHERE post = ANY($1) AND kind = $2 ORDER BY post, handle", [page.map((r) => r.id), RESPONSE_RSVP]);
+    for (const r of rs) byEvent.set(r.post, [...(byEvent.get(r.post) ?? []), r.handle]);
+  }
+  return {
+    as_of: new Date(now).toISOString(),
+    past: page.map((r) => eventView(r, byEvent.get(r.id) ?? [], now, [])),
+    next: more ? { past: true, before: new Date(page.at(-1).ends).toISOString() } : null,
+    note: "every ended event, newest end first; open one with { event: \"<host>/<slug>\" } for its window, its room and who came",
+  };
+}
 
 // THE TABLES ARE `posts` AND `responses` since 028 (POS-288): the calendar's
 // tables, generalized in place, with events their first class. The old names
@@ -998,14 +1050,26 @@ async function registerHarness(client, { handle, household, kind, address, secre
  * posts, and the calendar is the event class's), and there the one event is
  * named `post`; either name opens it.
  */
-export async function calendarAtOffice(fields = {}, { now = Date.now(), env = process.env } = {}) {
+export async function calendarAtOffice(fields = {}, { now = Date.now(), env = process.env, settlements = publishedSettlements } = {}) {
   const id = String(fields?.event ?? fields?.post ?? "").trim();
+  const past = fields?.past === true || fields?.past === "true";
+  if (past && id) throw refuse(422, "past lists events; event opens one", 'town { read: "calendar", args: { past: true } } — or { event: "<host>/<slug>" } for one');
   return read(async (client) => {
     if (id) {
       const row = await eventRow(client, id);
       if (!row) throw refuse(404, `no event "${id}"`, 'ids are <host>/<slug> — town { read: "calendar" } lists them');
-      return { as_of: new Date(now).toISOString(), event: eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id])) };
+      const view = eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id]));
+      // POS-1035 (CORE-82): once its doors have opened, an event answers its window, the room its talk formed and the households
+      // with a public act there — resolved by the office from the record, never by the site from RSVPs or today's positions
+      if (row.state !== STATE_CANCELLED) {
+        let edges = [];
+        try { edges = (await settlements()) ?? []; } catch { edges = []; }
+        const evidence = await eventEvidence(client, row, { now, edges });
+        if (evidence) view.evidence = evidence;
+      }
+      return { as_of: new Date(now).toISOString(), event: view };
     }
+    if (past) return pastEvents(client, fields, now);
     const since = new Date(now - ENDED_LIST_DAYS * 86_400_000).toISOString();
     const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends > $2 ORDER BY starts, id`, [EVENT_CLASS, since]);
     const events = rows.map(rowOf);

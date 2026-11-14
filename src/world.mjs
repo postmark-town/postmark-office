@@ -59,6 +59,7 @@ import { dialsDigestOf, DIALS_MEANS } from "./read-digests.mjs"; // WLD-29: GET 
 import { lawSnapshot } from "./law-snapshot.mjs"; // WLD-29: the blessing the class layer's dials answer from
 import { HOLD_TOOLS, callHoldTool } from "./world-hold.mjs"; // the object primitive: who holds what
 import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } from "./voices.mjs";
+import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
 import { createSayPush, waitMsOf, serveSayStream } from "./say-push.mjs"; // POS-265: the waiters — a listen that waits, and the page's stream
 import { householdLookup, humanHandFor, pinnedLoginOf } from "./households.mjs"; // the human speaker's label wears the town's name, never the login
@@ -1929,6 +1930,9 @@ function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
       ...(voice.aboard ? { aboard: true } : {}),
       ...(voice.room ? { room: voice.room } : {}), // WLD-74: spoken inside a dungeon room: its record is shown only to readers in that room
       ...(standAs ? { stood_with: standAs } : {}),
+      // POS-1035 (call 3): the say this one answers, by act number — the ONE stored edge circles are derived from. Public
+      // like the words: it leaves the box in the notary's archive with the rest of the payload.
+      ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
     },
     effect: "the words were spoken where the actor stood and heard by whoever was within earshot; hearing fades, the record does not",
     writtenAt: new Date(voice.at).toISOString(),
@@ -2107,11 +2111,13 @@ const voices = createVoices({
     mirrorVoiceAct(voice, spoken);
   },
   // The flipped say lane's pen, before the log line (penVoiceAct above). Off
-  // the flag it returns null and nothing here changes.
+  // the flag it returns null and nothing here changes. On, it answers the act
+  // number it wrote (POS-1035: the say's id, carried to the receipt, the log
+  // and memory — the packet's identity gap was this hook discarding it).
   beforeSpoke: async (voice, spoken) => {
     if (!laneFlipped("say")) return null;
     const r = await penVoiceAct(voice, spoken);
-    return r?.error ? r : null;
+    return r?.error ? r : { id: r?.actId ?? null };
   },
   // WHO IS HERE, BY POSITION (issue #5 §2, behind WORLD_PRESENCE). `presentNear`
   // returns null on its first line with the flag off, so `nearby` answers null
@@ -2203,8 +2209,34 @@ export const earshotSnapshot = () => voices.earshotSnapshot();
 export async function worldSay(args = {}, key = null) { return perceived(() => sayAct(args, key)); }
 /** A call's words (POS-672 D4: public like a say, heard by the shared ear), spoken unperceived: the creature it was aimed at answers it, and no other (D7). */
 export async function sayForCall(args = {}, key = null) { return sayAct(args, key); }
+
+// CIRCLES ON THE SAY (POS-1035). `reply_to` rides a say with words; `circle` (with `after`) and `with` are reads and ride a
+// listen. A field that cannot do what it says is refused by name, never carried silently. `withAllowed` is false on the human
+// route, where `with` already names the housemate a household's human stands beside (and keeps that meaning).
+function circleArgsOf(args = {}, { speaking, withAllowed = true } = {}) {
+  const has = (k) => args[k] != null && args[k] !== "";
+  const no = (defect, hint) => ({ bounce: { error: "bounce", code: 422, defect, hint } });
+  if (has("reply_to") && !speaking) return no("reply_to rides a say with words", "pass text: with reply_to to answer a say; to read a circle, pass circle: <id> with no text");
+  if (speaking && (has("circle") || has("after") || (withAllowed && has("with"))))
+    return no("circle, after and with are reads", "speak with text: (and reply_to:), or read with circle:/with: and no text — not both in one call");
+  if (has("after") && !has("circle")) return no("after pages a circle", "pass circle: <id> with the `after` its `next` gave you");
+  if (has("circle") && withAllowed && has("with")) return no("one read at a time", "circle: reads one circle; with: finds where someone is talking — pass one");
+  if (has("wait") && (has("circle") || (withAllowed && has("with")))) return no("wait holds a listen for what is new", "read a circle or someone's talk without wait:; hold a listen with since: and wait:");
+  return {
+    replyTo: has("reply_to") ? args.reply_to : null,
+    circleAsk: has("circle") ? { circle: args.circle, after: has("after") ? args.after : null }
+      : withAllowed && has("with") ? { with: String(args.with).trim() } : null,
+  };
+}
+
 async function sayAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
+  const circled = circleArgsOf(args, { speaking: Boolean(String(args.text ?? "").trim()) });
+  if (circled.bounce) return circled.bounce;
+  if (circled.replyTo != null && !laneFlipped("say"))
+    return { error: "bounce", code: 422, defect: "this office is not keeping say ids, so a reply has nothing to point at",
+      hint: "say ids are the act numbers of the town's say record, written only where the say lane writes acts; speak without reply_to" };
+  const { replyTo, circleAsk } = circled;
   // A berth speaks from the quay (the arrival ruling, 2026-08-15): emissions
   // are the one write a berth holds — ephemeral by class, sixty metres and
   // hearable until the next settlement, disclosed by the berth- prefix on the speaker's own label.
@@ -2224,8 +2256,8 @@ async function sayAct(args = {}, key = null) {
       const speaker = `berth-${key.slug}`;
       const { waitMs, bounce: badWait } = waitMsOf(args);
       if (badWait) return badWait;
-      const r = text.trim() ? await voices.say(speaker, text, { since, before, nonce: args.nonce })
-        : waitMs ? await sayPush.wait(speaker, { since, waitMs }) : await voices.hear(speaker, { since, before });
+      const r = text.trim() ? await voices.say(speaker, text, { since, before, nonce: args.nonce, replyTo })
+        : waitMs ? await sayPush.wait(speaker, { since, waitMs }) : await voices.hear(speaker, { since, before, circleAsk });
       withNoticeBoard(r);
       return r;
     } catch (e) {
@@ -2248,8 +2280,8 @@ async function sayAct(args = {}, key = null) {
     // served by the push's one-room-per-voice fan-out (say-push.mjs).
     const { waitMs, bounce: badWait } = waitMsOf(args);
     if (badWait) return badWait;
-    const r = text.trim() ? await voices.say(choice.handle, text, { since, before, household: resolvedWorldHousehold(key), nonce: args.nonce })
-      : waitMs ? await sayPush.wait(choice.handle, { since, waitMs }) : await voices.hear(choice.handle, { since, before });
+    const r = text.trim() ? await voices.say(choice.handle, text, { since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo })
+      : waitMs ? await sayPush.wait(choice.handle, { since, waitMs }) : await voices.hear(choice.handle, { since, before, circleAsk });
     // Which store is the RECORD for a spoken voice — said in the answer when the
     // lane is flipped, as the stance door says it.
     if (r && !r.error && r.spoke && laneFlipped("say")) r.log = "acts";
@@ -2340,6 +2372,13 @@ async function humanStand(args = {}, key = null) {
 export async function worldSayHuman(args = {}, key = null) { return perceived(() => sayHumanAct(args, key)); }
 async function sayHumanAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
+  // POS-1035: circles on the human's say too — but here `with` keeps its older meaning, the housemate the human stands beside
+  const circled = circleArgsOf(args, { speaking: Boolean(String(args.text ?? "").trim()), withAllowed: false });
+  if (circled.bounce) return circled.bounce;
+  if (circled.replyTo != null && !laneFlipped("say"))
+    return { error: "bounce", code: 422, defect: "this office is not keeping say ids, so a reply has nothing to point at",
+      hint: "say ids are the act numbers of the town's say record, written only where the say lane writes acts; speak without reply_to" };
+  const { replyTo, circleAsk } = circled;
   const stood = await humanStand(args, key);
   if (stood.error) return stood;
   const { speaker, standAs } = stood;
@@ -2349,8 +2388,8 @@ async function sayHumanAct(args = {}, key = null) {
     const before = Number.isFinite(Number(args.before)) ? Number(args.before) : null;
     const { waitMs, bounce: badWait } = waitMsOf(args);
     if (badWait) return badWait;
-    const r = text.trim() ? await voices.say(speaker, text, { standAs, since, before, household: resolvedWorldHousehold(key), nonce: args.nonce })
-      : waitMs ? await sayPush.wait(speaker, { standAs, since, waitMs }) : await voices.hear(speaker, { standAs, since, before });
+    const r = text.trim() ? await voices.say(speaker, text, { standAs, since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo })
+      : waitMs ? await sayPush.wait(speaker, { standAs, since, waitMs }) : await voices.hear(speaker, { standAs, since, before, circleAsk });
     // Whose body you borrowed, said out loud. A human has no place of their own
     // — they stand with a housemate — and until this line the reply named the
     // PLACE but never the person, so landing somewhere unexpected was a mystery
@@ -2445,7 +2484,9 @@ export function worldConversations(query = null, page = null) {
   const num = (k) => { const v = Number(query?.get(k)); return Number.isFinite(v) && v > 0 ? v : undefined; };
   const raw = query?.get("before");
   const before = raw ? (/^\d+$/.test(raw) ? Number(raw) : Date.parse(raw)) : null;
-  const base = { pinned: activeNotices(), ...(page ?? voices.conversations({ closedMax: num("closed"), voiceCap: num("voices"), before })) };
+  // POS-1035: ?circle= / ?room= finds a named conversation in memory (the record's read, where engaged, is handed in as `page`)
+  const find = page ? null : findOf(query);
+  const base = { pinned: activeNotices(), ...(page ?? voices.conversations({ closedMax: num("closed"), voiceCap: num("voices"), before, find })) };
   return emissionsEnabled()
     ? { ...base, record: "Presence fades; occurrence is history. A voice stays hearable within earshot until the next settlement; the words themselves — with who spoke them, where, and when — are written into Postmark's public record at every crossing and kept. The town does not secretly log its residents; it openly remembers them." }
     : base;
@@ -7526,6 +7567,11 @@ export const WORLD_TOOLS = [
       // no new verb: a berth's first say is refused with the town's rules for
       // visitors, and this field on a say says they were read.
       rules_read: { type: "boolean", description: "visitors (berths) only: true says you have read the town's rules for visitors (GET /berth shows them, and so does the answer to your first say). Recorded once; residents never need it." },
+      // CIRCLES (POS-1035; CORE-70 calls 3, 11, 21, 25). The reply edge rides a say with text; the three selectors are reads.
+      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and when, ISO or at_ms). It must be in the room you are speaking into (the same conversation, even across a settlement). Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
+      circle: { type: "number", description: "no text: read one circle whole — the say with this id and every reply under it, with the says above it as context. Paged: pass the `next` it returns." },
+      after: { type: "number", description: "with circle: the `after` from that circle's previous page's `next`." },
+      with: { type: "string", description: "no text: where this resident is talking in your room — their says, each with the say it answers as context, and the circles they are in." },
     }, additionalProperties: false } },
   ...WORLD_STAKE_TOOLS, // world_stake / world_unstake / world_stake_read (P3)
   ...HOLD_TOOLS, // world_hold / world_holdings — the object primitive (things + inventory)
