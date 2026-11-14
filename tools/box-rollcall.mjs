@@ -1390,49 +1390,31 @@ export function judgeOutcome(row, snapshot, now = Date.now()) {
     }
   }
 
-  // THE STEP THAT IS NOT RUNNING AT ALL (G1 lane 1, 2026-09-08).
+  // THE PRINTOUT NOBODY RECORDED (POS-1025; it replaces the retire step's
+  // `retired: null` rule, whose decision the clearing now makes before its seal).
   //
-  // The retire step tells the store what the world unpublished. It degrades
-  // LOUDLY BY DESIGN — a box with no `WORLD2_CLEARING_URL` writes a named
-  // absence into every receipt rather than failing the crossing — and that is
-  // the right failure and exactly the shape nobody reads. A named absence
-  // repeated twice a day forever is indistinguishable from a quiet town unless
-  // something is counting, which is the `left_drafted` lesson one rule up.
+  // The printout's record (095 § record_printout) is what moves the store's
+  // world-marks head. A crossing that printed and pushed and then could not
+  // record or tag degrades loudly by design: the world is already pushed, so it
+  // reports and escalates rather than refusing. A notice repeated crossing after
+  // crossing is still unread unless something counts it.
   //
-  // NULL AND ZERO ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS.
-  // deploy/settlement-history.mjs writes `retired: <n>` when the step ran and
-  // `retired: null` when it did not. A crossing that ran and retired nothing is
-  // a normal, common, green crossing — most are. A crossing that never asked is
-  // the register drifting from canon with nothing saying so. Alarming on `0`
-  // would fire on almost every crossing and teach the board to be ignored.
-  //
-  // A MISSING FIELD IS NOT A NULL. History lines written before this field
-  // existed have no `retired` key at all, and `undefined` deliberately does not
-  // match: an old log must not alarm about a step that did not exist when it was
-  // written. The rule therefore judges only crossings that ran the code that
-  // reports it, and it starts judging on its own as soon as they do — no
-  // install-day exception needed, unlike its sibling above.
-  //
-  // IT CARRIES ITS OWN `means`, AND THAT IS THE POINT OF THE SEPARATE FIELD.
-  // The shared `spec.means` above ends with an INSTALL-DAY NOTE — "this row is
-  // EXPECTED to read ALARM-outcome until the first crossing after deploy writes
-  // the log, and it clears itself then" — which is true of its siblings and
-  // FALSE here: a missing `retired` key does not match, so this rule is silent
-  // on an old log and has no install day to be excused for. Appending the
-  // shared sentence would have handed the operator an excuse for the one alarm
-  // that never needs one, which is how a real finding gets read as expected
-  // noise. `retire_means` names the box carry instead.
-  const blind = Number(spec.retire_null_runs);
-  if (Number.isFinite(blind) && blind > 0 && history.length >= blind) {
-    const window = history.slice(-blind);
-    if (window.every((r) => Object.prototype.hasOwnProperty.call(r, "retired") && r.retired === null)) {
-      const mine = spec.retire_means ? ` ${spec.retire_means}` : means;
+  // FALSE AND NULL ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS.
+  // deploy/settlement-history.mjs writes `recorded: false` when a printout was
+  // pushed and its tag or record refused, and `recorded: null` when nothing was
+  // printed to record (a refusal, which the unsettled rule above already judges).
+  // A MISSING FIELD IS NOT A FALSE: a line written before the printout has no
+  // `recorded` key and deliberately does not match, so this needs no install-day
+  // exception and carries its own `unrecorded_means`.
+  const unrecorded = Number(spec.unrecorded_runs);
+  if (Number.isFinite(unrecorded) && unrecorded > 0 && history.length >= unrecorded) {
+    const window = history.slice(-unrecorded);
+    if (window.every((r) => Object.prototype.hasOwnProperty.call(r, "recorded") && r.recorded === false)) {
+      const mine = spec.unrecorded_means ? ` ${spec.unrecorded_means}` : means;
       return (
-        `has crossed ${blind} times without the store hearing what the world unpublished — every one of those ` +
-        `receipts carries \`retired: {ran: false}\`. The world let marks go and the register still stands them, ` +
-        `which is the disagreement standing-equality reddens on. The usual cause is that ` +
-        `\`WORLD2_CLEARING_URL\` is absent from the settlement unit's environment, so the step names its own ` +
-        `absence and retires nothing.${mine}`
+        `has printed ${unrecorded} settlements in a row that the store did not record — each receipt's ` +
+        `\`tag\` or \`record\` block refused. World main carries them; the settlement tags and the store's ` +
+        `world-marks head do not, so the register and canon disagree about what was printed.${mine}`
       );
     }
   }
@@ -1448,16 +1430,16 @@ export function judgeOutcome(row, snapshot, now = Date.now()) {
   // hours.
   //
   // JUDGED ON THE LATEST LINE ONLY, and that is the difference from every rule
-  // above. `left_drafted` and `retired` are about a rail's BEHAVIOUR over time,
+  // above. `left_drafted` and `recorded` are about a rail's BEHAVIOUR over time,
   // where one bad crossing is noise; this is about the STORE'S STATE, where the
   // most recent reading is the only one that is still true.
   //
   // A LATEST LINE CARRYING NONE OF THE NAMED FIELDS IS ITSELF THE ALARM, and it
-  // is deliberately not the `retired` rule's silent-on-a-missing-key shape. That
+  // is deliberately not the `recorded` rule's silent-on-a-missing-key shape. That
   // discipline is right for a field a rail grew into; it is wrong here, because
   // "silent when the field is absent" means a writer that stops emitting the list
   // turns its own alarm off. The judge says so instead.
-  // IT CARRIES ITS OWN `means`, FOR THE REASON `retire_means` DOES ONE RULE UP
+  // IT CARRIES ITS OWN `means`, FOR THE REASON `unrecorded_means` DOES ONE RULE UP
   // AND FOR A SHARPER ONE. The shared `spec.means` ends with an INSTALL-DAY NOTE
   // — "this row is EXPECTED to read ALARM-outcome until the first crossing after
   // deploy appends to the log, and it clears itself then" — which is true of the

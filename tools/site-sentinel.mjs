@@ -1470,6 +1470,33 @@ export function classifySettlement({
     return { verdict: "DOWN", reason: `${sweep} ended ${word} and nothing has settled after ${minutesOrDuration(since)}: ${why}; ${SHIPPING_9}`, detail };
   }
 
+  // ── THE PRINTOUT'S REPORT-ONLY FINDINGS (POS-1025/c) ──────────────────────
+  //
+  // Since the settlement prints its sealed snapshot, the harm gate and the tag
+  // can no longer hold a crossing: the town publishes, and the finding is an
+  // alarm. This probe is the one alarm route, so it barks on them at once, with
+  // no grace: a harm finding over a published printout is the 2026-09-16 crisis
+  // class (a resident's mark moved or lost with no act naming it), and a
+  // refused tag or record is a settlement that published and is not blessed —
+  // both already final, neither cleared by waiting. DOWN, for §11's reason: a
+  // person must act (SHIPPING.md § 9).
+  const printedS = receipt.settlement != null ? `S${receipt.settlement}` : "the settlement";
+  if (receipt.harm && receipt.harm.ok === false) {
+    const named = (receipt.harm.checks ?? []).filter((c) => c && c.ok === false)
+      .map((c) => `${c.name}: ${(c.rows ?? []).slice(0, 2).join("; ")}${(c.count ?? 0) > 2 ? ` … and ${c.count - 2} more` : ""}`).join(" | ");
+    const why = named || `the gate could not gate (${String(receipt.harm.could_not_gate ?? "no report").slice(0, 120)})`;
+    return { verdict: "DOWN", reason: `${sweep} published ${printedS}, and the harm gate named harm over its printout: ${why.slice(0, 300)}; ${SHIPPING_9}`, detail };
+  }
+  const tagRefused = receipt.tag?.status === "refused" ? receipt.tag : receipt.record?.status === "refused" ? receipt.record : null;
+  if (tagRefused) {
+    const which = receipt.tag?.status === "refused" ? "its tag" : "the store's record of it";
+    return {
+      verdict: "DOWN",
+      reason: `${sweep} published ${printedS}, and ${which} refused (${tagRefused.refused ?? "refused"}: ${String(tagRefused.detail ?? "").slice(0, 200)}); a settlement tag is never moved — ${SHIPPING_9}`,
+      detail,
+    };
+  }
+
   // A SWEEP WE CANNOT VERIFY: UNKNOWN inside the hour, STALE past it, and the
   // error is in the sentence so the reader knows which instrument failed.
   const unverifiable = (error) => (late
@@ -1533,9 +1560,15 @@ export function classifySettlement({
   };
 }
 
-/** A world commit the sweep writes when it PUBLISHED: `settlement: sweep 6 published, 0 unpublished, …`. */
+/**
+ * A world commit a settlement writes when it PUBLISHED: the sweep's `settlement: sweep 6 published, 0 unpublished, …`,
+ * or, since the printout (POS-1025), `settlement: S214 printout — 3 written, 1 removed, 0 re-framed`. The settlement's
+ * own number is not a count, so a printout is judged on the three counts after the dash.
+ */
 export function isSweepPublication(message) {
   const s = firstLine(message);
+  const printout = /^settlement: S\d+ printout\b(.*)$/.exec(s);
+  if (printout) return (printout[1].match(/\d+/g) ?? []).some((n) => Number(n) > 0);
   return /^settlement: sweep\b/.test(s) && (s.match(/\d+/g) ?? []).some((n) => Number(n) > 0);
 }
 

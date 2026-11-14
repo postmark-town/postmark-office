@@ -447,7 +447,7 @@ HARM_JSON=""
 HARM_RED=0
 if [ "$PRINT_STATUS" = "printed" ] || [ "$PRINT_STATUS" = "dry" ]; then
   HARM_JSON="$WORK/harm.json"
-  node -e 'const r=require(process.argv[1]);const ids=(xs)=>(xs||[]).filter((x)=>x&&x.id).map((x)=>({id:x.id}));require("node:fs").writeFileSync(process.argv[2],JSON.stringify({published:ids(r.written),unpublished:ids(r.removed),withdrawn:[],reframed:ids(r.reframed)},null,1)+"\n")' \
+  node -e 'const r=require(process.argv[1]);const ids=(xs)=>(xs||[]).map((x)=>x&&(x.id||x.slug)).filter(Boolean).map((id)=>({id}));require("node:fs").writeFileSync(process.argv[2],JSON.stringify({published:ids(r.written),unpublished:ids(r.removed),withdrawn:[],reframed:ids(r.reframed)},null,1)+"\n")' \
     "$PRINTOUT_JSON" "$WORK/acts.json"
   if [ ! -f "$CLONE/tools/harm-gate.mjs" ]; then
     node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({ran:false,could_not_gate:"world "+process.argv[2]+" carries no tools/harm-gate.mjs"},null,1)+"\n")' "$HARM_JSON" "$(git -C "$CLONE" rev-parse --short main)"
