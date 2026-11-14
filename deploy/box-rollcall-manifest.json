@@ -1045,7 +1045,7 @@
         "from": "deploy",
         "match": "^postmark-tmp-janitor\\.sh$",
         "why": "postmark-tmp-janitor.service execs /usr/local/sbin/postmark-tmp-janitor.sh, a copy installed by hand on 2026-10-09 (DEPLOY.md § the disk). The disk watch's copy was retired with its unit in POS-556 (the sentinel's disk_root probe). No deploy writes that directory and the unit names no tree, so the reverse check above cannot see them: the gap §2c names, live. A fix to the script in deploy/ would never reach the box and nothing would go red. Read as bytes.",
-        "repair": "sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /usr/local/sbin/ — then re-run the roll-call",
+        "repair": "FIRST check which side is behind: the box can be AHEAD of the release when a janitor fix was installed by hand on a go before its train ships (POS-989's keep, 2026-11-10). If the open train's deploy/postmark-tmp-janitor.sh matches the box's bytes, do NOT install: that rolls the box back, and the alarm clears itself when that train ships. Only when the box is behind: sudo install -m 0755 /srv/postmark-office/deploy/postmark-tmp-janitor.sh /usr/local/sbin/ — then re-run the roll-call",
         "activation_owner": "Wright — the scripts were placed by hand with their units on Darko's go, 2026-10-09 (office #444); this row is POS-522's."
       }
     ]
