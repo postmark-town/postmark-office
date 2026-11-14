@@ -2233,6 +2233,17 @@ function circleArgsOf(args = {}, { speaking, withAllowed = true } = {}) {
   };
 }
 
+// THE DOOR'S ADDITIONS, ASKED BEFORE THE ROOM IS SIZED (POS-1035; Rivet 17:28Z): the circle budget counts the final MCP text, so the
+// voices module is told what this door will add after it answers — `log` on a flipped say, `standing_with` on a human's, and the
+// notice board where the reply stands (withNoticeBoard's own read). The same three lines below add them; this only names them first.
+const sayDoorExtra = ({ logged = false, standingWith = null } = {}) => (out) => {
+  const extra = {};
+  if (logged && laneFlipped("say")) extra.log = "acts";
+  if (standingWith) extra.standing_with = standingWith;
+  if (out?.where) { const board = noticeBoardAt(out.where.x, out.where.y, Date.now()); if (board) extra.notice_board = board; }
+  return extra;
+};
+
 async function sayAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const circled = circleArgsOf(args, { speaking: Boolean(String(args.text ?? "").trim()) });
@@ -2260,8 +2271,9 @@ async function sayAct(args = {}, key = null) {
       const speaker = `berth-${key.slug}`;
       const { waitMs, bounce: badWait } = waitMsOf(args);
       if (badWait) return badWait;
-      const r = text.trim() ? await voices.say(speaker, text, { since, before, nonce: args.nonce, replyTo })
-        : waitMs ? await sayPush.wait(speaker, { since, waitMs }) : await voices.hear(speaker, { since, before, circleAsk });
+      const doorExtra = sayDoorExtra();
+      const r = text.trim() ? await voices.say(speaker, text, { since, before, nonce: args.nonce, replyTo, doorExtra })
+        : waitMs ? await sayPush.wait(speaker, { since, waitMs }) : await voices.hear(speaker, { since, before, circleAsk, doorExtra });
       withNoticeBoard(r);
       return r;
     } catch (e) {
@@ -2284,8 +2296,8 @@ async function sayAct(args = {}, key = null) {
     // served by the push's one-room-per-voice fan-out (say-push.mjs).
     const { waitMs, bounce: badWait } = waitMsOf(args);
     if (badWait) return badWait;
-    const r = text.trim() ? await voices.say(choice.handle, text, { since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo })
-      : waitMs ? await sayPush.wait(choice.handle, { since, waitMs }) : await voices.hear(choice.handle, { since, before, circleAsk });
+    const r = text.trim() ? await voices.say(choice.handle, text, { since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo, doorExtra: sayDoorExtra({ logged: true }) })
+      : waitMs ? await sayPush.wait(choice.handle, { since, waitMs }) : await voices.hear(choice.handle, { since, before, circleAsk, doorExtra: sayDoorExtra() });
     // Which store is the RECORD for a spoken voice — said in the answer when the
     // lane is flipped, as the stance door says it.
     if (r && !r.error && r.spoke && laneFlipped("say")) r.log = "acts";
@@ -2392,8 +2404,9 @@ async function sayHumanAct(args = {}, key = null) {
     const before = Number.isFinite(Number(args.before)) ? Number(args.before) : null;
     const { waitMs, bounce: badWait } = waitMsOf(args);
     if (badWait) return badWait;
-    const r = text.trim() ? await voices.say(speaker, text, { standAs, since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo })
-      : waitMs ? await sayPush.wait(speaker, { standAs, since, waitMs }) : await voices.hear(speaker, { standAs, since, before, circleAsk });
+    const doorExtra = sayDoorExtra({ standingWith: standAs });
+    const r = text.trim() ? await voices.say(speaker, text, { standAs, since, before, household: resolvedWorldHousehold(key), nonce: args.nonce, replyTo, doorExtra })
+      : waitMs ? await sayPush.wait(speaker, { standAs, since, waitMs }) : await voices.hear(speaker, { standAs, since, before, circleAsk, doorExtra });
     // Whose body you borrowed, said out loud. A human has no place of their own
     // — they stand with a housemate — and until this line the reply named the
     // PLACE but never the person, so landing somewhere unexpected was a mystery

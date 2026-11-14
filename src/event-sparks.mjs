@@ -137,18 +137,19 @@ const near = (p, place, m = EVENT_PLACE_M) => Math.hypot(p.x - place.x, p.y - pl
 export function eventRoomFrom(voices, { window, place, edges = [], earshotM = talk.SAY_DIAL_SPEC.earshot_m[0] }) {
   const marks = [...edges].filter(Number.isFinite).sort((a, b) => a - b);
   if (marks.length && window.from < marks[0])
-    return { room: null, rooms: 0, history: "unavailable",
+    return { room: null, candidates: [], history: "unavailable",
       note: `the event's window opens before the oldest settlement this office has read (${iso(marks[0])}), so the room its talk formed cannot be told — this is not evidence that nobody spoke` };
   const inWindow = voices.filter((v) => v.at >= window.from && v.at <= window.to);
   const clusters = talk.clusterVoices(inWindow, { earshotM, boundaries: marks });
-  const here = clusters.filter((c) => c.voices.some((v) => near(v, place, earshotM)));
-  if (!here.length) return { room: null, rooms: 0, history: "complete" };
-  // the event's room is the one where most was said at its place; the others are counted, not dropped
-  const best = [...here].sort((a, b) => b.voices.length - a.voices.length || a.voices[0].at - b.voices[0].at)[0];
+  // PLACE MEMBERSHIP is the office's existing rule for "the conversation at a point" (voices.mjs § openConversationAt): a room
+  // with a voice within earshot of the point. Nothing here ranks rooms: no ruled source picks one of several (Rivet 17:28Z), so
+  // every candidate is listed in the order it started, and `room` is bound only when there is exactly one.
+  const here = clusters.filter((c) => c.voices.some((v) => near(v, place, earshotM))).sort((a, b) => a.voices[0].at - b.voices[0].at);
   // the conversations page's own thread header (its id, bounds, participants, counts); its lines are the circle reads' to serve
-  const { voices: _lines, ...thread } = talk.threadOf(best, { live: false, voiceCap: 1 });
-  return { room: thread, rooms: here.length, history: "complete",
-    ...(here.length > 1 ? { note: `${here.length} conversations formed at the place in the window (a settlement split one, or two groups talked apart); the room is the one with the most said` } : {}),
+  const header = (c) => { const { voices: _lines, ...thread } = talk.threadOf(c, { live: false, voiceCap: 1 }); return thread; };
+  const candidates = here.map(header);
+  return { room: candidates.length === 1 ? candidates[0] : null, candidates, history: "complete",
+    ...(candidates.length > 1 ? { binding: "unresolved", note: `${candidates.length} conversations formed at the place in the window (a settlement split one, or two groups talked apart); which is the event's room is not ruled, so none is chosen` } : {}),
     ...(marks.length ? {} : { settlement_note: "no settlement could be read, so the window's talk is grouped as one settlement" }) };
 }
 
@@ -197,8 +198,8 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
     complete,
     room: room.room ? { ...room.room, frame: roomFrame(room.room) } : null,
     room_history: room.history,
+    ...(room.candidates?.length > 1 ? { room_binding: room.binding, rooms_at_place: room.candidates.map((c) => ({ ...c, frame: roomFrame(c) })) } : {}),
     ...(room.note ? { room_note: room.note } : {}),
-    ...(room.rooms > 1 ? { rooms_at_place: room.rooms } : {}),
     present,
     present_basis: `households with a public act (${PRESENCE_ACTS.join(", ")}) within ${EVENT_PLACE_M} m of the event's place inside its window — never RSVPs, never who is there now`,
     ...(unplaced.length ? { unplaced_says: unplaced.length } : {}),

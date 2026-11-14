@@ -51,12 +51,13 @@ test("no talk at the place is no room (the radius frame applies); talk the offic
   assert.match(old.note, /not evidence that nobody spoke/);
 });
 
-test("a settlement inside the window splits the talk (until CORE-97 carries it): the most-said room is the event's, the others counted", () => {
+test("a settlement inside the window splits the talk (until CORE-97 carries it): every candidate room is listed, and NONE is chosen — no ranking is ruled", () => {
   const voices = [voice("a", 1, 100, 200), voice("b", 2, 100, 201), voice("c", 40, 100, 200), voice("d", 41, 101, 200), voice("e", 42, 100, 199)];
   const r = S.eventRoomFrom(voices, { window: { from: min(0), to: min(60) }, place: PLACE, edges: [min(-600), min(30)] });
-  assert.equal(r.rooms, 2);
-  assert.equal(r.room.voice_count, 3);
-  assert.match(r.note, /2 conversations formed at the place/);
+  assert.equal(r.room, null, "two candidates: the binding is unresolved, not guessed by size");
+  assert.equal(r.binding, "unresolved");
+  assert.deepEqual(r.candidates.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 2], [`t${min(40)}-c`, 3]], "in the order they started");
+  assert.match(r.note, /2 conversations formed at the place.*none is chosen/);
 });
 
 test("present: the households with a public act at the place in the window — once each, sorted; nothing without a household or a place", () => {

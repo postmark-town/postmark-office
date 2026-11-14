@@ -801,7 +801,9 @@ export function createVoices({
   // room's newest either way, so a page back never moves the forward cursor.
   // `circleAsk` (POS-1035) is the reader's circle selector: `{ circle, after }` for one circle whole and paged, `{ with }` for
   // someone's talk. `spokenSay` is the say this reply is the receipt of: its id, the say it answers and how that was resolved.
-  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true, circleAsk = null, spokenSay = null } = {}) {
+  // `doorExtra(out)` (POS-1035) answers the fields the door will add to this reply after it returns, so the circle budget counts
+  // the final text; `trailing` are fields this module adds after the reply (a nonce receipt's), placed last as they always were.
+  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true, circleAsk = null, spokenSay = null, doorExtra = null, trailing = {} } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
     const heard = heardBy(here, snap).filter(fresh);
@@ -941,15 +943,22 @@ export function createVoices({
       out.note = convo
         ? `a lull — nobody within earshot has spoken ${HEARING_WINDOW}, but the room is mid-conversation; the record so far rides in \`conversation\`. Say something.`
         : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
-    if (sized) {
-      // THE BUDGET IS THE READ (CORE-82, agreed): the view is sized against this whole reply as MCP text carries it, so what the
-      // caller reads stays near the target; `budget.used` is that whole reply. Fields the door adds after this module answers
-      // (the notice board, `log`) are not in it.
-      const shape = out.conversation;
-      const view = sized((v) => mcpBytes({ ...out, conversation: { ...shape, ...v } }));
-      out.conversation = { ...shape, ...view };
+    // THE BUDGET IS THE READ (CORE-82, agreed; Rivet 17:28Z: "count the final actual MCP JSON text"): the view is sized against
+    // the whole reply the caller receives — this module's fields, the receipt's trailing ones (`trailing`: a nonce's), and what the
+    // door adds after it answers (`doorExtra`: the notice board, `log`, `standing_with`), asked once — serialized as mcp.mjs does.
+    // `budget.used` is that final text. Key order does not change the count, so measuring the merged object is exact.
+    if (sized || circleSized) {
+      let extra = {};
+      if (doorExtra) { try { extra = (await doorExtra(out)) ?? {}; } catch { extra = {}; } }
+      const final = (o) => mcpBytes({ ...o, ...trailing, ...extra });
+      if (sized) {
+        const shape = out.conversation;
+        const view = sized((v) => final({ ...out, conversation: { ...shape, ...v } }));
+        out.conversation = { ...shape, ...view };
+      }
+      if (circleSized) out.circle = circleSized((v) => final({ ...out, circle: v }));
     }
-    if (circleSized) out.circle = circleSized((v) => mcpBytes({ ...out, circle: v }));
+    Object.assign(out, trailing);
     return delta(handle, out, { since, t, convo, present: Boolean(present) });
   }
 
@@ -1028,12 +1037,12 @@ export function createVoices({
   // "human-of-<household>" speaks standing WITH a placed housemate. Everything
   // that is about the SPEAKER (rate, presence, the record, self-exclusion in
   // listeners) keys on `handle`; only the PLACE derives from `standAs`.
-  async function hear(handle, { standAs = handle, since = null, before = null, circleAsk = null } = {}) {
+  async function hear(handle, { standAs = handle, since = null, before = null, circleAsk = null, doorExtra = null } = {}) {
     const t = now();
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
     touch(handle, here.at, t, "listened", here.room ?? null); // listening is presence: the room feels peopled between remarks
-    return reply(handle, here, t, false, since, { before, circleAsk });
+    return reply(handle, here, t, false, since, { before, circleAsk, doorExtra });
   }
 
   // `household` is CARRIED, NEVER STORED. It rides the `spoken` object to the
@@ -1076,13 +1085,13 @@ export function createVoices({
   // the way the send recomputes the crossing that would otherwise lie. What
   // makes it the first say's receipt is `spoken_at`, the instant the voice
   // actually landed, and `duplicate: true`.
-  async function say(handle, text, { standAs = handle, since = null, before = null, household = null, nonce = null, replyTo = null } = {}) {
+  async function say(handle, text, { standAs = handle, since = null, before = null, household = null, nonce = null, replyTo = null, doorExtra = null } = {}) {
     const key = String(nonce ?? "").trim() || null;
     if (key && Buffer.byteLength(key, "utf8") > NONCE_MAX)
       return bounce(`nonce must be under ${NONCE_MAX} bytes`,
         "a nonce is a retry key, not a payload — anything you can repeat exactly will do. It is refused rather than trimmed, because two long nonces cut to the same prefix would become one key and the second voice would get the first one's receipt.");
     // NO NONCE, NO SEAM: the say a caller always got, byte for byte.
-    if (!key) return speak(handle, text, { standAs, since, before, household, replyTo });
+    if (!key) return speak(handle, text, { standAs, since, before, household, replyTo, doorExtra });
     const slot = `${handle} ${key}`;
     const running = nonceInFlight.get(slot);
     if (running) {
@@ -1093,7 +1102,7 @@ export function createVoices({
     // The in-flight entry now covers the RECORD's lookup as well as the speech:
     // the lookup is awaited, and a second call carrying the same nonce must not
     // walk past the first while it is asking.
-    const p = spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo });
+    const p = spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo, doorExtra });
     nonceInFlight.set(slot, p);
     try { return await p; } finally { nonceInFlight.delete(slot); }
   }
@@ -1107,7 +1116,7 @@ export function createVoices({
   // honoured into the same conversation, not forever. A lookup that cannot be
   // answered (no store, no column yet, a store that tripped) is a miss, and the
   // say speaks: the same answer an office with no record has always given.
-  async function spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo = null }) {
+  async function spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo = null, doorExtra = null }) {
     const t = now();
     let spentAt = spentNonces.get(`${handle} ${key}`);
     if (spentAt != null && t - spentAt > closeMs) spentAt = null;
@@ -1121,7 +1130,7 @@ export function createVoices({
       return { ...room, duplicate: true, nonce: key, spoken_at: new Date(spentAt).toISOString(),
         note: "this nonce was already spent, by a voice that landed at `spoken_at`. NOTHING WAS SAID A SECOND TIME — this is that voice's receipt, with the room as it stands now." };
     }
-    return speak(handle, text, { standAs, since, before, household, nonce: key, replyTo });
+    return speak(handle, text, { standAs, since, before, household, nonce: key, replyTo, doorExtra });
   }
 
   // A cheap first look before the room is clustered for a name link: does the text contain the handle of anyone with a say id
@@ -1138,7 +1147,7 @@ export function createVoices({
     return false;
   }
 
-  async function speak(handle, text, { standAs, since, before = null, household, nonce = null, replyTo = null }) {
+  async function speak(handle, text, { standAs, since, before = null, household, nonce = null, replyTo = null, doorExtra = null }) {
     const t = now();
     const body = String(text ?? "").trim();
     if (!body) return refused("nothing to say", "pass text: to speak, or call with no arguments to listen");
@@ -1190,16 +1199,16 @@ export function createVoices({
         : {}),
       ...(voice.id == null ? { id_note: "the record returned no act number for this say, so nothing can reply to it by id" } : {}),
     };
-    if (!nonce) return reply(handle, here, t, true, since, { before, standAs, spokenSay });
+    if (!nonce) return reply(handle, here, t, true, since, { before, standAs, spokenSay, doorExtra });
     spentNonces.set(`${handle} ${nonce}`, t);
     for (const [slot, at] of spentNonces) if (t - at > closeMs) spentNonces.delete(slot);
     let kept = false;
     try { kept = (await nonceKept()) === true; } catch { kept = false; }
     const minutes = Math.round(closeMs / 60000);
-    return { ...(await reply(handle, here, t, true, since, { before, standAs, spokenSay })), nonce,
+    return reply(handle, here, t, true, since, { before, standAs, spokenSay, doorExtra, trailing: { nonce,
       idempotent: kept
         ? `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes; the nonce is kept on this voice's act in the town's record, so an office restart does not forget it`
-        : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` };
+        : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` } });
   }
 
   // The page's read: every conversation in the world, live ones first. Served

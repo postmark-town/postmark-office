@@ -317,9 +317,25 @@ test("the say door: the default read stays near the budget as MCP text, measured
   await store.say("r0", "the opening line of a long evening, with plenty of words in it to weigh");
   for (let i = 1; i < 30; i++) { tick(); await store.say(`r${i}`, `reply number ${i}, with enough words to be a real line in a long room`, { replyTo: 70000 + Math.max(1, i - 1) }); }
   tick();
-  const r = await store.hear("r29");
+  // what the door adds after the voices module answers (Rivet 17:28Z: count the FINAL MCP text): a notice board, and `log`
+  const extra = { log: "acts", notice_board: { pinned: [{ title: "Sorbet night", text: "x".repeat(300) }] } };
+  const r = await store.hear("r29", { doorExtra: async () => extra });
+  const final = { ...r, ...extra };
   const v = r.conversation.circles;
   assert.equal(v.budget.bytes, 8192);
-  assert.equal(v.budget.used, C.mcpBytes(r), "`used` is this whole reply as MCP text");
+  assert.equal(v.budget.used, C.mcpBytes(final), "`used` is the final reply as the door serves it, as MCP text");
   assert.ok(v.budget.used <= 8192 || v.budget.over, "inside the budget, or it says it is not");
+  // the strand's own path is the whole chain: served whole and over the hard cap — the measured conflict, reported, never cut
+  assert.equal(v.budget.over, true);
+  assert.ok(v.budget.used > 10_000, `measured ${v.budget.used} bytes over the 10,000-byte connector cap`);
+  const idx = C.circleIndex(store._voices());
+  const mine = store._voices().filter((x) => x.handle === "r29").at(-1);
+  const path = idx.pathOf(mine.id);
+  assert.ok(path.length > 10);
+  for (const id of path) assert.ok(v.lines.some((l) => l.id === id), `own path say ${id} is served — nothing of it was cut`);
+  // a nonce receipt's trailing fields are counted too
+  tick();
+  const said = await store.say("r29", "and one more, kept by a nonce", { nonce: "n-1", doorExtra: async () => extra });
+  assert.equal(said.conversation.circles.budget.used, C.mcpBytes({ ...said, ...extra }));
+  assert.equal(said.nonce, "n-1");
 });
