@@ -25,7 +25,7 @@
 //
 // WHAT A RECOVERY READ COSTS. `stances` carries every body of the marks it
 // lists, so a group's `open` and the walk name a `limit` taken from the page's
-// own bodies (GROUP_PAGE_BYTES of them). `stances` also carries its teaching
+// own rows (GROUP_PAGE_BYTES of them). `stances` also carries its teaching
 // block and the stances already spoken, which this fold cannot size: said so.
 //
 // THE BUDGET. WAITING_BUDGET_BYTES is measured on the text the connector
@@ -41,12 +41,21 @@ export const WAITING_BUDGET_BYTES = 9000;
 export const CONNECTOR_CAP_BYTES = 10000;
 /** How much of the budget identity rows may take before the marks are placed (the rest is for the groups). */
 export const ROWS_SHARE = 0.75;
-/** The bodies one recovery page of `stances` is sized to carry, in UTF-8 bytes (its teaching block and spoken stances come on top). */
-export const GROUP_PAGE_BYTES = 4000;
+/**
+ * The rows one recovery page of `stances` is sized to carry, in UTF-8 bytes as the connector delivers them (a row's whole JSON, body included).
+ * The rest of the cap is the read's own: its teaching block, the ground you hold and the stances you have spoken, which this fold cannot
+ * size (1.7 KB on the test house; more where the house holds many marks or has spoken many stances).
+ */
+export const GROUP_PAGE_BYTES = 6000;
+
+/** A stance row heavier than this is a page of its own: `limit: 1` reads it alone, and it does not set a group's limit. */
+export const HEAVY_ROW_BYTES = GROUP_PAGE_BYTES / 2;
 
 /** The text the connector delivers for an answer (mcp.mjs § contentFor), in UTF-8 bytes. */
 export const deliveredBytes = (answer) => Buffer.byteLength(JSON.stringify(answer, null, 1), "utf8");
 const bytes = (s) => Buffer.byteLength(String(s ?? ""), "utf8");
+/** One stance row as the connector delivers it inside `awaiting`: its JSON, two spaces deeper on every line. */
+export const rowBytes = (row) => { const j = JSON.stringify(row, null, 1); return bytes(j) + 2 * j.split("\n").length + 1; };
 
 const pick = (row, keys) => Object.fromEntries(keys.filter((k) => row?.[k] !== undefined).map((k) => [k, row[k]]));
 
@@ -89,11 +98,17 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
   const stanceTotal = answer.stances_awaiting?.total ?? 0;
   const pageMarks = answer.stances_awaiting?.shown ?? 0;
 
-  // how many of a run of marks one `stances` page can carry: their bodies, GROUP_PAGE_BYTES at most, at least one
+  // how many of a run of marks one `stances` page can carry, whichever page: the most rows in a row whose rows as delivered are GROUP_PAGE_BYTES at most
+  // in EVERY window of that size (a later page can be heavier than the first), and at least one (a single row heavier than that cannot be cut)
   const pageOf = (rows) => {
-    let used = 0, n = 0;
-    for (const r of rows) { used += bytes(r.body); if (n > 0 && used > GROUP_PAGE_BYTES) break; n += 1; if (n >= 100) break; }
-    return Math.max(1, n);
+    // a row heavier than half a page cannot share one, and is the read's to deliver whole whatever the limit: it does not set the limit
+    const w = rows.map((r) => { const n = rowBytes(r); return n > HEAVY_ROW_BYTES ? 0 : n; });
+    for (let k = Math.min(100, w.length); k > 1; k--) {
+      let sum = w.slice(0, k).reduce((n, x) => n + x, 0), worst = sum;
+      for (let i = k; i < w.length; i++) { sum += w[i] - w[i - k]; worst = Math.max(worst, sum); }
+      if (worst <= GROUP_PAGE_BYTES) return k;
+    }
+    return 1;
   };
   const inGroup = (g) => marks.filter((m) => m.by === g.by && (m.on_your_ground ?? [])[0] === g.over);
   const walkLimit = pageOf(marks);
@@ -139,7 +154,7 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
           groups: left.length, marks: left.reduce((n, g) => n + g.count, 0),
           note: "not named here: each is one author's marks over one place of yours, listed by the walk below",
         } } : {}),
-        open: `household { read: "stances", args: { limit: ${walkLimit} } } walks every mark in inbox order, ${walkLimit} a page (cursor ${walkLimit}, ${2 * walkLimit}, …), bodies whole and beside its teaching block and your spoken stances, which the connector's cap may not hold; one group: args { by, over, limit }`,
+        open: `household { read: "stances", args: { limit: ${walkLimit} } } walks every mark in inbox order, ${walkLimit} a page (cursor ${walkLimit}, ${2 * walkLimit}, …), bodies whole and beside its teaching block and your spoken stances, which the connector's cap may not hold; a page holding one very long mark may exceed it, and limit: 1 reads that mark alone; one group: args { by, over, limit }`,
       };
     }
     // the composer's scope sentence stands; its walk is bounded the way the others are

@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
-import { foldWaiting, deliveredBytes, WAITING_BUDGET_BYTES, CONNECTOR_CAP_BYTES, GROUP_PAGE_BYTES } from "../src/household-waiting-budget.mjs";
+import { foldWaiting, deliveredBytes, WAITING_BUDGET_BYTES, CONNECTOR_CAP_BYTES, GROUP_PAGE_BYTES, HEAVY_ROW_BYTES, rowBytes } from "../src/household-waiting-budget.mjs";
 import { markTakenAlerts, escrowOnMissingAlerts, sortAlerts } from "../src/alerts.mjs";
 import { contentFor } from "../src/mcp.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
@@ -97,9 +97,9 @@ const ctxOf = (readers) => ({ clone: scratch, asOf: AS_OF, odb: { fixture: true 
 
 const BIG = () => {
   // three long streams, a stream whose oldest body is oversized, then one-mark authors: 100 read of 130 waiting
-  const heron = stream("heron", "r000/the-long-wall", 6, (i) => (i === 5 ? body(300, "heron OVERSIZED") : body(3, `heron#${i}`)));
+  const heron = stream("heron", "r000/the-long-wall", 14, (i) => (i === 13 ? body(300, "heron OVERSIZED") : body(3, `heron#${i}`)));
   const marks = [
-    ...stream("kiln-keeper", "r000/garden", 40), ...stream("mossmere", "r001/orchard", 25), ...stream("brook", "r000/quay", 12), ...heron,
+    ...stream("kiln-keeper", "r000/garden", 32), ...stream("mossmere", "r001/orchard", 25), ...stream("brook", "r000/quay", 12), ...heron,
     ...Array.from({ length: 17 }, (_, i) => stream(`author-${String(i).padStart(2, "0")}`, `r00${i % 2}/spot-${i}`, 1)[0]),
   ];
   return {
@@ -204,7 +204,7 @@ test("B3 · every part names its items as bodyless identity rows, or counts the 
   const unlisted = a.groups_more?.unlisted ?? { groups: 0, marks: 0 };
   assert.equal(seen.size + unlisted.groups, want.size, "every group is on the answer or counted in unlisted");
   assert.equal([...seen.values()].reduce((n, c) => n + c, 0) + unlisted.marks, h.marks.length, "every mark read is in a group on the answer or counted");
-  assert.deepEqual(a.groups.slice(0, 3).map((g) => g.count), [40, 25, 12], "largest first, as needGroups orders them");
+  assert.deepEqual(a.groups.slice(0, 3).map((g) => g.count), [32, 25, 14], "largest first, as needGroups orders them");
   assert.deepEqual([a.stances_awaiting.total, a.stances_awaiting.shown], [130, 100]);
 });
 
@@ -216,8 +216,8 @@ test("B4 · an oversized sample is folded whole, never cut; every body shown is 
   assert.ok(heron, "the group with the oversized body is on the answer");
   assert.ok(!("sample" in heron), "its body does not fit and is not shown");
   assert.equal(heron.sample_folded, `${bytesOf(oldest("heron").body)} bytes of body not shown`, "the folded body's size is the source's");
-  assert.equal(heron.count, 6, "its count and ids stand");
-  assert.deepEqual(heron.ids, ["heron/kiln-5", "heron/orchard-4", "heron/quay-3"], "its oldest ids stand, and its act still answers the group");
+  assert.equal(heron.count, 14, "its count and ids stand");
+  assert.deepEqual(heron.ids, ["heron/kiln-13", "heron/orchard-12", "heron/quay-11"], "its oldest ids stand, and its act still answers the group");
   assert.match(heron.act, /declare-stance-on/);
   for (const g of a.groups.filter((x) => "sample" in x)) assert.equal(g.sample, oldest(g.by).body, `${g.by}'s sample is its oldest body, whole`);
   assert.ok(a.groups.some((g) => "sample" in g), "the groups that fit keep their sample");
@@ -307,15 +307,16 @@ test("B9 · every read a folded answer names exists, with arguments it takes, an
       assert.ok(name === "handle" || name in (HOUSEHOLD_READ_FIELDS[read] ?? {}), `read "${read}" takes ${name}`);
     }
   }
-  // each group read is the group's own by/over, its limit is the marks whose bodies fit GROUP_PAGE_BYTES, and the source holds exactly that many marks for it
+  // each group read is the group's own by/over, its limit is the marks whose rows fit GROUP_PAGE_BYTES, and the source holds exactly that many marks for it
   for (const g of a.groups.filter((x) => "open" in x)) {
     const [, by, over, limit] = g.open.match(/by: ("[^"]*"), over: ("[^"]*"), limit: (\d+)/);
     assert.deepEqual([JSON.parse(by), JSON.parse(over)], [g.by, g.over]);
     const own = h.marks.filter((m) => m.by === g.by && m.on_your_ground[0] === g.over);
     assert.equal(own.length, g.count, "the group the read lists is the one counted");
-    let used2 = 0, n = 0;
-    for (const m of own) { used2 += bytesOf(m.body); if (n > 0 && used2 > GROUP_PAGE_BYTES) break; n += 1; }
-    assert.equal(Number(limit), n, "the page is sized to this group's bodies");
+    const w = own.map((m) => (rowBytes(m) > HEAVY_ROW_BYTES ? 0 : rowBytes(m))); // a row heavier than half a page is the read's to deliver whole
+    const worst = (k) => Math.max(...w.map((_, i) => (i + k <= w.length ? w.slice(i, i + k).reduce((n, x) => n + x, 0) : 0)));
+    assert.ok(Number(limit) === 1 || worst(Number(limit)) <= GROUP_PAGE_BYTES, "every page of that many rows fits");
+    assert.ok(Number(limit) >= Math.min(own.length, 100) || worst(Number(limit) + 1) > GROUP_PAGE_BYTES, "and one more row would not");
     assert.ok(!g.act.includes("limit: 100"), "and its act no longer names the 100-row page");
   }
   const big = a.groups.find((g) => g.by === "kiln-keeper");
