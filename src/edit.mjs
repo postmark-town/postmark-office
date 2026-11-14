@@ -260,7 +260,7 @@ function selfContainedOnly(html) {
 // Skipped inside the drain's pen batch, which pulled once when it opened
 // (write.mjs § THE PEN BATCH, POS-723).
 const pullIfPush = (clone) => {
-  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) freshenClone(clone);   // POS-382: a dirty copy refuses by name (503), before the edit is written
+  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) freshenClone(clone, { waitMs: 0 });   // POS-382: a dirty copy refuses by name (503) at once, before the edit is written: no wait here, this runs on the office's own thread (the execs, separate processes, keep the bounded wait)
 };
 
 // The last commit that touched one town path, or null. Garnish discipline: a

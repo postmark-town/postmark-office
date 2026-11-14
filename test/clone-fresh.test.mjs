@@ -25,7 +25,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 
-import { freshenClone, cloneDirt, needsTendingError, isNeedsTending, NEEDS_TENDING } from "../src/clone-fresh.mjs";
+import { freshenClone, tendingBefore, cloneDirt, needsTendingError, isNeedsTending, NEEDS_TENDING } from "../src/clone-fresh.mjs";
 import { enqueueLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
@@ -96,6 +96,9 @@ test("2 · the refusal is named, a 503 in the bounce vocabulary, and the dirt is
   assert.equal(e.pen, NEEDS_TENDING);
   assert.deepEqual([e.code, e.defect], [503, NAMED]);
   assert.match(e.hint, /nothing was written and no stamps moved/);
+  assert.doesNotMatch(e.hint, /keeper has been shown|has been shown it/i, "the hint does not claim an alarm the roll-call's own grace has not raised");
+  assert.match(e.hint, /roll-call reports the copy if it stays this way/);
+  assert.doesNotMatch(e.hint, /waited/, "no wait, none claimed");
   assert.deepEqual(e.dirt, ["WHITE_PAGES/stamp-ledger.md"]);
   assert.deepEqual(snapshot(t.clone), before, "no stash, no reset, no rebase: HEAD, status and every byte as they were");
   assert.deepEqual(Object.keys(needsTendingError()).sort(), ["code", "defect", "dirt", "hint", "pen"], "the typed refusal is a bounce {code, defect, hint}");
@@ -130,6 +133,61 @@ test("3 · a writer in flight is waited for; dirt that stays is refused; untrack
   mkdirSync(join(r.clone, ".git", "rebase-merge"));
   assert.deepEqual(cloneDirt(r.clone), [".git/rebase-merge"]);
   assert.equal(caught(() => freshenClone(r.clone, { waitMs: 0 })).code, 503);
+});
+
+test("3b · a dirt that outlasts the bound is refused WITHOUT being called abandoned: the hint says it waited, and a number of seconds", () => {
+  const t = town();
+  dirty(t);
+  const e = caught(() => freshenClone(t.clone, { waitMs: 300, sleep: () => {} }));
+  assert.equal(e.code, 503);
+  assert.match(e.hint, /waited \d\.\d s for the copy to clear and it did not: from here a writer still at work and dirt left behind look the same/);
+  assert.doesNotMatch(e.hint, /abandoned/);
+});
+
+test("3c · THE DOOR'S LOOK WAITS ON A TIMER, NOT THE THREAD: the event loop keeps ticking meanwhile; a writer that finishes inside the bound is not refused; one that outlasts it is, and says so", async () => {
+  const t = town();
+  dirty(t);
+  const was = process.env.TOWN_PUSH; process.env.TOWN_PUSH = "1";
+  try {
+    // the in-flight writer commits half-way through the wait
+    let ticks = 0;
+    const timer = setInterval(() => { ticks += 1; }, 10);
+    setTimeout(() => { sh(t.clone, "checkout", "-q", "--", "WHITE_PAGES/stamp-ledger.md"); }, 150);
+    const ok = await tendingBefore(t.clone, { waitMs: 3_000 });
+    assert.equal(ok, null, "dirt that cleared inside the bound is a writer in flight, not a refusal");
+    assert.ok(ticks >= 5, `the office's event loop kept running while it waited (${ticks} ticks)`);
+    // the one that outlasts the bound
+    dirty(t);
+    ticks = 0;
+    const t0 = Date.now();
+    const e = await tendingBefore(t.clone, { waitMs: 400 });
+    clearInterval(timer);
+    assert.equal(e.code, 503);
+    assert.ok(Date.now() - t0 >= 380, "it waited the bound");
+    assert.ok(ticks >= 15, `and the loop ticked throughout (${ticks} ticks in ${Date.now() - t0} ms): an Atomics.wait would have given none`);
+    assert.match(e.hint, /waited \d\.\d s/);
+    // no push, no look
+    delete process.env.TOWN_PUSH;
+    assert.equal(await tendingBefore(t.clone, { waitMs: 0 }), null);
+  } finally { if (was === undefined) delete process.env.TOWN_PUSH; else process.env.TOWN_PUSH = was; }
+});
+
+test("4b · THE IN-PROCESS PENS NEVER SLEEP ON THE OFFICE'S THREAD: a letter on abandoned dirt is refused at once, with the event loop free straight after", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec("CREATE TABLE residents (handle TEXT PRIMARY KEY); CREATE TABLE letters (id TEXT PRIMARY KEY);");
+  db.prepare("INSERT INTO residents VALUES (?), (?)").run("wright", "limen");
+  const key = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
+  const t = town();
+  dirty(t);
+  const t0 = Date.now();
+  await withPush(async () => {
+    const e = await Promise.resolve().then(() => enqueueLetter({ from: "wright", to: "limen", title: "a fine hat", body: "limen —\n\nA hat." }, key, db, t.clone)).then(() => assert.fail("expected a refusal"), (x) => x);
+    assert.equal(e.code, 503);
+    assert.doesNotMatch(e.hint, /waited/, "no wait was taken");
+  });
+  assert.ok(Date.now() - t0 < 2_000, `refused at once (${Date.now() - t0} ms), not after the execs' six-second wait`);
+  const src = (f) => readFileSync(join(ROOT, "src", f), "utf8");
+  for (const f of ["write.mjs", "edit.mjs"]) assert.match(src(f), /freshenClone\(clone, \{ waitMs: 0 \}\)/, `${f} passes waitMs: 0: it runs on the office's own thread`);
 });
 
 test("4 · a CLEAN clone is freshened as it always was: the town's new commit arrives", () => {

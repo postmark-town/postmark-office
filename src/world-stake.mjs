@@ -619,7 +619,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // whole reason for asking, is only reachable against a balance you control.
     held = heldAtOffice,
     // THE SEVENTH (POS-382): is the town clone dirt a pull cannot write over? Asked before the promotion writes a claim onto the docket, so a dirty copy is the named
-    // 503 with nothing written (clone-fresh.mjs § tendingBefore). Injectable for the same reason as the rest.
+    // 503 with nothing written (clone-fresh.mjs § tendingBefore: async, with the execs' bounded wait). Injectable for the same reason as the rest.
     tending = (clone) => tendingBefore(clone),
     // THE FIFTH (WLD-27 A): has this mark's dropped unit already left? A read
     // of the record, asked before anything is promoted or charged. It is the
@@ -739,7 +739,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   //
   // A ✦0 stake's ground is walked FIRST, while the draft is still the draft the
   // promotion will put forward; it changes nothing about whether it goes.
-  const unsafe = tending(TOWN_CLONE);
+  const unsafe = await tending(TOWN_CLONE);
   if (unsafe) return bounce(unsafe.code, unsafe.defect, unsafe.hint);
   const zeroGround = n === 0 ? await judgeGround() : null;
   let putForward = null;
@@ -823,18 +823,13 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
 
   const staked = await ledger({ verb: "stake", handle: who.handle, mark: args.mark, n, via: "api", date: townDay() });
   if (staked?.error) {
-    // the exec found the copy dirty (a writer slipped in after the door looked): the promotion this act made is taken back by this act, so "nothing was written" stays true
-    if (staked.code === 503 && staked.defect === TENDING_DEFECT && putForward?.promoted) {
-      try {
-        const { retractPendingClaim } = await import("./world2-claims.mjs");
-        const undone = await retractPendingClaim(null, { windowId: putForward.window, slug: args.mark, claimant: by });
-        if (!undone) throw new Error("no pending row came back off the docket");
-      } catch (e) {
-        console.error(`[world-stake] the promotion of "${args.mark}" could not be retracted after the copy refused: ${String(e?.message ?? e)}`);
-        return bounce(500, `the office's town copy needs tending, and the claim for "${args.mark}" could not be taken back`,
-          "the stamp ledger moved nothing, so this claim stands on the docket with nothing behind it. Withdraw it (`world { do: \"withdraw-mark\" }`) or back it before the close, and tell the postmaster", { held: 0, requested: n });
-      }
-    }
+    // THE ONE RACE THAT KEEPS ITS WRITE (Darko, 2026-11-13, "Honest partial answer"): a writer slipped in after the door's look, and the exec refused the dirty copy AFTER the
+    // promotion had put the draft forward. That promotion stands, exactly as it always has: it replaced the author's earlier pending claim and released the draft's act in
+    // one transaction no retraction can undo, and nothing here tries. So the answer says what is true: the mark is put forward, THIS stake moved no new stamps, and it can be
+    // tried again. It does NOT say nothing was written, and it never says what stands behind the mark: earlier backing may be there.
+    if (staked.code === 503 && staked.defect === TENDING_DEFECT && putForward?.promoted)
+      return bounce(503, `the office's town copy needs tending; "${args.mark}" was put forward, but this stake moved no new stamps`,
+        `the mark is on the docket as the promotion left it, and this stake took no stamps: any backing it already had is untouched. The office's copy of the town record had changes it cannot write over. Try the same stake again once the copy is tended; the roll-call reports it if it stays this way`);
     return staked;
   }
 

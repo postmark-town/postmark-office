@@ -8,10 +8,13 @@
 //   · THE CLONE IS READ BEFORE ANYTHING IS DONE TO IT. Tracked dirt, or a rebase/merge left half-way, is what the pull would refuse on (untracked files are not:
 //     a pull does not refuse on them, and the files the office keeps beside the tree must never bark). The same definition tools/clone-state.mjs gives the roll-call.
 //   · A WRITER IN FLIGHT IS WAITED FOR, A CLONE THAT STAYS DIRTY IS REFUSED. The execs hold the town lock, so every writer that takes it has finished; what can still
-//     be mid-write is one that does not. The dirt gets a short, bounded wait (WAIT_MS) to clear. Dirt that is still there is not a write in flight: it is abandoned.
-//   · THE REFUSAL IS A 503 THAT SAYS NOTHING WAS WRITTEN, and it is true: this runs first inside the pen's transaction, before the write touches the clone, the
-//     ledger, the store or a balance. The dirt is NEVER touched: no stash, no reset, no rebase of signed lines. A person tends it, and the roll-call (the site
-//     sentinel's town_clone probe, tools/site-sentinel.mjs) already says so after its grace.
+//     be mid-write is one that does not. The dirt gets a short, bounded wait (WAIT_MS) to clear. Dirt still there at the end is refused, and the refusal does not claim
+//     it was abandoned: a writer that outlasts the bound looks the same from here, and the hint says it waited. The wait is on the thread in an exec (its own process) and on
+//     a TIMER in the async door look (tendingBefore); the in-process pens (write.mjs, edit.mjs) run on the office's own thread and pass waitMs: 0, refusing at once.
+//   · THE REFUSAL IS A 503 THAT SAYS NOTHING WAS WRITTEN, and it is true wherever this runs first inside the pen's transaction, before the write touches the clone, the
+//     ledger, the store or a balance. The dirt is NEVER touched: no stash, no reset, no rebase of signed lines. A person tends it, and the roll-call (the site sentinel's
+//     town_clone probe, tools/site-sentinel.mjs, with its own grace) reports it if it stays. ONE RACE IS EXCEPTED, ruled (Darko, 2026-11-13, "Honest partial answer"):
+//     world { do: "stake" } promotes a draft before its exec runs, so a copy that turns dirty after the door's look leaves that promotion standing (world-stake.mjs words it).
 //   · A PULL THAT REFUSES ON DIRT THE READ MISSED (a writer slipped in between the read and the pull) is the same refusal, not a trip. Any other pull failure
 //     (the network, a conflict) is the machinery's, as it always was.
 
@@ -26,25 +29,29 @@ export const WAIT_MS = 6_000;
 const STEP_MS = 200;
 
 const DEFECT = "the office's town copy needs tending; nothing was written";
-const HINT = "the office's copy of the town record has changes it cannot write over, so this request was refused before anything was recorded: nothing was written and no stamps moved. A keeper has been shown it on the roll-call; try again once the copy is tended";
+const hintFor = (waitedMs) => `the office's copy of the town record has changes it cannot write over, so this request was refused before anything was recorded: nothing was written and no stamps moved.${waitedMs > 0 ? ` It waited ${(waitedMs / 1000).toFixed(1)} s for the copy to clear and it did not: from here a writer still at work and dirt left behind look the same.` : ""} The roll-call reports the copy if it stays this way; the same request is safe to make again once it is tended`;
 
-/** The refusal's defect, for a caller that has to tell it from another 503 (world-stake.mjs takes back a promotion it had already made). */
+/** The refusal's defect, for a caller that has to tell it from another 503 (world-stake.mjs words the one race where its promotion already stands). */
 export const TENDING_DEFECT = DEFECT;
 
 /**
- * A READ-ONLY LOOK, FOR A DOOR THAT WRITES BEFORE IT SPAWNS THE EXEC: the typed refusal when the clone already holds dirt a pull would refuse on, else null. It waits for
- * nothing and touches nothing, so a door can say the named 503 BEFORE its own first write (world-stake promotes a draft onto the docket ahead of the ledger exec). The exec
- * still freshens under the lock and still decides; this only keeps the door from writing what the exec will then refuse. Only when the office pushes.
+ * THE DOOR'S LOOK, FOR A DOOR THAT WRITES BEFORE IT SPAWNS THE EXEC: the typed refusal when the clone holds dirt a pull would refuse on, else null. It gives dirt the same
+ * bounded wait the execs give (WAIT_MS) so a writer in flight is not called abandoned, and it WAITS ON A TIMER, never on the thread (the door is async: the office keeps
+ * answering everyone else meanwhile). It touches nothing, so a door can say the named 503 BEFORE its own first write (world-stake promotes a draft onto the docket ahead of the
+ * ledger exec). A writer that outlasts the bound is refused all the same, and the hint says it waited and cannot tell the two apart. The exec still freshens under the lock
+ * and still decides. Only when the office pushes. `waitMs`/`sleep` are for a test.
  */
-export function tendingBefore(clone) {
+export async function tendingBefore(clone, { waitMs = Number(process.env.TOWN_CLEAN_WAIT_MS ?? WAIT_MS), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (process.env.TOWN_PUSH !== "1") return null;
-  let dirt;
-  try { dirt = cloneDirt(clone); } catch { return null; }   // a clone the read cannot see is the exec's to judge, as it always was
-  return dirt.length ? needsTendingError(dirt) : null;
+  const read = () => { try { return cloneDirt(clone); } catch { return []; } };   // a clone the read cannot see is the exec's to judge, as it always was
+  const t0 = Date.now();
+  let dirt = read(), slept = false;
+  while (dirt.length && Date.now() - t0 < Math.max(0, waitMs)) { slept = true; await sleep(STEP_MS); dirt = read(); }
+  return dirt.length ? needsTendingError(dirt, { waitedMs: slept ? Date.now() - t0 : 0 }) : null;
 }
 
 /** The typed refusal (code 503, `pen: NEEDS_TENDING`): the bounce vocabulary every door and exec already turns into an answer. `dirt` is for the log, never the answer. */
-export const needsTendingError = (dirt = []) => Object.assign(new Error(DEFECT), { code: 503, pen: NEEDS_TENDING, defect: DEFECT, hint: HINT, dirt });
+export const needsTendingError = (dirt = [], { waitedMs = 0 } = {}) => Object.assign(new Error(DEFECT), { code: 503, pen: NEEDS_TENDING, defect: DEFECT, hint: hintFor(waitedMs), dirt });
 export const isNeedsTending = (e) => e?.pen === NEEDS_TENDING;
 
 const git = (clone, args, opts = {}) => execFileSync("git", ["-C", clone, "--no-optional-locks", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
@@ -71,10 +78,10 @@ const DIRT_REFUSAL = /unstaged changes|uncommitted changes|index contains uncomm
  * Call it FIRST inside the write's transaction; it touches nothing but the pull itself.
  */
 export function freshenClone(clone, { waitMs = Number(process.env.TOWN_CLEAN_WAIT_MS ?? WAIT_MS), sleep = sleepSync } = {}) {
-  const deadline = Date.now() + Math.max(0, waitMs);
-  let dirt = cloneDirt(clone);
-  while (dirt.length && Date.now() < deadline) { sleep(STEP_MS); dirt = cloneDirt(clone); }
-  if (dirt.length) throw needsTendingError(dirt);
+  const t0 = Date.now();
+  let dirt = cloneDirt(clone), slept = false;
+  while (dirt.length && Date.now() - t0 < Math.max(0, waitMs)) { slept = true; sleep(STEP_MS); dirt = cloneDirt(clone); }
+  if (dirt.length) throw needsTendingError(dirt, { waitedMs: slept ? Date.now() - t0 : 0 });
   try {
     git(clone, ["pull", "--rebase", "-q"]);
   } catch (e) {
