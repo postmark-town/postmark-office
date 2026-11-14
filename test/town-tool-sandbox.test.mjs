@@ -129,12 +129,16 @@ test("checkRequest takes a named tool, this sandbox's own clone, and TOWN_TZ alo
 
 test("stragglerPids names the instance's other processes, and nothing outside a postmark-town-tool@ instance", () => {
   const unitCg = "0::/system.slice/system-postmark\\x2dtown\\x2dtool.slice/postmark-town-tool@3-4021-1001.service\n";
-  assert.deepEqual(stragglerPids(unitCg, "100\n200\n300\n", 200), [100, 300], "every pid but serve's own");
-  assert.deepEqual(stragglerPids(unitCg, "200\n", 200), [], "serve alone: nothing to kill");
-  assert.equal(stragglerPids("0::/user.slice/user-1000.slice/session-3.scope\n", "1\n2\n", 2), null,
+  const svc = { INVOCATION_ID: "0123abcd" };
+  assert.deepEqual(stragglerPids(unitCg, "100\n200\n300\n", 200, svc), [100, 300], "every pid but serve's own");
+  assert.deepEqual(stragglerPids(unitCg, "200\n", 200, svc), [], "serve alone: nothing to kill");
+  assert.equal(stragglerPids("0::/user.slice/user-1000.slice/session-3.scope\n", "1\n2\n", 2, svc), null,
     "a test's stand-in, or anything that isn't the unit's own cgroup, kills nothing");
-  assert.equal(stragglerPids("0::/system.slice/postmark-office.service\n", "1\n", 9), null, "not the office's either");
-  assert.equal(stragglerPids("", "1\n", 9), null);
+  assert.equal(stragglerPids("0::/system.slice/postmark-office.service\n", "1\n", 9, svc), null, "not the office's either");
+  assert.equal(stragglerPids("", "1\n", 9, svc), null);
+  // THE SECOND GUARD, enough alone: even the unit's own cgroup kills nothing without systemd's INVOCATION_ID
+  assert.equal(stragglerPids(unitCg, "100\n200\n", 200, {}), null, "no INVOCATION_ID, no kill: no test or stand-in has one");
+  assert.equal(process.env.INVOCATION_ID, undefined, "this test runner is no systemd service (if it is, the stand-in tests below must not run serve)");
 });
 
 // ── a scratch town ──────────────────────────────────────────────────────────

@@ -141,8 +141,14 @@ export function checkRequest(req, ownClone) {
  * The other processes in this instance's own cgroup, from /proc/self/cgroup's
  * line and that cgroup's cgroup.procs: what a tool left running. null outside a
  * postmark-town-tool@ instance (a test's stand-in), where there is nothing to kill.
+ * TWO GUARDS, EACH ENOUGH ALONE: the cgroup must be a postmark-town-tool@ unit's,
+ * AND systemd's INVOCATION_ID must be set (every service has it; no test does).
+ * Outside the unit this kill would take every other process in the caller's
+ * cgroup, and on 2026-11-14 a can-fail flip that removed the first guard did
+ * exactly that to the seat house's shells in /init.scope (no seat was hit).
  */
-export function stragglerPids(cgroupText, procsText, self) {
+export function stragglerPids(cgroupText, procsText, self, env = process.env) {
+  if (!env.INVOCATION_ID) return null;
   const path = /^0::(\/\S*)$/m.exec(String(cgroupText))?.[1];
   if (!path || !/\/postmark-town-tool@[^/]+\.service$/.test(path)) return null;
   return String(procsText).split("\n").map(Number).filter((p) => Number.isInteger(p) && p > 0 && p !== self);
@@ -150,6 +156,7 @@ export function stragglerPids(cgroupText, procsText, self) {
 
 /** SIGKILL every other process in this instance until none is left; false if they won't go. */
 function killStragglers() {
+  if (!process.env.INVOCATION_ID) return true;
   let cg;
   try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { return true; }
   const path = /^0::(\/\S*)$/m.exec(cg)?.[1];
