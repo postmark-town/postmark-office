@@ -121,6 +121,11 @@ if (!process.env.SELFTEST_NO_PIN) {
   }, null, 1) + "\n");
 }
 EOF
+# sync-hearths.mjs (the extract's fifth step, mirrored from sync-atlas.yml): stubbed to the smallest thing that proves it RAN. The selftest predates the step, and every
+# pass died at "sync-hearths.mjs tripped" without this (POS-1034 found the harness stale on main and repaired it; this stub is the only thing it adds to the fake site).
+cat > "$SITE_SRC/tools/sync-hearths.mjs" <<'EOF'
+console.log("stub sync-hearths ran");
+EOF
 cat > "$SITE_SRC/tools/sync-renditions.mjs" <<'EOF'
 import { writeFileSync } from "node:fs";
 writeFileSync("public/renditions/a.html", "<p>a rendition merged after the tag</p>");
@@ -150,6 +155,8 @@ writeFileSync("dist-town/build.json", JSON.stringify({
   town_data_sha: process.env.BUILD_TOWN_DATA_SHA ?? null,
   town_sha: process.env.BUILD_TOWN_SHA ?? null,
   crossing: process.env.BUILD_CROSSING === "" ? null : Number(process.env.BUILD_CROSSING),
+  // POS-1034: the office index version the pass sampled, as the real stamper reads it (BUILD_TOWN_INDEX_AS_OF; unset or blank is null, never a stand-in)
+  town_index_as_of: (process.env.BUILD_TOWN_INDEX_AS_OF ?? "") === "" ? null : process.env.BUILD_TOWN_INDEX_AS_OF,
 }, null, 1));
 EOF
 git -C "$SITE_SRC" add -A && git -C "$SITE_SRC" commit -qm "the site"
@@ -489,6 +496,133 @@ check "the helper missing: exit 1" "$RC" "1"
 echo "$OUT" | grep -q "the pin helper is missing" && ok "and it names the helper, not the extract" || bad "no helper-missing line: $OUT"
 echo "$OUT" | grep -q "pass 1 —" && bad "it started a build before saying the helper is missing" || ok "before any build was started"
 check "the webroot still points at the standing release" "$(readlink -f "$WEBROOT")" "$STANDING"
+
+# ══════════════════════════════════════════════════════════════════
+# POS-1034 · THE OFFICE INDEX IS AN INPUT OF THE KEY, AND ITS VERSION REACHES THE STAMP
+#
+# The site builds its resident lists from the office's API, which reads the office's town index; the index can catch up while the town, site main, the tag and the
+# world stand still (Meddy, 2026-11-13). THE MOCK OFFICE below is the box door's two answers the script asks for: `/` (the crossing) and `/residents?limit=1`, whose
+# `x-postmark-town-index-as-of` header is whatever $SANDBOX/index-as-of holds (absent when the file is empty; a 503 while $SANDBOX/index-503 exists, the blip).
+
+cat > "$SANDBOX/mock-office.mjs" <<'EOF'
+import { createServer } from "node:http";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+const dir = process.argv[2];
+const read = (f) => { try { return readFileSync(`${dir}/${f}`, "utf8").trim(); } catch { return ""; } };
+createServer((req, res) => {
+  if (req.url === "/" || req.url === "") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ crossing: { number: 244 } })); }
+  if (req.url.startsWith("/residents")) {
+    if (existsSync(`${dir}/index-503`)) { res.writeHead(503); return res.end("{}"); }
+    const v = read("index-as-of");
+    res.writeHead(200, { "content-type": "application/json", ...(v ? { "x-postmark-town-index-as-of": v } : {}) });
+    return res.end("[]");
+  }
+  res.writeHead(404); res.end();
+}).listen(0, "127.0.0.1", function () { writeFileSync(`${dir}/mock-port`, String(this.address().port)); });
+EOF
+node "$SANDBOX/mock-office.mjs" "$SANDBOX" &
+MOCK_PID=$!
+trap 'kill "$MOCK_PID" 2>/dev/null; cleanup' EXIT
+for _ in $(seq 1 50); do [ -s "$SANDBOX/mock-port" ] && break; sleep 0.1; done
+OFFICE="http://127.0.0.1:$(cat "$SANDBOX/mock-port")"
+setindex() { printf '%s' "$1" > "$SANDBOX/index-as-of"; }
+stampv() { jget "$WEBROOT/build.json" town_index_as_of; }
+
+head_ "12 · THE INDEX CATCHES UP ALONE: an index-only advance builds, and an unchanged one stays quiet (POS-1034)"
+grep -q ' index:' "$ROOT/state.json" && bad "the state already carries an index token before any index was ever read" || ok "an office that never answered the index left the old key byte for byte (no index token in the last key)"
+setindex "idxA0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+check "exit 0" "$RC" "0"
+echo "$OUT" | grep -q "pass 1 —" && ok "the first read of an index version starts a build (it is an input now)" || bad "no build on the first index read: $OUT"
+check "THE VERSION REACHED THE STAMP through the real invocation" "$(stampv)" "idxA0000000000000000000000000000000000000"
+check "and the state names the version this pass surveyed" "$(jget "$ROOT/state.json" index_as_of)" "idxA0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "quiet: town, site main" && ok "the same version again: quiet" || bad "no quiet line: $OUT"
+echo "$OUT" | grep -q "pass 1 —" && bad "IT REBUILT with every input unchanged" || ok "no build pass started"
+BEFORE_IDX="$(readlink -f "$WEBROOT")"
+# ONLY THE INDEX MOVES. Every git input is held fixed (nothing is committed to the town, the site, the tag or the world between these two runs).
+TOWN_FIXED="$(git -C "$TOWN_SRC" rev-parse HEAD)"; SITE_FIXED="$(git -C "$SITE_SRC" rev-parse HEAD)"; TAGS_FIXED="$(git -C "$SITE_SRC" tag -l 'release/*' | sort | tail -1)"
+setindex "idxB0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+check "exit 0" "$RC" "0"
+check "the git inputs really were held fixed (town)" "$(git -C "$TOWN_SRC" rev-parse HEAD)" "$TOWN_FIXED"
+check "…(site)" "$(git -C "$SITE_SRC" rev-parse HEAD)" "$SITE_FIXED"
+echo "$OUT" | grep -q "pass 1 —" && ok "THE POINT: an index that caught up, on a town that did not move, starts a build" || bad "the index advanced alone and nothing was built: $OUT"
+[ "$(readlink -f "$WEBROOT")" != "$BEFORE_IDX" ] && ok "and the webroot swung to a new release dir" || bad "the link did not move"
+check "carrying the NEW version on the stamp" "$(stampv)" "idxB0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && bad "it built again with the new version already built" || ok "and the next tick, same version, is quiet"
+
+head_ "13 · THE OLD KEY FAILS THE INDEX-ONLY CASE (the falsifier: the same script with the index token cut out of the key)"
+mkdir -p "$SANDBOX/oldkey"
+sed 's/\${INDEX_KEYED:+ index:\$INDEX_KEYED}//' "$SCRIPT" > "$SANDBOX/oldkey/site-refresh.sh"
+cp "$HERE/site-refresh-pin.mjs" "$SANDBOX/oldkey/site-refresh-pin.mjs"
+cmp -s "$SCRIPT" "$SANDBOX/oldkey/site-refresh.sh" && bad "the old-key copy is identical to the script: the cut did not land" || ok "the old-key copy differs from the script by the index token alone"
+SCRIPT_KEEP="$SCRIPT"; SCRIPT="$SANDBOX/oldkey/site-refresh.sh"
+run POSTMARK_API="$OFFICE"          # the old key differs from the last (indexed) one once: it rebuilds to its own key
+setindex "idxC0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "quiet: town, site main" && ok "the OLD key says nothing moved though the office index advanced (the defect, reproduced)" || bad "the old key did not stay quiet: $OUT"
+echo "$OUT" | grep -q "pass 1 —" && bad "the old key built, so this is not the defect" || ok "and starts no build"
+SCRIPT="$SCRIPT_KEEP"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && ok "the same state, the real script: it builds" || bad "the real script stayed quiet on the index-only advance: $OUT"
+check "stamped with the version the old key ignored" "$(stampv)" "idxC0000000000000000000000000000000000000"
+
+head_ "14 · UNKNOWN STAYS HONESTLY UNKNOWN: a blip is not a moved input, and it is never stamped as a version"
+touch "$SANDBOX/index-503"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "quiet: town, site main" && ok "the local API answering 503 for one tick: quiet (a blip builds nothing)" || bad "the blip was treated as a moved input: $OUT"
+echo "$OUT" | grep -q "pass 1 —" && bad "a blip started a build" || ok "no build pass"
+# a blip while ANOTHER input moves: the build runs, and the stamp says unknown, not the version the key carries
+echo "crossing 11" >> "$TOWN_SRC/WHITE_PAGES/mail-ledger.md"
+git -C "$TOWN_SRC" commit -qam "a ferry landed during the blip"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && ok "another input moved during the blip: it builds as it always did" || bad "no build on a moved town: $OUT"
+check "and the stamp says unknown: never the version it could not read" "$(stampv)" "<null>"
+rm -f "$SANDBOX/index-503"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && bad "the version came back unchanged and it rebuilt (two builds for one blip)" || ok "the blip over, the same version: quiet, not a second rebuild"
+setindex ""
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && bad "an office that stops stating the version caused a build" || ok "no header at all: the old behaviour, quiet when nothing else moved"
+setindex "idxC0000000000000000000000000000000000000"
+
+head_ "15 · CONVERGENCE: an index that advances DURING a build is built again, inside the same pass budget"
+cat > "$SANDBOX/bin/npm" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  ci|install) mkdir -p node_modules; exit 0;;
+  run) if [ "\${2:-}" = "build" ]; then
+         mkdir -p dist-town; date -u +%s%N > dist-town/index.html
+         if [ -f "$SANDBOX/advance-index" ]; then
+           printf '%s' "\$(cat "$SANDBOX/advance-index")" > "$SANDBOX/index-as-of"
+           rm -f "$SANDBOX/advance-index"
+         fi
+       fi; exit 0;;
+esac
+exit 0
+EOF
+chmod +x "$SANDBOX/bin/npm"
+echo "crossing 12" >> "$TOWN_SRC/WHITE_PAGES/mail-ledger.md"
+git -C "$TOWN_SRC" commit -qam "a ferry landed, and the index catches up mid-build"
+printf '%s' "idxD0000000000000000000000000000000000000" > "$SANDBOX/advance-index"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "the town moved during the build" && ok "an index advance mid-build is one more moved input" || bad "no convergence line: $OUT"
+echo "$OUT" | grep -q "pass 2 —" && ok "and the loop ran a second pass" || bad "no second pass: $OUT"
+check "THE POINT: the published stamp names the version the SECOND pass surveyed" "$(stampv)" "idxD0000000000000000000000000000000000000"
+# THE BUDGET IS UNCHANGED: with one pass allowed, the same advance is left to the next tick, and says so
+echo "crossing 13" >> "$TOWN_SRC/WHITE_PAGES/mail-ledger.md"
+git -C "$TOWN_SRC" commit -qam "another ferry, one pass allowed"
+printf '%s' "idxE0000000000000000000000000000000000000" > "$SANDBOX/advance-index"
+run POSTMARK_API="$OFFICE" SITE_REFRESH_MAX_PASSES=1
+echo "$OUT" | grep -q "pass 2 —" && bad "a second pass started past the budget of one" || ok "SITE_REFRESH_MAX_PASSES=1: no second pass"
+echo "$OUT" | grep -q "pass budget is spent" && ok "and it says the budget is spent" || bad "no budget line: $OUT"
+check "that pass's stamp is the version it surveyed, not the newer one the build raced past" "$(stampv)" "idxD0000000000000000000000000000000000000"
+run POSTMARK_API="$OFFICE"
+echo "$OUT" | grep -q "pass 1 —" && ok "and the next tick takes the remainder (the advance that was left over)" || bad "the leftover advance was lost: $OUT"
+check "stamped with the newer version" "$(stampv)" "idxE0000000000000000000000000000000000000"
+kill "$MOCK_PID" 2>/dev/null || true
 
 # ═══════════════════════════════════════════════════════════════════════════
 
