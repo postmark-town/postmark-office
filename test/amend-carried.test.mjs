@@ -43,13 +43,14 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
+import { tempDir, removeTempDir, removeTempDirSync } from "./helpers/temp-dir.mjs";
 import {
   planAmendsCarried, proofFrom, holdsAmend, markFileParts, recordAmendsCarried, verifyAmendsCarried, amendsLine, isDoorAmend,
   HAND_CARRIED, TICK_CAP, proposedLines,
@@ -66,8 +67,10 @@ const MIGRATION = join(OFFICE, "world2", "schema", "075_amend_carried.sql");
 
 // ── the world ────────────────────────────────────────────────────────────────
 
-const world = mkdtempSync(join(tmpdir(), "postmark-amend-carried-"));
-after(() => rmSync(world, { recursive: true, force: true }));
+// POS-837: made and removed by the shared helper (helpers/temp-dir.mjs), whose import
+// also puts git's auto maintenance in the foreground for every git this file runs.
+const world = tempDir("postmark-amend-carried-");
+after(() => removeTempDirSync(world));
 let clock = Date.parse("2026-09-20T06:00:00Z");
 const git = (...a) => execFileSync("git", ["-C", world, ...a], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -112,6 +115,53 @@ const WINDOW_OF = { 1: 101, 2: 102, 3: 104, 4: 105, 5: 106, 6: 107 };
 const store = await startStore({ db: "amend_carried_test" });
 const skip = store.skip ?? false;
 after(async () => { if (!skip) await store.stop(); });
+
+// ── the world's git runs its auto maintenance in the foreground (POS-837) ────
+
+// Two instruments, and neither reproduces git's own detached gc (POS-419: a commit's
+// `gc --auto` can outlive the command on Linux and race the teardown's rmdir; whether it
+// does depends on the git version, and a runner's git 2.56 ran none at all for a
+// gc.auto=1 commit here, so no test below needs that child to exist).
+//
+// 1. CONFIG: the helper's import puts foreground maintenance into this process's env, so
+//    the `git` above, whose env spreads process.env, hands it to every child. Asked of
+//    git itself with --show-origin: the value comes from the env ("command line:"), not
+//    from a global file such as CI's, which sets the same keys. A config instrument, not
+//    proof that a detached child ended.
+test("THE WORLD'S GIT: foreground maintenance reaches it from the helper's env, not from a config file", () => {
+  for (const key of ["gc.autoDetach", "maintenance.autoDetach"])
+    assert.match(git("config", "--show-origin", "--get", key).trim(), /^command line:\s+false$/, `${key}: false, from the process env`);
+});
+
+// 2. LIFECYCLE: a synthetic child (this file only) holds a writer open until the parent
+//    releases it; removeTempDir(dir, { children }) must wait for its exit. The ready and
+//    release signals are the child's stdout and stdin, so no sleep or deadline decides
+//    anything. A helper that did not wait would run its removal before returning the
+//    promise: the folder would be gone at the first assertion, with the writer unreleased.
+const WRITER = `const fs=require("fs"),p=require("path");const d=process.argv[1];
+process.stdin.resume();process.stdout.write("ready");
+process.stdin.on("end",()=>{fs.mkdirSync(p.join(d,"pack"),{recursive:true});for(let i=0;i<50;i++)fs.writeFileSync(p.join(d,"pack","tmp_"+i),"x".repeat(512));});`;
+
+test("THE WORLD'S TEARDOWN: removeTempDir waits for a child still writing into the scratch repo, then removes it whole", async () => {
+  const dir = tempDir("postmark-amend-carried-child-");
+  const objects = join(dir, ".git", "objects");
+  mkdirSync(objects, { recursive: true });
+  const child = spawn(process.execPath, ["-e", WRITER, objects], { stdio: ["pipe", "pipe", "inherit"] });
+  const exited = once(child, "exit");
+  try {
+    await Promise.race([once(child.stdout, "data"), exited.then(() => { throw new Error("the writer exited before it was ready"); })]);
+    const removal = removeTempDir(dir, { children: [child] });
+    assert.equal(existsSync(objects), true, "the folder stands while the writer is held: the removal is waiting on it");
+    assert.equal(child.exitCode, null, "and the writer has not exited");
+    child.stdin.end(); // release: the writer fills objects/pack, then exits
+    await removal;
+    assert.notEqual(child.exitCode, null, "the writer had exited when the removal returned");
+    assert.equal(existsSync(dir), false, "the scratch repo is gone, writer's files and all");
+  } finally {
+    child.stdin.end(); // a failed assertion still releases its own child and waits for it
+    await removeTempDir(dir, { children: [child] });
+  }
+});
 
 // ── the pure half ────────────────────────────────────────────────────────────
 
