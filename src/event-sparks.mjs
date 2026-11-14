@@ -415,6 +415,22 @@ export function sparkDeclaration(row, evidence) {
   };
 }
 
+/**
+ * THE BATCH A COMPLETION SIGNS, FOUND IN THE LEDGER (the landed-but-uncommitted retry): this event's whole post-return to `by`,
+ * immediately followed by `by`'s own 1-stamp world stake on a mark — the spark it names. Null when the ledger holds no such pair:
+ * then a return that is there was not this completion's, and nothing is guessed.
+ */
+export function landedCompletionOf(entries, post, by, n) {
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const lines = (entries ?? []).map((e) => e?.canonical ?? e);
+  const ret = new RegExp(`^- \\S+ · stake:post/${esc(post)} → ${esc(by)} · ${Number(n)} · for: post-return$`);
+  const backing = new RegExp(`^- \\S+ · ${esc(by)} → stake:world-mark/([a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*) · ${EVENT_SPARK_BACKING} · via: \\S+$`);
+  const i = lines.findIndex((l) => ret.test(l));
+  if (i < 0 || i + 1 >= lines.length) return null;
+  const m = backing.exec(lines[i + 1]);
+  return m ? { spark: m[1] } : null;
+}
+
 /** Is a mark id free in every place an identity lives? (`q` holds the host household's keys, so its drafts are seen.) */
 async function sparkIdFree(q, by, slug) {
   const id = `${by}/${slug}`;
@@ -450,10 +466,35 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
     if (evidence.room_binding === "unresolved") return held("several rooms formed at its place — which one its spark binds is an open Call", { rooms: evidence.rooms_at_place.map((r) => r.id) });
 
-    // 3 · the id, under the host household's own keys (its drafts count as used)
+    // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not
     const by = String(row.fields.stake.by);
+    const n = Number(row.fields.stake.n);
+    const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+    const ws = await import(pathToFileURL(join(clone, "tools", "world-stake.mjs")).href);
+    const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
+    const { readFileSync } = await import("node:fs");
+    const entries = mint.parseStampLedger(readFileSync(path, "utf8"));
+    const position = postPositionOf(entries, row.id, by);
+    let recovering = null;
+    if (position.returned) {
+      // the retry FOLLOWS THE RECEIPT the ledger already holds: this completion's exact batch, or nothing — never re-signed
+      recovering = landedCompletionOf(entries, row.id, by, n);
+      if (!recovering)
+        return refusal(503, `the ledger has returned "${row.id}"'s stake to ${by}, but not as this completion's batch (no spark backing follows it)`,
+          "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
+    } else if (position.n !== n)
+      return refusal(503, `the ledger holds ${position.n} on "${row.id}" for ${by}, and the event's record says ${n}`,
+        "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
+
+    // 3b · the id, under the host household's own keys (its drafts count as used): the ledger's, on a retry
     const base = String(row.id).split("/").slice(1).join("/");
-    const slug = await pen.officeWrite((q) => freeSparkSlug(q, by, base), { household: row.household, env });
+    const slug = recovering
+      ? (await pen.officeWrite((q) => sparkIdFree(q, by, recovering.spark.split("/").slice(1).join("/")), { household: row.household, env })
+        ? recovering.spark.split("/").slice(1).join("/") : null)
+      : await pen.officeWrite((q) => freeSparkSlug(q, by, base), { household: row.household, env });
+    if (recovering && (!slug || recovering.spark.split("/")[0] !== by))
+      return refusal(503, `the ledger's batch for "${row.id}" names ${recovering.spark}, which this office already holds as another mark or claim`,
+        "an existing mark is never adopted as an event's spark; nothing was written — the operator reconciles it");
     if (!slug) return held("no free spark id under its slug");
     const sparkId = `${by}/${slug}`;
 
@@ -465,32 +506,31 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     if (!leave?.planned || leave.put_forward !== true) return held("its spark would not go forward with its 1 stamp (the mark road kept it a draft)");
     const prepared = await journal.prepareActFlipped(leave.entry);
 
-    // 4 · signed: the whole return, then the spark's own stake
-    const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
-    const ws = await import(pathToFileURL(join(clone, "tools", "world-stake.mjs")).href);
-    const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
-    const { readFileSync } = await import("node:fs");
-    const position = postPositionOf(mint.parseStampLedger(readFileSync(path, "utf8")), row.id, by);
-    if (position.returned || position.n !== Number(row.fields.stake.n))
-      return refusal(503, `the ledger holds ${position.n} on "${row.id}" for ${by}${position.returned ? " (already returned)" : ""}, and the event's record says ${row.fields.stake.n} unreturned`,
-        "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it (a return that landed without its receipt is never signed again)");
-    mint.appendSigned(clone, [mint.postReturnLine({ date, post: row.id, handle: by, n: Number(row.fields.stake.n) })], keyPem);
-    const staked = ws.worldStakeApply(clone, { handle: by, mark: sparkId, n: EVENT_SPARK_BACKING, via, date }, keyPem);
-    if (staked.applied !== EVENT_SPARK_BACKING) return refusal(503, `the spark's backing did not apply (${staked.reason ?? "applied " + staked.applied})`, "nothing was written; the lines are put back");
+    // 4 · signed (a fresh completion only): the whole return, then the spark's own stake
+    if (!recovering) {
+      mint.appendSigned(clone, [mint.postReturnLine({ date, post: row.id, handle: by, n })], keyPem);
+      const staked = ws.worldStakeApply(clone, { handle: by, mark: sparkId, n: EVENT_SPARK_BACKING, via, date }, keyPem);
+      if (staked.applied !== EVENT_SPARK_BACKING) return refusal(503, `the spark's backing did not apply (${staked.reason ?? "applied " + staked.applied})`, "nothing was written; the lines are put back");
+    }
     const plan = await planStampedCommit(clone, { env });
+    const { syncStampLinesVia } = await import("./stamp-lines.mjs");
 
     // 5 · ONE transaction: the spark, its lock, the receipt, and last the ledger
     return await pen.officeWrite(async (client) => {
       if (!(await sparkIdFree(client, by, slug))) throw Object.assign(new Error("moved"), { code: 409, defect: `${sparkId} was taken meanwhile`, hint: "nothing was written; the next tick tries again" });
       const { actId: sparkAct } = await journal.writePreparedVia(client, prepared);
       await stakeGuard(sparkId)(client);
-      const receipt = await store.recordCompletionVia(client, row.id, { spark: sparkId, n: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, now });
-      const landed = await landPlannedVia(client, clone, plan, [path], `event complete: ${row.id} -> spark ${sparkId} · ${row.fields.stake.n} home, ${EVENT_SPARK_BACKING} backing`, { env });
+      const receipt = await store.recordCompletionVia(client, row.id, { spark: sparkId, n, to: by, backing: EVENT_SPARK_BACKING, now });
+      // a fresh completion lands its lines last; a retry's lines are already in git, so only the store's copy of them is recorded
+      const landed = recovering
+        ? (plan ? (await syncStampLinesVia(client, clone, { engine: plan.engine }), { recovered: true }) : { recovered: true })
+        : await landPlannedVia(client, clone, plan, [path], `event complete: ${row.id} -> spark ${sparkId} · ${n} home, ${EVENT_SPARK_BACKING} backing`, { env });
       if (landed?.moved) throw Object.assign(new Error("moved"), { code: 409, defect: "the stamp ledger moved while the completion was landing", hint: "nothing was written; the next tick tries again" });
       if (landed?.error) throw Object.assign(new Error("not landed"), landed.error);
       return { event: row.id, completed: true, spark: sparkId, spark_act: sparkAct, act_id: receipt.act_id,
         stake: { returned: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, home: Number(row.fields.stake.n) - EVENT_SPARK_BACKING },
-        ...(landed?.commit ? { commit: landed.commit } : {}), room: evidence.room?.id ?? null, present: evidence.present };
+        ...(landed?.commit ? { commit: landed.commit } : {}), ...(recovering ? { recovered: "its lines were already in the ledger; only the store's half was written" } : {}),
+        room: evidence.room?.id ?? null, present: evidence.present };
     }, { household: prepared.household ?? row.household, env });
   } catch (e) { return asAnswer(e); }
 }
