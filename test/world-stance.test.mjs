@@ -33,8 +33,8 @@ import { CLASS_MARK, ACTION_LEAVE, readJournal } from "../src/world-journal.mjs"
 import { seedJournalRow } from "./journal-seed.mjs";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import {
-  ACTION_STANCE, AMBIENT_CAP, CLASS_STANCE, PAGE_SIZE, STANCES,
-  candidatesFrom, declareStanceViaOffice, groundFor, resetStanceGeometry,
+  ACTION_STANCE, AMBIENT_CAP, CLASS_STANCE, PAGE_SIZE, RESPONSE_QUOTE_MAX_BYTES, STANCES,
+  responseFunctionSays, candidatesFrom, declareStanceViaOffice, groundFor, resetStanceGeometry,
   readNeverPerforms, stanceInbox, stanceShadow, stanceTeach, standingStances, standsBefore, stancesBlock, withEdgeWords,
 } from "../src/world-stance.mjs";
 import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool-stub.mjs";
@@ -743,6 +743,82 @@ test("a rewritten law is REPORTED, never paraphrased — the quote cannot outliv
   assert.match(teach.unresolved, /no longer carries the sentences this door quotes/);
   // And the mark half still stands: two sources, independently honest.
   assert.equal(teach.after_it_is_published.the_law_reaches, LATE_WELCOME_SAYS);
+});
+
+// ── THE QUOTE BOUND (CORE-95) ───────────────────────────────────────────────────────────────────────────────────────────────
+// Wright, CORE-88 settlement: "The unbounded quote in responseFunctionSays is upstream of this read." Each quote responseFunctionSays
+// returns is at most 10,000 UTF-8 bytes JSON-encoded as a value, marker included; a quote that fits is verbatim; a longer one keeps a
+// whole-character prefix and a plain marker counting the removed bytes and naming the file. A REAL temporary file, the real producer.
+const jsonBytes = (s) => Buffer.byteLength(JSON.stringify(s), "utf8");
+const MARKER = /^(.*) \[cut: (\d+) bytes of this quote are not shown; the whole text is in LOGOS\/the-response-function\.md in the World checkout\]$/s;
+// multibyte on purpose: é is 2 bytes, — 3, 🙂 4 (a surrogate pair), so a byte-counted cut can land inside any of them
+const filler = (n) => Array.from({ length: n }, (_, i) => ["é", "—", "🙂", "a", "b c"][i % 5]).join("");
+const writeLaw = (name, { a = "a short opposed sentence.", b = "short.", c = "short." } = {}) => {
+  const w = join(scratch, name);
+  mkdirSync(join(w, "LOGOS"), { recursive: true });
+  // the three anchors as the live file has them: a line-terminated `opposed` bullet, then one paragraph whose "this is safe at any latency"
+  // clause CONTAINS the neutral-and-revisable sentence (both end at "Nothing blocks; nothing is lost.")
+  writeFileSync(join(w, "LOGOS", "the-response-function.md"),
+    `# The response function\n\n- **opposed — the veto:** ${a}\n\nResidents: this is safe at any latency, because the default is neutral-and-revisable: ${b} Nothing blocks; nothing is lost.\n\nAnd more: ${c}\n`);
+  return w;
+};
+
+test("CORE-95: a quote over the bound is cut at a whole character, ends in a plain marker with the exact cut-byte count, and holds the bound — all three quotes, and the one the unruled text reuses", () => {
+  const long = filler(12000);                                  // about 25 KB of mixed-width text per quote
+  const w = writeLaw("world-long-quotes", { a: long, b: long });
+  const said = responseFunctionSays(w);
+  const full = {
+    what_opposed_does: `opposed — the veto: ${long}`,
+    until_you_speak: `the default is neutral-and-revisable: ${long} Nothing blocks; nothing is lost.`,
+    any_latency: `this is safe at any latency, because the default is neutral-and-revisable: ${long} Nothing blocks; nothing is lost.`,
+  };
+  for (const [field, whole] of Object.entries(full)) {
+    const q = said[field];
+    assert.ok(jsonBytes(whole) > RESPONSE_QUOTE_MAX_BYTES, `${field}: the fixture really is over the bound (${jsonBytes(whole)} B as a JSON value)`);
+    assert.ok(jsonBytes(q) <= RESPONSE_QUOTE_MAX_BYTES, `${field}: ${jsonBytes(q)} B as a JSON value, marker included, is within ${RESPONSE_QUOTE_MAX_BYTES}`);
+    const m = MARKER.exec(q);
+    assert.ok(m, `${field}: it ends in the plain marker naming the file`);
+    const [, kept, cut] = m;
+    assert.ok(whole.startsWith(kept), `${field}: what is kept is a prefix of the quote, verbatim`);
+    assert.equal(Number(cut), Buffer.byteLength(whole, "utf8") - Buffer.byteLength(kept, "utf8"), `${field}: the marker's count is exactly the UTF-8 bytes removed`);
+    assert.ok(kept.isWellFormed() && !kept.includes("�"), `${field}: no split multibyte character or surrogate pair`);
+    assert.ok(Number(cut) > 0 && kept.length > 100, `${field}: a real cut that still keeps a real prefix`);
+    // tight: one more character would not have fit (the cut is not wasteful by more than a character and the marker's digit slack)
+    const next = Array.from(whole)[Array.from(kept).length];
+    assert.ok(jsonBytes(kept + next + `[cut: ${cut} bytes of this quote are not shown; the whole text is in LOGOS/the-response-function.md in the World checkout]`) > RESPONSE_QUOTE_MAX_BYTES - 8, `${field}: the prefix is the longest that fits (within a character)`);
+  }
+  assert.equal(said.from, "LOGOS/the-response-function.md", "from is intact");
+  assert.equal(responseFunctionSays(w), said, "the cache answers the same bounded object for the same file version");
+  // the unruled text reuses the (bounded) any_latency quote: it carries the marker, not the whole text, and says so
+  const teach = stanceTeach(w, { lateWelcome: LATE_WELCOME_SAYS });
+  assert.ok(teach.after_it_is_published.unruled.includes(said.any_latency), "the unruled text quotes the bounded any_latency verbatim");
+  assert.match(teach.after_it_is_published.unruled, /\[cut: \d+ bytes of this quote are not shown; the whole text is in LOGOS\/the-response-function\.md in the World checkout\]/);
+  assert.ok(!teach.after_it_is_published.unruled.includes(long), "and not the whole over-long text");
+  assert.equal(teach.after_it_is_published.law_mark, "the-town/the-late-welcome", "law-mark provenance intact");
+  assert.equal(teach.after_it_is_published.the_law_reaches, LATE_WELCOME_SAYS, "the late-welcome mark is not trimmed");
+});
+
+test("CORE-95 CONTROLS: a quote at exactly the bound is verbatim, one byte more is cut, and a missing anchor is still disclosed", () => {
+  // `opposed` as a JSON value is its text plus two quote bytes: pad to exactly the bound
+  const lead = "opposed — the veto: ";
+  const atBound = lead + "x".repeat(RESPONSE_QUOTE_MAX_BYTES - 2 - Buffer.byteLength(lead, "utf8"));
+  assert.equal(jsonBytes(atBound), RESPONSE_QUOTE_MAX_BYTES);
+  const exact = responseFunctionSays(writeLaw("world-at-bound", { a: atBound.slice(lead.length) }));
+  assert.equal(exact.what_opposed_does, atBound, "exactly at the bound: verbatim, no marker");
+  const over = responseFunctionSays(writeLaw("world-one-over", { a: atBound.slice(lead.length) + "x" }));
+  assert.ok(MARKER.test(over.what_opposed_does), "one byte over: cut with the marker");
+  assert.ok(jsonBytes(over.what_opposed_does) <= RESPONSE_QUOTE_MAX_BYTES);
+  // normal teaching is unchanged (the live-shape fixture the rest of this suite uses)
+  const normal = stanceTeach(repo, { lateWelcome: LATE_WELCOME_SAYS });
+  assert.equal(normal.what_opposed_does, OPPOSED_SAYS);
+  assert.equal(normal.until_you_speak, UNTIL_YOU_SPEAK_SAYS);
+  assert.ok(normal.after_it_is_published.unruled.includes(ANY_LATENCY_SAYS));
+  // a missing anchor stays disclosed (the other quotes are bounded; the missing one is named in `unquoted`)
+  const w = join(scratch, "world-one-anchor-missing"); mkdirSync(join(w, "LOGOS"), { recursive: true });
+  writeFileSync(join(w, "LOGOS", "the-response-function.md"), `- opposed — the veto: ${filler(12000)}\n\nNothing else of the law is here.\n`);
+  const part = responseFunctionSays(w);
+  assert.deepEqual(part.unquoted, ["neutral_and_revisable", "any_latency"]);
+  assert.ok(jsonBytes(part.what_opposed_does) <= RESPONSE_QUOTE_MAX_BYTES && MARKER.test(part.what_opposed_does));
 });
 
 test("a mark the checkout cannot answer is DISCLOSED, not filled in from memory", () => {
