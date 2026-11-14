@@ -3211,6 +3211,43 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    ```
    It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.
 
+## 094: a sign-in's family, so a reused refresh token ends the whole sign-in (POS-485)
+
+Darko ruled twice on 2026-11-13:
+- 09:09 EST, POS-485/a: "End the whole sign-in, no grace".
+- 13:1x EST, POS-485/b: "Link new keys, leave old".
+
+Every new or refreshed OAuth pair records its sign-in in `oauth_tokens.family`, and a refresh keeps the retired token's hash as a `spent` row. A retired refresh token presented again deletes every access and refresh token of its sign-in. The law is `src/oauth.mjs § THE SIGN-IN'S FAMILY`, and `CONTRACT.md § Auth` has the client's words.
+
+**094** adds one nullable column (`family`) and its index (`oauth_tokens_family`). It needs no grant change: `office_api` keeps SELECT, INSERT and DELETE, and nothing updates a token. There is no backfill and no row changes.
+
+**Nobody is signed out at the switch.** Pre-switch pairs stay unlinked and keep their own expiry; a pre-switch refresh token links what it issues from its first refresh on. Household, resident and static keys are untouched.
+
+Box steps (Jetto's hand, never a lane's):
+
+1. **Apply and prove 094 BEFORE the train PR is approved.** The new code names `family` in every pair it issues. Against a store without the column, every sign-in and refresh rolls back and answers `503` with `Retry-After`: nobody is signed out, but nobody can sign in or refresh until 094 lands.
+   - **Approving the train PR IS the deploy.** That approval's release-train run cuts the release tag and deploys it in the same run (§ The auto-deploy). So there is no moment between the tag and the code, and the SQL cannot come from the tag. Source it from the reviewed commit, or from the train once #1021 has landed there; the 094 file is the same at both.
+   - The office before this change ignores the column, so 094 can land any time before that approval. It does not touch the clearing's tables, so it needs no window around the clearing.
+   - The file waits at most 5 s for its lock (`lock_timeout`). Behind a long transaction on `oauth_tokens` it fails with `lock_not_available` and changes nothing: run it again.
+   - It is idempotent. The pipe is 079's above, from a commit instead of a tag:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office
+   REF=b0356f0e1e92614ba65abc85f8853f4fc08fe612   # #1021's reviewed commit; or REF=origin/train/2026-w47 once #1021 has landed there
+   git -C $CLONE fetch -q origin
+   git -C $CLONE show "$REF:world2/schema/094_oauth_signin_family.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 094):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_tokens' AND column_name = 'family'"   # text
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.oauth_tokens_family')"                                                              # oauth_tokens_family
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT has_table_privilege('office_api', 'oauth_tokens', 'UPDATE')"                                           # f (unchanged)
+   ```
+2. **Deploy the code: the train PR's approval, only once step 1's proof reads as above.** Its own release-train run deploys it. With `OFFICE_AUTODEPLOY` off, the deploy is the hand-carry of that tag, which also follows step 1. A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
+3. **Rollback** of the code needs no store step. The old code ignores `family`, and `spent` rows are inert to it (no reader matches the kind, and its sweep skips their NULL expiry). Refreshes keep working, without the reuse rule. After a later re-deploy, the sweep removes the `spent` rows whose sign-in has no live key left.
+
 ## Two site rebuilds per run, not three (POS-944, 2026-11-08)
 
 On the evening of 2026-11-07 the town kept moving while the site built, so the refresh rebuilt up to three times per run, and each pass took 12 to 22 minutes. The unit's 45-minute limit (`TimeoutStartSec`) killed the 22:10Z run in its third pass, before its report step, and the sentinel read the missing report as stale. Darko ruled the cap (2026-11-07 22:06 EST, POS-944/a: "Cap at 2 rebuilds per run"). Installed on the box at 03:08Z on 11-08:
