@@ -165,6 +165,11 @@ async function seedPassages(n) {
   } finally { await owner.end(); }
 }
 
+// WHY THE BOUND IS CROWD / 4 AND NOT A SMALL CONSTANT. A burst shares one scan per WAVE of arrivals (trailingFlight: at most two runs per wave), and how many waves
+// sixty acts make depends on how the event loop interleaves their orient and eyes: measured here 4 scans in most runs and 7 in one of three CI-shaped runs (CI run
+// 43726351000 saw 7). Unshared, it is one count(*) per orient and per eyes, about 4 per act (240 for 60). A bound of CROWD / 4 (15) sits over the worst shared
+// count seen and sixteen times under the unshared one, so it holds the flips (F1, F2, F3) and does not ask the scheduler for a number.
+const SCAN_BOUND = CROWD / 4;
 const passageScans = (seen) => seen.sql.filter((q) => /count\(\*\)/i.test(q) && /payload->>'_ledger' IS NULL/.test(q)).length;
 const passageReads = (seen) => seen.sql.filter((q) => /SELECT id, at, crossing, actor, action, payload FROM acts WHERE action = ANY/.test(q)).length;
 const idle = (pool) => pool.totalCount === pool.idleCount && pool.waitingCount === 0;
@@ -182,8 +187,8 @@ test("a crowd acting at once: the act doors scan the passage record a handful of
     // test measures) and then refuses at the law, by name. Nothing here claims an act was admitted or landed.
     for (const a of answers) assert.ok(a?.code === 503 && /the law that binds this act cannot be read/.test(String(a.defect)), `every act door reached its law gate: ${JSON.stringify(a).slice(0, 160)}`);
     // the act door's first step is orient and eyes (it cannot judge an act without them); each asks who is inside what
-    assert.ok(passageScans(onActs) <= 4, `${passageScans(onActs)} count(*) scans of the passage record for ${CROWD} acts at once (it was one per orient and eyes: about ${CROWD * 4})`);
-    assert.ok(passageReads(onActs) <= 4, `${passageReads(onActs)} whole-record reads`);
+    assert.ok(passageScans(onActs) <= SCAN_BOUND, `${passageScans(onActs)} count(*) scans of the passage record for ${CROWD} acts at once (bound ${SCAN_BOUND}; unshared it is one per orient and eyes: about ${CROWD * 4})`);
+    assert.ok(passageReads(onActs) <= SCAN_BOUND, `${passageReads(onActs)} whole-record reads (bound ${SCAN_BOUND})`);
     assert.equal(onActs.errors, 0, "no acts-pool checkout ran out its acquire timeout");
     const notes = onPen.sql.filter((q) => /resident_notes/.test(q)).length;
     assert.equal(notes, 0, `the act door read the resident's note ${notes} times through the pen for an answer that never carries it (a write-mode transaction and a second checkout per act)`);
@@ -201,7 +206,7 @@ test("a crowd entering at once: the crossing's ledger reads share the same scans
   try {
     const ledgers = await Promise.all(Array.from({ length: CROWD }, () => crossingDeps().ledger()));
     assert.equal(new Set(ledgers).size, 1, "every enterer reads the one ledger");
-    assert.ok(passageScans(onActs) <= 4, `${passageScans(onActs)} count(*) scans for ${CROWD} ledger reads at once`);
+    assert.ok(passageScans(onActs) <= SCAN_BOUND, `${passageScans(onActs)} count(*) scans for ${CROWD} ledger reads at once (bound ${SCAN_BOUND})`);
   } finally { delete process.env.WORLD_APEX; }
   assert.ok(idle(actsPool));
 });
