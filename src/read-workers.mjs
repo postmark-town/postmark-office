@@ -126,9 +126,60 @@ export function mcpWorkerTakes(messages) {
     const name = m.params?.name;
     const args = m.params?.arguments ?? {};
     if (MCP_WORKER_TOOLS.has(name)) return true;
+    if (name === "household") return householdReadOnWorker(args);
+    if (name === "doorstep") return doorstepReadOnWorker(args);
     if (name !== "world" || typeof args !== "object" || Array.isArray(args)) return false;
     if (args.do != null && args.do !== "") return false;
     return String(args.read ?? "").trim() !== "say";
+  });
+}
+
+/**
+ * THE HOUSEHOLD'S READS (POS-1064). `household` is answered on the main thread
+ * today, so a doorstep waited in line behind everything that thread does (POS-1057:
+ * ~100-300 ms of its synchronous CPU per read, 12 residents polling together queued
+ * 3-8 s). The same reads already run on a worker as REST GETs (/doorstep, /quests,
+ * /stamps); these are the household reads that answer from the store, the clone and
+ * the files, through the same functions, with no main-thread memory but ONE, which
+ * the handover carries (the world-write budget, `wantsWorldWrites`).
+ *
+ * A NAMED LIST, as above. NOT on it, and so on the main thread: every `do:` (an act),
+ * `read: "letter"` (opening a letter clears it for the key's residents, a write:
+ * `opensALetter`), `explain:`, and every read this list does not name (mail, window,
+ * address, home, media, earpiece, fund, blocks, settings, house, day, hearth: not
+ * audited for this lane, they keep their thread).
+ */
+export const HOUSEHOLD_WORKER_READS = new Set(["doorstep", "stamps", "quests", "stances", "outcomes", "stakes", "waiting", "marks", "needs-you", "happened", "closer", "correspondents", "posts", "standing"]);
+function householdReadOnWorker(args) {
+  if (typeof args !== "object" || Array.isArray(args)) return false;
+  if ((args.do != null && args.do !== "") || args.explain != null) return false;
+  const read = String(args.read ?? "").trim();
+  // the bare call is the glance (v2) or the checklist (v1): both carry the standing's world_writes
+  if (read === "") return args.read == null || args.read === "";
+  return HOUSEHOLD_WORKER_READS.has(read);
+}
+/** `doorstep` (the apex of apexes): a read, never an act; its `world` item carries `heard`, so it takes the earshot too. */
+function doorstepReadOnWorker(args) {
+  if (typeof args !== "object" || Array.isArray(args)) return false;
+  if ((args.do != null && args.do !== "") || args.explain != null) return false;
+  const read = String(args.read ?? "").trim();
+  return read === "" || read === "bundle";
+}
+
+/**
+ * Does a handed-over household call state the standing's `world_writes`? That block
+ * is the bouncer's live budget, this thread's memory (admission is one thread's), so
+ * the main thread reads it for the key's household at admission and hands it over
+ * with the call, as it does earshot; a worker's own bouncer is empty and would say 0.
+ */
+export function wantsWorldWrites(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((m) => {
+    if (m?.params?.name !== "household") return false;
+    const a = m.params?.arguments ?? {};
+    if (a.do != null && a.do !== "") return false;
+    const read = String(a.read ?? "").trim();
+    return read === "" || read === "standing";
   });
 }
 
@@ -140,6 +191,7 @@ export function mcpWorkerTakes(messages) {
 export function wantsEarshot(messages, shape = "v0") {
   if (!Array.isArray(messages)) return false;
   return messages.some((m) => {
+    if (m?.params?.name === "doorstep") return true; // the doorstep's world item is a v2 bare read
     if (m?.params?.name !== "world") return false;
     const a = m.params?.arguments ?? {};
     if ((a.do != null && a.do !== "") || (a.read != null && a.read !== "")) return false;
@@ -227,12 +279,12 @@ export function serveReadsInWorker(handle) {
       return;
     }
     if (msg?.type !== "read") return;
-    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null } = msg;
+    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null, worldWrites = null } = msg;
     // An ended request: a GET's is empty, an agent's MCP read (POS-284) carries
     // the JSON-RPC body the main thread already read, delivered as one chunk
     // before the end.
     const req = new Writable({ write(_c, _e, cb) { cb(); } });
-    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp), handedEarshot: earshot });
+    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp), handedEarshot: earshot, handedWorldWrites: worldWrites });
     req.on = ((on) => function (ev, fn) {
       if (ev === "end") { queueMicrotask(() => queueMicrotask(fn)); return this; }
       if (ev === "data") { if (body != null) queueMicrotask(() => fn(body)); return this; }
@@ -381,7 +433,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
      * main thread already read, and the flag that lets the worker's POST /mcp
      * past the read role's refusal for this call alone.
      */
-    forward(req, res, { body = null, mcp = false, earshot = null } = {}) {
+    forward(req, res, { body = null, mcp = false, earshot = null, worldWrites = null } = {}) {
       if (stopped) return false;
       return dispatch(res, {
         type: "read",
@@ -391,6 +443,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         ip: req.socket?.remoteAddress ?? null,
         ...(mcp ? { body, mcp: true } : {}),
         ...(earshot ? { earshot } : {}),
+        ...(worldWrites ? { worldWrites } : {}),
       });
     },
     /** What the pool is, for /release: how many workers are up and what each has served. */

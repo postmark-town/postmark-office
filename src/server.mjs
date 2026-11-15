@@ -92,7 +92,7 @@ import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt 
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
 import { withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: the read role's three refusals (the workers are threads, POS-266)
-import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
+import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot, wantsWorldWrites } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
@@ -828,11 +828,18 @@ let readPool = null;
 // POS-284's handover of an agent's read to a worker, plus POS-632 W4: a v2 bare
 // world read carries `heard`, and earshot is this thread's memory, so it is
 // snapshotted here, at admission, with no listen mark, and handed over with the call.
-async function handOverRead(req, res, raw, messages) {
+async function handOverRead(req, res, raw, messages, key = null) {
   if (!mcpWorkerTakes(messages)) return false;
   let earshot = null;
   if (wantsEarshot(messages, readShape())) { try { earshot = await earshotSnapshot(); } catch { earshot = null; } }
-  return readPool.forward(req, res, { body: raw, mcp: true, earshot });
+  // POS-1064: a household's standing carries `world_writes`, the bouncer's live budget (this thread's memory): read here, at admission, for the
+  // key's household and handed over, so a worker states the number the 429 enforces and not its own empty bouncer's
+  let worldWrites = null;
+  if (wantsWorldWrites(messages) && key?.household) {
+    try { worldWrites = { household: key.household, budget: bouncer.worldWriteBudget(key.household) }; }
+    catch { return false; } // no number to hand over: this thread answers, as it did before
+  }
+  return readPool.forward(req, res, { body: raw, mcp: true, earshot, worldWrites });
 }
 
 // `route` is the office's one request handler; `handle` (below it) resolves the
@@ -1402,13 +1409,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         worldCost: cost,
       }),
       // POS-284: the agents' reads, on another core (read-workers.mjs § mcpWorkerTakes).
-      handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages) : null, // + POS-632 W4's earshot
+      handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages, key) : null, // + POS-632 W4's earshot
       earshot: req.handedEarshot ?? null,
       onlyReads: IN_READ_WORKER ? mcpWorkerTakes : null,
       // The household world-write budget as a READ (POS-139). Same bouncer
       // instance the `rateLimit` closure above enforces with, so the standing
       // read's `world_writes` and that layer's 429 state one number, not two.
-      worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
+      // a handed-over read states the budget the main thread read at admission (a worker's bouncer is empty), POS-1064
+      worldWriteBudget: (household) => req.handedWorldWrites && req.handedWorldWrites.household === household ? req.handedWorldWrites.budget : bouncer.worldWriteBudget(household),
       rateResponse,
     });
   }
