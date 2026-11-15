@@ -249,9 +249,9 @@ export async function standingFor(q, handle) {
   try { return row?.json ? JSON.parse(row.json) : null; } catch { return null; }
 }
 
-/** The index meta a quest board reads (quest_registry, quest_day), from the store's own town_meta. */
+/** The index meta a quest board reads (quest_registry, quest_day, and POS-961's quest_invites), from the store's own town_meta. */
 async function questMeta(q) {
-  const rows = (await q.query("SELECT key, value FROM town_meta WHERE key IN ('quest_registry', 'quest_day')")).rows;
+  const rows = (await q.query("SELECT key, value FROM town_meta WHERE key IN ('quest_registry', 'quest_day', 'quest_invites')")).rows;
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
