@@ -76,6 +76,20 @@ test("a ref that moves is read afresh: the kept parse is keyed by the commit, ne
   assert.equal(before.marks.length, 9000, "what an earlier caller holds is untouched");
 });
 
+test("a ref that moves between the resolution and the read cannot file the new commit's JSON under the old commit", async () => {
+  const { readJsonAtRef, __forgetParsedForTest } = await import("../src/world-branches.mjs");
+  __forgetParsedForTest();
+  const oldSha = git("rev-parse", "refs/heads/main").trim();
+  const oldTag = JSON.parse(git("show", `${oldSha}:WORLD/world-state.json`)).tag;
+  writeFileSync(join(repo, "WORLD", "world-state.json"), world(11, "raced"));
+  const moved = () => { git("commit", "-qam", "moved mid-read"); };
+  const got = readJsonAtRef(repo, "refs/heads/main", "WORLD/world-state.json", { afterResolve: moved });
+  assert.equal(got.tag, oldTag, "the read is of the commit it resolved");
+  const asked = readJsonAtRef(repo, oldSha, "WORLD/world-state.json");
+  assert.equal(asked.tag, oldTag, "a later read of the old commit is the old commit's file");
+  assert.equal(readJsonAtRef(repo, "refs/heads/main", "WORLD/world-state.json").tag, "raced", "the moved ref reads its new commit");
+});
+
 test("a ref git's own files do not resolve (HEAD) is read and parsed as before, a fresh object each time", async () => {
   const { readJsonAtRef, __forgetParsedForTest } = await import("../src/world-branches.mjs");
   __forgetParsedForTest();

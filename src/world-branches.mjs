@@ -631,13 +631,15 @@ export function pathAtRef(repo, ref, path) {
 // running the 229 world, household, doorstep, stake, mark, stance and guard test files with the parse deep-frozen, which threw nowhere).
 const PARSED_CAP = 3;
 const parsedCache = new Map(); // "repo\0sha\0path" -> parsed JSON, insertion-ordered for eviction
-export function readJsonAtRef(repo, ref, path) {
+export function readJsonAtRef(repo, ref, path, { afterResolve } = {}) {
   const rel = String(path).replace(/\\/g, "/");
   const sha = refShaFromDisk(repo, ref);
   if (!sha) return JSON.parse(readAtRef(repo, ref, path));
   const key = `${repo}\0${sha}\0${rel}`;
   if (parsedCache.has(key)) return parsedCache.get(key);
-  const parsed = JSON.parse(readAtRef(repo, ref, path));
+  afterResolve?.(sha); // tests only: the moment a concurrent writer could move the ref
+  // read the COMMIT we keyed by, never the name again: a ref that moved between the two resolutions would file the new commit's JSON under the old key
+  const parsed = JSON.parse(readAtRef(repo, sha, path));
   parsedCache.set(key, parsed);
   if (parsedCache.size > PARSED_CAP) parsedCache.delete(parsedCache.keys().next().value);
   return parsed;
