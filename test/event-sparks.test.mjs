@@ -87,7 +87,8 @@ test("spark_note (v1 read): an empty collection says why — free (the rule only
   const staked = { ends: ended, fields: { stake: { n: 20, by: "wright" } } };
   const ev = (over = {}) => ({ complete: true, room_history: "complete", rooms: [{ id: "t1-a" }], sparks: [], ...over });
   const free = S.sparkNoteOf({ ends: ended, fields: { completed: { act: 9, at: ended, free: true } } }, ev(), { now });
-  assert.match(free, /posted before events were staked, so it stays free: .* its host's draft, which is not the town's canon: none is public unless the host publishes it/);
+  assert.match(free, /posted before events were staked, so it stays free and keeps no public sparks of its own here: .* its host's draft, not the town's canon, and once published it is an ordinary spark — look for it in the gallery/);
+  assert.doesNotMatch(free, /\bwere made\b|\bwas made\b/, "never claims a draft exists — an event before the cutoff has none");
   assert.doesNotMatch(free, /\d/, "the free note carries no count, id or time — only the rule");
   assert.match(S.sparkNoteOf({ ends: ended, fields: { stake: { n: 20, by: "w", returned: { n: 20 } } } }, ev(), { now }), /came home with its cancellation/);
   assert.match(S.sparkNoteOf({ ...staked, ends: "2026-11-15T01:00:00Z" }, ev({ complete: false }), { now }), /made after it ends, one per room/);
@@ -288,7 +289,8 @@ test("the host's invitation (POS-1035, ruled): every spark of each completed eve
   assert.deepEqual(drafts.map((d) => [d.id, d.drafts]), [["pica/old-fair", ["pica/old-fair", "pica/old-fair-2"]]]);
   const inv = S.recountingInvitation(drafts[0]);
   assert.deepEqual(inv.drafts, ["pica/old-fair", "pica/old-fair-2"]);
-  assert.match(inv.cause, /ended before events were staked, so its 2 sparks, one per room, were made as your drafts \(pica\/old-fair, pica\/old-fair-2\).* not the town's canon .* until you publish it with 1 stamp/);
+  assert.match(inv.cause, /posted before events were staked, so its rooms' sparks start as your drafts\. Your spark drafts that name it and still carry its invitation's words \(or its title\): pica\/old-fair, pica\/old-fair-2 — write what actually happened\. A draft is not the town's canon .* until you publish it with 1 stamp/);
+  assert.doesNotMatch(inv.cause, /\b2 sparks\b|were made/, "an association, never a claim of which the completion made or how many (Wright 05:35Z)");
   assert.match(inv.act, /^world_leave_mark \{ slug: "old-fair", … \}.*stamps: 1 publishes it/);
   // an office pointed at no record cannot establish the list: it throws (NoRecordError), and needs-you says unknown — never an
   // empty answer from a missing store (Rivet 03:56Z). A fresh process: this one's pen has its pool already.
@@ -687,13 +689,20 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
   assert.equal(mirrored.length, 0, "no draft wrote a public act");
   const ev = (await calendarAtOffice({ event: row.id }, { now: Date.now(), env: ENV, settlements: () => edges })).event;
   assert.deepEqual(ev.evidence.sparks, [], "the public collection: none — drafts are not public");
-  assert.match(ev.evidence.spark_note, /stays free: .* its host's draft, which is not the town's canon: none is public unless the host publishes it/);
+  assert.match(ev.evidence.spark_note, /stays free and keeps no public sparks of its own here: .* look for it in the gallery/);
   assert.doesNotMatch(JSON.stringify(ev), /free-supper-2/, "no draft id anywhere in the public event object");
   assert.equal(ev.evidence.rooms.length, 2, "its rooms are still listed — public talk, public coverage");
+  // published (Wright 05:35Z, "the simpler roads"): an ordinary spark, found in the gallery by its room — never a completion root
+  await owner.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+    VALUES (gen_random_uuid(), 'wright/free-supper', 'spark', 'wright', 'wright-house', 'Free supper', '{}', box(point(0,0), point(1,1)), 'standing', 1035, $1)`,
+    [JSON.stringify({ kind: "spark", rooms: [ev.evidence.rooms[0].id], event: row.id })]);
+  const later = (await calendarAtOffice({ event: row.id }, { now: Date.now(), env: ENV, settlements: () => edges })).event.evidence;
+  assert.deepEqual(later.sparks, [], "no recorded public completion collection for a free event — even once one is published");
+  assert.deepEqual(later.gallery.sparks.map((s) => s.id), ["wright/free-supper"], "the published one is an ordinary accepted spark in the gallery");
   // the host is told, privately: needs-you, under the event's household
   const asked = (await S.recountingsAwaitingAtOffice(["wright"], { env: ENV })).find((r) => r.event === row.id);
   assert.deepEqual(asked?.drafts, out.drafts);
-  assert.match(asked.cause, /made as your drafts .* not the town's canon/);
+  assert.match(asked.cause, /start as your drafts\. Your spark drafts that name it .* not the town's canon/);
   // never twice
   const again = await complete(dir, await eventRowAtOffice(row.id, { env: ENV }), Date.now(), { edges, draftsFrom: starts });
   assert.match(again.held, /already complete/);

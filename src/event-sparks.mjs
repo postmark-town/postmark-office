@@ -328,8 +328,9 @@ export function eventSparkIds(row) {
 /**
  * An event's own sparks, by the identities its completion recorded (`fields.completed.sparks`, one per room, in the rooms' start
  * order): each accepted (standing) with its view, or `{ id, accepted: false, status }` while its claim waits on acceptance (or was
- * refused). Empty before the event completes — and for a free event, whose sparks are its host's private drafts and never named
- * here. The whole recorded collection, never a first or chosen one.
+ * refused). Empty before the event completes — and always for a free event (Wright 05:35Z): its sparks start as its host's
+ * drafts and are never named here; one published is an ordinary spark, in the gallery by its room or circle. The whole
+ * recorded collection, never a first or chosen one.
  */
 export async function eventSparksOf(q, row) {
   const ids = eventSparkIds(row);
@@ -485,10 +486,12 @@ export function recountingOf(row) {
 //     or it is no longer there (neither standing nor on the docket: withdrawn while nobody held it, refused, retracted). The host
 //     pulling their own stake is not that: a spark others stake on still stands (Darko 23:14 EST), and still waits. An amendment
 //     of the headline or the place alone is not writing what happened (Rivet, POS-1035-host-notice-settled);
-//   · a FREE event's sparks are its host's private DRAFTS (Darko 23:15/23:17 EST): each waits while it is still a draft whose
-//     recounting is the one the completion wrote (the invitation, or the title). Rewriting it, publishing it with its stake or
-//     taking it back ends that draft's ask. These are read under the event's own household's keys (007's row policy), so they
-//     reach only that house's needs-you, never a public read.
+//   · a FREE event's sparks are its host's ordinary DRAFTS (Darko 23:15/23:17 EST; carried by Wright 05:35Z, "the simpler
+//     roads"): the host is told at completion through this ordinary draft invitation. It is an ASSOCIATION, not provenance: the
+//     host's spark drafts that name the event and still carry its words (the invitation, or the title) — never presented as
+//     the ones the completion made, nor as a count of them. Rewriting one, publishing it or taking it back ends its ask; a
+//     published one is an ordinary spark, with no reminder after. Read under the host's own claim household's keys (007's row
+//     policy), so they reach only that house's needs-you, never a public read.
 // Amending stays the spark's author's alone, as it is everywhere: nothing here grants a host or a default any right over a spark.
 // The doorstep's cursor hides an unchanged line.
 export const RECOUNTINGS_AWAITING_MAX = 20;
@@ -529,10 +532,9 @@ const listed = (ids) => ids.join(", ");
 /** One invitation, in the needs-you list's own shape: what it is, why it waits on you, and the act that answers it. */
 export function recountingInvitation(r) {
   if (Array.isArray(r.drafts)) {
-    const n = r.drafts.length;
     return {
       event: r.id, title: r.title ?? null, drafts: r.drafts, host: r.host, completed_at: r.completed_at,
-      cause: `your event "${r.title ?? r.id}" ended before events were staked, so its ${n === 1 ? "spark was" : `${n} sparks, one per room, were`} made as your draft${n === 1 ? "" : "s"} (${listed(r.drafts)}), recounted from your invitation's words (or its title) — write what actually happened; a draft is not the town's canon and lives only in your own reading of the world until you publish it with 1 stamp, like any mark`,
+      cause: `your event "${r.title ?? r.id}" ended; it was posted before events were staked, so its rooms' sparks start as your drafts. Your spark drafts that name it and still carry its invitation's words (or its title): ${listed(r.drafts)} — write what actually happened. A draft is not the town's canon and lives only in your own reading of the world until you publish it with 1 stamp, like any mark`,
       act: `world_leave_mark { slug: "${leaf(r.drafts[0])}", … } — the draft as it stands, with properties: { recounting: "<what happened>" }; stamps: 1 publishes it`,
     };
   }
@@ -554,8 +556,8 @@ export async function recountingsAwaitingVia(q, handles) {
 
 /**
  * A free event's draft invitations: `events` its completed free events (FREE_COMPLETED_SQL rows), `draftsOf(host, ids)` the host's
- * drafts read under the household its own acts file drafts in (the completion wrote them there). A draft waits while its
- * recounting is still the completion's.
+ * drafts read under the household its own acts file drafts in. By ASSOCIATION (Wright 05:35Z): the host's spark drafts naming the
+ * event whose recounting is still its words — not proof of which the completion made, nor a count of them.
  */
 export async function draftRecountingsVia(events, draftsOf) {
   const byHost = new Map();
@@ -604,8 +606,11 @@ export const EVENT_SPARKS_MAX = 20;
  */
 export function sparkNoteOf(row, evidence, { now = Date.now() } = {}) {
   if (!evidence || !Array.isArray(evidence.sparks)) return undefined;
+  // a free event (Wright 05:35Z, "the simpler roads"): no recorded public completion collection — which is not "no sparks": a
+  // draft its host publishes is an ordinary spark, found in the gallery by its room or circle. Says only the rule: never whether
+  // any draft exists (an event before the cutoff has none), how many, or what they say.
   if (!row?.fields?.stake)
-    return "this event was posted before events were staked, so it stays free: at its end each room's spark is made as its host's draft, which is not the town's canon: none is public unless the host publishes it";
+    return "this event was posted before events were staked, so it stays free and keeps no public sparks of its own here: a spark of it starts as its host's draft, not the town's canon, and once published it is an ordinary spark — look for it in the gallery, by its room or circle";
   if (row.fields.stake.returned && !row.fields.completed) return "its stake came home with its cancellation: no spark is made";
   if (evidence.sparks.length) {
     const over = evidence.rooms.length - EVENT_SPARKS_MAX;
