@@ -81,6 +81,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     console.error(`[event-sparks] --drafts-from ${JSON.stringify(draftsFrom.invalid)} is not one UTC instant (YYYY-MM-DDTHH:MM[:SS]Z) — no free event is due until it is`);
     draftsFrom = null; misconfigured = true;
   }
+  // unset is UNCONFIGURED, not "no free event qualifies": say so every run, so a quiet log is never read as an empty cohort
+  if (draftsFrom == null && !misconfigured)
+    console.error("[event-sparks] free events' drafts are UNCONFIGURED (no --drafts-from / EVENT_DRAFTS_FROM): every free event is held, not found ineligible — the cutoff is set once at deploy (POS-1035/e)");
   const { officeRead } = await import("../src/world2-pen.mjs");
   const { rowOf } = await import("../src/events-store.mjs");
   const now = Date.now();

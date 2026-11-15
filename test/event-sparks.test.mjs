@@ -102,12 +102,26 @@ test("spark_note (v1 read): an empty collection says why — free (the rule only
   assert.equal(S.sparkNoteOf(staked, ev({ sparks: null }), { now }), undefined, "an unread collection's note is the read's own");
 });
 
-test("each room its own spark (Darko 23:10 EST): every room's own frozen frame, naming that one room, in start order, at most 20; confirmed silence ONE on the locked circle; unknown history HELD", () => {
+// World's one-room rule as World #391 states it (tools/spark.mjs § roomsPlace, dcd4d57b): exactly one room's finite, uninverted
+// bounds → midpoint and differences; anything else null. Handed in as the engine would hand its own; it records what it was asked.
+const asked = [];
+const worldRoomsPlace = (bounds) => {
+  asked.push(bounds);
+  if (!Array.isArray(bounds) || bounds.length !== 1) return null;
+  const { x0, y0, x1, y1 } = bounds[0] ?? {};
+  if (![x0, y0, x1, y1].every((v) => typeof v === "number" && Number.isFinite(v)) || x1 < x0 || y1 < y0) return null;
+  return { at: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, extent: { w: x1 - x0, h: y1 - y0 } };
+};
+
+test("each room its own spark (Darko 23:10 EST): each room placed by the WORLD's roomsPlace from its own bounds, naming that one room, in start order, at most 20; confirmed silence ONE on the locked circle; unknown history, a null or no helper HELD", () => {
   const row = { id: "pica/sorbet-night", title: "Sorbet night", body: "sorbet on the counter", place_x: 100, place_y: 200 };
   const window = { from: "2026-11-14T20:00:00.000Z", to: "2026-11-14T22:00:00.000Z" };
   const a = { id: "t1-a", voice_count: 2, extent: { x0: 10, y0: 20, x1: 30, y1: 20, span_m: 20 } };   // a line room
   const b = { id: "t2-b", voice_count: 9, extent: { x0: 55, y0: 18, x1: 61, y1: 26, span_m: 10 } };   // apart from it, and bigger
-  const one = S.sparkDeclarations(row, { rooms: [{ ...a, frame: S.roomFrame(a) }], room_history: "complete", window, present: ["pica-house"] });
+  const opts = { roomsPlace: worldRoomsPlace };
+  asked.length = 0;
+  const one = S.sparkDeclarations(row, { rooms: [{ ...a, frame: S.roomFrame(a) }], room_history: "complete", window, present: ["pica-house"] }, opts);
+  assert.deepEqual(asked, [[{ x0: 10, y0: 20, x1: 30, y1: 20 }]], "World is asked with exactly that one room's absolute bounds");
   assert.equal(one.sparks.length, 1);
   assert.deepEqual([one.sparks[0].at, one.sparks[0].extent], [{ x: 20, y: 20 }, { w: 20, h: 0 }], "the room's own frame: exact midpoint and differences, its zero kept");
   assert.deepEqual(one.sparks[0].properties.rooms, ["t1-a"], "the room, by the page's id — World's strict `rooms`, one id");
@@ -115,21 +129,28 @@ test("each room its own spark (Darko 23:10 EST): every room's own frozen frame, 
   assert.deepEqual(one.sparks[0].properties.present, ["pica-house"]);
   assert.equal(one.sparks[0].properties.recounting, "sorbet on the counter");
   assert.equal(one.sparks[0].properties.event, "pica/sorbet-night");
-  const two = S.sparkDeclarations(row, { rooms: [a, b], room_history: "complete", window, present: [] });
+  const two = S.sparkDeclarations(row, { rooms: [a, b], room_history: "complete", window, present: [] }, opts);
   assert.deepEqual(two.sparks.map((s) => s.properties.rooms), [["t1-a"], ["t2-b"]], "one spark per room, in start order — the bigger is not first");
   assert.deepEqual(two.sparks.map((s) => [s.at, s.extent]), [[{ x: 20, y: 20 }, { w: 20, h: 0 }], [{ x: 58, y: 22 }, { w: 6, h: 8 }]], "each its own room's frame, no union");
   assert.equal("beyond" in two, false);
   const many = Array.from({ length: 22 }, (_, i) => ({ id: `t${i}-r`, extent: { x0: i, y0: 0, x1: i + 1, y1: 1, span_m: 1 } }));
-  const capped = S.sparkDeclarations(row, { rooms: many, room_history: "complete", window, present: [] });
+  const capped = S.sparkDeclarations(row, { rooms: many, room_history: "complete", window, present: [] }, opts);
   assert.equal(capped.sparks.length, 20, "at most 20");
   assert.deepEqual(capped.sparks.map((s) => s.room), many.slice(0, 20).map((r) => r.id), "the first 20 in the natural (start) order — no ranking");
   assert.deepEqual(capped.beyond, ["t20-r", "t21-r"], "the rooms past the cap are named, not dropped silently");
-  const none = S.sparkDeclarations(row, { rooms: [], room_history: "complete", window, present: [] });
+  const none = S.sparkDeclarations(row, { rooms: [], room_history: "complete", window, present: [] }, { roomsPlace: () => assert.fail("no room asks no place") });
   assert.equal(none.sparks.length, 1, "confirmed silence: ONE spark");
   assert.deepEqual([none.sparks[0].at, none.sparks[0].extent], [{ x: 100, y: 200 }, { w: 120, h: 120 }], "the place and the ruled locked circle");
   assert.equal("rooms" in none.sparks[0].properties, false, "standalone: rooms absent");
-  assert.match(S.sparkDeclarations(row, { rooms: [], room_history: "unavailable", window, present: [] }).held, /cannot be told/,
+  assert.match(S.sparkDeclarations(row, { rooms: [], room_history: "unavailable", window, present: [] }, opts).held, /cannot be told/,
     "unknown history is not silence");
+  const inverted = { id: "t3-x", extent: { x0: 5, y0: 5, x1: 1, y1: 5 } };
+  const nulled = S.sparkDeclarations(row, { rooms: [a, inverted], room_history: "complete", window, present: [] }, opts);
+  assert.match(nulled.held, /roomsPlace will not place room t3-x's bounds — a null is not "no room"/, "one null holds the whole collection");
+  assert.equal("sparks" in nulled, false, "never the locked circle for a real room");
+  assert.match(S.sparkDeclarations(row, { rooms: [a], room_history: "complete", window, present: [] }).held, /has no roomsPlace/,
+    "an engine without the World's helper holds: the office computes no place of its own");
+  assert.equal(S.sparkDeclarations(row, { rooms: [], room_history: "complete", window, present: [] }).sparks.length, 1, "silence needs no helper");
 });
 
 test("present: the households with a public act at the place in the window — once each, sorted; nothing without a household or a place", () => {
@@ -486,7 +507,7 @@ async function endedEvent(dir, title, { at = null } = {}) {
   return { row, after: Date.parse(row.ends) + 60_000 };
 }
 const complete = (dir, row, now, opts = {}) => penTransaction(dir, () =>
-  completeEvent(row, { clone: dir, keyPem: keyPem(), env: completionEnv(dir), now, date: townDay(), planLeave, ...opts }));
+  completeEvent(row, { clone: dir, keyPem: keyPem(), env: completionEnv(dir), now, date: townDay(), planLeave, roomsPlace: worldRoomsPlace, ...opts }));
 const claimOf = async (id) => (await owner.query("SELECT class, status, stake, claimant FROM claims WHERE slug = $1", [id])).rows;
 const storeVerifies = async (dir) => verifyStampLinesVia(owner, dir);
 
@@ -654,7 +675,7 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
   const row = await eventRowAtOffice("wright/free-supper", { env: ENV });
   // PROSPECTIVE ONLY (Wright 04:58:48Z): no cutoff configured, none made; a cutoff at or after its end, none made — by its own end
   const calls = plannerCalls.length;
-  assert.match((await complete(dir, row, Date.now(), { edges })).held, /no cutoff .* is configured/);
+  assert.match((await complete(dir, row, Date.now(), { edges })).held, /unconfigured \(no cutoff is set\): held, not found ineligible/);
   assert.match((await complete(dir, row, Date.now(), { edges, draftsFrom: ends })).held, /ended at or before the free events' cutoff/);
   assert.equal(plannerCalls.length, calls, "held before a draft is even planned");
   const { DUE_EVENTS_SQL, draftsCutoffOf } = await import("../deploy/event-sparks-pass.mjs");
@@ -838,6 +859,21 @@ test("the pass: a stamp ledger with lines nobody committed is not touched (exit 
     assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 3);
     assert.equal(await main([], ENV), 2);
   } finally { console.error = quiet; }
+  // the free events' cutoff: unset is said to be UNCONFIGURED (held), never a quiet empty cohort; a malformed one admits none, exit 1
+  const clean = townInABottle();
+  const said = [];
+  const log = console.log;
+  console.error = (s) => said.push(String(s)); console.log = () => {};
+  try {
+    assert.equal(await main(["--town", clean, "--dry-run"], ENV), 0);
+    assert.ok(said.some((s) => /free events' drafts are UNCONFIGURED .* held, not found ineligible/.test(s)), said.join("\n"));
+    said.length = 0;
+    assert.equal(await main(["--town", clean, "--dry-run", "--drafts-from", "yesterday"], ENV), 1);
+    assert.ok(said.some((s) => /--drafts-from "yesterday" is not one UTC instant/.test(s)), said.join("\n"));
+    said.length = 0;
+    assert.equal(await main(["--town", clean, "--dry-run", "--drafts-from", "2026-11-14T14:37:00Z"], ENV), 0);
+    assert.ok(!said.some((s) => /UNCONFIGURED/.test(s)), "a configured cutoff is not unconfigured");
+  } finally { console.error = quiet; console.log = log; }
 });
 
 test("the pass never signs onto a RED ledger: an event due meets its completion's own arrival check and the pass stops (exit 4); a quiet tick runs no verify", async () => {
