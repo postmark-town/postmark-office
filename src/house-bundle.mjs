@@ -573,6 +573,17 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
+  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended and became a spark recounted
+  // from their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: the recorded spark,
+  // until its recounting is rewritten or it is withdrawn). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
+  let recountings;
+  try {
+    const rows = readers.recountingsAwaiting
+      ? await readers.recountingsAwaiting(mine)
+      : await (await import("./event-sparks.mjs")).recountingsAwaitingAtOffice(mine);
+    recountings = { rows: rows ?? [] };
+  } catch { recountings = { rows: [], unavailable: "the house's completed events could not be read, so whether one waits on your recounting is unknown, not none" }; }
+
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
@@ -586,7 +597,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
+  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length + recountings.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -608,7 +619,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     alerts,
     ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable
+    // said only when one waits or the read failed (POS-1035), as takes_awaiting is: every other house's page keeps its shape
+    ...(recountings.rows.length || recountings.unavailable ? { recountings_awaiting: recountings } : {}),
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable && !recountings.unavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

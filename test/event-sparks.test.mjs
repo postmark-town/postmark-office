@@ -205,27 +205,44 @@ test("the host's invitation (POS-1035, ruled): every completed event of theirs w
     [id, `the ${id}`, host, `${host}-house`, new Date(min(atMin - 120)), new Date(min(atMin - 1)),
       JSON.stringify({ doors_open: new Date(min(atMin - 120)).toISOString(), stake: { n: 20, by: host, returned: { act: 1, n: 20, to: host }, backing: { spark, n: 1 } },
         completed: { act: 1, spark, at: new Date(min(atMin)).toISOString() } })]);
-  const markAct = async (action, actor, object, atMin) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, object, payload, at_anchor, at_dx, at_dy)
-    VALUES ($1, 0, $2, $3, 'mark', $4, '{}', 'world', 0, 0)`, [new Date(min(atMin)), actor, action, object]);
-  await done("hosty/tea", "hosty", "hosty/tea", 1000);
-  await done("hosty/supper", "hosty", "hosty/supper", 2000);
-  await done("hosty/brunch", "hosty", "hosty/brunch", 3000);
-  await done("other/fair", "other", "other/fair", 2500);
-  await markAct("amend", "hosty", "hosty/tea", 900);          // an amend BEFORE the completion answers nothing
-  await markAct("amend", "hosty", "hosty/supper", 2100);      // rewritten after it: answered
-  await markAct("withdraw", "hosty", "hosty/brunch", 3100);   // withdrawn: nothing left to write
+  const markAct = async (action, actor, object, atMin, payload = {}) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, object, payload, at_anchor, at_dx, at_dy)
+    VALUES ($1, 0, $2, $3, 'mark', $4, $5, 'world', 0, 0)`, [new Date(min(atMin)), actor, action, object, JSON.stringify(payload)]);
+  // each completion's own leave act: the spark as made, recounted from the invitation
+  const made = (spark, atMin) => markAct("leave-mark", spark.split("/")[0], spark, atMin, { kind: "spark", body: `the ${spark}`, recounting: "come for sorbet" });
+  await done("hosty/tea", "hosty", "hosty/tea", 1000); await made("hosty/tea", 1000);
+  await done("hosty/supper", "hosty", "hosty/supper", 2000); await made("hosty/supper", 2000);
+  await done("hosty/brunch", "hosty", "hosty/brunch", 3000); await made("hosty/brunch", 3000);
+  await done("hosty/picnic", "hosty", "hosty/picnic", 3500); await made("hosty/picnic", 3500);
+  await done("other/fair", "other", "other/fair", 2500); await made("other/fair", 2500);
+  await markAct("amend", "hosty", "hosty/tea", 900, { body: "Tea", recounting: "we drank it all" });        // BEFORE the completion: answers nothing
+  await markAct("amend", "hosty", "hosty/supper", 2100, { body: "Supper", recounting: "nine came, the soup ran out" }); // the recounting rewritten: answered
+  await markAct("withdraw", "hosty", "hosty/brunch", 3100);                                                 // withdrawn: nothing left to write
+  await markAct("amend", "hosty", "hosty/picnic", 3600, { body: "A better headline", recounting: "come for sorbet" }); // the headline alone: NOT an answer
 
   const rows = await S.recountingsAwaitingVia(owner, ["hosty"]);
-  assert.deepEqual(rows.map((r) => r.event), ["hosty/tea"], "only the event whose spark the host has not since rewritten or withdrawn — never another host's");
-  const [tea] = rows;
+  assert.deepEqual(rows.map((r) => r.event), ["hosty/picnic", "hosty/tea"],
+    "waiting: the spark whose headline alone was amended, and the one amended only before its completion — never another host's");
+  const tea = rows.find((r) => r.event === "hosty/tea");
   assert.equal(tea.spark, "hosty/tea");
   assert.match(tea.cause, /became the spark hosty\/tea; its recounting is your invitation's words \(or its title\) — write what actually happened/);
   assert.match(tea.act, /^world_leave_mark \{ slug: "tea", amend: true, … \}.*recounting/);
-  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty", "other"])).map((r) => r.event), ["other/fair", "hosty/tea"], "newest completion first, every host asked");
+  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty", "other"])).map((r) => r.event), ["hosty/picnic", "other/fair", "hosty/tea"], "newest completion first, every host asked");
   assert.deepEqual(await S.recountingsAwaitingVia(owner, ["nobody"]), []);
   assert.deepEqual(await S.recountingsAwaitingVia(owner, []), [], "no residents, no read");
-  await markAct("amend", "hosty", "hosty/tea", 1100);
-  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["hosty"]), [], "the host wrote it: the invitation is answered");
+  await markAct("amend", "hosty", "hosty/tea", 1100, { body: "Tea" });                       // an amend that carries no recounting at all
+  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty"])).map((r) => r.event), ["hosty/picnic", "hosty/tea"], "no recounting written: still asked");
+  await markAct("amend", "hosty", "hosty/tea", 1200, { body: "Tea", recounting: "twelve came; the pot went round twice" });
+  await markAct("amend", "hosty", "hosty/picnic", 3700, { body: "A better headline", recounting: "rain, then sun, then sorbet" });
+  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["hosty"]), [], "the host wrote what happened: every invitation answered");
+  // an office pointed at no record cannot establish the list: it throws (NoRecordError), and needs-you says unknown — never an
+  // empty answer from a missing store (Rivet 03:56Z). A fresh process: this one's pen has its pool already.
+  const { spawnSync: run } = await import("node:child_process");
+  const probe = run(process.execPath, ["--input-type=module", "-e",
+    `const S = await import(${JSON.stringify(new URL("../src/event-sparks.mjs", import.meta.url).href)});
+     try { console.log("ROWS", JSON.stringify(await S.recountingsAwaitingAtOffice(["other"]))); } catch (e) { console.log("THREW", e?.name); }
+     process.exit(0);`],
+    { encoding: "utf8", env: { ...process.env, WORLD2_PG: "", WORLD2_PG_URL: "" } });
+  assert.match(probe.stdout, /THREW NoRecordError/, `${probe.stdout}${probe.stderr}`);
 });
 
 // ── THE HOSTING STAKE, on disposable fixtures: a town in a bottle (its own engine, ledger and key) and this store ──

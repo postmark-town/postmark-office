@@ -452,15 +452,23 @@ export function recountingOf(row) {
 // host is clearly asked to write what happened. The ask rides the house's private needs-you list (house-bundle § needsYou), which
 // the doorstep's YOU reads — no new delivery service, queue or notice of its own. It reads only what the completion recorded
 // (`fields.completed.spark`) and creates, selects or moves nothing. It stands from the successful completion until the host
-// rewrites that spark (an `amend` act on it after the completion) or withdraws it; the doorstep's cursor already hides an
-// unchanged line on a `since` read.
+// REWRITES THE RECOUNTING — an `amend` of that spark after the completion whose recounting differs from the one the completion
+// wrote (its own leave act's) — or the spark is withdrawn. An amendment of the headline or the place alone is not writing what
+// happened, so it does not end the ask (Rivet, POS-1035-host-notice-settled). Amending stays the spark's author's alone, as it
+// is everywhere: nothing here grants a host or a default any right over a spark. The doorstep's cursor hides an unchanged line.
 export const RECOUNTINGS_AWAITING_MAX = 20;
 export const RECOUNTINGS_AWAITING_SQL = `SELECT p.id, p.title, p.fields->'completed'->>'spark' AS spark, p.fields->'completed'->>'at' AS completed_at,
     p.fields->'stake'->>'by' AS host
   FROM posts p
   WHERE p.class = 'event' AND p.fields ? 'completed' AND p.fields->'stake'->>'by' = ANY($1)
     AND NOT EXISTS (SELECT 1 FROM acts a WHERE a.object = p.fields->'completed'->>'spark' AND a.class = 'mark'
-                      AND a.action IN ('amend', 'withdraw') AND a.at > (p.fields->'completed'->>'at')::timestamptz)
+                      AND a.at > (p.fields->'completed'->>'at')::timestamptz
+                      AND (a.action = 'withdraw'
+                        OR (a.action = 'amend' AND a.payload->>'recounting' IS NOT NULL
+                            AND a.payload->>'recounting' IS DISTINCT FROM (
+                              SELECT l.payload->>'recounting' FROM acts l
+                               WHERE l.object = p.fields->'completed'->>'spark' AND l.class = 'mark' AND l.action = 'leave-mark'
+                               ORDER BY l.at, l.id LIMIT 1))))
   ORDER BY (p.fields->'completed'->>'at') DESC, p.id
   LIMIT ${RECOUNTINGS_AWAITING_MAX}`;
 
@@ -482,7 +490,11 @@ export async function recountingsAwaitingVia(q, handles) {
   return rows.map(recountingInvitation);
 }
 
-/** The same, through the office's own read pen (house-bundle § needsYou's default reader). */
+/**
+ * The same, through the office's own read pen (house-bundle § needsYou's default reader). Every failure is thrown — an office
+ * pointed at no record included (NoRecordError: the events live only there, so the list cannot be established; that is unknown,
+ * not empty, Rivet 03:56Z) — and the caller says the list is unknown, never empty. Known empty is a successful empty read.
+ */
 export async function recountingsAwaitingAtOffice(handles, { env = process.env } = {}) {
   const pen = await import("./world2-pen.mjs");
   return pen.officeRead((q) => recountingsAwaitingVia(q, handles), { env });
