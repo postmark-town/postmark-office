@@ -438,12 +438,54 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
 //       FOR UPDATE: never twice), and LAST the ledger's landing (stamp-lines § landPlannedVia). A ledger that moved, an id taken
 //       meanwhile or an event that moved answers `moved`, and penTransaction puts the signed lines back.
 
-/** The spark's recounting, from the event's own words. ⚑ The mapping is Wright's Call (POS-1035-completion-seam-response § 1): the
- *  recommended reading is the invitation verbatim, sourced as the event's original words, with the title when there is none —
- *  never words written for the host. It stands in this one function so the ruling replaces it here and nowhere else. */
+/** The spark's recounting, from the event's own words — RULED (POS-1035/a, Wright 21:55/21:57Z): the invitation verbatim, with the
+ *  title when there is none; never words written for the host. The host is then invited to write what happened (§ THE HOST'S
+ *  INVITATION below), through the ordinary amend. */
 export function recountingOf(row) {
   const body = String(row?.body ?? "").trim();
   return body || String(row?.title ?? "").trim();
+}
+
+// ── THE HOST'S INVITATION TO WRITE WHAT HAPPENED (POS-1035, ruled 21:55/21:57Z; route settled by Rivet on the issue) ─────────
+//
+// An event's automatic spark is recounted from the host's invitation (or its title), never from words written for them, so the
+// host is clearly asked to write what happened. The ask rides the house's private needs-you list (house-bundle § needsYou), which
+// the doorstep's YOU reads — no new delivery service, queue or notice of its own. It reads only what the completion recorded
+// (`fields.completed.spark`) and creates, selects or moves nothing. It stands from the successful completion until the host
+// rewrites that spark (an `amend` act on it after the completion) or withdraws it; the doorstep's cursor already hides an
+// unchanged line on a `since` read.
+export const RECOUNTINGS_AWAITING_MAX = 20;
+export const RECOUNTINGS_AWAITING_SQL = `SELECT p.id, p.title, p.fields->'completed'->>'spark' AS spark, p.fields->'completed'->>'at' AS completed_at,
+    p.fields->'stake'->>'by' AS host
+  FROM posts p
+  WHERE p.class = 'event' AND p.fields ? 'completed' AND p.fields->'stake'->>'by' = ANY($1)
+    AND NOT EXISTS (SELECT 1 FROM acts a WHERE a.object = p.fields->'completed'->>'spark' AND a.class = 'mark'
+                      AND a.action IN ('amend', 'withdraw') AND a.at > (p.fields->'completed'->>'at')::timestamptz)
+  ORDER BY (p.fields->'completed'->>'at') DESC, p.id
+  LIMIT ${RECOUNTINGS_AWAITING_MAX}`;
+
+/** One invitation, in the needs-you list's own shape: what it is, why it waits on you, and the act that answers it. */
+export function recountingInvitation(r) {
+  const slug = String(r.spark).split("/").slice(1).join("/");
+  return {
+    event: r.id, title: r.title ?? null, spark: r.spark, host: r.host, completed_at: r.completed_at,
+    cause: `your event "${r.title ?? r.id}" ended and became the spark ${r.spark}; its recounting is your invitation's words (or its title) — write what actually happened`,
+    act: `world_leave_mark { slug: "${slug}", amend: true, … } — the spark as it stands, with properties: { recounting: "<what happened>" }`,
+  };
+}
+
+/** The invitations waiting on these residents (`handles`, the hosts), newest completion first. `q` is a client or pool. */
+export async function recountingsAwaitingVia(q, handles) {
+  const list = [...(handles ?? [])].map(String);
+  if (!list.length) return [];
+  const { rows } = await q.query(RECOUNTINGS_AWAITING_SQL, [list]);
+  return rows.map(recountingInvitation);
+}
+
+/** The same, through the office's own read pen (house-bundle § needsYou's default reader). */
+export async function recountingsAwaitingAtOffice(handles, { env = process.env } = {}) {
+  const pen = await import("./world2-pen.mjs");
+  return pen.officeRead((q) => recountingsAwaitingVia(q, handles), { env });
 }
 
 /**

@@ -199,6 +199,35 @@ test("the lasting list: every ended event past the calendar's week, newest end f
   await assert.rejects(calendarAtOffice({ past: true, event: "pica/tie-a" }, { now: NOW, env: ENV }), /past lists events/);
 });
 
+test("the host's invitation (POS-1035, ruled): every completed event of theirs whose spark they have not rewritten waits, named with its spark and the act that answers it — until they amend or withdraw that spark", async () => {
+  const done = async (id, host, spark, atMin) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', $2, '', $3, $4, NULL, 0, 0, $5, $6, 'announced', $7, 0, 1, 1)`,
+    [id, `the ${id}`, host, `${host}-house`, new Date(min(atMin - 120)), new Date(min(atMin - 1)),
+      JSON.stringify({ doors_open: new Date(min(atMin - 120)).toISOString(), stake: { n: 20, by: host, returned: { act: 1, n: 20, to: host }, backing: { spark, n: 1 } },
+        completed: { act: 1, spark, at: new Date(min(atMin)).toISOString() } })]);
+  const markAct = async (action, actor, object, atMin) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, object, payload, at_anchor, at_dx, at_dy)
+    VALUES ($1, 0, $2, $3, 'mark', $4, '{}', 'world', 0, 0)`, [new Date(min(atMin)), actor, action, object]);
+  await done("hosty/tea", "hosty", "hosty/tea", 1000);
+  await done("hosty/supper", "hosty", "hosty/supper", 2000);
+  await done("hosty/brunch", "hosty", "hosty/brunch", 3000);
+  await done("other/fair", "other", "other/fair", 2500);
+  await markAct("amend", "hosty", "hosty/tea", 900);          // an amend BEFORE the completion answers nothing
+  await markAct("amend", "hosty", "hosty/supper", 2100);      // rewritten after it: answered
+  await markAct("withdraw", "hosty", "hosty/brunch", 3100);   // withdrawn: nothing left to write
+
+  const rows = await S.recountingsAwaitingVia(owner, ["hosty"]);
+  assert.deepEqual(rows.map((r) => r.event), ["hosty/tea"], "only the event whose spark the host has not since rewritten or withdrawn — never another host's");
+  const [tea] = rows;
+  assert.equal(tea.spark, "hosty/tea");
+  assert.match(tea.cause, /became the spark hosty\/tea; its recounting is your invitation's words \(or its title\) — write what actually happened/);
+  assert.match(tea.act, /^world_leave_mark \{ slug: "tea", amend: true, … \}.*recounting/);
+  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty", "other"])).map((r) => r.event), ["other/fair", "hosty/tea"], "newest completion first, every host asked");
+  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["nobody"]), []);
+  assert.deepEqual(await S.recountingsAwaitingVia(owner, []), [], "no residents, no read");
+  await markAct("amend", "hosty", "hosty/tea", 1100);
+  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["hosty"]), [], "the host wrote it: the invitation is answered");
+});
+
 // ── THE HOSTING STAKE, on disposable fixtures: a town in a bottle (its own engine, ledger and key) and this store ──
 //
 // Money proof (the brief): an insufficient balance writes nothing; a cancellation returns the whole stake once and a second cannot

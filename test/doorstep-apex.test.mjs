@@ -187,6 +187,21 @@ test("WLD-51 — YOU's at-risk line states the snapshot it was read from, and ke
   assert.equal(youPart({ unread: 0, needs: { stakes_at_risk: { rows: [] } } }).some((i) => i.from === "household.stakes"), false, "no risk, no line, so no frame to state");
 });
 
+// ── POS-1035 · the host is asked to write what happened ─────────────────────
+
+test("POS-1035 — YOU asks the host to write the recounting of an event that became a spark, from needs-you; a new completion is a new line past the cursor", async () => {
+  const { youPart, digestOf } = await import("../src/doorstep-apex.mjs");
+  const line = (rows) => youPart({ unread: 0, needs: { recountings_awaiting: { rows } } }).filter((i) => /became a spark/.test(i.what));
+  const one = line([{ event: "wright/sorbet-night", spark: "wright/sorbet-night" }]);
+  assert.deepEqual(one, [{ what: "1 event of yours became a spark — write what happened, its recounting: wright/sorbet-night", from: "household.needs-you" }]);
+  const two = line([{ event: "wright/tea", spark: "wright/tea" }, { event: "wright/sorbet-night", spark: "wright/sorbet-night" }]);
+  assert.match(two[0].what, /^2 events of yours became a spark — .*wright\/tea, wright\/sorbet-night$/);
+  assert.notEqual(digestOf(two[0]), digestOf(one[0]), "a new spark changes the line, so a since: read shows it again");
+  assert.equal(digestOf(line([{ spark: "wright/sorbet-night" }])[0]), digestOf(one[0]), "an unchanged ask is the same line: the cursor hides it");
+  assert.deepEqual(line([]), [], "nothing waiting, no line");
+  assert.deepEqual(line(undefined), [], "a needs-you without the list (an older office), no line");
+});
+
 // ── POS-806 · the first-visit line points at FIRST-DAY.md ────────────────────
 
 test("POS-806 — while arriving steps remain, YOU carries one line pointing at the first-day walk; with none left it is gone", async () => {

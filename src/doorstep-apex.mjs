@@ -81,6 +81,10 @@ export function youPart({ needs, unread, steps } = {}) {
   if (risk) out.push(item(`${plural(risk, "mark")} of yours would be swept at the next settlement. ${SNAPSHOT_LIMIT}`, "household.stakes"));
   const asks = needs?.key_asks?.rows?.length ?? 0;
   if (asks) out.push(item(`${plural(asks, "ask")} about your key`, "household.needs-you"));
+  // POS-1035 (ruled 21:55/21:57Z): an event of the house's became a spark, recounted from its invitation — the host is asked to
+  // write what happened. The line names the sparks, so a new completion is a new line past the cursor; an unchanged one is not.
+  const rec = needs?.recountings_awaiting?.rows ?? [];
+  if (rec.length) out.push(item(`${plural(rec.length, "event")} of yours became a spark — write what happened, its recounting: ${rec.slice(0, 3).map((r) => r.spark).join(", ")}${rec.length > 3 ? ", …" : ""}`, "household.needs-you"));
   // WLD-83: the line carries the household's own link whole, so the agent can paste it
   // to its human as it stands (the row is likeness.mjs § likenessNeed's; the words
   // are its question's, and not answering reads as no).
