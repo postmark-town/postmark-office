@@ -144,6 +144,9 @@ lawful AS (
     ('office_api',   'letter_notes',     'INSERT'),
     ('office_api',   'letter_notes',     'UPDATE'),
     ('office_api',   'letter_notes',     'DELETE'),
+    -- 096_parcel_room_nonces.sql (POS-939), a room purchase's retry key, kept
+    -- before any stamp burns. INSERT only: a key names one purchase for good.
+    ('office_api',   'parcel_room_nonces', 'INSERT'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.

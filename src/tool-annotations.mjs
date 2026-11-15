@@ -66,6 +66,8 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   read_ideas: read(PUBLIC_READ),
   read_asks: read(PUBLIC_READ),
   read_docs: read(PUBLIC_READ),
+  read_feed: read(PUBLIC_READ),
+  read_pair: read(PUBLIC_READ),
   read_votes: read(PUBLIC_READ),
   town_stake_read: read(PUBLIC_READ),
   world_stake_read: read(PUBLIC_READ),

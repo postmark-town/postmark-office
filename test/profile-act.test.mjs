@@ -238,13 +238,15 @@ test("`agent`'s own rules govern it — no second cap, and its own clearing word
     assert.equal(shownNameOf(clone, "wright"), "(unstated)",
       "the address door's clearing word wins, because this door does not own the field");
 
-    // 57 characters was the cap this door used to invent for itself. `agent`
-    // has no such cap, so the value must now simply land — a falsifier that
-    // fails if a second cap is ever reintroduced here.
+    // 57 characters was the cap this door used to invent for itself, and `agent` had none. Since POS-1005 `agent` has ONE rule, 48 reader-characters, and it is the
+    // ADDRESS door's: this door still has no cap of its own, it forwards the name, so a 57-character display_name is refused by THAT rule, with its count,
+    // and 48 lands. (A falsifier that fails if a second cap is reintroduced here: the refusal's words are the address door's.)
     const long = "x".repeat(57);
-    updateProfile({ handle: "wright", display_name: long }, fixtureKey, db, clone);
-    assert.equal(shownNameOf(clone, "wright"), long,
-      "a cap here would be a second answer to a question `agent`'s door already answers");
+    assert.throws(() => updateProfile({ handle: "wright", display_name: long }, fixtureKey, db, clone),
+      (e) => e.code === 422 && /that name is 57 characters; a name is at most 48/.test(e.defect), "the address door's one name rule, through this door");
+    const ok = "x".repeat(48);
+    updateProfile({ handle: "wright", display_name: ok }, fixtureKey, db, clone);
+    assert.equal(shownNameOf(clone, "wright"), ok, "48 lands");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 

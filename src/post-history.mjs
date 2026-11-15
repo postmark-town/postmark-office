@@ -31,6 +31,7 @@ import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP, ACT_CLOSE, ACT_HOST, ACT
 import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs";
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
+import { BALLOT_CLASS } from "./ballots.mjs";
 
 /** The text `unavailable` carries when the store holds no stamp chain to read. */
 export const NO_CHAIN = "the store holds no stamp chain yet (stamp_lines), so every history row's stamps_paid is null";
@@ -102,7 +103,25 @@ export const HISTORY_ACTIONS = Object.freeze({
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),
+  [BALLOT_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_CLOSE]),   // POS-983: submissions → staking → closed
 });
+
+/**
+ * A ballot's history, PURE (POS-983): the post, the advance to staking and
+ * the close, each `{ stage, at, hand }`: the state the act left it in, and the
+ * town's hand that moved it (the pen's acts always name one).
+ */
+export function ballotHistoryOf(acts) {
+  const out = new Map();
+  for (const a of acts) {
+    const p = payloadOf(a);
+    const stage = a.action === ACT_ADVANCE ? p.to : p.state;
+    if (!stage) continue;
+    const post = String(a.object);
+    out.set(post, [...(out.get(post) ?? []), { stage, at: new Date(a.at).toISOString(), hand: p.hand ?? a.actor ?? null }]);
+  }
+  return out;
+}
 
 const payloadOf = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
 
@@ -143,5 +162,6 @@ export async function postHistoryVia(client, cls, ids) {
   const { paid, unavailable } = pays ? await postPaymentsVia(client) : { paid: null, unavailable: null };
   if (cls === BUG_CLASS) return { byPost: bugHistoryOf(acts, paid ?? new Map()), awardsByPost: null, unavailable };
   if (cls === IDEA_CLASS) return { byPost: ideaHistoryOf(acts), awardsByPost: ideaAwardsOf(acts, paid), unavailable };
+  if (cls === BALLOT_CLASS) return { byPost: ballotHistoryOf(acts), awardsByPost: null, unavailable: null };
   return { byPost: plainHistoryOf(cls, acts), awardsByPost: null, unavailable: null };
 }

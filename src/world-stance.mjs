@@ -90,9 +90,9 @@ import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mj
 // the office learns "pool" once per table — see world2-acts.mjs § THE STANCE
 // READ'S OWN CREDENTIAL.
 import { stanceQuery } from "./world2-acts.mjs";
-import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
+import { importEngineAt, mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import {
-  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
+  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstCover, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
   lawMarksAt, lawShaFor, onCurrentVersion, readVersions,
 } from "./town-stance.mjs";
 import { join } from "node:path";
@@ -174,6 +174,49 @@ const TEACH_CACHE = new Map();
 /** Markdown emphasis stripped, whitespace folded — the sentence as a reader hears it. */
 const plain = (s) => s.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
 
+// ── THE QUOTE BOUND (CORE-95; Wright, CORE-88 settlement: "The unbounded quote in responseFunctionSays is upstream of this read") ──
+//
+// The anchors slice a sentence out of a file a World PR can rewrite, so a quote's length is the file's, not this door's. Each quote
+// `responseFunctionSays` returns (opposed, neutral_and_revisable, any_latency; the third is the one `stanceTeach`'s unruled text reuses)
+// is therefore bounded HERE, at its producer: JSON-encoded as a value (JSON.stringify of the string, its quotes and escapes counted) it
+// is at most RESPONSE_QUOTE_MAX_BYTES of UTF-8, marker included. A quote that fits is returned verbatim. One that does not keeps a
+// whole-character prefix and a plain marker, so a cut prefix is never passed off as the full law: it counts the quote's UTF-8 bytes it
+// removed and names the file.
+//
+// THE NUMBER IS SIZED SO THE USUAL TEACHING ANSWER FITS THE CONNECTOR (Wright, CORE-95 fit, 2026-11-14 16:18Z: "size the per-quote
+// bound so a teaching answer with its usual number of quotes plus its own fields stays under 10,000"). The answer the consumer sends
+// (`household { read: "stances", part: "teach" }`: {read, part, law, teach}, as household-read-page.mjs teachPage builds it and mcp.mjs
+// § contentFor serialises it, JSON.stringify(…, null, 1) in UTF-8) carries FOUR copies of a producer quote: `what_opposed_does`,
+// `until_you_speak`, `any_latency`, and `any_latency` again inside the unruled text. Everything else in it (the envelope, the law
+// line, `from`, the late-welcome body twice (`the_law_reaches` and inside `unruled`), the unruled text's own words, the marks and the
+// nested-quote escapes) measured 2,223 bytes in a PRINTABLE STRESS CASE: a late-welcome body of 150 four-byte characters, which is a
+// stress figure chosen for the measurement, not a limit the record enforces. CAP_BYTES 10,000 - 2,223 = 7,777 over 4 copies = 1,944
+// per quote; the constant is 1,900. 4 x 1,900 + 2,223 = 9,823 is that measured stress-case allocation for the usual teaching answer
+// (177 bytes under the cap), NOT an invariant. What this does NOT bound: the late-welcome body is a kind property and the mark lint
+// exempts it from the 150-character cap, so it is uncapped here; and a JSON control character costs up to 6 bytes, so a body or quote
+// of such characters costs more than the printable figure. Growth in that property, a fifth quote copy or a longer field would need
+// the number re-derived. A live quote is a sentence or two (about 200 bytes), so normal teaching is far under it and verbatim. It
+// bounds each producer quote; test/world-stance.test.mjs asserts the whole answer for the stress case.
+export const RESPONSE_QUOTE_MAX_BYTES = 1900;
+const jsonBytes = (s) => Buffer.byteLength(JSON.stringify(s), "utf8");
+const cutMarker = (removedBytes) => ` [cut: ${removedBytes} bytes of this quote are not shown; the whole text is in ${RESPONSE_FUNCTION_FILE.replace(/\\/g, "/")} in the World checkout]`;
+
+/** `quote` verbatim when it fits RESPONSE_QUOTE_MAX_BYTES as a JSON value; otherwise its longest whole-character prefix plus `cutMarker`, still within it. */
+export function boundQuote(quote, max = RESPONSE_QUOTE_MAX_BYTES) {
+  if (jsonBytes(quote) <= max) return quote;
+  const chars = Array.from(quote);                                   // code points: a cut never lands inside a character (or a surrogate pair)
+  const total = Buffer.byteLength(quote, "utf8");
+  const fits = (n) => {
+    const head = chars.slice(0, n).join("");
+    return jsonBytes(head + cutMarker(total - Buffer.byteLength(head, "utf8"))) <= max;
+  };
+  let lo = 0, hi = chars.length;                                      // the largest n that fits; n = 0 is the marker alone
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fits(mid)) lo = mid; else hi = mid - 1; }
+  while (lo > 0 && !fits(lo)) lo -= 1;                                // the marker's digits can shrink as the prefix grows: settle on a size that holds
+  const head = chars.slice(0, lo).join("");
+  return head + cutMarker(total - Buffer.byteLength(head, "utf8"));
+}
+
 /**
  * The response function's own two sentences, sliced out of the file at `repo`.
  *
@@ -181,6 +224,14 @@ const plain = (s) => s.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
  * the file moves, is rewritten, or loses an anchor, this says so and the door
  * teaches one sentence less. That is strictly better than teaching a sentence
  * the record no longer contains.
+ *
+ * THE BOUND (CORE-95): every quote returned here (`what_opposed_does`,
+ * `until_you_speak`, `any_latency`) is at most RESPONSE_QUOTE_MAX_BYTES (1,900,
+ * sized so the usual teaching answer stays under 10,000; see the derivation
+ * at the constant) UTF-8 bytes
+ * JSON-encoded as a value, marker included. A longer one is cut at a
+ * whole character and ends in a plain marker saying how many bytes were cut and
+ * that the whole text is in LOGOS/the-response-function.md (`boundQuote`).
  */
 export function responseFunctionSays(repo = WORLD_CLONE) {
   const path = join(repo, RESPONSE_FUNCTION_FILE);
@@ -203,7 +254,7 @@ export function responseFunctionSays(repo = WORLD_CLONE) {
     if (end < 0) { missing.push(a.key); continue; }
     // The line-terminated anchor stops AT the break; the sentence-terminated one
     // keeps the sentence that ends it.
-    found[a.key] = plain(text.slice(start, a.to === "\n" ? end : end + a.to.length));
+    found[a.key] = boundQuote(plain(text.slice(start, a.to === "\n" ? end : end + a.to.length)));   // CORE-95: bounded here, for all three quotes
   }
   const out = missing.length === RESPONSE_ANCHORS.length
     ? { unresolved: `${RESPONSE_FUNCTION_FILE.replace(/\\/g, "/")} no longer carries the sentences this door quotes (${missing.join(", ")}) — it was rewritten, and this door will not paraphrase what it can no longer read` }
@@ -657,15 +708,44 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // not yet cleared) keeps its own date, as before.
   const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
   if (laid.unreachable) return { unreachable: laid.unreachable };
-  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
-  const firstLaid = new Map();
+  const { firstClaimInstant, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
   for (const r of laid.rows ?? []) {
-    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
-    if (!r?.slug || !Number.isFinite(at)) continue;
+    if (!r?.slug) continue;
     const id = String(r.slug);
-    if (!firstLaid.has(id) || at < firstLaid.get(id)) firstLaid.set(id, at);
+    if (!chainOf.has(id)) chainOf.set(id, []);
+    chainOf.get(id).push({ id: r.id, geometry: r.geometry ?? null, decided_at: r.decided_at ?? null });
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (!firstLaid.has(id) || at < firstLaid.get(id)) { firstLaid.set(id, at); originOf.set(id, r.id); }
   }
-  const elder = elderByFirstLaid(firstLaid);
+  // AND ON THE CELLS TWO MARKS SHARE (POS-571). The fold reads seniority cell by
+  // cell wherever a mark's footprints say which of its cells are new (world
+  // consent.mjs § seniorAtContact: "an expansion is a newcomer on its new
+  // cells"), so the door asks the same blessed engine the same question, of the
+  // same claims it already reads: the footprints from the earliest locked claim
+  // on, through the canon shape the door is judging (`mark-render.mjs §
+  // footprintsThroughShape`), so an amend locked but not yet crossed neither drops
+  // the history canon's fold read nor adds what it has not (P3). They and the
+  // instants stay in this closure: `elder` hands `awaitingOf` a yes or no, and
+  // no date or footprint joins a candidate. An engine that cannot answer per
+  // cell (one older than the rule, or one that cannot be read) leaves the
+  // whole-mark order, which is what its own fold reads too.
+  let firstCoverOrder = null;
+  try { firstCoverOrder = (await importEngineAt(repo, "consent.mjs")).firstCoverOrder ?? null; } catch { firstCoverOrder = null; }
+  const records = new Map();
+  const recordOf = (m) => {
+    const id = String(m?.id ?? "");
+    if (records.has(id)) return records.get(id);
+    const at = firstLaid.get(id);
+    const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
+    const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
+    const rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
+      date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
+    records.set(id, rec);
+    return rec;
+  };
+  const elder = elderByFirstCover({ firstCoverOrder, recordOf, wholeMark: elderByFirstLaid(firstLaid) });
 
   // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
   // own test, the same one world.mjs uses for an act's anchor (held.mjs §
@@ -678,13 +758,17 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   return { marks, householdOf, elder, isThing };
 }
 
-// The first-laid read, on the one table `stance_reader` holds. Three columns,
+// The first-laid read, on the one table `stance_reader` holds. Six columns,
 // none of them a body, only claims that stood, and its rows never leave
-// `worldForStances`.
+// `worldForStances`. The id, the geometry and the decision instant are the
+// footprints' (POS-571): when each locked version took effect, and where.
 const FIRST_LAID_SELECT = `
   SELECT slug,
+         id,
          data ->> 'date' AS laid_date,
-         submitted_at
+         submitted_at,
+         decided_at,
+         geometry
     FROM claims
    WHERE slug = ANY($1) AND status = 'locked'`;
 

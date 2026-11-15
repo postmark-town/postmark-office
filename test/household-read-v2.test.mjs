@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
-  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS } from "../src/household-read-v2.mjs";
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS, FIRST_STEPS_NOTE, FIRST_STEPS_NAMING_NOTE } from "../src/household-read-v2.mjs";
 import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -192,7 +192,7 @@ test("D1 · every can act names every field it takes, grouped by intent", async 
     assert.ok(text.includes(actFields(act)), `${act} rides with its fields`);
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
-  assert.equal(actFields("send"), "send { from, to, title, body, thread? }");
+  assert.equal(actFields("send"), "send { from, to, title, body, thread?, resend? }");   // POS-1027: resend?, the bounced letter this one replaces
   // profile's fields are read from their one owner (edit.mjs § PROFILE_FIELD_DOC), pronouns included (#677)
   const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
   assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
@@ -307,7 +307,9 @@ test("closer · pairs with everyone outside the house, a multi-recipient letter 
   const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
   const rows = closerRows(letters, { mine: HOUSE9, houseOf, mints: new Map([["l1", 1], ["l2", 1], ["l4", 1]]), milestones: new Map([["damaris", [{ by: "wright", rung: 1 }]]]) });
   assert.deepEqual(rows.map((r) => [r.with, r.of, r.letters]), [["damaris", "Mayflower", 2], ["isabella-cognita", "Casa Cognita", 1], ["kai", "Kai's House", 1]]);
-  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "milestones", "stamps_between", "last_at"]);
+  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "house_members", "milestones", "stamps_between", "last_at"]);
+  // POS-1027: which of the house's residents wrote with each correspondent (a pair read's `a`)
+  assert.deepEqual(rows.map((r) => [r.with, r.house_members]), [["damaris", ["rei", "wright"]], ["isabella-cognita", ["mari"]], ["kai", ["mari"]]]);
   assert.equal(rows[0].stamps_between, 2);
   assert.equal(rows[0].last_at, "2026-10-19T12:06:00.000Z");
   assert.ok(!rows.some((r) => "says" in r), "D6: no says");
@@ -325,8 +327,8 @@ test("went and mints · read by the ledger's own grammar: a giver of ours is wen
     { canonical: "- 2026-10-19 · damaris → stake:world-mark/x/y · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
   ];
   assert.deepEqual(wentRows(lines, HOUSE9), [
-    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, via: "api" },
-    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, for: "correction:abc" },
+    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, kind: "mark", via: "api" },   // POS-1027: each row gains its kind
+    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, kind: "burn", for: "correction:abc" },
   ]);
   assert.deepEqual([...mintsByLetter(lines, HOUSE9)], [["augie-2026-10-19-to-mari-the-view", 1]]);
 });
@@ -355,7 +357,8 @@ test("happened · D4: hand and for from what the record knows; a route never rec
 // the four mail-parity acts join can.write (amend-letter { id, body } · withdraw-letter { id } · block { household }
 // · unblock { household }) and put the full stack at 6,784, 64 over 6,720.
 const FULL_BUDGET = 6848;
-test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
+// The every-block fixture, built once for the H2 test below and POS-947/c's.
+function fullStarforge() {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
   // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)
   const stream = (by, over, n, body) => Array.from({ length: n }, (_, i) => ({ mark: `${by}/a-mark-of-theirs-${String(i).padStart(2, "0")}`, by, kind: "sited",
@@ -370,6 +373,10 @@ test("H2 with every block · Starforge's glance with closer and happened stays b
     action: "leave-mark", object: `${STARFORGE[i % STARFORGE.length]}/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
   happened[1] = happenedRow({ at: new Date(NOW - 3_600_000).toISOString(), actor: "rei", hand: "human", for_handle: "rei", route: "site", action: "home", object: "rei/home" }, { houseName: "Starforge" });
   const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
+  return { p, closer, happened, went };
+}
+test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
+  const { p, closer, happened, went } = fullStarforge();
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
   t.diagnostic(`Starforge, every block: ${served(g)} characters (${Object.entries(g).map(([k, v]) => `${k} ${served(v)}`).join(", ")})`);
   assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
@@ -681,3 +688,42 @@ test("WLD-51 · the exact risk row reaches the glance's marks block at two at-ri
     assert.ok(served(g) <= PART1_BUDGET, `${name} is ${served(g)} characters as served`);
   }
 });
+
+// ── POS-947/c · the naming, a one-off in first_steps (Darko 2026-11-08; Wright 19:33Z, corrected 19:34Z) ─────────
+//
+// "acts should be reserved for always-relevant verbs; not one-offs": `invited-by` is offered in first_steps, beside the
+// missing papers, only while the house's record names no inviter (`naming`), gone once named, never in `can`. Neither
+// budget above moves. The requested newly joined, inviter-less house (the H2 "new house", every paper missing) is held to
+// part 1's; the other fixtures' compositions with the offer are said.
+const NAMING_STEP = 'invited-by: household { do: "invited-by", args: { invited_by: "<their handle, or hh:<slug>>" } }: if someone invited your house; once, public';
+test("POS-947/c · the naming is offered in first_steps only while the house names no inviter, never in can, inside both budgets", (t) => {
+  const newHouse = (naming) => glanceV2({ ...partsFor(["newbie"], { waiting: 0, papersGaps: { newbie: ["home", "window", "parcel"] }, quests: [], fresh: true }),
+    mail: { unanswered: 0, newInbound: 0, standing: 0 }, naming }, { nowMs: NOW });
+  const fresh = newHouse(true);
+  assert.deepEqual(fresh.house.first_steps.slice(-1), [NAMING_STEP], "offered, after the papers");
+  assert.equal(fresh.house.first_steps.length, 4, "home, window, parcel, then the naming");
+  assert.equal(fresh.house.first_steps_note, FIRST_STEPS_NAMING_NOTE, "the note says what the naming does, never that it makes the house easier to find");
+  assert.ok(!JSON.stringify(fresh.can).includes("invited-by"), "never in can");
+  const named = newHouse(false);
+  assert.equal(named.house.first_steps.some((s) => s.startsWith("invited-by")), false, "a house that names an inviter is not offered it");
+  assert.equal(named.house.first_steps_note, FIRST_STEPS_NOTE, "and its note is as it was");
+  // a whole house is offered the naming alone; a whole, named house has no first steps at all
+  assert.deepEqual(firstSteps({ kai: [] }, { naming: true }), [NAMING_STEP]);
+  assert.equal(firstSteps({ kai: [] }, { naming: false }), null);
+  assert.equal(firstSteps({ kai: [] }), null, "off unless the record says so");
+  assert.deepEqual(firstSteps({ kai: ["invited-by"] }), null, "a member's gap can never offer it: it is the house's, from its record");
+  for (const g of [fresh, named]) assert.deepEqual(unexplained("household", g, 2), []);
+
+  // THE CALLED CASE, held to part 1's budget: the newly joined, inviter-less house.
+  t.diagnostic(`a new house (newly joined, inviter-less), offered the naming: ${served(fresh)} characters as served (part 1 budget ${PART1_BUDGET}); ${served(named)} without, +${served(fresh) - served(named)}`);
+  assert.ok(served(fresh) <= PART1_BUDGET, `the newly joined house's glance with the naming is ${served(fresh)} characters as served`);
+  // The other fixtures' compositions with the offer, SAID and not capped (WLD-51's rule: "a budget for that fixture, not a
+  // contract that every composition fits"); H2's own assertions above are unchanged.
+  const sf = glanceV2({ ...partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } }), naming: true }, { nowMs: NOW });
+  const one = glanceV2({ ...partsFor(["kai"], { waiting: 3 }), naming: true }, { nowMs: NOW });
+  const { p, closer, happened, went } = fullStarforge();
+  const full = glanceV2({ ...p, closer, happened, went, naming: true }, { nowMs: NOW });
+  t.diagnostic(`with the naming, said not capped: Starforge part 1 ${served(sf)} (budget ${PART1_BUDGET}); a house of one ${served(one)} (budget ${PART1_BUDGET}); Starforge every block ${served(full)} (budget ${FULL_BUDGET})`);
+  for (const g of [sf, one, full]) assert.equal(offer1(g), NAMING_STEP);
+});
+const offer1 = (g) => g.house.first_steps.find((s) => s.startsWith("invited-by: "));

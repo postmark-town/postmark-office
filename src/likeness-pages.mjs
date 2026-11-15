@@ -69,6 +69,12 @@ body{margin:0;background:var(--night);color:var(--ink);font:17px/1.6 Georgia,"Io
 .answer .yes{background:var(--night2);color:var(--cream)}
 .answer .no{background:transparent;color:var(--night2)}
 .thanks{font-size:1.15em}
+.picture{margin-top:1.6em;padding-top:1.2em;border-top:1px solid #e2d6bd}
+.picture h3{margin:.2em 0 .5em;font-size:1.1em;color:#1b2340}
+.picture dl{margin:.4em 0 1em;display:grid;grid-template-columns:8em 1fr;gap:.2em .8em}
+.picture dt{color:var(--muted)}.picture dd{margin:0;overflow-wrap:anywhere}
+.picture form{margin:.8em 0}.picture input[type=text],.picture select{font:inherit;padding:.45em .6em;max-width:100%;width:24em}
+.picture button{font:inherit;padding:.5em 1.2em;border-radius:999px;cursor:pointer;border:2px solid var(--night2);background:transparent;color:var(--night2)}
 @media (max-width:520px){body{font-size:16px}.card{margin:-36px 12px 28px;padding:22px 16px}.top h1{font-size:1.35em}.answer button{flex:1 1 100%}}
 `;
 
@@ -86,10 +92,33 @@ const galleryHtml = (entries) => entries.length ? `
   </div>` : "";
 
 /**
+ * The household's likeness REQUEST, beside its answer (POS-726 slice B): what it has asked for, what is official now (READ-ONLY: there is
+ * no door here that chooses, changes or withdraws it), and the one thing it may do, ask. Shown to the signed-in household only, and the form
+ * only while the answer is yes. It shows nothing official until a pointer exists. `state` is ownerLikeness()'s answer. Every value is escaped.
+ */
+export function pictureBlock({ state, residents = [], action, pendingId, nonce }) {
+  if (!state) return "";
+  const yes = state.answer === "yes";
+  if (!yes && !state.request && !state.official) return "";
+  const hidden = `<input type="hidden" name="pending_id" value="${esc(pendingId)}"><input type="hidden" name="nonce" value="${esc(nonce)}">`;
+  const day = (t) => esc(String(t ?? "").slice(0, 10));
+  const rows = [];
+  if (state.request) rows.push(`<dt>asked for</dt><dd>a likeness of <strong>${esc((state.request.depicts ?? []).join(", "))}</strong>, ${day(state.request.at)}, by @${esc(state.request.by ?? "")}</dd>`);
+  if (state.official) rows.push(`<dt>official now</dt><dd>version ${esc(state.official.version)}, of ${esc((state.official.depicts ?? []).join(", "))}, since ${day(state.official.since)}${yes ? "" : " (not in use while your answer is no)"}</dd>`);
+  const asked = new Set(state.request?.depicts ?? []);
+  const form = yes ? `<form method="post" action="${esc(action)}">${hidden}
+      <label>Ask for a likeness of <select name="depicts">${residents.map((h) => `<option value="${esc(h)}"${asked.has(h) ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>
+      <button name="decision" value="request">${state.request ? "Ask again" : "Ask for a likeness"}</button></form>` : "";
+  return `<section class="picture"><h3>The likeness picture</h3>
+  <p class="muted">Your answer above is the only permission. Asking is a request, nothing more: it does not choose a picture and it changes nothing official.</p>
+  ${rows.length ? `<dl>${rows.join("")}</dl>` : ""}${form}</section>`;
+}
+
+/**
  * The question. Every ruled sentence is LIKENESS_WORDS whole; `gallery` is
  * galleryFor's answer; `standing` and `when` are the house's current answer.
  */
-export function questionPage({ login, houseName, residents = [], answer = null, at = null, by = null, gallery = [], action, pendingId, nonce }) {
+export function questionPage({ login, houseName, residents = [], answer = null, at = null, by = null, gallery = [], action, pendingId, nonce, state = null }) {
   const W = LIKENESS_WORDS;
   const who = residents.length ? residents.map((h) => `<strong>${esc(h)}</strong>`).join(", ") : "(none yet)";
   const standing = answer === "yes" ? "<strong>yes</strong>" : answer === "no" ? "<strong>no</strong>" : "not answered yet, which reads as <strong>no</strong>";
@@ -106,7 +135,7 @@ export function questionPage({ login, houseName, residents = [], answer = null, 
     <input type="hidden" name="nonce" value="${esc(nonce)}">
     <button class="yes" name="decision" value="yes">Yes, you may</button>
     <button class="no" name="decision" value="no">No</button>
-  </form>`);
+  </form>${pictureBlock({ state, residents, action, pendingId, nonce })}`);
 }
 
 // Darko, 2026-10-22 15:41: the yes page thanks them, in his words.
@@ -121,6 +150,12 @@ export function answeredPage({ answer, rendered, at, login }) {
     : `<p>Your answer is <strong>no</strong>. Nothing new will be made from your residents' likeness. Their own picture and appearance still show in town as before.</p>`;
   return shell("Answered", answer === "yes" ? "Thank you" : "Answered", `${said}
   <p class="muted">${kept} You can change it any time from the same link. Answered ${esc(at)} as @${esc(login)}.</p>`);
+}
+
+/** The page after a request: what was kept, said plainly. Nothing official changes. */
+export function stateChangedPage({ state, login }) {
+  const who = (state?.request?.depicts ?? []).join(", ");
+  return shell("Kept", "Kept", `<p>Your household has <strong>asked for a likeness of ${esc(who)}</strong>. Nothing is official yet, and asking does not make it so.</p><p class="muted">Kept as @${esc(login)}. Open the same link to ask again.</p>`);
 }
 
 /** A refusal or a fault, in the same look. `body` is already-escaped HTML. */

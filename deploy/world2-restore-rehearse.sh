@@ -7,10 +7,13 @@
 #
 #   world2-restore-rehearse.sh [--from-remote | --from-s3] [--keep]
 #
-#     --from-remote   clone the off-box repo into a temp dir and restore from
-#                     THAT, rather than from the box-local dump. This is the
+#     --from-s3       copy the newest night down from the S3 bucket (the one
+#                     off-box route since STAR-118) and restore from THAT,
+#                     rather than from the box-local dump. This is the
 #                     rehearsal that actually proves the off-box copy; the
 #                     local one only proves pg_dump ran.
+#     --from-remote   the same from the GitHub backup repo, which holds the
+#                     nights up to the git ship's retirement (STAR-118).
 #     --keep          leave the scratch database in place for poking at.
 #
 # ── WHAT "MATCHING" MEANS HERE, AND WHERE IT CANNOT ─────────────────────────
@@ -149,7 +152,14 @@ say "   restored in $((r1 - r0))s"
 say "== row counts, restored vs live ($DB)"
 TABLES=$(psql_owner --dbname "$SCRATCH" -tAc \
   "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-bad=0; rows_total=0; drift_lines=""
+# THE TRANSIENT TABLES are the exception to the rule above, the ones whose rows the office deletes by design:
+# 031_office_paperwork.sql says it ("none of this is the record"). A sign-in round trip is swept at 10 min, a code
+# is spent on exchange or swept at 120 s, a token goes on rotation or the sweep, a key claim when it's spent. A
+# row in the dump that's gone from live is the sweep working, so these may shrink. Every other table keeps the
+# strict rule, and office_role_audit, the append-only one that matters, is not on this list. (STAR-118, 11-12:
+# oauth_pending 2 restored vs 1 live, a pending sign-in completed or expired between the 08:10 dump and the count.)
+TRANSIENT="oauth_pending oauth_codes oauth_tokens oauth_key_claims"
+bad=0; rows_total=0; drift_lines=""; RS_AUDIT=""; RS_ROLES=""
 printf '   %-26s %10s %10s  %s\n' table restored live verdict
 for t in $TABLES; do
   a=$(psql_owner --dbname "$SCRATCH" -tAc "SELECT count(*) FROM \"$t\"" 2>/dev/null)
@@ -158,16 +168,18 @@ for t in $TABLES; do
   rows_total=$((rows_total + a))
   if [ "$a" -eq "$b" ]; then v="match"
   elif [ "$a" -lt "$b" ]; then v="live +$((b - a)) (town moved since the dump — expected)"
+  elif [[ " $TRANSIENT " == *" $t "* ]]; then v="live -$((a - b)) (swept or spent since the dump — a transient table, expected)"
   else v="RESTORED HAS MORE (+$((a - b))) — HISTORY DISAGREES"; bad=$((bad + 1)); fi
   printf '   %-26s %10s %10s  %s\n' "$t" "$a" "$b" "$v"
   [ "$a" -ne "$b" ] && drift_lines="$drift_lines$t:$a/$b "
+  case "$t" in office_role_audit) RS_AUDIT="$a $b" ;; office_roles) RS_ROLES="$a $b" ;; esac
 done
 say "   $rows_total rows restored across $(echo "$TABLES" | wc -w) tables"
 
 
 # ── roles.db, restored and counted ──────────────────────────────────────────
 # POS-185. The dump above is the world store; this is the office's registry of
-# WHO PAID, which rides the same commit (world2-backup.sh § 1b) because a grant
+# WHO PAID, which rides the same night (world2-backup.sh § 1b) because a grant
 # exists nowhere else — no repo holds it and no fold recomputes it.
 #
 # "Restoring" it is a file copy, not a pg_restore: it is a whole SQLite database
@@ -186,10 +198,17 @@ if [ "$FROM_REMOTE" = true ]; then ROLES_DIR="$TMPCLONE/roles"; elif [ "$FROM_S3
 # the newest night by its stamped name, not its mtime: in a fresh clone every file has one mtime, and the pick was
 # arbitrary (STAR-118, 11-04: 11-01's copy on one run, 11-02's on the next)
 ROLES_COPY="$(ls -1 "$ROLES_DIR"/roles-*.db 2>/dev/null | sort | tail -n1)"
-if [ -z "${ROLES_COPY:-}" ]; then
+if [ -z "${ROLES_COPY:-}" ] && [ -n "${RS_AUDIT:-}" ]; then
+  # IN THE STORE (POS-271; the backup reports the roles in-store since 2026-11-11): the registry is office_roles and
+  # office_role_audit, restored with the dump and already compared in the table above under the strict rule, so a
+  # restored audit with more rows than live has already counted as a finding there. This names them as the roles
+  # check and carries the audit count into the receipt; it adds no second count of the same finding.
+  RA_COPY="${RS_AUDIT% *}"; RA_LIVE="${RS_AUDIT#* }"
+  say "   in the store: office_role_audit $RA_COPY restored / $RA_LIVE live, office_roles ${RS_ROLES% *} / ${RS_ROLES#* } (compared in the table above; no roles-*.db is shipped since the move)"
+elif [ -z "${ROLES_COPY:-}" ]; then
   # Absent is legal and is NOT a pass: it is reported in the operator's words so
   # a reader cannot mistake "nothing to check" for "checked and fine".
-  say "   NOT-RUN: no roles-*.db in $ROLES_DIR — either no role has ever been granted on this box (OFFICE_ROLE_GATES is unset on every office today) or the lane has not shipped one yet"
+  say "   NOT-RUN: no roles-*.db in $ROLES_DIR and no office_role_audit in the restore — either no role has ever been granted on this box (OFFICE_ROLE_GATES is unset on every office today) or the lane has not shipped one yet"
 else
   # One node, both files, read-only on each. A missing live registry counts as
   # zero rather than as an error: the copy having rows the live side lost is the

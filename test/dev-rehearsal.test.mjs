@@ -155,6 +155,27 @@ test("the rehearsal's crossing runs every job postmark-ferry.service runs, and n
   assert.deepEqual(diff(mine, box), [], "the rehearsal runs ferry jobs the box does not");
 });
 
+// POS-988 (Truey's review of #1007): the socket installs only after the release
+// that carries it is live, so the w47 pre-tag rehearsal runs on a box without
+// it. The seal job then skips, naming why, rather than reddening the tag's gate;
+// with the socket there, it runs like every other job.
+test("the seal job skips, naming the uninstalled socket, and runs once the socket is there", () => {
+  const seal = CROSSING.find((j) => j.name === "seal");
+  assert.equal(seal.box, "tools/town-seal-sandbox.mjs");
+  const was = process.env.TOWN_SEAL_SOCKET;
+  const dir = mkdtempSync(join(tmpdir(), "seal-socket-"));
+  try {
+    process.env.TOWN_SEAL_SOCKET = join(dir, "absent.sock");
+    assert.match(seal.skipIf({}), /absent\.sock is not here: postmark-town-seal\.socket installs after the release that carries it is live \(POS-988\)/);
+    writeFileSync(join(dir, "present.sock"), "");
+    process.env.TOWN_SEAL_SOCKET = join(dir, "present.sock");
+    assert.equal(seal.skipIf({}), null, "the FLIP: with the socket there, the seal is rehearsed");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_SEAL_SOCKET; else process.env.TOWN_SEAL_SOCKET = was;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the rehearsal's tick runs every job the keep tick runs under its lock, and no other", () => {
   const keep = boxFile("deploy/office-keep.sh");
   const from = keep.indexOf("flock -w 300 9"), to = keep.indexOf("mint catch-up FAILED");

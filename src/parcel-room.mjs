@@ -279,9 +279,10 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
 // only the room it saw. The door quotes at entry and hands the exec the
 // household and the nth it would buy (`expect`); inside the lock, a purchase of
 // that nth already on the ledger IS that purchase (by this click or the one
-// before it), so the call answers its receipt and burns nothing. The ledger is
-// the record: no new field on the act and no new row. A call made after the
-// first one answered sees the new room at entry, and buys the next room.
+// before it), so the call answers its receipt and burns nothing. Without a
+// nonce the ledger is the whole record. A call made after the first one
+// answered sees the new room at entry, and buys the next room: a retry after a
+// lost answer is that call, and only the nonce tells it apart (§ THE RETRY KEY).
 
 /**
  * The purchase of `nth` room for `household` (a slug) already on the ledger, by
@@ -309,6 +310,11 @@ export function parcelRoomBought({ registry, entries, engine, household, nth }) 
  * read now. With `expect` (the room the call saw at the door), a purchase of
  * that room already made answers `{ repeat }`, and a room that moved past it
  * any other way is refused: a call never buys a room it did not see.
+ *
+ * `expect.handle` is set when a nonce names the purchase (§ THE RETRY KEY): the
+ * payer is then part of the purchase, so that room bought by another resident
+ * is refused rather than answered as this nonce's receipt, and a caller paying
+ * as anyone else is refused before anything is written.
  */
 export async function quoteAt(clone, handle, date, { expect = null } = {}) {
   const engine = await townEngineAt(clone);
@@ -316,24 +322,98 @@ export async function quoteAt(clone, handle, date, { expect = null } = {}) {
   const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const entries = existsSync(ledger) ? engine.parseStampLedger(readFileSync(ledger, "utf8")) : [];
+  const keyed = expect?.handle != null;
+  const newNonce = keyed ? ` and buy it with a new nonce: this one names room for parcel ${expect.nth}` : "";
   if (expect) {
     const made = parcelRoomBought({ registry, entries, engine, household: expect.household, nth: expect.nth });
-    if (made) return { repeat: made };
+    if (made && (!keyed || made.handle === expect.handle)) return { repeat: made };
+    if (made)
+      return refuse(409, `${expect.household}'s room for parcel ${expect.nth} was bought by ${made.handle}, not by ${expect.handle}`,
+        `this nonce names ${expect.handle}'s purchase of that room, which was never made, so nothing was burned for it. To buy the next room, quote it first${newNonce}`);
+    if (keyed && expect.handle !== handle)
+      return refuse(409, `this nonce names ${expect.handle}'s purchase of room for ${expect.household}'s parcel ${expect.nth}, not ${handle}'s`,
+        `nothing was burned: retry it with from: "${expect.handle}", or buy as ${handle} with a new nonce`);
   }
   const townKey = typeof engine.householdKeys === "function" ? townKeyAt(engine, clone, entries, handle, date) : `solo:${handle}`;
   const q = parcelRoomQuote({ handle, date, registry, entries, engine, townKey });
   if (expect && q.quote && (q.quote.household !== expect.household || q.quote.room.after !== expect.nth))
     return refuse(409, `${expect.household}'s room changed while this call waited for the pen`,
-      `this call would have bought room for parcel ${expect.nth}, and the next room is now parcel ${q.quote.room.after}${q.quote.household !== expect.household ? ` of ${q.quote.household}` : ""}. Nothing was burned: quote again with preview: true`);
+      `this call would have bought room for parcel ${expect.nth}, and the next room is now parcel ${q.quote.room.after}${q.quote.household !== expect.household ? ` of ${q.quote.household}` : ""}. Nothing was burned: quote again with preview: true${newNonce}`);
   return q;
 }
 
 /** The answer to a repeat: the first purchase's receipt, and that nothing was burned again. */
-function repeatReceipt(made) {
+function repeatReceipt(made, nonce = null) {
+  const next = `household { do: "${BUY_ROOM_ACT}", args: { from, preview: true } }`;
+  if (nonce != null) return {
+    did: BUY_ROOM_ACT, duplicate: true, nonce, ...made,
+    note: `the purchase this nonce names is on the town's ledger: ${made.handle} bought room for ${made.household}'s parcel ${made.room.after} (${made.price} stamps), and this is that purchase's receipt, read back off the ledger. NOTHING WAS BURNED A SECOND TIME. To buy the next room, quote it first and buy it with a new nonce: ${next}`,
+  };
   return {
     did: BUY_ROOM_ACT, duplicate: true, ...made,
-    note: `this room was already bought: ${made.handle} bought room for ${made.household}'s parcel ${made.room.after} (${made.price} stamps), and this is that purchase's receipt. NOTHING WAS BURNED A SECOND TIME. To buy the next room, quote it first: household { do: "${BUY_ROOM_ACT}", args: { from, preview: true } }`,
+    note: `this room was already bought: ${made.handle} bought room for ${made.household}'s parcel ${made.room.after} (${made.price} stamps), and this is that purchase's receipt. NOTHING WAS BURNED A SECOND TIME. To buy the next room, quote it first: ${next}`,
   };
+}
+
+// ── THE RETRY KEY (POS-939; Wright 2026-11-13 15:2x EST, on Darko's ruling) ──
+//
+// "buy-parcel-room joins the office's act nonce, so a retry after a lost answer
+// can't buy a second room." The world door's grammar (act-nonce.mjs): the field
+// is `nonce`, judged by nonceDefect, kept spelled `<door action>:<nonce>`
+// (keptNonce), scoped to the paying house, and a repeat answers the first
+// purchase's receipt with `duplicate: true` and NOTHING WAS BURNED. What differs
+// is where the key is kept. A purchase writes no `acts` row (it is the town's
+// signed BURN line, under the town lock), so the key has its own table (096,
+// parcel_room_nonces), and it is kept BEFORE the purchase rather than with it.
+//
+// WHAT THE KEY HOLDS: the purchase the nonce is, `{ household, nth, handle }`,
+// the room the call saw and its payer. Never "bought". The door hands it to the
+// exec as `expect` (§ ONE CALL, ONE ROOM, which makes it durable), and the
+// exec, under the lock, reads the ledger: that payer's line for that room IS the
+// receipt; no line is a purchase not yet made, which this call makes, once; a
+// line by anyone else is refused. So the key and the paid effect never have to
+// land together, and each step a crash can stop at is safe:
+//
+//   before the key is kept     nothing kept, nothing burned: the retry is a first call
+//   key kept, nothing burned   the retry buys the room the key names, once
+//   burned, answer lost        the retry reads the line: the first purchase's receipt
+//
+// A requested nonce is never dropped: a key the store cannot read or keep (096
+// not applied, the store unreachable) refuses the purchase, and nothing burns.
+// A key, once kept, names its room for good (no UPDATE, no DELETE), so a retry
+// can never be pointed at the next room.
+export const ROOM_NONCE_IDEMPOTENT = "retry this exact call with the same nonce and you will get this purchase's receipt back rather than a second purchase";
+
+const ROOM_KEY_SQL = "SELECT household, handle, nth FROM parcel_room_nonces "
+  + "WHERE household = ANY($1::text[]) AND nonce = $2 ORDER BY kept_at, household LIMIT 1";
+
+/** The purchase a kept key names, among a house's spellings, or null. Throws when the store cannot be asked. */
+export async function roomKeyKept(spellings, kept) {
+  const { officeRead } = await import("./world2-pen.mjs");
+  return officeRead(async (c) => (await c.query(ROOM_KEY_SQL, [spellings, kept])).rows[0] ?? null, { by: "roomKeyKept" });
+}
+
+/**
+ * Keep the key for a purchase not yet made, and answer the purchase the key
+ * names: this one, or the one a racing twin kept first (the primary key keeps
+ * one). Committed before it returns. Throws when the key cannot be kept.
+ */
+export async function keepRoomKey({ household, spellings = [household], kept, handle, nth }) {
+  const { officeWrite } = await import("./world2-pen.mjs");
+  return officeWrite(async (c) => {
+    await c.query("INSERT INTO parcel_room_nonces (household, nonce, handle, nth) VALUES ($1, $2, $3, $4) ON CONFLICT (household, nonce) DO NOTHING",
+      [household, kept, handle, nth]);
+    const { rows: [row] } = await c.query(ROOM_KEY_SQL, [spellings, kept]);
+    if (!row) throw new Error("the retry key was written and could not be read back");
+    return row;
+  });
+}
+
+/** The house `handle` lives in at a checkout, with every spelling it has carried, or null. */
+function houseAt(clone, handle) {
+  const houses = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"))?.households ?? {};
+  const slug = Object.keys(houses).find((s) => (houses[s]?.residents ?? []).includes(handle)) ?? null;
+  return slug ? { slug, spellings: [slug, ...(houses[slug]?.formerly ?? []).filter(Boolean)] } : null;
 }
 
 // ── NOT BEFORE THE LAW IS BLESSED (Truey's review of d97cfa2, F2) ───────────
@@ -382,43 +462,80 @@ export async function parcelLawBlessed(worldClone) {
 const roomInFlight = new Map(); // household slug -> Map(token -> nth)
 
 /**
- * THE DOOR: `household { do: "buy-parcel-room", args: { from, preview } }`.
+ * THE DOOR: `household { do: "buy-parcel-room", args: { from, preview, nonce } }`.
  * Preview quotes and writes nothing; the act runs the exec under the town lock,
- * which asks the same quote inside the lock and appends the town's line.
+ * which asks the same quote inside the lock and appends the town's line. With a
+ * nonce, the key is read first and kept before the exec runs (§ THE RETRY KEY).
  * `worldClone` (a test names one) is the world whose blessing says the law is live.
  */
-export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key, { channel, date = null, worldClone = null } = {}) {
+export async function buyParcelRoomViaOffice(clone, { from, preview, nonce } = {}, key, { channel, date = null, worldClone = null } = {}) {
   const bounce = (code, defect, hint) => ({ error: "bounce", code, defect, hint });
   if (!from) return bounce(422, "which resident pays?", `required: from, one of your residents — household { do: "${BUY_ROOM_ACT}", args: { from: "…" } }`);
   if (!key?.handles?.has(from))
     return bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "nobody"}`);
+  const keyed = nonce != null;
+  const { keptNonce, nonceDefect } = keyed ? await import("./act-nonce.mjs") : {};
+  if (keyed) {
+    const bad = nonceDefect(nonce);
+    if (bad) return bounce(422, bad.defect, bad.hint);
+  }
   const law = await parcelLawBlessed(worldClone ?? (await import("./world.mjs")).WORLD_CLONE);
   if (!law.live)
     return bounce(409, "not-yet-open", `room is sold once the world's parcel law is blessed: the engine at ${law.at} does not size a household's parcel room yet, so room bought now would change nothing until it is blessed. Nothing was burned`);
   const { townDay } = await import("./votes.mjs");
   const today = date ?? townDay(); // the town day; a caller (a test) may name one
   const { toConfirm, NOTHING_MOVED } = await import("./stamps-preview.mjs");
+  const { faultLogged } = await import("./fault-words.mjs");
   const call = `household { do: "${BUY_ROOM_ACT}", args: { from: "${from}" } }`;
+  const unread = (e) => bounce(503, "not-yet-open", `the office could not read the town's ledger, so the room could not be quoted; ${faultLogged("the parcel room quote could not read the town", e)}`);
+  // THE KEY, READ BEFORE THE ENTRY QUOTE (§ THE RETRY KEY): a nonce that already
+  // names a purchase goes to the exec with that purchase, so a room since bought,
+  // a purse since spent or a cap since reached cannot refuse its own receipt.
+  const kept = keyed ? keptNonce(BUY_ROOM_ACT, nonce) : null;
+  let house = null;
+  let named = null;
+  if (keyed && preview !== true) {
+    try { house = houseAt(clone, from); } catch (e) { return unread(e); }
+    if (house) {
+      try { named = await roomKeyKept(house.spellings, kept); }
+      catch (e) {
+        return bounce(503, "the office could not read its retry keys",
+          `so it cannot tell a retry from a second purchase, and it bought nothing: nothing was burned. Retry with the same nonce shortly. ${faultLogged("the parcel room retry key could not be read", e)}`);
+      }
+    }
+  }
   // The quote at entry, for the preview AND the act: the act's is the room its
   // call saw, which the exec sells and no other (§ ONE CALL, ONE ROOM).
-  let q;
-  try { q = await quoteAt(clone, from, today); }
-  catch (e) {
-    const { faultLogged } = await import("./fault-words.mjs");
-    return bounce(503, "not-yet-open", `the office could not read the town's ledger, so the room could not be quoted; ${faultLogged("the parcel room quote could not read the town", e)}`);
+  let q = null;
+  if (!named) {
+    try { q = await quoteAt(clone, from, today); }
+    catch (e) { return unread(e); }
+    if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
+    if (preview === true)
+      return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
   }
-  if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
-  if (preview === true)
-    return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
   // The room this call saw, less any purchase still in flight (§ THE PURCHASES
   // IN FLIGHT), registered before the next await so a later call sees it.
-  const slug = q.quote.household;
+  // A kept key's room is the one it names.
+  const slug = named ? house.slug : q.quote.household;
   const flying = roomInFlight.get(slug) ?? new Map();
   roomInFlight.set(slug, flying);
-  const expect = { household: slug, nth: Math.min(q.quote.room.after, ...flying.values()) };
+  const expect = named ? { household: slug, nth: Number(named.nth), handle: named.handle }
+    : { household: slug, nth: Math.min(q.quote.room.after, ...flying.values()) };
   const token = Symbol(from);
   flying.set(token, expect.nth);
   try {
+    // THE KEY IS KEPT BEFORE ANY STAMP BURNS, or nothing burns (§ THE RETRY KEY).
+    if (keyed && !named) {
+      let held;
+      try { held = await keepRoomKey({ household: slug, spellings: house?.spellings ?? [slug], kept, handle: from, nth: expect.nth }); }
+      catch (e) {
+        return bounce(503, "the office could not keep this nonce",
+          `a nonce it cannot keep would let a retry after a lost answer buy a second room, so it bought nothing: nothing was burned. Retry with the same nonce shortly. ${faultLogged("the parcel room retry key could not be kept", e)}`);
+      }
+      Object.assign(expect, { nth: Number(held.nth), handle: held.handle });
+      flying.set(token, expect.nth);
+    }
     const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
     const { viaFor } = await import("./channel.mjs");
     const exec = join(dirname(fileURLToPath(import.meta.url)), "parcel-room-exec.mjs");
@@ -427,13 +544,12 @@ export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key,
       out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel), expect }), { ...process.env, TOWN_CLONE: clone });
     } catch (e) {
       if (lockTimedOut(e)) return bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
-      const { faultLogged } = await import("./fault-words.mjs");
       return bounce(500, "the parcel room purchase tripped", faultLogged("the parcel room purchase tripped", e));
     }
     const result = JSON.parse(out.trim().split("\n").at(-1));
     if (result.error) return bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
-    if (result.repeat) { const { repeat: _r, ...made } = result; return repeatReceipt(made); }
-    return { did: BUY_ROOM_ACT, ...result };
+    if (result.repeat) { const { repeat: _r, ...made } = result; return repeatReceipt(made, keyed ? nonce : null); }
+    return { did: BUY_ROOM_ACT, ...result, ...(keyed ? { nonce, idempotent: ROOM_NONCE_IDEMPOTENT } : {}) };
   } finally {
     flying.delete(token);
     if (!flying.size && roomInFlight.get(slug) === flying) roomInFlight.delete(slug);

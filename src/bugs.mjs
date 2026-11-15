@@ -330,6 +330,12 @@ export function judgeBugText(input, { partial = false } = {}) {
     out.fields.steps = s;
   }
   if (input.record !== undefined) out.fields.record = oneLine("record", input.record, RECORD_MAX);
+  // CORE-32: the reporter's declaration, at POST only (an amendment never sends it): "I'd like to fix this myself". It is recorded, not enforced:
+  // only `true` is carried onto the bug's record; false and omission both leave the record exactly as it was (the bug is open by default).
+  if (input.fix_myself !== undefined) {
+    if (typeof input.fix_myself !== "boolean") throw refuse(422, "fix_myself is true or false", "fix_myself: true says you'd like first go at fixing this bug yourself; leave it off and the bug is open", { field: "fix_myself" });
+    if (input.fix_myself && !partial) out.fields.fix_myself = true;
+  }
   return out;
 }
 

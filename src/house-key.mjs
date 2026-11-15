@@ -58,6 +58,7 @@
 // recorded yet is minted under whatever key the ledger says when the pass
 // runs, so those two sentences are left out of the comparison.
 
+import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -288,7 +289,7 @@ export function appendHouseKey(clone, signed) {
   if (!signed?.length) return null;
   const abs = join(clone, LEDGER_REL);
   const prior = readFileSync(abs, "utf8");
-  writeFileSync(abs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+  writeFileSync(abs, endWithNewline(prior) + signed.join("\n") + "\n");
   return abs;
 }
 

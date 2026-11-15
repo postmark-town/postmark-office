@@ -190,12 +190,13 @@ export function bulletinRows(town) {
  * points here for it. FIRST-DAY.md is "The first-day 360", a newcomer's walk
  * round the town by Julian and Vex of little-bird's house (CORE-8), and
  * PROMISES.md is their "The town's seven promises, in plain words", LOGOS's
- * seven promises reworded plainly (CORE-8).
+ * seven promises reworded plainly (CORE-8). HEARTH-SETUP.md (POS-1019, the town's root file) is the ONE authored prompt that starts an agent on its household's
+ * own Hearth template with its human (POS-1018); it is served whole from the town checkout as `hearth-setup`, and the office keeps no second copy of its words.
  */
-export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md"]);
+export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md", "HEARTH-SETUP.md"]);
 
 /** The names `town { read: "docs" }` takes as `doc:`, each a key of the docs value lowercased. */
-export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises"]);
+export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises", "hearth-setup"]);
 
 /**
  * `town { read: "docs" }`'s answer, shaped from the ONE docs value that GET
@@ -209,7 +210,8 @@ export function docsAnswer({ as_of = null, docs = {} } = {}, doc = null) {
     return {
       as_of,
       docs: Object.entries(docs).map(([k, d]) => ({ doc: k.toLowerCase(), path: d.path, chars: d.body?.length ?? 0 })),
-      open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move',
+      open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move' +
+        (docs["HEARTH-SETUP"] ? '; doc: "hearth-setup" is the prompt for designing your household\'s Hearth with your human' : ''),   // said only while the doc is on the shelf: a pointer that cannot lead to the text is not drawn
     };
   }
   const d = docs[String(doc).toUpperCase()];
@@ -350,6 +352,29 @@ export async function fundingRows(TOWN, { log = console } = {}) {
 }
 
 /**
+ * BRING A NEIGHBOUR's monthly count, for `town_meta` (POS-961). The town's own fold
+ * (tools/quest-progress.mjs § foldQuestProgress) already carries it on every handle's
+ * entry as `invite: { month, paid }`: the household's INVITER-side payouts dated in the
+ * town month, by canonical inviting household (`invitesPaidByHouse`, POS-816/g). This
+ * only carries that answer to the board, as one small meta value, so the hot read never
+ * parses the ledger: `{ month, paid: { <handle>: <n> } }`, handles whose house was paid
+ * at least once (a handle absent from `paid` is a COUNTED zero for `month`). Null when
+ * the town's fold predates the field, so the board keeps the row unmeasured, never a
+ * zero it cannot know. Sorted, so two runs over one ledger write one value.
+ */
+export function invitesOf(prog) {
+  let month = null;
+  const paid = [];
+  for (const [handle, p] of prog) {
+    const m = p?.invite?.month;
+    if (typeof m !== "string") continue;
+    month ??= m;
+    if (m === month && Number.isInteger(p.invite.paid) && p.invite.paid > 0) paid.push([handle, p.invite.paid]);
+  }
+  return month ? JSON.stringify({ month, paid: Object.fromEntries(paid.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) }) : null;
+}
+
+/**
  * Quests — today's per-resident progress (quest gold Phase 2), folded with the
  * town's OWN tool, and the standing rows (the board's non-daily facts; the rules
  * live in src/quest-standing.mjs). Answers null when the checkout has no quest
@@ -378,7 +403,7 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
     progress.put([handle, p.send, p.receive, p.household.size, p.household.send, p.household.receive,
       JSON.stringify(p.sentTo ?? []), JSON.stringify(p.heardFrom ?? [])]);
   }
-  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), standing: null };
+  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), invites: invitesOf(prog), standing: null };
 
   // ── the standing rows: what the record already knew and nobody joined ──────
   // ONE derivation, not a second one: every fact comes from the town's own
@@ -511,6 +536,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
+  if (q?.invites) meta.push(["quest_invites", q.invites]); // POS-961: bring a neighbour's monthly count
 
   const atlas = atlasRows(TOWN, town, { log });
   t.regions = atlas?.regions ?? [];

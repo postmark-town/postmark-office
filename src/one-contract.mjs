@@ -83,6 +83,13 @@ export const FIELD_ALIASES = Object.freeze({
 // (`052_world_act_nonce.sql`) — act-nonce.mjs says how, and what a repeat
 // answers. The world door judges its own envelope (world-apex.mjs § Stage ②)
 // and skips exactly what this list names for the tool it dispatches to.
+//
+// THE PARCEL ROOM PURCHASE TAKES IT HERE (POS-939; Wright 2026-11-13, on
+// Darko's ruling: "buy-parcel-room joins the office's act nonce, so a retry
+// after a lost answer can't buy a second room"). It dispatches to no flat tool,
+// so the household door judges it under the act's own name. The key is kept in
+// 096's table before any stamp burns (parcel-room.mjs § THE RETRY KEY); a key
+// the office cannot keep refuses the purchase rather than disclosing it.
 const NONCE = Object.freeze(["nonce"]);
 export const DOOR_FIELDS = Object.freeze({
   send_letter: NONCE,
@@ -103,6 +110,7 @@ export const DOOR_FIELDS = Object.freeze({
   world_ride: NONCE,
   world_declare_stance: NONCE,
   world_creature: NONCE, // a creature's afforded actions (POS-672, review-692 F2): a retried offer uses up one unit
+  "buy-parcel-room": NONCE, // POS-939: a retry after a lost answer answers the first purchase's receipt
 });
 
 /** One `renamed` row — the same shape for a field, a read and a segment. */

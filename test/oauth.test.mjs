@@ -224,13 +224,102 @@ test("full dance: register → GitHub → consent → code → token → /town 2
   });
   assert.equal(ref.status, 200);
   const grant2 = await ref.json();
+  const me2 = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant2.access_token}` } });
+  assert.equal(me2.status, 200, "the new pair works");
   const replay = await fetch(`${BASE}/oauth/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: grant.refresh_token }),
   });
   assert.equal(replay.status, 400, "rotated refresh token must be dead");
-  const town2 = await fetch(`${BASE}/town`, { headers: { authorization: `Bearer ${grant2.access_token}` } });
-  assert.equal(town2.status, 200);
+  // POS-485: and presenting it again ended its whole sign-in, no grace (the next test is the full falsifier)
+  assert.equal((await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant2.access_token}` } })).status, 401);
+});
+
+// ── POS-485 · a reused refresh token ends its whole sign-in (the file's road: the store's is oauth-store-outage R6–R11) ──
+
+const tokenAt = (body) => fetch(`${BASE}/oauth/token`, {
+  method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) });
+async function signInGrant() {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerClient();
+  const verifier = randomBytes(32).toString("base64url");
+  const { code } = await danceToCode(clientId, verifier);
+  const tok = await tokenAt({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: REDIRECT, code_verifier: verifier });
+  assert.equal(tok.status, 200);
+  return tok.json();
+}
+const rotateGrant = async (refreshToken) => {
+  const r = await tokenAt({ grant_type: "refresh_token", refresh_token: refreshToken });
+  assert.equal(r.status, 200, `rotation: ${r.status}`);
+  return r.json();
+};
+const meStatus = async (key) => (await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${key}` } })).status;
+// A pair issued before the switch, written into the office's own oauth.db as issueTokens wrote it then: no family.
+function legacyPair() {
+  const db = new DatabaseSync(join(tmp, "oauth.db"));
+  try {
+    const t = Math.floor(Date.now() / 1000), pair = { access_token: randomBytes(32).toString("base64url"), refresh_token: randomBytes(32).toString("base64url") };
+    const ins = db.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created) VALUES (?, ?, 999, 'keeminlee', ?, ?, ?)");
+    ins.run(s256(pair.access_token), "access", redirectClientId, t + 3600, t);
+    ins.run(s256(pair.refresh_token), "refresh", redirectClientId, t + 7200, t);
+    return pair;
+  } finally { db.close(); }
+}
+
+test("POS-485 · THE FALSIFIER: a replayed refresh token ends every key of its sign-in at the door; another sign-in of the same account and client, a pre-switch access key and the household and resident keys still work", async () => {
+  const g1 = await signInGrant(), g2 = await rotateGrant(g1.refresh_token), g3 = await rotateGrant(g2.refresh_token);
+  const other = await signInGrant();                       // the same account, the same registered client: another sign-in
+  const legacy = legacyPair();
+  const humanKey = (await (await fetch(`${BASE}/keys`, { method: "POST", headers: { authorization: `Bearer ${other.access_token}` } })).json()).key;
+  const { mintHouseholdKey } = await import("../src/oauth.mjs");
+  const odb = new DatabaseSync(join(tmp, "oauth.db"));
+  const residentKey = await mintHouseholdKey(odb, 999, "keeminlee", { heldBy: "resident", claimedHandle: "wright", cosignedBy: { id: 999, login: "keeminlee" } });
+  odb.close();
+  for (const k of [g1.access_token, g2.access_token, g3.access_token, other.access_token, legacy.access_token, humanKey, residentKey])
+    assert.equal(await meStatus(k), 200, "before: every key opens the door");
+
+  const replay = await tokenAt({ grant_type: "refresh_token", refresh_token: g1.refresh_token });
+  assert.equal(replay.status, 400);
+  const said = await replay.json();
+  assert.equal(said.error, "invalid_grant");
+  assert.match(said.error_description, /already used once, so the sign-in it belongs to has ended/);
+  for (const g of [g1, g2, g3]) assert.equal(await meStatus(g.access_token), 401, "every access key of that sign-in, the older 30-day ones included, fails at once");
+  assert.equal((await tokenAt({ grant_type: "refresh_token", refresh_token: g3.refresh_token })).status, 400, "and its live refresh token");
+
+  assert.equal(await meStatus(other.access_token), 200, "another sign-in of the same account and client still works");
+  assert.equal(await meStatus(legacy.access_token), 200, "a pre-switch access key is outside the rule (POS-485/b)");
+  assert.equal(await meStatus(humanKey), 200, "the household key is untouched");
+  assert.equal(await meStatus(residentKey), 200, "and the resident's own key");
+  assert.equal((await tokenAt({ grant_type: "refresh_token", refresh_token: other.refresh_token })).status, 200, "the other sign-in still refreshes");
+});
+
+test("POS-485 · a pre-switch refresh links what it issues from its first rotation; a replay of it ends that, never the pre-switch access key beside it", async () => {
+  await registerClient();
+  const legacy = legacyPair();
+  const n1 = await rotateGrant(legacy.refresh_token), n2 = await rotateGrant(n1.refresh_token);
+  assert.equal(await meStatus(n2.access_token), 200);
+  const replay = await tokenAt({ grant_type: "refresh_token", refresh_token: legacy.refresh_token });
+  assert.equal(replay.status, 400);
+  assert.match((await replay.json()).error_description, /the sign-in it belongs to has ended/);
+  for (const g of [n1, n2]) assert.equal(await meStatus(g.access_token), 401);
+  assert.equal(await meStatus(legacy.access_token), 200, "the pre-switch access key keeps its own expiry");
+});
+
+test("POS-485 · the file's sweep keeps a retired token's evidence while its sign-in can still authenticate, and removes it after", async () => {
+  const { openOauthDb, sweep } = await import("../src/oauth.mjs");
+  const db = openOauthDb(join(tmp, "sweep-parity.db"));
+  try {
+    const t = Math.floor(Date.now() / 1000);
+    const ins = db.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created, family) VALUES (?, ?, 999, 'k', 'c', ?, ?, ?)");
+    const spent = db.prepare("INSERT INTO tokens (token_hash, kind, family, created) VALUES (?, 'spent', ?, ?)");
+    ins.run("live-access", "access", t + 600, t, "fam-live");
+    ins.run("dead-access", "access", t - 5, t, "fam-dead");
+    spent.run("live-spent", "fam-live", t);
+    spent.run("dead-spent", "fam-dead", t);
+    await sweep(db);
+    const left = db.prepare("SELECT token_hash FROM tokens ORDER BY token_hash").all().map((r) => r.token_hash);
+    assert.deepEqual(left, ["live-access", "live-spent"]);
+  } finally { db.close(); }
 });
 
 test("PKCE mismatch → invalid_grant, and the code is burned", async () => {

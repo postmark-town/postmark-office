@@ -490,6 +490,17 @@ async function sendRow(args, key, db, clone, odb, nonce) {
 
   const plan = validateLetter(args, key, db); // the office's own fence, unchanged and first
 
+  // A RESEND (POS-1027): this letter stands in for one of the sender's that bounced. Judged AFTER the fence (so the key holds the sender before anything about a
+  // letter is confirmed) and AFTER the nonce lookup above (so a retry ends where the first call ended). The original is never touched: the link is this row's own
+  // arguments, kept verbatim in the log (letter-resend.mjs).
+  let resendOf = null;
+  if (args?.resend !== undefined && args?.resend !== null && args?.resend !== "") {
+    const { judgeResend } = await import("./letter-resend.mjs");
+    const { storeIndexPooled } = await import("./town-index-store.mjs");
+    try { resendOf = await judgeResend(args, { from: plan.from, ix: storeIndexPooled(clone), odb, logOn: true }); }
+    catch (e) { if (e?.name === "TownIndexUnreachable") throw Object.assign(new Error(e.refused.defect), { code: 503, defect: e.refused.defect, hint: e.refused.hint }); throw e; }
+  }
+
   const bad = await preflightEnvelope(clone, plan);
   if (bad) { const e = new Error(bad.defect); Object.assign(e, bad); throw e; }
 
@@ -510,7 +521,7 @@ async function sendRow(args, key, db, clone, odb, nonce) {
   }
 
   const file = outboxRelPath(plan.from, plan.date, plan.to, plan.slug);
-  const seq = await logLetter(odb, { args, key, from: plan.from, id: plan.id, file });
+  const seq = await logLetter(odb, { args: resendOf ? { ...args, resend: resendOf.id } : args, key, from: plan.from, id: plan.id, file });
   return {
     letter_id: plan.id,
     // NOTHING IS COMMITTED, and the field says so rather than going missing:
@@ -543,5 +554,7 @@ async function sendRow(args, key, db, clone, odb, nonce) {
     ...(nonce ? { nonce, idempotent: "retry this exact call with the same nonce and you will get this receipt back rather than a second letter — until the crossing takes it, after which the letter id is the guard" } : {}),
     // A thread the office's copy does not hold yet is accepted and said (POS-332, write.mjs § threadNoteFor).
     ...(plan.threadUnseen ? { thread_note: threadNoteFor(plan.thread) } : {}),
+    // Only when one was named (POS-1027): which bounce this letter stands in for, and what that does and does not mean
+    ...(resendOf ? { resend: resendOf.id, resend_note: (await import("./letter-resend.mjs")).resendNote(resendOf.id) } : {}),
   };
 }

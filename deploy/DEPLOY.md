@@ -300,7 +300,11 @@ by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows): run the seed advance
-below with the seed's current pair, then the rehearsal. The pair, read from origin
+below with the seed's current pair, then the rehearsal, before the open window's
+close that the advance prints. The advance reseeds the registry from the clone, so
+the keep tick welcomes no rehearsal house the town never held, and trues up the
+open window's close, so the bless names the window the rehearsal cleared (POS-950).
+No hand SQL comes between them. The pair, read from origin
 in a box shell, since a clone's local tags are only as new as its last fetch:
 ```sh
 for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
@@ -329,18 +333,33 @@ dev's. Then, in order, stopping at the first failure and naming it:
    having written nothing, and prints the retag for someone whose clone can push.
    Run it, then run the script again.
 2. **The freshen** stands the clones on the seed and re-signs.
-3. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
+3. **The registry.** The seed's `tools/households.json` holds no rehearsal house, and
+   the store still holds the last rehearsal's. So `households`, `household_pins` and
+   `registry_meta` are emptied as `world2_owner` (`office_api` holds no DELETE), in one
+   statement that refuses any database but the sandbox; `registry-seed --apply` fills
+   them from the town clone, and `registry-drain --check` must say byte-equal.
+4. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
    `stamp-lines --sync` records the seed's lines past them, then `--verify`.
-4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
+5. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
    head already exists).
-5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
+6. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
    that sha. A world sha that doesn't descend from the pin stops here, and the stop
    prints the line that clears the pin.
-6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+7. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
    as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
-7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
+8. **The window true-up.** A clearing opens the next window at the cleared one's
+   scheduled close, for 12 hours, and dev has no candle between rehearsals, so the open
+   window's close is long past by the next one. Cleared as it stands, its successor's
+   close would be past too, and the bless would name that successor. So a past close
+   moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
+   database but the sandbox and any count of open windows but one. A close still ahead
+   is left alone. The step prints the close: rehearse before it, or run the advance again.
+9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+A seed past the suite's pins (`test/clone-pins.json`) needs a pin-move PR on the
+train beside it, in POS-953's shape. The plan prints this too.
 
 No testers on dev during an advance. The dev office stays up, and the trim doesn't
 take the lock its stamped writes take, so a tester's act between the trim and the
@@ -627,6 +646,25 @@ Most of `office-keep.sh` is deliberately non-fatal: a step that fails prints a l
 - **Provenance (Wright, 2026-10-13):** `postmark-office-keep.service` is the scheduled unit by contract and always records `source: "scheduled"`. To run the tick by hand, use **`systemctl start postmark-office-keep-by-hand.service`**: it runs the same script and records `by-hand`. A by-hand run never extends or clears a scheduled streak and never counts as freshness. That unit has no `[Install]` section and no timer, so the roll-call's unit discovery does not list it. A line with no `source` field (older than this change) counts as scheduled. A source the reader does not know counts as unknown and never clears anything.
 - **Accepted limitation:** starting `postmark-office-keep.service` itself by hand is recorded as **scheduled**, because the unit cannot tell who started it, and there is deliberately no `INVOCATION_ID` or `LastTrigger` detection. Use the by-hand unit instead. `/etc/postmark-office.env` must not set `POSTMARK_KEEP_SOURCE`: an `EnvironmentFile=` value overrides the unit's `Environment=` line.
 - **Install day:** copy both units, as in One-time setup step 3 (the by-hand unit is copied, never enabled). Until the first receipt is written at `history_path`, this row is **expected** to show ALARM-outcome ("empty or unreadable"). The first scheduled tick after the release clears it, if every step is `ok`.
+
+### A lost mint push no longer wedges the town clone (POS-1030)
+
+On 2026-11-13 the tick's mint commit lost its push race (15:24Z), stayed in the town clone ahead of main, and every later tick's `pull --ff-only` refused until a hand reset the clone (16:02Z). From this change, `office-keep.sh` records its own mint commit and that commit's parent in the clone's git directory, as `office-keep-unlanded`, before it pushes. A push that answers no is settled from a fresh fetch (§ THE TICK'S OWN UNLANDED COMMIT in the script):
+
+| What the fetch shows | What the tick does | Receipt |
+|---|---|---|
+| main holds the commit (the push landed and its answer was lost) | nothing more; it is never minted again | `push` ok `landed-unacked` |
+| main does not hold it, and HEAD is still exactly that commit | `reset --keep` to its parent; the rows re-derive on the next tick, on main's tail; a signed line is never rebased | `push` refused `push-failed`, `rollback` ok `unmade` |
+| the fetch or a read failed | the commit is **kept**, with its record | `rollback` refused `unconfirmed` |
+| another writer committed on top of it in the clone | **kept**; nothing of the other writer's is touched | `rollback` refused `moved` |
+
+The next tick settles any record **before** its pull (`pull` ok `unmade` or `landed-unacked`). While a record stays unsettled, the tick signs no new line: `mint` refused `prereq:unlanded`, and three such scheduled ticks raise the keep row's alarm.
+
+- **Nothing to install.** This is code only: no unit, environment, store or migration change.
+- **The record is the tick's own.** Don't delete `/srv/postmark-office/town-clone/.git/office-keep-unlanded` while the commit it names is still in the clone. Doing so turns a commit the tick would settle into one only a hand can. If a hand does repair the clone (resetting the commit away, as on 11-13), the next tick finds the commit gone and clears the record itself (`pull` ok `gone`).
+- **On `unconfirmed` or `moved` for more than one tick:** `git -C /srv/postmark-office/town-clone log -2` and `cat .git/office-keep-unlanded` name the commit and its parent. `moved` means a write outside the town lock committed on top of the tick's commit. That is a hand repair under `town.lock`, as on 11-13; keep the tick's commit on a branch, never rebase it.
+- **What the deploy does not settle:** a tick commit stranded **before** this release has no record, so the new tick doesn't treat it as its own. Its pull refuses as before, and the sentinel's `town_clone` probe names it. Run `git -C /srv/postmark-office/town-clone status -sb` once after the deploy. It should show no `ahead`.
+- **Rollback:** revert the code. The old script never reads the record, so a leftover one changes nothing. Remove it only once `git status -sb` shows the clone level with main.
 
 ### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
 
@@ -1329,6 +1367,84 @@ cat /srv/postmark-sentinel/status.json | head -40
   If this box is down or the timer is masked, nothing here alarms. That needs an
   off-box heartbeat and is deliberately out of scope.
 
+### The store, residents' 5xx, certificates, failed units, the backup and trips (POS-968)
+
+Six more probes run inside the same 10-minute tick (`tools/site-sentinel.mjs`
+§14–§19), from the STAR-161 sitting (Darko, 2026-11-08): *"make sure that we
+don't accidentally drop any alarms in the move. false alarms are fine as long as
+we iterate and fix them as we find them."* Each reads something the box already
+writes, as meepo. No unit, timer or webhook is added. A source the sentinel
+cannot read makes its probe STALE, never OK. Every reason is written for the
+public board, so none carries a resident's handle, a query, an error's text or
+a unit's name. Where a probe has more to say (the failed units' names), it says
+it only in the Discord post, the change log and `state.json`.
+
+A post longer than 1,900 characters keeps its lines whole from the top and ends
+"…and N more not shown here; the board has every one."
+
+The store, residents' 5xx and trip probes count events over the last 25 minutes,
+in any 10-minute span of them. The span is the ruled window. The lookback is
+longer than one tick, so a burst that straddles two ticks is counted whole. A
+finished burst reads DOWN for one tick longer before it recovers.
+
+| Probe | Reads | Says |
+|---|---|---|
+| `store_health` | `/srv/postmark-office/telemetry/store-txn-4380.json` (the office's store watch, each minute) and the office's journal (`journalctl -u postmark-office.service`) for `terminating connection due to idle-in-transaction timeout` | **DOWN:** a kill with an office 500 within 10 min of it (POS-963). **WARN:** a kill with no 500 beside it; a session idle in a transaction for 5 s or more; a minute the watch could not ask the store. **STALE:** the watch older than 5 min, or the record or the journal unreadable. |
+| `resident_5xx` | `/srv/postmark-office/telemetry/access-YYYY-MM-DD.jsonl`, by the moment each request was answered, routes masked (`GET /quests/<h>`) | **DOWN:** 5 or more 5xx on one route within 10 min (POS-965). Fewer are named and not alarmed. **STALE:** no log, or no line in 25 min (the sentinel's own `GET /api/` lands one each tick). |
+| `cert_<host>` (one row per host) | The certificate nginx serves, read with `openssl s_client -connect 127.0.0.1:443 -servername <host>` | **WARN:** under 21 days. **DOWN:** under 7 days, expired, or a certificate that does not name the host. **STALE:** the handshake printed none. |
+| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. The board says only the counts ("2 failed units, 1 the roll-call manifest names"); the post and the change log name them. **Any change in the set of failed units posts again**, saying which came and which went, so a second unit failing under a standing WARN is heard. |
+| `backup_outcome` | `/srv/world2-lab/state/backup.json` | **DOWN:** `failed` (it names the stage), or any status that is not `shipped`. **WARN:** `shipped-no-basebackup`. **STALE:** older than 1,560 min, the roll-call's allowance. |
+| `office_tripped` | The office's journal: `the office tripped` lines, counted by door (`mcp household`, a REST door) | **WARN:** any trip. **DOWN:** 5 or more on one door within 10 min, the same line as `resident_5xx`. The MCP door wraps a trip in HTTP 200, so `resident_5xx` cannot see it. |
+
+The hosts are `CONFIG.certs.hosts`: every `listen 443` server name. The test reads
+this repo's `deploy/nginx-*.conf` and refuses a name missing from the list.
+meepo.online, starstory.online and starforge-atelier.online are served from nginx
+files that exist only on the box, so a host added there is added to the list by
+hand. pages.postmark.town is not on it. It has no DNS and no block of its own.
+
+**What the sentinel's user cannot read.** The Postgres log is `postgres:adm` and
+meepo is not in adm, so the kills come from the office's own journal line
+instead. That journal is meepo's (the office runs as meepo). A 502 or 504 that
+nginx answers for an office that is down or slow never reaches the office's
+access log, and nginx's log is adm's too. The doors probes catch an office that
+is down, and a slow one is not counted.
+
+**The change log.** Every tick appends one line to
+`/srv/postmark-sentinel/history.jsonl` for each probe whose verdict changed or
+that spoke: `at`, `key`, `from`, `to`, `reason`, `alert`, and `delivered` when a
+post went out. It keeps 366 days, and at most 64 MB. Read the last day's changes with:
+
+```sh
+tail -n 200 /srv/postmark-sentinel/history.jsonl | jq -r '"\(.at) \(.key) \(.from) -> \(.to) \(.alert // "")"'
+```
+
+**Acknowledging a standing red.** The operator writes
+`/srv/postmark-sentinel/acks.json` (readable by meepo), beside `state.json`:
+
+```json
+{ "acks": [
+  { "probe": "failed_units", "issue": "STAR-151", "until": "2026-11-15T00:00:00Z" }
+] }
+```
+
+- `probe` is the board's key. `issue` is an issue id or a link. `until` is no more than 7 days out. An ack that runs further is refused, not shortened.
+- The first tick that reads an ack binds it to the probe's finding as it stands. While that finding holds, the probe reads on the board as before (with `ack` beside it) and posts nothing: no onset, no 12-hour reminder.
+- Any change in the finding posts at once and spends the ack. A new ack, with a new `until`, binds to the new finding.
+- An ack that expires, or is taken out of the file, while its finding stands posts once at once.
+- An ack that is refused, expired or unreadable is named in the board's `alerting.notes`, and it applies to nothing.
+
+A probe's finding is kept in `state.json`, never on the board: for the six
+probes above it is their own (for `failed_units`, the names), and for any other
+probe it is its verdict and its reason with every number masked, so a clock in
+the sentence is not a change. The board's `ack` shows the issue and `until`.
+Check the acks and the new rows after a deploy with:
+
+```sh
+sudo -u meepo systemctl start postmark-site-sentinel
+jq -r '.probes[] | select(.key|test("^(store_health|resident_5xx|cert_|failed_units|backup_outcome|office_tripped)")) | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+jq -r '.alerting.notes[]?' /srv/postmark-sentinel/status.json
+```
+
 ## The operator dashboards (`/ops/`, hub generated since 2026-08-11)
 
 Seven static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
@@ -1589,6 +1705,91 @@ saved COMPLETE`). `systemctl show postmark-crossing-save.service -p Result` read
 **Rollback:** copy the three files back from `/var/backups/`, `daemon-reload`,
 `systemctl restart postmark-crossing-save.timer`. The save is idempotent, so a
 crossing saved by either shape reads the same.
+
+### The seal runs in its own sandbox (POS-988)
+
+The ferry's seal stage used to run the town's `PROJECTS/the-town-seal/seal.mjs`
+and `verify.mjs` inside `postmark-ferry.service`, as meepo, with the office env,
+the stamp key, the town push credential and the network in reach. Measured on
+POS-988 (2026-11-10), the pair needs none of it. Now the stage runs
+`tools/town-seal-sandbox.mjs --clone`, which sends the pair's four inputs to
+`postmark-town-seal.socket` (meepo only, 0600). Each connection starts one
+`postmark-town-seal@.service`: a DynamicUser with no environment, no network
+and `/srv` hidden but for the one tool. Only a green seal and verify send the two
+outputs back. The stage, the ferry's undo, the witness record and the ferry's
+own commit are unchanged. The why and the exchange are in the tool's header.
+
+**The rehearsal before the tag.** Until step 1 below, the box has no socket, so
+the w47 pre-tag dev rehearsal skips its seal job by name. Its record carries
+`seal SKIPPED: /run/postmark-town-seal.sock is not here …` among the notes,
+which is expected, and the job is not red. Every other job runs as before. From
+step 1 on, the rehearsal runs the seal through the socket like the ferry does.
+
+**Install (by hand, away from a crossing: not 23:50–00:40 or 11:50–12:40 UTC),
+and only after the release carrying this change is live**, so that
+`/srv/postmark-office/tools/town-seal-sandbox.mjs` exists. The order is: the
+socket, then the proof, and only then the ferry unit. A failed proof costs
+nothing, because no crossing has met the new ferry yet. A ferry unit that calls
+a missing socket would refuse its seal stage at every crossing. (The undo would
+put the clone back, and nothing before the seal would be lost.)
+
+**1. The socket.**
+```sh
+sudo cp /srv/postmark-office/deploy/postmark-town-seal.socket \
+        /srv/postmark-office/deploy/postmark-town-seal@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-town-seal.socket
+systemctl show postmark-town-seal.socket -p ActiveState -p Listen    # active, /run/postmark-town-seal.sock (Stream)
+stat -c '%U %a' /run/postmark-town-seal.sock                          # meepo 600
+```
+
+**2. The proof, which writes nothing in the town clone.** (a) Seal a scratch
+copy of the four inputs through the socket, and compare the outputs with the
+committed ones. They are byte-identical when the ledger hasn't moved since the
+last seal. (b) Send a probe in the seal's place. It records only whether it
+could reach each thing (an error code, or `REACHED`), never what it read.
+```sh
+d=$(sudo -u meepo mktemp -d)
+for f in PROJECTS/the-town-seal/seal.mjs PROJECTS/the-town-seal/verify.mjs PROJECTS/the-town-seal/seal.json WHITE_PAGES/mail-ledger.md; do
+  sudo -u meepo install -D -m 644 "/srv/postmark-office/town-clone/$f" "$d/$f"; done
+sudo -u meepo node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$d"; echo "exit $?"   # [seal] sealed in the sandbox: …, exit 0
+for f in seal.json the-town-seal.html; do cmp "$d/PROJECTS/the-town-seal/$f" "/srv/postmark-office/town-clone/PROJECTS/the-town-seal/$f" && echo "$f same"; done
+# (b) the probe: every line must read ENOENT, EACCES, EROFS or EAFNOSUPPORT, and env must be ["PATH"]
+sudo -u meepo tee "$d/PROJECTS/the-town-seal/verify.mjs" >/dev/null <<<'process.exit(0)'
+sudo -u meepo tee "$d/PROJECTS/the-town-seal/seal.mjs" >/dev/null <<'PROBE'
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
+const code = (f) => { try { f(); return "REACHED"; } catch (e) { return e.code; } };
+const sock = (o) => new Promise((ok) => { const s = connect(o); const d = (v) => { s.destroy(); ok(v); }; s.on("connect", () => d("REACHED")); s.on("error", (e) => d(e.code)); setTimeout(() => d("TIMEOUT"), 3000); });
+const out = { env: Object.keys(process.env).sort(),
+  stamp_key: code(() => readFileSync("/srv/postmark-office/stamp-key.pem")), push_credential: code(() => readFileSync("/srv/postmark-office/.git-credentials")),
+  office_env: code(() => readFileSync("/etc/postmark-office.env")), town_clone: code(() => readdirSync("/srv/postmark-office/town-clone")),
+  write_etc: code(() => writeFileSync("/etc/postmark-seal-probe", "x")), postgres: await sock({ path: "/run/postgresql/.s.PGSQL.5432" }),
+  system_bus: await sock({ path: "/run/dbus/system_bus_socket" }), network: await sock({ host: "1.1.1.1", port: 443 }) };
+writeFileSync("PROJECTS/the-town-seal/seal.json", JSON.stringify(out, null, 1) + "\n");
+writeFileSync("PROJECTS/the-town-seal/the-town-seal.html", "probe\n");
+PROBE
+sudo -u meepo node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$d" && sudo -u meepo cat "$d/PROJECTS/the-town-seal/seal.json"
+journalctl -u 'postmark-town-seal@*' --since -5min --no-pager | tail -5   # [town-seal] seal: exit 0, verify: exit 0
+```
+Then remove `$d` and its files by name. If (a) differs or (b) reads `REACHED`
+anywhere, stop here: the ferry still runs the seal itself, and nothing has changed for it.
+**3. The ferry unit.**
+```sh
+sudo cp -n /etc/systemd/system/postmark-ferry.service /var/backups/postmark-ferry.service.pre-pos988   # the rollback copy; -n keeps the first one
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+The ferry's own drop-ins under `postmark-ferry.service.d/` are untouched.
+Nothing is started by hand: the next crossing is the first sandboxed seal.
+After it, `journalctl -u postmark-ferry` shows `[seal] sealed in the sandbox`,
+and the witness record names `--stage done`.
+
+**Rollback:** `sudo cp /var/backups/postmark-ferry.service.pre-pos988
+/etc/systemd/system/postmark-ferry.service && sudo systemctl daemon-reload`. The
+seal runs in the ferry again, as before. The socket can stay. To take it away,
+run `sudo systemctl disable --now postmark-town-seal.socket` and remove its two
+unit files.
 
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
@@ -2027,7 +2228,7 @@ is a hand-run, deliberately: it drops and recreates a database, and nothing that
 does that belongs on a clock.
 
 **The backup lane also carries `roles.db` since POS-185 (2026-09-21)**, and it is
-the only file in that commit that is not the world store. It is there because
+the only file in that night that is not the world store or an intake journal. It is there because
 `src/roles.mjs:71-82` says so in its own voice and then declines to act on it,
 correctly — the module states the gap, operations decides the discipline:
 
@@ -2052,7 +2253,7 @@ next reader will have:
   — `VACUUM INTO` writes only to the target — so the backup lane never holds a
   pen over who paid.
 - **No new unit, no new credential, no new roll-call row.** Same timer, same
-  private repo, same deploy key, and the `postmark-world2-backup.timer` row's
+  private bucket, same instance role, and the `postmark-world2-backup.timer` row's
   receipt now carries `roles_status`, `roles_db_bytes` and `role_audit_rows`.
   `roles_status: absent` is legal and does not redden: `OFFICE_ROLE_GATES` is
   unset on every office today (`src/server.mjs:170`), so a box that has never
@@ -2062,15 +2263,21 @@ next reader will have:
 **Restoring it is a file copy**, which is the whole restore path:
 
 ```
-cp roles/<newest>.db /srv/postmark-office/roles.db   # the office opens it at boot
+aws s3 cp s3://<bucket>/world2/<stamp>/roles-<stamp>.db /srv/postmark-office/roles.db   # the office opens it at boot
 ```
+
+Since 2026-11-11 the roles live in the store (`office_roles`, `office_role_audit`; POS-271) and ride
+inside the dump, so an in-store night ships no `roles-*.db`: restoring the dump restores them.
 
 `world2-restore-rehearse.sh` counts the shipped copy's `role_audit` against the
 live registry on every rehearsal, under the same drift rule as the Postgres
 tables: the live side may have gained rows (the town kept selling), but the copy
 holding MORE rows than live cannot be explained by the clock and is the finding.
-Prefer `--from-remote`, which reads the copy out of the off-box clone rather than
-the box's own disk — the local one only proves the copier ran.
+Prefer `--from-s3`, which reads the copy out of the S3 bucket rather than the
+box's own disk — the local one only proves the copier ran. With the roles in the
+store, the rehearsal counts `office_roles` and `office_role_audit` with the dump's
+other tables. (`--from-remote` reads the GitHub repo, archived at STAR-118 with
+every night up to the git ship's retirement.)
 
 ### The law pen keeps its own clock (2026-09-19, postmark#2893)
 
@@ -2259,13 +2466,21 @@ not fail the notary**: the certification is the notary's job, and this finding i
 about the register. The alarm is the roll-call's outcome rule on the
 `postmark-world2-notary.timer` row (`alarm_on_nonempty` on its lists, and
 `alarm_on_false` on `escrow_checked` — a read that could not run is never a
-clean town). The escrow list holds only **judgeable** zeros: a commons mark
-locked at a window whose town sha the escrow projection never held — every
-window before 181, migration 014's first ingest — is **unjudgeable**, written
-on the line as `escrow_unjudgeable` with the oldest projected sha beside it,
-and printed by the row's `report_counts` as a count, never an alarm
-(postmark#2935; before it, 227 such marks alarmed every morning for eight
-nights while the true unbacked count was zero).
+clean town). The escrow list holds only **judgeable** zeros, and a mark is
+unbacked only if it has no backing **now** (POS-808/b; Darko, 2026-11-08: "Only
+what's unbacked today"): its stake is read at the store's current town read,
+`projection_heads['town']`, not at the town sha of the window that locked it, so
+a mark locked at zero and staked since is not listed. The window and sha that
+locked it stay on the row as history. If that current read is unnamed or the
+escrow projection holds no rows for it, nothing can be judged that night: every
+eligible commons mark is **unjudgeable**, written on the line as
+`escrow_unjudgeable` with the oldest projected sha beside it, and printed by
+the row's `report_counts` as a count, never an alarm — so a GREEN line with a
+non-zero count is a night the escrow judgement did not run, not a clean town.
+Before POS-808/b
+this class was marks locked before window 181, migration 014's first ingest,
+whose locking sha was never projected (postmark#2935; 227 such marks alarmed
+every morning for eight nights while the true unbacked count was zero).
 
 At the G1 swap the class becomes structurally impossible — the fold writes what
 the candle locked — and the read stays as the detector.
@@ -2370,11 +2585,14 @@ stamp pen the founder parked.
     /srv/world2-lab/state/          one JSON per lane — the roll-call heartbeats
     /srv/world2-lab/private-dumps/  pg_dump output, 0700, outside every checkout
     /srv/world2-lab/basebackups/    pg_basebackup output, 0700
-    /srv/world2-lab/backup-repo/    the off-box dump repo's checkout
+    /srv/world2-lab/backup-repo/    the git ship's checkout, RETIRED with it (STAR-118);
+                                    it no longer grows, and its removal is
+                                    POS-1009's call. The off-box copy is S3.
     /srv/world2-lab/notary/         the notary checkout, pushed to its OWN repo
     /srv/world2-lab/ingest-clones/  persistent world/town checkouts, reset per run
     /srv/world2-lab/.ssh/           two deploy keys + a pinned known_hosts:
                                     w2-backups -> postmark-world2-backups
+                                                  (the retired git ship's key)
                                     w2-notary  -> postmark-world2-notary
                                     NEITHER key can read the other's repo, and
                                     that is DEC-7 rather than tidiness (below)
@@ -2395,6 +2613,87 @@ stamp pen the founder parked.
 > enables it would recommit a ruling by muscle memory. `law-ingest` takes its
 > place — the law half, split out on postmark#2893, section below. The parked
 > unit's files still ship, so `scp`ing them is right; enabling it is not.
+
+### The S3 route: the bucket, a rebuilt box, the cold restore (STAR-118)
+
+Since STAR-118 the backup lane's one off-box copy is an S3 bucket in the box's
+own AWS account. The bucket's name is the unit's `W2_S3_BUCKET` (the drop-in
+below), and this page writes it as `<bucket>`.
+
+**What the bucket keeps.** These are Darko's settings from his AWS setup on
+2026-11-08, as Wright relayed them on STAR-118 (2026-11-09 01:14Z). They aren't
+read back from the box, because its role can't read the bucket's configuration
+(`GetBucketVersioning` and `GetLifecycleConfiguration` are denied, read
+2026-11-12).
+- Region us-east-2, with **versioning on**.
+- **Lifecycle `trim-old-nights`:** current versions expire at 90 days, and
+  noncurrent versions at 7. So **the bucket keeps about the last 90 nights**, and
+  a night's objects are gone about 97 days after it shipped.
+- Nights from 2026-08-29 up to the git ship's retirement are in the archived
+  GitHub repo `wright-starforge/postmark-world2-backups`. Nights before
+  2026-11-04 shipped whole (`dumps/<file>`); from 11-04 on they're in parts
+  (`cat dumps/<file>.part-* > <file>`), with the sum of the whole beside them.
+- **The box's access is the instance role `postmark-box-backup`.** Its one
+  policy, `postmark-world2-backup-nodelete`, gives `s3:ListBucket` on the bucket
+  and `s3:PutObject` and `s3:GetObject` on its objects. It has no delete and no
+  bucket settings, so the box can write and read but never destroy, and the
+  lifecycle does the trimming.
+
+**What a box needs before the lane can ship.** A box rebuilt from § Install
+alone fails every night at `ship`, because the lane won't run without a bucket:
+1. **The instance profile `postmark-box-backup`** is attached to the instance
+   (EC2 → the instance → Actions → Security → Modify IAM role; this is Darko's
+   AWS act). As meepo, `aws sts get-caller-identity` then names
+   `assumed-role/postmark-box-backup/…`.
+2. **The AWS CLI v2, where the unit can find it.** Run
+   `sudo snap install aws-cli --classic`, then
+   `sudo ln -s /snap/bin/aws /usr/local/bin/aws`, since the unit's PATH has no
+   `/snap/bin`.
+3. **The drop-in** `/etc/systemd/system/postmark-world2-backup.service.d/s3.conf`:
+
+       [Service]
+       Environment=W2_S3_BUCKET=<bucket>
+
+   Then run `sudo systemctl daemon-reload`.
+4. **Check it:** as meepo, `aws s3 ls s3://<bucket>/world2/` exits 0. Then run
+   the unit once by hand (`sudo systemctl start postmark-world2-backup.service`);
+   `state/backup.json` should read `shipped`, with its `s3` field naming the
+   night.
+
+**The cold restore, when the box is gone.** This is a hand-run, and **only ever
+into a new, empty database: never against the live store.** It runs on a new
+box with Postgres, the store's roles and an empty database (§ Install, § The one
+Postgres change), or on any machine that can read the bucket:
+
+    aws s3 ls s3://<bucket>/world2/                  # nights are fixed-width UTC stamps, so sort order is time order
+    aws s3 ls s3://<bucket>/world2/<stamp>/          # take the newest night that HAS a LATEST.json:
+                                                     # it uploads last, so a night without one didn't finish
+    aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
+    cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
+    pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> world2-<stamp>.dump
+
+Then put back what rode beside the dump, as `LATEST.json` names it:
+- **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
+  Each watcher reads its file whole on its next tick.
+- **A `roles-<stamp>.db`**, if the night has one, goes to
+  `/srv/postmark-office/roles.db`. An in-store night (since 2026-11-11) has none,
+  because its roles are in the dump.
+
+What comes back is up to 24 hours old (the dump's RPO), since the WAL and the
+base backups don't leave the box. **The grants are a named gap.** The dump is
+taken `--no-owner --no-acl`, so it carries the schema and the rows but not the
+pens' grants. They live in the schema files (`world2/schema/*.sql`), and
+re-applying them to a restored store has not been rehearsed.
+
+**`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
+into a scratch database and compares that with a live store, so it needs one
+running. It proves the cold path while the box is alive. Run it by hand the way
+the unit runs, so the root-only env file loads before it drops to meepo (the
+2026-11-12 rehearsal ran exactly this):
+
+    sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-world2-dev.env \
+      -p "Environment=W2_S3_BUCKET=<bucket>" -p Environment=WORLD2_OFFICE=/srv/postmark-office \
+      --pipe --wait --collect /bin/bash /srv/postmark-office/deploy/world2-restore-rehearse.sh --from-s3
 
 ### ONE TREE PER BOX — the office-tree drop-in (2026-09-10)
 
@@ -2572,9 +2871,10 @@ records the measurement.
 
 1. **The WAL does not ride off-box.** Measured at ~163 MB/day raw (2026-08-29,
    a heavy build day), which no git history survives. The dump ships; the WAL and
-   the base backups stay on the box. Giving the box a private object-storage
-   bucket turns that into about a dozen lines — see `world2-backup.sh` § *the
-   off-box destination* for what was tried and why each was refused.
+   the base backups stay on the box. The box has a private bucket now (STAR-118,
+   § The S3 route), so the WAL ship is about a dozen lines, and they're not
+   written. See `world2-backup.sh` § *the off-box destination* for what was tried
+   before the bucket and why each was refused.
 
 ## 069: the seal records its town words (POS-362)
 
@@ -2910,6 +3210,43 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node tools/media-takedown.mjs --url <media url> --reason "<why>" --by <your handle> --oauth-db /srv/postmark-office/oauth.db'
    ```
    It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.
+
+## 094: a sign-in's family, so a reused refresh token ends the whole sign-in (POS-485)
+
+Darko ruled twice on 2026-11-13:
+- 09:09 EST, POS-485/a: "End the whole sign-in, no grace".
+- 13:1x EST, POS-485/b: "Link new keys, leave old".
+
+Every new or refreshed OAuth pair records its sign-in in `oauth_tokens.family`, and a refresh keeps the retired token's hash as a `spent` row. A retired refresh token presented again deletes every access and refresh token of its sign-in. The law is `src/oauth.mjs § THE SIGN-IN'S FAMILY`, and `CONTRACT.md § Auth` has the client's words.
+
+**094** adds one nullable column (`family`) and its index (`oauth_tokens_family`). It needs no grant change: `office_api` keeps SELECT, INSERT and DELETE, and nothing updates a token. There is no backfill and no row changes.
+
+**Nobody is signed out at the switch.** Pre-switch pairs stay unlinked and keep their own expiry; a pre-switch refresh token links what it issues from its first refresh on. Household, resident and static keys are untouched.
+
+Box steps (Jetto's hand, never a lane's):
+
+1. **Apply and prove 094 BEFORE the train PR is approved.** The new code names `family` in every pair it issues. Against a store without the column, every sign-in and refresh rolls back and answers `503` with `Retry-After`: nobody is signed out, but nobody can sign in or refresh until 094 lands.
+   - **Approving the train PR IS the deploy.** That approval's release-train run cuts the release tag and deploys it in the same run (§ The auto-deploy). So there is no moment between the tag and the code, and the SQL cannot come from the tag. Source it from the reviewed commit, or from the train once #1021 has landed there; the 094 file is the same at both.
+   - The office before this change ignores the column, so 094 can land any time before that approval. It does not touch the clearing's tables, so it needs no window around the clearing.
+   - The file waits at most 5 s for its lock (`lock_timeout`). Behind a long transaction on `oauth_tokens` it fails with `lock_not_available` and changes nothing: run it again.
+   - It is idempotent. The pipe is 079's above, from a commit instead of a tag:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office
+   REF=b0356f0e1e92614ba65abc85f8853f4fc08fe612   # #1021's reviewed commit; or REF=origin/train/2026-w47 once #1021 has landed there
+   git -C $CLONE fetch -q origin
+   git -C $CLONE show "$REF:world2/schema/094_oauth_signin_family.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 094):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_tokens' AND column_name = 'family'"   # text
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.oauth_tokens_family')"                                                              # oauth_tokens_family
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT has_table_privilege('office_api', 'oauth_tokens', 'UPDATE')"                                           # f (unchanged)
+   ```
+2. **Deploy the code: the train PR's approval, only once step 1's proof reads as above.** Its own release-train run deploys it. With `OFFICE_AUTODEPLOY` off, the deploy is the hand-carry of that tag, which also follows step 1. A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
+3. **Rollback** of the code needs no store step. The old code ignores `family`, and `spent` rows are inert to it (no reader matches the kind, and its sweep skips their NULL expiry). Refreshes keep working, without the reuse rule. After a later re-deploy, the sweep removes the `spent` rows whose sign-in has no live key left.
 
 ## Two site rebuilds per run, not three (POS-944, 2026-11-08)
 

@@ -508,9 +508,8 @@ test("a household with holo reads four tenses that sum sanely — and holo is IN
 test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", () => {
   // THE FOUNDER, 2026-09-17, verbatim: "holo does anything a normal stamp can;
   //   staking vs voting is a nondistiction."
-  // THE SENTENCE THIS REPEALS, which was live on this door until today: "this
-  //   buys ownership and memory, NEVER VOICE, and converts to real value only
-  //   if the town someday does."
+  // Until that ruling the sentence on this door withheld the vote from a
+  //   giver's stamps (its wording is in git history).
   //
   // This is the one place the office made a promise about VOICE, and it made it
   // at the instant a patron is about to send money. A test that only compared
@@ -522,10 +521,23 @@ test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", (
     "it says the stamps vote, because they do — a vote is a stake and clips against a fungible balance");
   assert.match(WHAT_THIS_BUYS, /capped/,
     "AND it names the bound in the same breath: a patron told their stamps vote and NOT told their share is capped has been told half the truth");
-  assert.match(WHAT_THIS_BUYS, /ownership and memory/,
-    "the two things that did not change are still promised");
-  assert.match(WHAT_THIS_BUYS, /converts to real value only if the town someday does/,
-    "and so is the conversion caveat, which this ruling never touched");
+  // CHANGED 2026-11-11 (POS-1001). NOMOS's definition of Stamp: "Stamps are not
+  // money. They can't be bought"; II.4.5: "Stamps never turn into money."; and II.6.1: NOMOS "grants
+  // no claim" on owning Postmark or on money outside the town. Until
+  // 2026-11-11 the next two asserted the sentence's earlier wording; NOMOS
+  // grants nothing outside the town for money, so both are now asserted
+  // ABSENT, and the sentence is held to the site's twin word for word.
+  assert.doesNotMatch(WHAT_THIS_BUYS, /ownership/,
+    "the money moment offers no ownership: NOMOS grants no claim on owning Postmark");
+  assert.doesNotMatch(WHAT_THIS_BUYS, /converts to real value/,
+    "and no conversion to real value: stamps never turn into money");
+  assert.match(WHAT_THIS_BUYS, /stamps never turn into money/,
+    "it says so, in NOMOS II.4.5's own words");
+  // written out rather than imported: the site's fine print says this sentence
+  // (postmark-site town/pages/fund/[pot].astro), capitalized and with a stop
+  assert.equal(WHAT_THIS_BUYS,
+    "a gift pays a bill and is written down in your name. If the town staked on this pot, the close thanks you in stamps that work like any stamp, including vote; money's share of your household is capped, and stamps never turn into money",
+    "the office's disclosure is the site's, word for word");
 });
 
 test("minted · for keeping reads as its own section — no liquid coin, and no fifth tense", async () => {

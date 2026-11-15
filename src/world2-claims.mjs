@@ -1235,14 +1235,25 @@ export async function lastAmendedRow(mark, { env = process.env, p: injected = nu
  * draft in town — including the caller's own — is invisible to this query. That
  * is the right answer for a shelf that describes what the TOWN did.
  */
-export async function claimRowsDecidedSince(since, { env = process.env } = {}) {
+export async function claimRowsDecidedSince(since, { env = process.env, until = null, afterSlug = null, exclusive = false } = {}) {
   const p = await pool(env);
+  // `until` (POS-1027, the town feed's cursor): read from a POSITION in this order, newest first (to the millisecond) then slug ascending, bytewise (COLLATE "C", as the feed's own cursor compares ids), so the 500 are the 500 after it and not the same
+  // newest 500 again. At the instant `until` only the slugs after `afterSlug` (none when `exclusive`) stand; older rows always do. Milliseconds, as the feed spells a time.
+  const at = `date_trunc('milliseconds', decided_at)`;
+  const params = [since];
+  let seek = "";
+  if (until) {
+    params.push(until);
+    if (exclusive) seek = ` AND ${at} < $2::timestamptz`;
+    else if (afterSlug != null) { params.push(afterSlug); seek = ` AND (${at} < $2::timestamptz OR (${at} = $2::timestamptz AND slug COLLATE "C" > $3))`; }
+    else seek = ` AND ${at} <= $2::timestamptz`;
+  }
   const { rows } = await p.query(
     `SELECT slug, status, window_id, decided_at, refusal_check
        FROM claims
-      WHERE status IN ('locked','refused') AND decided_at >= $1
-      ORDER BY decided_at DESC, slug ASC
-      LIMIT 500`, [since]);
+      WHERE status IN ('locked','refused') AND decided_at >= $1${seek}
+      ORDER BY ${at} DESC, slug COLLATE "C" ASC
+      LIMIT 500`, params);
   return rows;
 }
 

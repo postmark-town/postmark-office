@@ -31,7 +31,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { amendPlan, applyGate, MARK } from "../tools/town-signpost-amend.mjs";
+import { amendPlan, applyGate, MARK, OLD_BODY, NEW_BODY } from "../tools/town-signpost-amend.mjs";
 
 const CLONE = join(process.cwd(), "world-clone");
 const TOWN = join(process.cwd(), "town-clone");
@@ -64,8 +64,16 @@ test("T1 · THE REGRESSION: POS-606's signpost amend previews put_forward: true,
   assert.ok(backing >= 1, `the Centre has escrow behind it on the town's ledger (77 at the pin): ${backing}`);
   assert.equal(Number((await worldStakeRead({ mark: MARK })).escrow) || 0, 0, "and the signpost itself has none");
 
-  const plan = amendPlan(canonForGuards().byId.get(MARK) ?? null, await guardedLiveMarks(null, { actor: "the-town" }));
-  assert.equal(plan.refusal, undefined, plan.refusal);
+  // POS-1031: World #312 put the approved signpost text into canon, so on a World where it has landed the tool's plan is, truthfully, "already amended" and writes nothing; on a World
+  // before it, the plan is clean. The test asserts whichever is TRUE of the canon it reads, and then runs the Centre's verdict on a real amendable control: the SAME canon mark
+  // (its kind, ground, place, extent and house exactly as canon serves them) carrying the words the tool was approved to replace.
+  const real = canonForGuards().byId.get(MARK) ?? null;
+  const live = await guardedLiveMarks(null, { actor: "the-town" });
+  const truth = amendPlan(real, live);
+  if (real?.body === NEW_BODY) assert.deepEqual(truth, { refusal: "already amended: canon carries the approved text; nothing written" }, "canon carries the approved text: the tool refuses, nothing written");
+  else assert.equal(truth.refusal, undefined, truth.refusal);
+  const plan = amendPlan({ ...real, body: OLD_BODY }, live);
+  assert.equal(plan.refusal, undefined, `the amendable control (canon's own mark with the approved-to-replace words) plans an amend: ${plan.refusal}`);
   const before = await actsCount();
   const preview = await journalLeaveMark({ ...plan.clean, preview: true });
   assert.equal(preview.would, "amend");

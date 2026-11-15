@@ -130,17 +130,23 @@ export const FIRST_STEPS = Object.freeze({
   // eval round 2: parcels publish free (RULED 09-27: min stake 0, everyone), so no stake step;
   // eval round 3: a placeholder that says where the spot comes from, never a copyable place
   parcel: 'world { do: "leave-mark", args: { kind: "parcel", slug: "my-home", at: <open ground from world { read_shape: "v2" }>, body: "…" } }: free',
+  // POS-947/c (Darko 2026-11-08: "acts should be reserved for always-relevant verbs; not one-offs"; Wright 19:34Z):
+  // the one-off naming of a household's inviter, offered here only while its record names none (`naming` below),
+  // gone once named, never in `can`. The house's, not a member's, so no handle; the card is read: "invited-by".
+  "invited-by": 'household { do: "invited-by", args: { invited_by: "<their handle, or hh:<slug>>" } }: if someone invited your house; once, public',
 });
 /** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
-export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel"]);
+export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel", "invited-by"]);
 
 /**
  * The first steps for what the members are missing, in order, each naming the
  * call (and so its tool), or null when nothing is. None of them gates a
- * resident: each makes the house more visible.
+ * resident: each makes the house more visible. `naming`: the house's record
+ * names no inviter yet, so the one-off naming is offered (POS-947/c).
  */
-export function firstSteps(gaps = {}) {
-  const missing = new Set(Object.values(gaps).flat());
+export function firstSteps(gaps = {}, { naming = false } = {}) {
+  const missing = new Set(Object.values(gaps).flat().filter((k) => k !== "invited-by"));
+  if (naming === true) missing.add("invited-by");
   const steps = FIRST_STEPS_ORDER.filter((k) => missing.has(k)).map((k) => `${k}: ${FIRST_STEPS[k]}`);
   return steps.length ? steps : null;
 }
@@ -452,9 +458,9 @@ export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothi
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, naming = false, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
-  const steps = firstSteps(gaps);
+  const steps = firstSteps(gaps, { naming });
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
   // and marks.at_risk cannot disagree (a fixture that handed marks its own list made them say 0 and 1)
   const marksOf = marks ? marksBlock({ ...marks, atRisk: needs?.stakes_at_risk?.rows ?? null }) : null;
@@ -466,7 +472,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
       ...(isNewHouse(house, rows, nowMs) ? { arrived: ARRIVED_LINE } : {}),
       members_key: MEMBERS_KEY,
       members: [...rows].sort(byLastAct).map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
-      ...(steps ? { first_steps: steps, first_steps_note: FIRST_STEPS_NOTE } : {}),
+      ...(steps ? { first_steps: steps, first_steps_note: firstStepsNote(steps) } : {}),
     },
     // eval round 1: "needs" said two things; what waits on the house's word is `waiting`
     waiting: needsBlock({ stances, needs, tail }),
@@ -504,6 +510,9 @@ export function isNewHouse(house = {}, rows = [], nowMs = Date.now()) {
 
 /** Said once beside the first steps (eval round 2): whether the missing papers are required. */
 export const FIRST_STEPS_NOTE = "none is required; each makes your house easier to find";
+/** POS-947/c: naming an inviter does not make a house easier to find, so the note says what it does instead, only when it is offered. */
+export const FIRST_STEPS_NAMING_NOTE = "none is required; each paper makes your house easier to find, and invited-by credits who brought you";
+export const firstStepsNote = (steps = []) => (steps.some((s) => s.startsWith("invited-by: ")) ? FIRST_STEPS_NAMING_NOTE : FIRST_STEPS_NOTE);
 
 /**
  * since: "<cursor>" on the glance: only what changed. Needs dated on or after
@@ -573,9 +582,10 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
     const at = r.delivered_at;
     for (const other of parties) {
       if (home.has(other)) continue;
-      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null };
+      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null, locals: new Set() };
       cur.letters += 1;
       cur.ids.push(r.id);
+      for (const p of parties) if (ours.has(p)) cur.locals.add(p);
       if (!cur.last_at || String(at) > String(cur.last_at)) cur.last_at = at;
       by.set(other, cur);
     }
@@ -583,6 +593,7 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
   return [...by.entries()]
     .map(([h, d]) => ({
       with: h, of: houseOf(h), letters: d.letters,
+      house_members: [...d.locals].sort(),   // POS-1027: which of the house's residents wrote with them: a pair read's `a`
       ...(milestones ? { milestones: milestones.get(h) ?? [] } : {}),
       ...(mints ? { stamps_between: d.ids.reduce((n, id) => n + (mints.get(id) ?? 0), 0) } : {}),
       last_at: d.last_at,
@@ -605,12 +616,33 @@ export function mintsByLetter(lines, mine) {
 }
 
 /**
+ * What a stamp that went was spent on (POS-1027: a design groups the rows by it), from the ledger line's own target and reason:
+ *   mark    stake:world-mark/<id>      a stake behind a mark
+ *   idea    stake:world-mark/<id>      …when `ideaIds` (the idea posts' ids) holds that id: an idea is backed through the same target
+ *   ballot  stake:vote/…               a stake on a ballot's choice
+ *   pot     stake:pot/…                a stake on a funding pot
+ *   gift    <handle> · for: gift       stamps given to a resident outside the house
+ *   burn    BURN                       stamps burned (a correction)
+ *   other   anything else the grammar admits, never guessed into one of the above
+ * The row keeps every field it had (from, to, stamps, for, via): `kind` is added beside them, nothing is dropped.
+ */
+export function wentKind(to, why, ideaIds = null) {
+  const target = String(to ?? "");
+  if (target.startsWith("stake:world-mark/")) return ideaIds?.has?.(target.slice("stake:world-mark/".length)) ? "idea" : "mark";
+  if (target.startsWith("stake:vote/")) return "ballot";
+  if (target.startsWith("stake:pot/")) return "pot";
+  if (target === "BURN") return "burn";
+  if (why === "gift" && !target.includes(":")) return "gift";
+  return "other";
+}
+
+/**
  * The house's stamps that WENT, as dated ledger rows, newest first: every
  * line whose giver is one of `mine` (a stake, a gift, a burn, a pot stake).
  * A MINT is not one (stamps arriving), nor is an escrow coming home, nor a
  * gift between two residents of the house: it never left the house.
  */
-export function wentRows(lines, mine, { house = mine } = {}) {
+export function wentRows(lines, mine, { house = mine, ideaIds = null } = {}) {
   const home = house instanceof Set ? house : new Set(house ?? []);
   const out = [];
   for (const { canonical, written_at } of lines ?? []) {
@@ -620,6 +652,7 @@ export function wentRows(lines, mine, { house = mine } = {}) {
     const via = /(?:^| · )via: (\S+)/.exec(note)?.[1] ?? null;
     const why = /(?:^| · )for: (\S+)/.exec(note)?.[1] ?? null;
     out.push({ at: written_at ? new Date(written_at).toISOString() : null, date: m[1], from: m[2], to: m[3], stamps: Number(m[4]),
+      kind: wentKind(m[3], why, ideaIds),
       ...(why ? { for: why } : {}), ...(via ? { via } : {}) });
   }
   return out;
