@@ -573,9 +573,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
-  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended and became a spark recounted
-  // from their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: the recorded spark,
-  // until its recounting is rewritten or it is withdrawn). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
+  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended in sparks recounted from
+  // their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: every spark of the recorded collection, or a free event's private drafts, until each one's recounting is rewritten or it is
+  // gone). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
   let recountings;
   try {
     const rows = readers.recountingsAwaiting

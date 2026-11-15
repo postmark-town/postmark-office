@@ -81,40 +81,54 @@ test("CORE-97 × the event: a room that carries across a settlement inside the w
   assert.equal("binding" in two, false);
 });
 
-test("spark_note (v1 read): a null root says why — free, cancelled, not ended, untellable rooms, several rooms, or the next tick; a root needs none", () => {
+test("spark_note (v1 read): an empty collection says why — free (the rule only, never a draft), cancelled, not ended, untellable rooms, or the next tick; a capped one says so; a whole one needs none", () => {
   const now = Date.parse("2026-11-14T23:00:00Z");
   const ended = "2026-11-14T22:00:00Z";
   const staked = { ends: ended, fields: { stake: { n: 20, by: "wright" } } };
-  const ev = (over = {}) => ({ complete: true, room_history: "complete", rooms: [{ id: "t1-a" }], spark: null, ...over });
-  assert.match(S.sparkNoteOf({ ends: ended, fields: {} }, ev(), { now }), /posted before events were staked: it stays free/);
+  const ev = (over = {}) => ({ complete: true, room_history: "complete", rooms: [{ id: "t1-a" }], sparks: [], ...over });
+  const free = S.sparkNoteOf({ ends: ended, fields: { completed: { act: 9, at: ended, free: true } } }, ev(), { now });
+  assert.match(free, /posted before events were staked, so it stays free: .* its host's draft, which is not the town's canon: none is public unless the host publishes it/);
+  assert.doesNotMatch(free, /\d/, "the free note carries no count, id or time — only the rule");
   assert.match(S.sparkNoteOf({ ends: ended, fields: { stake: { n: 20, by: "w", returned: { n: 20 } } } }, ev(), { now }), /came home with its cancellation/);
-  assert.match(S.sparkNoteOf({ ...staked, ends: "2026-11-15T01:00:00Z" }, ev({ complete: false }), { now }), /made after it ends/);
+  assert.match(S.sparkNoteOf({ ...staked, ends: "2026-11-15T01:00:00Z" }, ev({ complete: false }), { now }), /made after it ends, one per room/);
   assert.match(S.sparkNoteOf(staked, ev({ room_history: "unavailable", rooms: [] }), { now }), /cannot be told yet, .* unknown, not silence/);
-  assert.match(S.sparkNoteOf(staked, ev({ rooms: [{ id: "t1-a" }, { id: "t2-b" }] }), { now }), /^2 conversations formed .* one room/);
-  assert.match(S.sparkNoteOf(staked, ev(), { now }), /next keeping tick/);
+  assert.match(S.sparkNoteOf(staked, ev({ rooms: [{ id: "t1-a" }, { id: "t2-b" }] }), { now }), /next keeping tick/, "several rooms are no hold: each will get its own");
   assert.match(S.sparkNoteOf(staked, ev({ rooms: [] }), { now }), /next keeping tick/, "confirmed silence still makes its spark");
-  assert.equal(S.sparkNoteOf(staked, ev({ spark: { id: "wright/x", accepted: true } }), { now }), undefined, "a root needs no note");
+  assert.equal(S.sparkNoteOf(staked, ev({ sparks: [{ id: "wright/x", accepted: true }] }), { now }), undefined, "a whole collection needs no note");
+  const rooms = Array.from({ length: 23 }, (_, i) => ({ id: `t${i}-a` }));
+  assert.match(S.sparkNoteOf(staked, ev({ rooms, sparks: rooms.slice(0, 20).map((r) => ({ id: r.id })) }), { now }),
+    /^23 rooms formed, and an event makes at most 20 sparks, one per room in the order the rooms began — the last 3 have none/);
+  assert.equal(S.sparkNoteOf(staked, ev({ sparks: null }), { now }), undefined, "an unread collection's note is the read's own");
 });
 
-test("single-room v1 (Wright 04:08Z): one room is the spark's place, that room's frame frozen; confirmed silence the locked circle; unknown history and SEVERAL rooms are HELD, every room named, none chosen", () => {
+test("each room its own spark (Darko 23:10 EST): every room's own frozen frame, naming that one room, in start order, at most 20; confirmed silence ONE on the locked circle; unknown history HELD", () => {
   const row = { id: "pica/sorbet-night", title: "Sorbet night", body: "sorbet on the counter", place_x: 100, place_y: 200 };
   const window = { from: "2026-11-14T20:00:00.000Z", to: "2026-11-14T22:00:00.000Z" };
   const a = { id: "t1-a", voice_count: 2, extent: { x0: 10, y0: 20, x1: 30, y1: 20, span_m: 20 } };   // a line room
   const b = { id: "t2-b", voice_count: 9, extent: { x0: 55, y0: 18, x1: 61, y1: 26, span_m: 10 } };   // apart from it, and bigger
-  const one = S.sparkDeclaration(row, { rooms: [{ ...a, frame: S.roomFrame(a) }], room_history: "complete", window, present: ["pica-house"] });
-  assert.deepEqual([one.at, one.extent], [{ x: 20, y: 20 }, { w: 20, h: 0 }], "the one room's own frame: exact midpoint and differences, its zero kept");
-  assert.deepEqual(one.properties.rooms, ["t1-a"], "the room, by the page's id (World's held wire: `rooms: [<id>]`)");
-  assert.equal("room" in one.properties, false, "no Office alias");
-  assert.deepEqual(one.properties.present, ["pica-house"]);
-  const none = S.sparkDeclaration(row, { rooms: [], room_history: "complete", window, present: [] });
-  assert.deepEqual([none.at, none.extent], [{ x: 100, y: 200 }, { w: 120, h: 120 }], "CONFIRMED silence: the place and the ruled locked circle");
-  assert.equal("rooms" in none.properties, false, "no rooms written for none");
-  assert.match(S.sparkDeclaration(row, { rooms: [], room_history: "unavailable", window, present: [] }).held, /cannot be told/,
+  const one = S.sparkDeclarations(row, { rooms: [{ ...a, frame: S.roomFrame(a) }], room_history: "complete", window, present: ["pica-house"] });
+  assert.equal(one.sparks.length, 1);
+  assert.deepEqual([one.sparks[0].at, one.sparks[0].extent], [{ x: 20, y: 20 }, { w: 20, h: 0 }], "the room's own frame: exact midpoint and differences, its zero kept");
+  assert.deepEqual(one.sparks[0].properties.rooms, ["t1-a"], "the room, by the page's id — World's strict `rooms`, one id");
+  assert.equal("room" in one.sparks[0].properties, false, "no scalar alias");
+  assert.deepEqual(one.sparks[0].properties.present, ["pica-house"]);
+  assert.equal(one.sparks[0].properties.recounting, "sorbet on the counter");
+  assert.equal(one.sparks[0].properties.event, "pica/sorbet-night");
+  const two = S.sparkDeclarations(row, { rooms: [a, b], room_history: "complete", window, present: [] });
+  assert.deepEqual(two.sparks.map((s) => s.properties.rooms), [["t1-a"], ["t2-b"]], "one spark per room, in start order — the bigger is not first");
+  assert.deepEqual(two.sparks.map((s) => [s.at, s.extent]), [[{ x: 20, y: 20 }, { w: 20, h: 0 }], [{ x: 58, y: 22 }, { w: 6, h: 8 }]], "each its own room's frame, no union");
+  assert.equal("beyond" in two, false);
+  const many = Array.from({ length: 22 }, (_, i) => ({ id: `t${i}-r`, extent: { x0: i, y0: 0, x1: i + 1, y1: 1, span_m: 1 } }));
+  const capped = S.sparkDeclarations(row, { rooms: many, room_history: "complete", window, present: [] });
+  assert.equal(capped.sparks.length, 20, "at most 20");
+  assert.deepEqual(capped.sparks.map((s) => s.room), many.slice(0, 20).map((r) => r.id), "the first 20 in the natural (start) order — no ranking");
+  assert.deepEqual(capped.beyond, ["t20-r", "t21-r"], "the rooms past the cap are named, not dropped silently");
+  const none = S.sparkDeclarations(row, { rooms: [], room_history: "complete", window, present: [] });
+  assert.equal(none.sparks.length, 1, "confirmed silence: ONE spark");
+  assert.deepEqual([none.sparks[0].at, none.sparks[0].extent], [{ x: 100, y: 200 }, { w: 120, h: 120 }], "the place and the ruled locked circle");
+  assert.equal("rooms" in none.sparks[0].properties, false, "standalone: rooms absent");
+  assert.match(S.sparkDeclarations(row, { rooms: [], room_history: "unavailable", window, present: [] }).held, /cannot be told/,
     "unknown history is not silence");
-  const two = S.sparkDeclaration(row, { rooms: [a, b], room_history: "complete", window, present: [] });
-  assert.match(two.held, /^2 conversations formed at its place .* v1 makes an automatic spark only for an event with one room .* for the sitting/);
-  assert.deepEqual(two.rooms, ["t1-a", "t2-b"], "every room named, in start order — the bigger is not chosen");
-  assert.equal("at" in two, false, "no place is made for several");
 });
 
 test("present: the households with a public act at the place in the window — once each, sorted; nothing without a household or a place", () => {
@@ -172,7 +186,8 @@ test("one event's evidence: its window, the rooms its talk formed at its place (
   assert.deepEqual(ev.rooms[0].frame, { room: ev.rooms[0].id, at: { x: 115.5, y: 200 }, extent: { w: 31, h: 0 } }, "exact midpoint, a half and a zero kept");
   assert.equal("frame" in ev, false, "the rooms' combined place is the World's (roomsPlace), asked when the spark is made — not a second copy in the read");
   assert.deepEqual(ev.gallery, { rooms: [ev.rooms[0].id], sparks: [] }, "the gallery's coverage is the event's rooms; no accepted spark there yet: known none");
-  assert.equal(ev.spark, null, "and no root before completion");
+  assert.deepEqual(ev.sparks, [], "and no public spark before completion — known none, never a failed read");
+  assert.equal("spark" in ev, false, "no singular root");
   assert.equal("room" in ev, false, "the room set replaces the single room");
   assert.deepEqual(ev.present, ["otter-house", "pica-house", "seth-house"], "public acts at the place in the window; never the RSVP");
   assert.match(ev.present_basis, /never RSVPs/);
@@ -211,41 +226,70 @@ test("the lasting list: every ended event past the calendar's week, newest end f
   await assert.rejects(calendarAtOffice({ past: true, event: "pica/tie-a" }, { now: NOW, env: ENV }), /past lists events/);
 });
 
-test("the host's invitation (POS-1035, ruled): every completed event of theirs whose spark they have not rewritten waits, named with its spark and the act that answers it — until they amend or withdraw that spark", async () => {
-  const done = async (id, host, spark, atMin) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+test("the host's invitation (POS-1035, ruled): every spark of each completed event's COLLECTION that they have not rewritten waits, one row per event — until they amend its recounting or it is gone; the host pulling their stake while others keep it standing is not gone", async () => {
+  // a closed window of its own, for the fixture marks to have been accepted in
+  await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1034, now() - interval '3 days', now() - interval '2 days', 'closed')");
+  const done = async (id, host, sparks, atMin) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
     VALUES ($1, 'event', $2, '', $3, $4, NULL, 0, 0, $5, $6, 'announced', $7, 0, 1, 1)`,
     [id, `the ${id}`, host, `${host}-house`, new Date(min(atMin - 120)), new Date(min(atMin - 1)),
-      JSON.stringify({ doors_open: new Date(min(atMin - 120)).toISOString(), stake: { n: 20, by: host, returned: { act: 1, n: 20, to: host }, backing: { spark, n: 1 } },
-        completed: { act: 1, spark, at: new Date(min(atMin)).toISOString() } })]);
+      JSON.stringify({ doors_open: new Date(min(atMin - 120)).toISOString(), stake: { n: 20, by: host, returned: { act: 1, n: 20, to: host }, backing: { sparks, n: sparks.length } },
+        completed: { act: 1, sparks, at: new Date(min(atMin)).toISOString() } })]);
   const markAct = async (action, actor, object, atMin, payload = {}) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, object, payload, at_anchor, at_dx, at_dy)
     VALUES ($1, 0, $2, $3, 'mark', $4, $5, 'world', 0, 0)`, [new Date(min(atMin)), actor, action, object, JSON.stringify(payload)]);
-  // each completion's own leave act: the spark as made, recounted from the invitation
-  const made = (spark, atMin) => markAct("leave-mark", spark.split("/")[0], spark, atMin, { kind: "spark", body: `the ${spark}`, recounting: "come for sorbet" });
-  await done("hosty/tea", "hosty", "hosty/tea", 1000); await made("hosty/tea", 1000);
-  await done("hosty/supper", "hosty", "hosty/supper", 2000); await made("hosty/supper", 2000);
-  await done("hosty/brunch", "hosty", "hosty/brunch", 3000); await made("hosty/brunch", 3000);
-  await done("hosty/picnic", "hosty", "hosty/picnic", 3500); await made("hosty/picnic", 3500);
-  await done("other/fair", "other", "other/fair", 2500); await made("other/fair", 2500);
+  const stands = (slug) => owner.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+    VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), 'standing', 1034, $6)`,
+    [slug, slug.split("/")[0], `${slug.split("/")[0]}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), JSON.stringify({ kind: "spark" })]);
+  // each completion's own leave act: the spark as made, recounted from the invitation; and it stands
+  const made = async (spark, atMin) => { await markAct("leave-mark", spark.split("/")[0], spark, atMin, { kind: "spark", body: `the ${spark}`, recounting: "come for sorbet" }); await stands(spark); };
+  await done("hosty/tea", "hosty", ["hosty/tea"], 1000); await made("hosty/tea", 1000);
+  await done("hosty/supper", "hosty", ["hosty/supper", "hosty/supper-2"], 2000); await made("hosty/supper", 2000); await made("hosty/supper-2", 2000);
+  await done("hosty/brunch", "hosty", ["hosty/brunch", "hosty/brunch-2"], 3000);
+  await markAct("leave-mark", "hosty", "hosty/brunch", 3000, { kind: "spark", recounting: "come for sorbet" });                // withdrawn while nobody held it: gone
+  await made("hosty/brunch-2", 3000);
+  await done("hosty/picnic", "hosty", ["hosty/picnic"], 3500); await made("hosty/picnic", 3500);
+  await done("other/fair", "other", ["other/fair"], 2500); await made("other/fair", 2500);
   await markAct("amend", "hosty", "hosty/tea", 900, { body: "Tea", recounting: "we drank it all" });        // BEFORE the completion: answers nothing
-  await markAct("amend", "hosty", "hosty/supper", 2100, { body: "Supper", recounting: "nine came, the soup ran out" }); // the recounting rewritten: answered
-  await markAct("withdraw", "hosty", "hosty/brunch", 3100);                                                 // withdrawn: nothing left to write
+  await markAct("amend", "hosty", "hosty/supper", 2100, { body: "Supper", recounting: "nine came, the soup ran out" }); // ONE room's recounting rewritten
+  await markAct("withdraw", "hosty", "hosty/brunch", 3100);                                                 // withdrawn, and no longer there
+  await markAct("withdraw", "hosty", "hosty/brunch-2", 3100);                                               // the host let go, but others' stakes keep it standing
   await markAct("amend", "hosty", "hosty/picnic", 3600, { body: "A better headline", recounting: "come for sorbet" }); // the headline alone: NOT an answer
 
   const rows = await S.recountingsAwaitingVia(owner, ["hosty"]);
-  assert.deepEqual(rows.map((r) => r.event), ["hosty/picnic", "hosty/tea"],
-    "waiting: the spark whose headline alone was amended, and the one amended only before its completion — never another host's");
+  assert.deepEqual(rows.map((r) => [r.event, r.sparks]), [["hosty/picnic", ["hosty/picnic"]], ["hosty/brunch", ["hosty/brunch-2"]], ["hosty/supper", ["hosty/supper-2"]], ["hosty/tea", ["hosty/tea"]]],
+    "one row per event, naming every spark of its collection still waiting — the rewritten one and the gone one answered; never another host's");
   const tea = rows.find((r) => r.event === "hosty/tea");
-  assert.equal(tea.spark, "hosty/tea");
   assert.match(tea.cause, /became the spark hosty\/tea; its recounting is your invitation's words \(or its title\) — write what actually happened/);
   assert.match(tea.act, /^world_leave_mark \{ slug: "tea", amend: true, … \}.*recounting/);
-  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty", "other"])).map((r) => r.event), ["hosty/picnic", "other/fair", "hosty/tea"], "newest completion first, every host asked");
+  const two = S.recountingInvitation({ id: "hosty/supper", title: "Supper", host: "hosty", completed_at: "x", sparks: ["hosty/supper", "hosty/supper-2"] });
+  assert.match(two.cause, /became 2 sparks, one per room: hosty\/supper, hosty\/supper-2; each is recounted from your invitation's words/);
+  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty", "other"])).map((r) => r.event), ["hosty/picnic", "hosty/brunch", "other/fair", "hosty/supper", "hosty/tea"], "newest completion first, every host asked");
   assert.deepEqual(await S.recountingsAwaitingVia(owner, ["nobody"]), []);
   assert.deepEqual(await S.recountingsAwaitingVia(owner, []), [], "no residents, no read");
   await markAct("amend", "hosty", "hosty/tea", 1100, { body: "Tea" });                       // an amend that carries no recounting at all
-  assert.deepEqual((await S.recountingsAwaitingVia(owner, ["hosty"])).map((r) => r.event), ["hosty/picnic", "hosty/tea"], "no recounting written: still asked");
+  assert.ok((await S.recountingsAwaitingVia(owner, ["hosty"])).some((r) => r.event === "hosty/tea"), "no recounting written: still asked");
   await markAct("amend", "hosty", "hosty/tea", 1200, { body: "Tea", recounting: "twelve came; the pot went round twice" });
   await markAct("amend", "hosty", "hosty/picnic", 3700, { body: "A better headline", recounting: "rain, then sun, then sorbet" });
-  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["hosty"]), [], "the host wrote what happened: every invitation answered");
+  await markAct("amend", "hosty", "hosty/supper-2", 2200, { body: "Supper", recounting: "the garden room sang" });
+  await markAct("amend", "hosty", "hosty/brunch-2", 3200, { body: "Brunch", recounting: "eggs, mostly" });
+  assert.deepEqual(await S.recountingsAwaitingVia(owner, ["hosty"]), [], "the host wrote what happened: every spark of every collection answered");
+
+  // A FREE event's drafts (pure: the household's own read handed in) — each waits while it is a draft with the completion's words
+  const free = [{ id: "pica/old-fair", title: "Old fair", host: "pica", household: "pica-house", completed_at: "2026-11-14T21:00:00.000Z", recounting: "bring a chair" },
+    { id: "pica/older", title: "Older", host: "pica", household: "pica-house", completed_at: "2026-11-13T21:00:00.000Z", recounting: "Older" }];
+  const asked = [];
+  const drafts = await S.draftRecountingsVia(free, async (host, ids) => {
+    asked.push([host, ids]);
+    return [{ slug: "pica/old-fair", claimant: "pica", event: "pica/old-fair", recounting: "bring a chair" },
+      { slug: "pica/old-fair-2", claimant: "pica", event: "pica/old-fair", recounting: "bring a chair" },
+      { slug: "pica/older", claimant: "pica", event: "pica/older", recounting: "we sang" },          // rewritten: answered
+      { slug: "pica/hand-made", claimant: "noe", event: "pica/old-fair", recounting: "bring a chair" }]; // not the host's: never
+  });
+  assert.deepEqual(asked, [["pica", ["pica/old-fair", "pica/older"]]], "read once per host, under the household its own drafts are filed in");
+  assert.deepEqual(drafts.map((d) => [d.id, d.drafts]), [["pica/old-fair", ["pica/old-fair", "pica/old-fair-2"]]]);
+  const inv = S.recountingInvitation(drafts[0]);
+  assert.deepEqual(inv.drafts, ["pica/old-fair", "pica/old-fair-2"]);
+  assert.match(inv.cause, /ended before events were staked, so its 2 sparks, one per room, were made as your drafts \(pica\/old-fair, pica\/old-fair-2\).* not the town's canon .* until you publish it with 1 stamp/);
+  assert.match(inv.act, /^world_leave_mark \{ slug: "old-fair", … \}.*stamps: 1 publishes it/);
   // an office pointed at no record cannot establish the list: it throws (NoRecordError), and needs-you says unknown — never an
   // empty answer from a missing store (Rivet 03:56Z). A fresh process: this one's pen has its pool already.
   const { spawnSync: run } = await import("node:child_process");
@@ -412,16 +456,20 @@ const plannerCalls = [];
 const planLeave = async ({ by, household, slug, body, at, extent, properties, stamps }) => {
   plannerCalls.push({ by, slug, body, at, extent, properties, stamps });
   const id = `${by}/${slug}`;
-  return { planned: true, id, put_forward: true, ground_min: 0, entry: {
+  // as the mark road answers: staked goes forward, unstaked stays the household's private draft
+  const forward = stamps > 0;
+  return { planned: true, id, put_forward: forward, ground_min: 0, entry: {
     actor: by, household, action: "leave-mark", object: id, cls: "mark",
-    payload: { slug, kind: "spark", by, household, body, at, extent, ...properties, stamps, put_forward: true } } };
+    payload: { slug, kind: "spark", by, household, body, at, extent, ...properties, stamps, put_forward: forward } } };
 };
 let candleLit = false;
 async function lightTheCandle() {
   if (candleLit) return;
   // the claim pen reads the process's own switches (world2-claims § candleEnabled), as the office's does
   Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), WORLD2_CANDLE: "1" });
-  await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1035, now() - interval '1 day', now() + interval '1 day', 'open')");
+  // the candle tiles time: it opens where the last window closed (the invitation's fixture window), else a day ago
+  await owner.query(`INSERT INTO windows (id, opens_at, closes_at, status)
+    SELECT 1035, COALESCE((SELECT closes_at FROM windows ORDER BY id DESC LIMIT 1), now() - interval '1 day'), now() + interval '1 day', 'open'`);
   candleLit = true;
 }
 const keyPem = () => readFileSync(KEY_FILE, "utf8");
@@ -440,7 +488,7 @@ const complete = (dir, row, now, opts = {}) => penTransaction(dir, () =>
 const claimOf = async (id) => (await owner.query("SELECT class, status, stake, claimant FROM claims WHERE slug = $1", [id])).rows;
 const storeVerifies = async (dir) => verifyStampLinesVia(owner, dir);
 
-test("completion: an ended staked event becomes ONE put-forward spark — all 20 come home and the spark's own 1 backs it (19 home), the town's verifier green", async () => {
+test("completion with nobody speaking: ONE put-forward spark on the locked circle — all 20 come home and its own 1 backs it (19 home), the town's verifier green", async () => {
   const dir = townInABottle();
   const { row, after: now } = await endedEvent(dir, "Sorbet finale");
   assert.equal(await liquidOf(dir, "wright"), 5);
@@ -448,7 +496,7 @@ test("completion: an ended staked event becomes ONE put-forward spark — all 20
   const out = await complete(dir, row, now);
   const slug = row.id.split("/").slice(1).join("/");
   assert.equal(out.completed, true, JSON.stringify(out));
-  assert.equal(out.spark, `wright/${slug}`, "identity: <host>/<event-slug>");
+  assert.deepEqual(out.sparks, [`wright/${slug}`], "identity: <host>/<event-slug>");
   assert.deepEqual(out.stake, { returned: 20, to: "wright", backing: 1, home: 19 });
   const call = plannerCalls.at(-1);
   assert.equal(call.body, "Sorbet finale", "the headline is the title");
@@ -469,9 +517,9 @@ test("completion: an ended staked event becomes ONE put-forward spark — all 20
   assert.deepEqual((await storeVerifies(dir)).problems, [], "the store's copy of the lines matches the ledger");
 
   const stored = await postRow(row.id);
-  assert.equal(stored.fields.completed.spark, `wright/${slug}`);
+  assert.deepEqual(stored.fields.completed.sparks, [`wright/${slug}`]);
   assert.deepEqual(stored.fields.stake.returned, { act: stored.fields.completed.act, n: 20, to: "wright" });
-  assert.deepEqual(stored.fields.stake.backing, { spark: `wright/${slug}`, n: 1 });
+  assert.deepEqual(stored.fields.stake.backing, { sparks: [`wright/${slug}`], n: 1 });
   const claims = await claimOf(`wright/${slug}`);
   assert.equal(claims.length, 1, "exactly one spark claim");
   assert.equal(claims[0].class, "spark");
@@ -501,35 +549,147 @@ test("completion: a second tick does nothing — no second spark, no second retu
 const sayAt = async (who, at, x, y) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
   VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, $5, $6)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, y, `${who}-house`]);
 
-test("completion is HELD, nothing moved: before its end, when its rooms cannot be told, and — single-room v1 — when SEVERAL rooms formed: no spark, no plan, no line, no receipt, no claim", async () => {
+test("completion is HELD, nothing moved: before its end, and when its rooms cannot be told — no spark, no plan, no line, no receipt, no claim", async () => {
   const dir = townInABottle();
-  // its own place: the record is append-only, and the talk this test adds must not be any other event's
-  const { row, after: now } = await endedEvent(dir, "Sorbet held", { at: { x: 900, y: 900 } });
+  const { row, after: now } = await endedEvent(dir, "Sorbet held", { at: { x: 1900, y: 1900 } });
   const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
-  assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
-  // a settlement the office knows that is newer than the window's start: the room cannot be told — never "no conversation"
-  assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /room cannot be told/);
-  // two groups each 50 m from the place and 100 m apart (beyond earshot of each other): two rooms, whatever the settlements
-  const doors = Date.parse(row.fields.doors_open ?? row.starts);
-  await sayAt("held-a", doors + 60_000, 850, 900);
-  await sayAt("held-b", doors + 30 * 60_000, 950, 900);
   const calls = plannerCalls.length;
-  const several = await complete(dir, row, now, { edges: [doors - 3_600_000] });
-  assert.match(several.held, /^2 conversations formed at its place .* v1 makes an automatic spark only for an event with one room .* no spark is made, nothing is signed and no stamp moves/);
-  assert.equal(several.rooms.length, 2, "both rooms named — neither chosen");
-  assert.equal(plannerCalls.length, calls, "held before the spark is even planned");
+  assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
+  // a settlement the office knows that is newer than the window's start: the rooms cannot be told — never "no conversation"
+  assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /rooms cannot be told/);
+  assert.equal(plannerCalls.length, calls, "held before a spark is even planned");
   assert.equal(ledgerText(dir), lines, "no return, no backing: nothing signed");
   assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
   assert.equal((await postRow(row.id)).fields.completed, undefined, "no completion written");
   assert.equal((await claimOf(`wright/${row.id.split("/").slice(1).join("/")}`)).length, 0, "no spark claim");
-  const ev = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => [doors - 3_600_000] })).event.evidence;
-  assert.equal(ev.rooms.length, 2, "the public evidence still lists every room — the coverage is not narrowed by v1's automatic spark");
-  assert.deepEqual(ev.gallery.rooms, ev.rooms.map((r) => r.id), "and the gallery still covers them all");
-  assert.equal(ev.spark, null);
-  assert.match(ev.spark_note, /2 conversations formed at its place .* one room/, "the null root says why");
 });
 
-test("single-room v1: the mark road's refusal or draft holds the completion; then ONE room completes with that room's own frame, frozen, under the page's id", async () => {
+test("EACH ROOM ITS OWN SPARK (Darko 23:10/23:14 EST): two rooms make two put-forward sparks, each on its own room's frozen frame, 1 of the 20 backing each and 18 home — one batch, one transaction; the read names the whole collection, the gallery none of it", async () => {
+  const dir = townInABottle();
+  // its own place: the record is append-only, and the talk this test adds must not be any other event's
+  const { row, after: now } = await endedEvent(dir, "Sorbet rooms", { at: { x: 900, y: 900 } });
+  // two groups each 50 m from the place and 100 m apart (beyond earshot of each other): two rooms, whatever the settlements
+  const doors = Date.parse(row.fields.doors_open ?? row.starts);
+  await sayAt("rooms-a", doors + 60_000, 850, 900);
+  await sayAt("rooms-b", doors + 30 * 60_000, 950, 900);
+  const edges = [doors - 3_600_000];
+  const slug = row.id.split("/").slice(1).join("/");
+  const head = git(dir, "rev-parse", "HEAD").trim();
+  const out = await complete(dir, row, now, { edges });
+  assert.equal(out.completed, true, JSON.stringify(out));
+  assert.deepEqual(out.sparks, [`wright/${slug}`, `wright/${slug}-2`], "one per room, the event's id then the next suffix, in the rooms' start order");
+  assert.deepEqual(out.stake, { returned: 20, to: "wright", backing: 2, home: 18 }, "five rooms would be 5 and 15; two are 2 and 18");
+  assert.equal(out.rooms.length, 2);
+  const [first, second] = plannerCalls.slice(-2);
+  assert.deepEqual([first.properties.rooms, second.properties.rooms], [[out.rooms[0]], [out.rooms[1]]], "each names its ONE room — World's strict `rooms`");
+  assert.deepEqual([first.at, first.extent, second.at, second.extent], [{ x: 850, y: 900 }, { w: 0, h: 0 }, { x: 950, y: 900 }, { w: 0, h: 0 }], "each its own room's frame — never a union");
+  assert.deepEqual([first.stamps, second.stamps], [1, 1]);
+
+  const text = ledgerText(dir);
+  const ours = text.split("\n").filter((l) => l.includes(`stake:post/${row.id} → wright`) || l.includes(`stake:world-mark/wright/${slug}`));
+  assert.equal(ours.length, 3, "one return and two backings — nothing more");
+  assert.match(ours[0], / · 20 · for: post-return/, "the whole return first");
+  assert.match(ours[1], new RegExp(`→ stake:world-mark/wright/${slug} · 1 · via: api`), "then each spark's own 1, in the collection's order");
+  assert.match(ours[2], new RegExp(`→ stake:world-mark/wright/${slug}-2 · 1 · via: api`));
+  const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  assert.deepEqual(landedCompletionOf(mint.parseStampLedger(text), row.id, "wright", 20), { sparks: out.sparks }, "the batch a retry would recognise, whole");
+  assert.equal(await liquidOf(dir, "wright"), 23, "5 left after the stake, 18 home");
+  assert.notEqual(git(dir, "rev-parse", "HEAD").trim(), head, "the batch was committed");
+  assert.equal(verifies(dir).status, 0, "the town's own verifier passes");
+  assert.deepEqual((await storeVerifies(dir)).problems, []);
+  for (const id of out.sparks) assert.equal((await claimOf(id)).length, 1, `${id}: exactly one claim`);
+  const stored = await postRow(row.id);
+  assert.deepEqual(stored.fields.completed.sparks, out.sparks);
+  assert.deepEqual(stored.fields.stake.backing, { sparks: out.sparks, n: 2 });
+
+  const ev = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => edges })).event.evidence;
+  assert.deepEqual(ev.sparks.map((s) => s.id), out.sparks, "the read names the whole recorded collection, in order — no first or chosen one");
+  assert.ok(ev.sparks.every((s) => s.accepted === false && s.status === "pending"), "each waiting on acceptance");
+  assert.equal("spark" in ev, false, "no singular alias");
+  assert.equal("spark_note" in ev, false, "a whole collection needs no note");
+  assert.deepEqual(ev.gallery.rooms, ev.rooms.map((r) => r.id), "the gallery covers every room");
+  assert.equal(ev.gallery.sparks.length, 0);
+  // accepted, the roots stay out of the gallery: every one of them
+  for (const id of out.sparks) await owner.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+    VALUES (gen_random_uuid(), $1, 'spark', 'wright', 'wright-house', 'Sorbet rooms', '{}', box(point(0,0), point(1,1)), 'standing', 1035, $2)`,
+    [id, JSON.stringify({ kind: "spark", rooms: [out.rooms[out.sparks.indexOf(id)]], event: row.id })]);
+  const ev2 = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => edges })).event.evidence;
+  assert.deepEqual(ev2.sparks.map((s) => [s.id, s.accepted]), out.sparks.map((id) => [id, true]));
+  assert.deepEqual(ev2.gallery.sparks, [], "every completion root excluded from the gallery");
+  // the host is asked about every spark of it
+  const asked = (await S.recountingsAwaitingAtOffice(["wright"], { env: ENV })).find((r) => r.event === row.id);
+  assert.deepEqual(asked?.sparks, out.sparks, "the notice follows the actual collection");
+
+  // a retry whose ledger batch does not back as many sparks as its rooms make is refused, never guessed
+  const dir2 = townInABottle();
+  const two = await endedEvent(dir2, "Sorbet rooms short", { at: { x: 900, y: 900 } });
+  const slug2 = two.row.id.split("/").slice(1).join("/");
+  const mint2 = await import(`${new URL(`file://${join(dir2, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  const ws2 = await import(`${new URL(`file://${join(dir2, "tools", "world-stake.mjs")}`).href}?t=${Date.now()}`);
+  mint2.appendSigned(dir2, [mint2.postReturnLine({ date: townDay(), post: two.row.id, handle: "wright", n: 20 })], keyPem());
+  ws2.worldStakeApply(dir2, { handle: "wright", mark: `wright/${slug2}`, n: 1, via: "api", date: townDay() }, keyPem());
+  git(dir2, "add", "WHITE_PAGES/stamp-ledger.md");
+  git(dir2, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a batch backing one");
+  const lines2 = ledgerText(dir2);
+  const short = await complete(dir2, two.row, two.after, { edges });
+  assert.equal(short.error?.code, 503, JSON.stringify(short));
+  assert.match(short.error.defect, /backs 1 spark\(s\), and its rooms make 2/);
+  assert.equal(ledgerText(dir2), lines2);
+  assert.equal((await postRow(two.row.id)).fields.completed, undefined);
+});
+
+test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its host's PRIVATE DRAFT — no line, no charge, no backing; the public row, act, read and gallery name none of it; the host is told; never twice", async () => {
+  const dir = townInABottle();
+  await lightTheCandle();
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  const ends = Date.now() - 60_000, starts = ends - 3_600_000;
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ('wright/free-supper', 'event', 'Free supper', 'soup at the long table', 'wright', 'wright-house', NULL, 3000, 3000, $1, $2, 'announced', $3, 0, 1, 1)`,
+    [new Date(starts), new Date(ends), JSON.stringify({ doors_open: new Date(starts).toISOString() })]);
+  await sayAt("free-a", starts + 60_000, 2950, 3000);
+  await sayAt("free-b", starts + 120_000, 3050, 3000);
+  const edges = [starts - 3_600_000];
+  const row = await eventRowAtOffice("wright/free-supper", { env: ENV });
+  const out = await complete(dir, row, Date.now(), { edges });
+  assert.equal(out.completed, true, JSON.stringify(out));
+  assert.equal(out.free, true);
+  assert.deepEqual(out.drafts, ["wright/free-supper", "wright/free-supper-2"], "one per room");
+  assert.deepEqual(plannerCalls.slice(-2).map((c) => c.stamps), [0, 0], "unstaked: the mark road keeps them drafts");
+  assert.equal(ledgerText(dir), lines, "no line: nothing charged, nothing backs them");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
+  // the drafts are the household's own: invisible to a public read of the claims (007's row policy), visible under its keys
+  const { rows: seen } = await owner.query("SELECT slug, status FROM claims WHERE slug LIKE 'wright/free-supper%' ORDER BY slug");
+  assert.deepEqual(seen.map((r) => [r.slug, r.status]), [["wright/free-supper", "draft"], ["wright/free-supper-2", "draft"]]);
+  const pen = await import("../src/world2-pen.mjs");
+  const publicly = await pen.officeRead((q) => q.query("SELECT slug FROM claims WHERE slug LIKE 'wright/free-supper%'"), { env: ENV });
+  assert.deepEqual(publicly.rows, [], "a public read sees no draft");
+  // the public row and its act say only that it completed, free
+  const stored = await postRow(row.id);
+  assert.deepEqual(Object.keys(stored.fields.completed).sort(), ["act", "at", "free"]);
+  const { rows: [act] } = await owner.query("SELECT payload FROM acts WHERE id = $1", [out.act_id]);
+  assert.deepEqual(Object.keys(act.payload).sort(), ["at", "free", "post"], "the complete act carries no draft id, count or word");
+  assert.doesNotMatch(JSON.stringify(stored.fields) + JSON.stringify(act.payload), /free-supper-2|soup at the long table/);
+  const { rows: mirrored } = await owner.query("SELECT 1 FROM acts WHERE object LIKE 'wright/free-supper%' AND class = 'mark'");
+  assert.equal(mirrored.length, 0, "no draft wrote a public act");
+  const ev = (await calendarAtOffice({ event: row.id }, { now: Date.now(), env: ENV, settlements: () => edges })).event;
+  assert.deepEqual(ev.evidence.sparks, [], "the public collection: none — drafts are not public");
+  assert.match(ev.evidence.spark_note, /stays free: .* its host's draft, which is not the town's canon: none is public unless the host publishes it/);
+  assert.doesNotMatch(JSON.stringify(ev), /free-supper-2/, "no draft id anywhere in the public event object");
+  assert.equal(ev.evidence.rooms.length, 2, "its rooms are still listed — public talk, public coverage");
+  // the host is told, privately: needs-you, under the event's household
+  const asked = (await S.recountingsAwaitingAtOffice(["wright"], { env: ENV })).find((r) => r.event === row.id);
+  assert.deepEqual(asked?.drafts, out.drafts);
+  assert.match(asked.cause, /made as your drafts .* not the town's canon/);
+  // never twice
+  const again = await complete(dir, await eventRowAtOffice(row.id, { env: ENV }), Date.now(), { edges });
+  assert.match(again.held, /already complete/);
+  const raced = await complete(dir, row, Date.now(), { edges }); // the row as the first tick read it: ids taken, receipt refuses
+  assert.ok(raced.error || raced.held, JSON.stringify(raced));
+  const { rows: after } = await owner.query("SELECT slug FROM claims WHERE slug LIKE 'wright/free-supper%'");
+  assert.equal(after.length, 2, "no third draft");
+});
+
+test("one room: the mark road's refusal or draft holds the completion; then the room's spark completes with that room's own frame, frozen, under the page's id", async () => {
   const dir = townInABottle();
   const { row, after: now } = await endedEvent(dir, "Sorbet single", { at: { x: 700, y: 700 } });
   const doors = Date.parse(row.fields.doors_open ?? row.starts);
@@ -538,7 +698,7 @@ test("single-room v1: the mark road's refusal or draft holds the completion; the
   const edges = [doors - 3_600_000];
   const lines = ledgerText(dir);
   assert.match((await complete(dir, row, now, { edges, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,
-    /would not go forward: outside the world/);
+    /^its spark for room t\d+-solo-a would not go forward: outside the world/);
   assert.match((await complete(dir, row, now, { edges, planLeave: async (a) => ({ ...(await planLeave(a)), put_forward: false }) })).held, /kept it a draft/);
   assert.equal(ledgerText(dir), lines, "no line signed by any held completion");
   const done = await complete(dir, row, now, { edges });
@@ -547,11 +707,11 @@ test("single-room v1: the mark road's refusal or draft holds the completion; the
   assert.equal(ev.rooms.length, 1);
   assert.match(ev.rooms[0].id, /^t\d+-solo-a$/, "the room is named by its first say, as the page names it");
   assert.deepEqual(done.rooms, [ev.rooms[0].id], "the one room, by the page's id");
-  assert.equal(ev.spark?.id, done.spark, "the root is the completed spark (waiting on acceptance here)");
-  assert.equal("spark_note" in ev, false, "a root needs no note");
+  assert.deepEqual(ev.sparks.map((s) => s.id), done.sparks, "the collection is the completed one (waiting on acceptance here)");
+  assert.equal("spark_note" in ev, false, "a whole collection needs no note");
   const call = plannerCalls.at(-1);
-  assert.deepEqual(call.properties.rooms, done.rooms, "the record names it (World's held wire, `rooms: [<id>]`)");
-  assert.equal("room" in call.properties, false, "no Office alias");
+  assert.deepEqual(call.properties.rooms, done.rooms, "the record names it: World's strict `rooms`, one id");
+  assert.equal("room" in call.properties, false, "no scalar alias");
   assert.deepEqual([call.at, call.extent], [{ x: 715.5, y: 700 }, { w: 31, h: 0 }], "that room's own frame, frozen at completion: exact midpoint, half and zero kept");
 });
 
@@ -571,14 +731,14 @@ test("completion interrupted after its lines landed and before the store committ
 
   const out = await complete(dir, row, now);
   assert.equal(out.completed, true, JSON.stringify(out));
-  assert.equal(out.spark, `wright/${slug}`, "the ledger's spark, followed");
+  assert.deepEqual(out.sparks, [`wright/${slug}`], "the ledger's spark, followed");
   assert.match(out.recovered, /already in the ledger/);
   assert.equal(ledgerText(dir), lines, "not re-signed: the ledger is byte for byte the same");
   assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "no new commit");
   assert.equal(await liquidOf(dir, "wright"), 24, "19 home once, 1 backing once");
   assert.deepEqual((await storeVerifies(dir)).problems, [], "the store now holds the lines the town already had");
   assert.equal((await claimOf(`wright/${slug}`)).length, 1);
-  assert.equal((await postRow(row.id)).fields.completed.spark, `wright/${slug}`);
+  assert.deepEqual((await postRow(row.id)).fields.completed.sparks, [`wright/${slug}`]);
 });
 
 test("completion never signs onto a RED ledger: the mint's own arrival predicate, at the completion's own boundary, refuses before the first signature — no line, no commit, no claim, no receipt", async () => {
@@ -631,7 +791,7 @@ test("completion never adopts or guesses: a return that is not its batch is refu
   lines = ledgerText(dir2);
   const taken = await complete(dir2, two.row, two.after);
   assert.equal(taken.error?.code, 503, JSON.stringify(taken));
-  assert.match(taken.error.defect, /already holds as another mark or claim/);
+  assert.match(taken.error.defect, /already holds as other marks or claims/);
   assert.equal(ledgerText(dir2), lines);
   assert.equal((await claimOf(`wright/${slug2}`)).length, 1, "the other claim is untouched and no spark joined it");
 
@@ -642,7 +802,7 @@ test("completion never adopts or guesses: a return that is not its batch is refu
   await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, slug)
     VALUES (1035, 'sited', 'wright', 'solo:wright', 'pending', 'A lamp.', '{}', box(point(1,1), point(2,2)), 0, $1)`, [`wright/${slug3}`]);
   const suffixed = await complete(dir3, three.row, three.after);
-  assert.equal(suffixed.spark, `wright/${slug3}-2`, JSON.stringify(suffixed));
+  assert.deepEqual(suffixed.sparks, [`wright/${slug3}-2`], JSON.stringify(suffixed));
   assert.equal((await claimOf(`wright/${slug3}-2`))[0]?.class, "spark");
 });
 

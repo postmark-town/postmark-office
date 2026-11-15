@@ -394,7 +394,7 @@ test("NEEDS-YOU (WLD-83): the likeness question is a row of its own, counted, an
 test("NEEDS-YOU (POS-1035): the host is asked to write what happened — a waiting row is counted and its cause named; empty keeps the page; unreadable or no record is unknown, never 'nothing waits'", async () => {
   const { readers } = worldReaders();
   const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
-  const row = { event: "r000/tea", title: "Tea", spark: "r000/tea", host: "r000", completed_at: "2026-09-26T20:00:00.000Z",
+  const row = { event: "r000/tea", title: "Tea", sparks: ["r000/tea"], host: "r000", completed_at: "2026-09-26T20:00:00.000Z",
     cause: "your event \"Tea\" ended and became the spark r000/tea; its recounting is your invitation's words (or its title) — write what actually happened",
     act: "world_leave_mark { slug: \"tea\", amend: true, … } — the spark as it stands, with properties: { recounting: \"<what happened>\" }" };
   const asked = [];
@@ -406,7 +406,7 @@ test("NEEDS-YOU (POS-1035): the host is asked to write what happened — a waiti
   assert.equal(n.count, 3 + 1, "it counts beside the stances, the bounces and the at-risk mark");
   assert.equal(n.shown, 3 + 1);
   const { youPart } = await import("../src/doorstep-apex.mjs");
-  assert.ok(youPart({ needs: n }).some((i) => /became a spark — write what happened.*r000\/tea/.test(i.what) && i.from === "household.needs-you"), "the doorstep's YOU names it");
+  assert.ok(youPart({ needs: n }).some((i) => /ended in sparks — write what happened.*r000\/tea/.test(i.what) && i.from === "household.needs-you"), "the doorstep's YOU names it");
 
   // held-resident scope: a key holding one resident asks for that one only
   asked.length = 0;

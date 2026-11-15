@@ -6,9 +6,10 @@
 // ── WHAT IT DOES ─────────────────────────────────────────────────────────────
 //
 // Every event that was posted with its 20-stamp stake, has ended, was not cancelled and is not yet complete is completed by
-// src/event-sparks.mjs § completeEvent: one put-forward spark through the mark road, its whole stake home and the spark's own
-// 1-stamp stake backing it (19 home, 1 kept), in one signed batch and one store transaction — or not at all. This file decides
-// nothing about money or sparks; it finds the due events and asks, once each.
+// src/event-sparks.mjs § completeEvent: one put-forward spark per room (at most 20; one on the locked circle if nobody spoke)
+// through the mark road, its whole stake home and 1 of it backing each spark (one room: 19 home, 1 kept), in one signed batch and
+// one store transaction — or not at all. This file decides nothing about money or sparks; it finds the due events and asks, once
+// each. A free event's sparks are its host's private drafts: its line here names the event and that it completed, never a draft.
 //
 // ── WHERE IT RUNS ────────────────────────────────────────────────────────────
 //
@@ -20,8 +21,8 @@
 // ── NEVER TWICE, AND NEVER A GUESS ───────────────────────────────────────────
 //
 // The event's receipt (fields.completed) is written in the same transaction as the spark and the ledger's landing, read FOR
-// UPDATE, so a second tick finds it complete and does nothing. An event whose room cannot be told, or where several rooms formed
-// (an open Call), is HELD: named in the output, nothing moved, asked again next tick.
+// UPDATE, so a second tick finds it complete and does nothing. An event whose rooms cannot be told is HELD (unknown is never
+// silence): named in the output, nothing moved, asked again next tick.
 //
 // ── NEVER ONTO A RED LEDGER ──────────────────────────────────────────────────
 //
@@ -79,7 +80,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   let refused = 0;
   for (const row of due) {
     const out = await penTransaction(town, () => completeEvent(row, { clone: town, keyPem, env, now, date: townDay(), edges, registry }));
-    console.log(JSON.stringify(out));
+    // a free event's drafts are its host's private ones: the tick's log names none of them
+    console.log(JSON.stringify(out?.free ? { event: out.event, completed: out.completed, free: true, act_id: out.act_id } : out));
     if (out?.error?.reason === "ledger-red") {
       console.error(`[event-sparks] the stamp ledger is red — ${due.length} due event(s) wait; no completion signs onto it`);
       return 4;

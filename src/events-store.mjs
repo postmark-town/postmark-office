@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparkOf, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, sparkTextRefusal } from "./event-sparks.mjs";
+import { eventEvidence, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -301,7 +301,7 @@ async function postEvent(handle, input, { now, env, door, stake = null }) {
     if (landed?.error) throw refuse(landed.error.code ?? 503, landed.error.defect, landed.error.hint);
     const where = `${place.mark ?? "a point"} (${place.x}, ${place.y}), ${interval.starts} to ${interval.ends}`;
     const staked = stake ? { stake: { n: stake.n, by: stake.by, ...(landed?.commit ? { commit: landed.commit } : {}),
-      note: `${stake.n} of ${stake.by}'s stamps are staked on this event until it ends or is cancelled: at its end it becomes a spark, ${EVENT_SPARK_BACKING} stamp backing it and ${stake.n - EVENT_SPARK_BACKING} home; cancelled, all ${stake.n} come home` } } : {};
+      note: `${stake.n} of ${stake.by}'s stamps are staked on this event until it ends or is cancelled: at its end each room its talk formed becomes a spark (one with the 60 m circle if nobody spoke; at most ${EVENT_SPARKS_MAX}), ${EVENT_SPARK_BACKING} stamp backing each and the rest home — one room keeps ${EVENT_SPARK_BACKING} and ${stake.n - EVENT_SPARK_BACKING} come home; cancelled, all ${stake.n} come home` } } : {};
     return door === "household"
       ? { event: eventView(row, [], now), act_id: actId, ...staked, receipt: `hosted: ${id}, at ${where}`, read: READ_HINT(id) }
       : { post: eventView(row, [], now), act_id: actId, ...staked, receipt: `posted: ${id} (an event), at ${where}`, read: POST_READ_HINT(id) };
@@ -324,16 +324,37 @@ export async function nextEventId(handle, title, { now = Date.now(), env = proce
  * a staked, ended, uncancelled, unreturned and uncompleted event — so a retry or a second tick can never complete it twice — then
  * the town's internal `complete` act and the row it folds to (`fields.completed`, the stake's whole return and its spark backing).
  */
-export async function recordCompletionVia(client, id, { spark, n, to, backing, now }) {
+export async function recordCompletionVia(client, id, { sparks, n, to, backing, now }) {
   const prev = await eventRow(client, id, { forUpdate: true });
   if (!prev) throw refuse(404, `no event "${id}"`, "nothing was written");
   if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event makes no spark; its stake came home with the cancellation", { moved: true });
-  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete (its spark is ${prev.fields.completed.spark})`, "nothing was written — it completes once", { moved: true });
+  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete`, "nothing was written — it completes once", { moved: true });
   if (!prev.fields?.stake || prev.fields.stake.returned) throw refuse(409, `"${id}" has no open stake to complete`, "nothing was written", { moved: true });
   if (Date.parse(prev.ends) > now) throw refuse(409, `"${id}" has not ended`, "an event completes at its end", { moved: true });
   if (prev.fields.stake.by !== to || Number(prev.fields.stake.n) !== Number(n)) throw refuse(409, `"${id}"'s stake is ${prev.fields.stake.n} from ${prev.fields.stake.by}`, "nothing was written", { moved: true });
   const at = new Date(now).toISOString();
-  const payload = { post: id, spark, at, stake_returned: { n, to }, backing };
+  const payload = { post: id, sparks: [...sparks].map(String), at, stake_returned: { n, to }, backing };
+  const actId = await insertAct(client, actRow({ action: ACT_COMPLETE, actor: PEN_HANDLE, event: id, payload, place: placeOfRow(prev), now }));
+  const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() }, { id: actId, action: ACT_COMPLETE, actor: PEN_HANDLE, object: id, payload, household: prev.household });
+  await updatePost(client, row);
+  return { act_id: actId, row };
+}
+
+/**
+ * A FREE EVENT'S RECEIPT, on the caller's transaction (POS-1035, Darko 23:15/23:17 EST): the same FOR UPDATE guard — an ended,
+ * uncancelled, unstaked, uncompleted event, so a retry or a second tick never makes its drafts twice — then the `complete` act and
+ * its row. It carries `{ post, at, free: true }` and NOTHING else: the drafts it made are its host's private ones, so no id, count
+ * or word of them reaches this public act, the row, a read or an export.
+ */
+export async function recordFreeCompletionVia(client, id, { now }) {
+  const prev = await eventRow(client, id, { forUpdate: true });
+  if (!prev) throw refuse(404, `no event "${id}"`, "nothing was written");
+  if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event makes no spark", { moved: true });
+  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete`, "nothing was written — it completes once", { moved: true });
+  if (prev.fields?.stake) throw refuse(409, `"${id}" is a staked event`, "a staked event completes with its stake, not as drafts; nothing was written", { moved: true });
+  if (Date.parse(prev.ends) > now) throw refuse(409, `"${id}" has not ended`, "an event completes at its end", { moved: true });
+  const at = new Date(now).toISOString();
+  const payload = { post: id, at, free: true };
   const actId = await insertAct(client, actRow({ action: ACT_COMPLETE, actor: PEN_HANDLE, event: id, payload, place: placeOfRow(prev), now }));
   const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() }, { id: actId, action: ACT_COMPLETE, actor: PEN_HANDLE, object: id, payload, household: prev.household });
   await updatePost(client, row);
@@ -1180,13 +1201,15 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         try { edges = (await settlements()) ?? []; } catch { edges = []; }
         const evidence = await eventEvidence(client, row, { now, edges });
         if (evidence) {
-          // its own spark, by the identity its completion recorded: accepted (standing) or waiting on acceptance; null before it ends
-          evidence.spark = await eventSparkOf(client, row);
-          // v1: when there is no automatic root, why — so a null spark is never read as a failed read
-          const note = sparkNoteOf(row, evidence, { now });
+          // its own sparks, the public collection its completion recorded (one per room, in order): each accepted (standing) or
+          // waiting on acceptance; [] before it ends, and for a free event, whose sparks are its host's private drafts
+          try { evidence.sparks = await eventSparksOf(client, row); }
+          catch { evidence.sparks = null; evidence.spark_note = "the store could not answer the event's sparks just now — unknown, not none"; }
+          // why the collection says what it says — so an empty one is never read as a failed read, nor a capped one as every room's
+          const note = evidence.sparks ? sparkNoteOf(row, evidence, { now }) : undefined;
           if (note) evidence.spark_note = note;
-          // and every accepted spark across its rooms (the gallery); a store that cannot answer is said, never an empty list
-          try { Object.assign(evidence, await eventGalleryOf(client, evidence, { root: row.fields?.completed?.spark ?? null })); }
+          // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
+          try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(row) })); }
           catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
           view.evidence = evidence;
         }

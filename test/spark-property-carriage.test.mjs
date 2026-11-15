@@ -148,7 +148,7 @@ test("a spark DRAFT stays on the household's private road: its own household rea
   assert.ok(!marks.some((m) => String(m.slug).includes("quiet")), "and no mark row holds it");
 });
 
-test("THE SITE'S SPARKS (CORE-82): accepted = standing in marks; a circle's sparks by the spine (on / below); credit is the maker, the picture is the spark's own; an event's spark by its recorded identity", async () => {
+test("THE SITE'S SPARKS (CORE-82): accepted = standing in marks; a circle's sparks by the spine (on / below); credit is the maker, the picture is the spark's own; an event's sparks by their recorded collection", async () => {
   const { rows: [w] } = await owner.query("SELECT id FROM windows ORDER BY id DESC LIMIT 1");
   const mark = async (slug, owner_, data, status = "standing") => owner.query(
     `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
@@ -175,19 +175,21 @@ test("THE SITE'S SPARKS (CORE-82): accepted = standing in marks; a circle's spar
   assert.equal(a.on.find((s) => s.id === "seth/y-on-a").own_link, "pica/x-on-a", "its own link is shown as itself, never as placement");
   assert.deepEqual((await S.acceptedSparksOfCircle(owner, 50105)).on.map((s) => s.id), ["amia/z-on-b"]);
 
-  assert.equal(await S.eventSparkOf(owner, { fields: {} }), null, "before completion: no spark");
-  assert.equal((await S.eventSparkOf(owner, { fields: { completed: { spark: "pica/x-on-a" } } })).accepted, true);
-  assert.deepEqual(await S.eventSparkOf(owner, { fields: { completed: { spark: "noe/w-pending" } } }), { id: "noe/w-pending", accepted: false, status: "pending" });
+  assert.deepEqual(await S.eventSparksOf(owner, { fields: {} }), [], "before completion: none");
+  assert.deepEqual(await S.eventSparksOf(owner, { fields: { completed: { act: 1, at: "x", free: true } } }), [], "a free event's drafts are never named");
+  const both = await S.eventSparksOf(owner, { fields: { completed: { sparks: ["noe/w-pending", "pica/x-on-a"] } } });
+  assert.deepEqual(both.map((s) => [s.id, s.accepted]), [["noe/w-pending", false], ["pica/x-on-a", true]], "the recorded collection, in its own order");
+  assert.deepEqual(both[0], { id: "noe/w-pending", accepted: false, status: "pending" });
 });
 
-test("THE EVENT'S GALLERY (Facet via Rivet 20:03Z): every accepted spark across EVERY room the event bound, by the World's rooms spine — the root apart, coverage literal, unknown never empty", async () => {
+test("THE EVENT'S GALLERY (Facet via Rivet 20:03Z): every accepted spark across EVERY room the event bound, by the World's rooms spine — every root apart, coverage literal, unknown never empty", async () => {
   const { rows: [w] } = await owner.query("SELECT id FROM windows ORDER BY id DESC LIMIT 1");
   const mark = async (slug, data, status = "standing", locked = w.id) => owner.query(
     `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
      VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), $6, $7, $8)`,
     [slug, slug.split("/")[0], `${slug.split("/")[0]}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), status, locked, JSON.stringify(data)]);
   const base = { kind: "spark", recounting: "r", experienced_at: "2026-11-14T20:00:00.000Z" };
-  await mark("gala/the-evening", { ...base, rooms: ["t1-gala", "t2-gala"], event: "gala/the-evening" });           // the root: the event's own
+  await mark("gala/the-evening", { ...base, rooms: ["t1-gala"], event: "gala/the-evening" });                      // its first room's root
   await mark("pica/toast-in-one", { ...base, rooms: ["t1-gala"], circle: 70101, circle_path: [70101] });
   await mark("seth/song-in-two", { ...base, rooms: ["t2-gala"], circle: 70201, circle_path: [70201] });
   await mark("amia/reply-in-two", { ...base, rooms: ["t2-gala"], circle: 70205, circle_path: [70201, 70205] });
@@ -198,12 +200,13 @@ test("THE EVENT'S GALLERY (Facet via Rivet 20:03Z): every accepted spark across 
     [w.id, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), JSON.stringify({ ...base, rooms: ["t1-gala"], circle: 70101, circle_path: [70101] })]);
 
   const evidence = { room_history: "complete", rooms: [{ id: "t1-gala" }, { id: "t2-gala" }] };
-  const { gallery } = await S.eventGalleryOf(owner, evidence, { root: "gala/the-evening" });
+  await mark("gala/the-evening-2", { ...base, rooms: ["t2-gala"], event: "gala/the-evening" });                     // its second room's root
+  const { gallery } = await S.eventGalleryOf(owner, evidence, { roots: ["gala/the-evening", "gala/the-evening-2"] });
   assert.deepEqual(gallery.rooms, ["t1-gala", "t2-gala"], "the coverage: every room the event bound");
   assert.deepEqual(gallery.sparks.map((s) => s.id).sort(), ["amia/reply-in-two", "pica/toast-in-one", "seth/song-in-two"],
     "every accepted spark in ANY of its rooms — both rooms, a reply circle's too; never another room's, a retired one or a pending claim");
   assert.ok(gallery.sparks.every((s) => s.accepted === true && Array.isArray(s.rooms)), "each as the site reads a spark, its rooms carried");
-  assert.ok(!gallery.sparks.some((s) => s.id === "gala/the-evening"), "the root is evidence.spark, not repeated");
+  assert.ok(!gallery.sparks.some((s) => s.id.startsWith("gala/the-evening")), "every completion root is in evidence.sparks, none repeated here");
   assert.deepEqual((await S.eventGalleryOf(owner, { room_history: "complete", rooms: [{ id: "t3-quiet" }] })).gallery, { rooms: ["t3-quiet"], sparks: [] },
     "a covered room with no accepted spark: KNOWN none");
   assert.deepEqual((await S.eventGalleryOf(owner, { room_history: "complete", rooms: [] })).gallery, { rooms: [], sparks: [] }, "no rooms: none");

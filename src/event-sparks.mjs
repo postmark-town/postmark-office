@@ -274,7 +274,16 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
 // THE SPINE (WLD-173, Darko 10:46): a spark stands under every circle on its `circle_path`; `on` is the circle it ties to (the
 // path's end), `below` every deeper one. Its own `parent_spark` link is shown as itself and never moves it in the tree.
 
-export const STANDING_SPARKS_SQL = "SELECT slug, owner, household, body, locked_window, data FROM marks WHERE kind = 'spark' AND status = 'standing'";
+// ── A SPARK'S ROOM, SPELLED IN ONE PLACE ─────────────────────────────────────
+//
+// Each spark binds ONE room. The canonical field is World's `rooms`: a strict JSON array of room ids, at most one, absent for a
+// standalone spark (WLD-173-v1; POS-1035-CORE-82-v1-contract §4, Rivet 04:39Z) — read by World's own roomsOf/roomsPlace. No scalar
+// `room`, no alias: spelled here and only here.
+export const SPARK_ROOM_FIELD = "rooms";
+export const sparkRoomProperty = (id) => ({ rooms: [String(id)] });
+export const SPARK_ROOM_IN_SQL = "jsonb_typeof(data->'rooms') = 'array' AND data->'rooms' ?| $1::text[]";
+
+export const STANDING_SPARKS_SQL ="SELECT slug, owner, household, body, locked_window, data FROM marks WHERE kind = 'spark' AND status = 'standing'";
 
 /** One accepted spark as the site reads it: its id, the maker's credit, its words, its place, its time and its own properties. */
 export function sparkView(m) {
@@ -288,7 +297,7 @@ export function sparkView(m) {
     ...(m.locked_window != null ? { accepted_window: Number(m.locked_window) } : {}),
     ...pick("picture"), ...pick("image_prompt"), ...pick("recounting"),
     ...pick("experienced_at"), ...pick("experienced_until"),
-    ...pick("rooms"), ...pick("event"), ...pick("circle"), ...pick("circle_path"), ...pick("acts"), ...pick("present"),
+    ...pick(SPARK_ROOM_FIELD), ...pick("event"), ...pick("circle"), ...pick("circle_path"), ...pick("acts"), ...pick("present"),
     ...(d.parent_spark ? { own_link: d.parent_spark } : {}),
   };
 }
@@ -310,37 +319,47 @@ export async function acceptedSparksOfCircle(q, circleId) {
   return sparksOfCircle(rows, circleId);
 }
 
+/** The public spark ids an event's completion recorded (`fields.completed.sparks`), in its order; none for a free event's drafts. */
+export function eventSparkIds(row) {
+  const ids = row?.fields?.completed?.sparks;
+  return Array.isArray(ids) ? ids.map(String) : [];
+}
+
 /**
- * An event's own spark, by the identity its completion recorded (`fields.completed.spark`): accepted (standing) with its view,
- * or `{ id, accepted: false, status }` while its claim waits on acceptance (or was refused). Null before the event completes.
+ * An event's own sparks, by the identities its completion recorded (`fields.completed.sparks`, one per room, in the rooms' start
+ * order): each accepted (standing) with its view, or `{ id, accepted: false, status }` while its claim waits on acceptance (or was
+ * refused). Empty before the event completes — and for a free event, whose sparks are its host's private drafts and never named
+ * here. The whole recorded collection, never a first or chosen one.
  */
-export async function eventSparkOf(q, row) {
-  const id = row?.fields?.completed?.spark;
-  if (!id) return null;
-  const { rows: [m] } = await q.query(`${STANDING_SPARKS_SQL} AND slug = $1`, [String(id)]);
-  if (m) return sparkView(m);
-  const { rows: [c] } = await q.query(
-    "SELECT status FROM claims WHERE slug = $1 AND status <> 'draft' ORDER BY submitted_at DESC LIMIT 1", [String(id)]);
-  return { id: String(id), accepted: false, status: c?.status ?? "unknown" };
+export async function eventSparksOf(q, row) {
+  const ids = eventSparkIds(row);
+  if (!ids.length) return [];
+  const { rows: standing } = await q.query(`${STANDING_SPARKS_SQL} AND slug = ANY($1::text[])`, [ids]);
+  const { rows: claimed } = await q.query(
+    `SELECT DISTINCT ON (slug) slug, status FROM claims WHERE slug = ANY($1::text[]) AND status <> 'draft' ORDER BY slug, submitted_at DESC`, [ids]);
+  const accepted = new Map(standing.map((m) => [String(m.slug), m]));
+  const waiting = new Map(claimed.map((c) => [String(c.slug), c.status]));
+  return ids.map((id) => accepted.has(id) ? sparkView(accepted.get(id)) : { id, accepted: false, status: waiting.get(id) ?? "unknown" });
 }
 
 /**
  * THE EVENT'S GALLERY (POS-1035 → CORE-82, Facet via Rivet 20:03Z): every ACCEPTED spark across every room the event bound,
- * beside its root (`evidence.spark`, never repeated here). Membership is the World's spine for an event's spark — every circle
- * spark in any of its rooms (tools/spark.mjs § sparkChildren, by roomsOf) — and acceptance is the store's: a standing mark. So:
- * the standing sparks whose `rooms` share a room with the event's, in the order they were accepted. Coverage is literal:
+ * beside its own (`evidence.sparks`, never repeated here: every one of the event's roots is left out). Membership is the World's
+ * spine for an event's spark — every circle spark in any of its rooms (tools/spark.mjs § sparkChildren) — and acceptance is the
+ * store's: a standing mark. So: the standing sparks whose room is one of the event's, in the order they were accepted. Coverage
+ * is literal, every room the event formed (beyond the automatic cap too):
  *   · `{ rooms: [the room ids covered], sparks: [spark…] }` — an empty `sparks` is KNOWN none in those rooms (no rooms: none);
  *   · `gallery: null` with `gallery_note` — the rooms cannot be told (unknown history), so neither can the gallery.
  * While the event is still on, the rooms covered are those so far (`window.as_of`).
  */
-export async function eventGalleryOf(q, evidence, { root = null } = {}) {
+export async function eventGalleryOf(q, evidence, { roots = [] } = {}) {
   if (evidence?.room_history !== "complete")
     return { gallery: null, gallery_note: "the event's rooms cannot be told (its window opens before the settlements this office has read), so neither can its gallery — unknown, not none" };
   const rooms = evidence.rooms.map((r) => String(r.id));
   if (!rooms.length) return { gallery: { rooms: [], sparks: [] } };
   const { rows } = await q.query(
-    `${STANDING_SPARKS_SQL} AND jsonb_typeof(data->'rooms') = 'array' AND data->'rooms' ?| $1::text[] AND slug <> $2 ORDER BY locked_window, slug`,
-    [rooms, root == null ? "" : String(root)]);
+    `${STANDING_SPARKS_SQL} AND ${SPARK_ROOM_IN_SQL} AND NOT (slug = ANY($2::text[])) ORDER BY locked_window, slug`,
+    [rooms, [...(roots ?? [])].map(String)]);
   return { gallery: { rooms, sparks: rows.map(sparkView) } };
 }
 
@@ -422,21 +441,29 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
 
 // ── THE COMPLETION (call 22; Darko 11:00 EST "a spark anyway, 1 kept"; Rivet's seam responses) ──────────────────────────────
 //
-// At its end a staked event becomes ONE put-forward spark through the mark road, its 20 come home whole and the spark's own stake
-// of 1 backs it (19 home, 1 kept) — in ONE locked, signed batch and ONE store transaction, or not at all:
-//   1 · read (no transaction): the event's evidence — single-room v1 (Wright 04:08Z): one room is the spark's place (its frame,
-//       frozen now), confirmed silence the locked circle; SEVERAL rooms, or rooms that cannot be told, are HELD before anything
-//       is signed or written — no spark, no return, no backing, never the no-conversation radius.
-//   2 · the spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
-//       World's spark pre-check, and the verdict — it must go forward with its 1 stamp, or the completion is HELD and says why.
-//   3 · its id: <host>/<event-slug>, else the first unused numeric suffix, checked against published marks, every claim (the
-//       household's drafts included, under its own keys) and every act — never an overwrite, an amend or an adoption.
-//   4 · signed (the town lock is held by the keep tick's mint step): the whole post-return of 20, then the spark's own 1-stamp
-//       world stake (the engine's worldStakeApply, which sees the 20 already home).
-//   5 · ONE officeWrite under the spark household's keys: the spark's act and claim (world-journal § writePreparedVia, the pen's
-//       own two writes), its mark lock (mark-stake-lock § stakeGuard), the event's receipt (events-store § recordCompletionVia,
-//       FOR UPDATE: never twice), and LAST the ledger's landing (stamp-lines § landPlannedVia). A ledger that moved, an id taken
-//       meanwhile or an event that moved answers `moved`, and penTransaction puts the signed lines back.
+// EACH ROOM GETS ITS OWN SPARK (Darko 23:10 EST via Wright 04:11Z): at its end a staked event becomes a COLLECTION of put-forward
+// sparks through the mark road — one per room its talk formed at its place in its window, each tied to the event and frozen to its
+// own room's frame, at most EVENT_SPARKS_MAX in the rooms' own start order (no ranking, no default, no chosen room); with confirmed
+// silence, ONE spark on the locked circle. Its 20 come home whole and each spark is backed by 1 of them (POS-1035/c, Darko 23:14
+// EST: one room 1 kept and 19 home, five rooms 5 and 15) — in ONE locked, signed batch and ONE store transaction, or not at all:
+//   1 · read (no transaction): the event's evidence. Rooms that cannot be told are HELD before anything is signed or written —
+//       unknown is never silence, and never the no-conversation radius.
+//   2 · every spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
+//       World's spark pre-check, and the verdict — each must go forward with its 1 stamp, or the WHOLE completion is held and says why.
+//   3 · their ids: <host>/<event-slug>, then the next unused numeric suffixes, each checked against published marks, every claim (the
+//       household's drafts included, under its own keys), every act and the collection's own — never an overwrite or an adoption.
+//   4 · signed (the town lock is held by the keep tick's mint step): the whole post-return of 20, then each spark's own 1-stamp world
+//       stake in the collection's order (the engine's worldStakeApply, which sees the 20 already home).
+//   5 · ONE officeWrite under the host household's keys: every spark's act and claim (world-journal § writePreparedVia), each one's
+//       mark lock (mark-stake-lock § stakeGuard), the event's receipt naming the whole collection (events-store §
+//       recordCompletionVia, FOR UPDATE: never twice), and LAST the ledger's landing (stamp-lines § landPlannedVia). A ledger that
+//       moved, an id taken meanwhile or an event that moved answers `moved`, and penTransaction puts the signed lines back.
+//
+// A FREE EVENT (one posted before events were staked; Darko 23:15/23:17 EST via Wright 04:17Z, "old events only") ends the same way
+// but as its host's PRIVATE DRAFTS: one unstaked leave per room through the same mark road — the household's existing private draft
+// road (007), no new store or writer — with no ledger line, no charge, no backing and no publication. Its public receipt says only
+// that it completed: no draft's id, count or words reach the event's fields, its acts, a read or an export. Publishing a draft is
+// the host's own later stake of 1, like any mark.
 
 /** The spark's recounting, from the event's own words — RULED (POS-1035/a, Wright 21:55/21:57Z): the invitation verbatim, with the
  *  title when there is none; never words written for the host. The host is then invited to write what happened (§ THE HOST'S
@@ -448,41 +475,76 @@ export function recountingOf(row) {
 
 // ── THE HOST'S INVITATION TO WRITE WHAT HAPPENED (POS-1035, ruled 21:55/21:57Z; route settled by Rivet on the issue) ─────────
 //
-// An event's automatic spark is recounted from the host's invitation (or its title), never from words written for them, so the
+// An event's automatic sparks are recounted from the host's invitation (or its title), never from words written for them, so the
 // host is clearly asked to write what happened. The ask rides the house's private needs-you list (house-bundle § needsYou), which
-// the doorstep's YOU reads — no new delivery service, queue or notice of its own. It reads only what the completion recorded
-// (`fields.completed.spark`) and creates, selects or moves nothing. It stands from the successful completion until the host
-// REWRITES THE RECOUNTING — an `amend` of that spark after the completion whose recounting differs from the one the completion
-// wrote (its own leave act's) — or the spark is withdrawn. An amendment of the headline or the place alone is not writing what
-// happened, so it does not end the ask (Rivet, POS-1035-host-notice-settled). Amending stays the spark's author's alone, as it
-// is everywhere: nothing here grants a host or a default any right over a spark. The doorstep's cursor hides an unchanged line.
+// the doorstep's YOU reads — no new delivery service, queue or notice of its own. It follows the ACTUAL COLLECTION the completion
+// recorded — every spark of it, never a first or chosen one — and creates, selects or moves nothing. One row per event, naming
+// each spark that still waits:
+//   · a STAKED event's sparks (`fields.completed.sparks`): a spark waits from the completion until the host REWRITES ITS
+//     RECOUNTING — an `amend` of that spark after the completion whose recounting differs from the one its own leave act wrote —
+//     or it is no longer there (neither standing nor on the docket: withdrawn while nobody held it, refused, retracted). The host
+//     pulling their own stake is not that: a spark others stake on still stands (Darko 23:14 EST), and still waits. An amendment
+//     of the headline or the place alone is not writing what happened (Rivet, POS-1035-host-notice-settled);
+//   · a FREE event's sparks are its host's private DRAFTS (Darko 23:15/23:17 EST): each waits while it is still a draft whose
+//     recounting is the one the completion wrote (the invitation, or the title). Rewriting it, publishing it with its stake or
+//     taking it back ends that draft's ask. These are read under the event's own household's keys (007's row policy), so they
+//     reach only that house's needs-you, never a public read.
+// Amending stays the spark's author's alone, as it is everywhere: nothing here grants a host or a default any right over a spark.
+// The doorstep's cursor hides an unchanged line.
 export const RECOUNTINGS_AWAITING_MAX = 20;
-export const RECOUNTINGS_AWAITING_SQL = `SELECT p.id, p.title, p.fields->'completed'->>'spark' AS spark, p.fields->'completed'->>'at' AS completed_at,
-    p.fields->'stake'->>'by' AS host
+const COMPLETED_AT = "(p.fields->'completed'->>'at')";
+const STILL_THERE = (s) => `(EXISTS (SELECT 1 FROM marks m WHERE m.slug = ${s} AND m.status = 'standing')
+          OR EXISTS (SELECT 1 FROM claims c WHERE c.slug = ${s} AND c.status IN ('pending', 'locked', 'held_review')))`;
+const RECOUNTING_REWRITTEN = (s) => `EXISTS (SELECT 1 FROM acts a WHERE a.object = ${s} AND a.class = 'mark' AND a.action = 'amend'
+          AND a.at > ${COMPLETED_AT}::timestamptz AND a.payload->>'recounting' IS NOT NULL
+          AND a.payload->>'recounting' IS DISTINCT FROM (
+            SELECT l.payload->>'recounting' FROM acts l WHERE l.object = ${s} AND l.class = 'mark' AND l.action = 'leave-mark'
+             ORDER BY l.at, l.id LIMIT 1))`;
+export const RECOUNTINGS_AWAITING_SQL = `SELECT p.id, p.title, ${COMPLETED_AT} AS completed_at, p.fields->'stake'->>'by' AS host, w.sparks
   FROM posts p
-  WHERE p.class = 'event' AND p.fields ? 'completed' AND p.fields->'stake'->>'by' = ANY($1)
-    AND NOT EXISTS (SELECT 1 FROM acts a WHERE a.object = p.fields->'completed'->>'spark' AND a.class = 'mark'
-                      AND a.at > (p.fields->'completed'->>'at')::timestamptz
-                      AND (a.action = 'withdraw'
-                        OR (a.action = 'amend' AND a.payload->>'recounting' IS NOT NULL
-                            AND a.payload->>'recounting' IS DISTINCT FROM (
-                              SELECT l.payload->>'recounting' FROM acts l
-                               WHERE l.object = p.fields->'completed'->>'spark' AND l.class = 'mark' AND l.action = 'leave-mark'
-                               ORDER BY l.at, l.id LIMIT 1))))
-  ORDER BY (p.fields->'completed'->>'at') DESC, p.id
+  CROSS JOIN LATERAL (
+    SELECT array_agg(s.spark ORDER BY s.n) AS sparks
+      FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(p.fields->'completed'->'sparks') = 'array'
+                                          THEN p.fields->'completed'->'sparks' ELSE '[]'::jsonb END) WITH ORDINALITY AS s(spark, n)
+     WHERE ${STILL_THERE("s.spark")} AND NOT ${RECOUNTING_REWRITTEN("s.spark")}) w
+  WHERE p.class = 'event' AND p.fields ? 'completed' AND p.fields->'stake'->>'by' = ANY($1) AND w.sparks IS NOT NULL
+  ORDER BY ${COMPLETED_AT} DESC, p.id
   LIMIT ${RECOUNTINGS_AWAITING_MAX}`;
+/** A free event's recounting at its completion, as recountingOf spells it: the invitation trimmed, else the title trimmed. */
+const RECOUNTING_OF_SQL = "COALESCE(NULLIF(btrim(p.body), ''), btrim(p.title))";
+/** The completed FREE events these residents hosted (public facts only: no draft is read here), with their households. */
+export const FREE_COMPLETED_SQL = `SELECT p.id, p.title, p.author AS host, p.household, ${COMPLETED_AT} AS completed_at, ${RECOUNTING_OF_SQL} AS recounting
+  FROM posts p
+  WHERE p.class = 'event' AND p.fields ? 'completed' AND NOT (p.fields ? 'stake') AND p.author = ANY($1)
+  ORDER BY ${COMPLETED_AT} DESC, p.id`;
+/** Under ONE household's keys (007: a draft is visible only there): its residents' draft sparks of these events, in made order. */
+export const EVENT_DRAFTS_SQL = `SELECT c.slug, c.claimant, c.data->>'event' AS event, c.data->>'recounting' AS recounting
+  FROM claims c
+  WHERE c.status = 'draft' AND c.class = '${SPARK_CLASS}' AND c.claimant = ANY($1) AND c.data->>'event' = ANY($2)
+  ORDER BY length(c.slug), c.slug`;
+
+const leaf = (id) => String(id).split("/").slice(1).join("/");
+const listed = (ids) => ids.join(", ");
 
 /** One invitation, in the needs-you list's own shape: what it is, why it waits on you, and the act that answers it. */
 export function recountingInvitation(r) {
-  const slug = String(r.spark).split("/").slice(1).join("/");
+  if (Array.isArray(r.drafts)) {
+    const n = r.drafts.length;
+    return {
+      event: r.id, title: r.title ?? null, drafts: r.drafts, host: r.host, completed_at: r.completed_at,
+      cause: `your event "${r.title ?? r.id}" ended before events were staked, so its ${n === 1 ? "spark was" : `${n} sparks, one per room, were`} made as your draft${n === 1 ? "" : "s"} (${listed(r.drafts)}), recounted from your invitation's words (or its title) — write what actually happened; a draft is not the town's canon and lives only in your own reading of the world until you publish it with 1 stamp, like any mark`,
+      act: `world_leave_mark { slug: "${leaf(r.drafts[0])}", … } — the draft as it stands, with properties: { recounting: "<what happened>" }; stamps: 1 publishes it`,
+    };
+  }
+  const sparks = (r.sparks ?? []).map(String);
   return {
-    event: r.id, title: r.title ?? null, spark: r.spark, host: r.host, completed_at: r.completed_at,
-    cause: `your event "${r.title ?? r.id}" ended and became the spark ${r.spark}; its recounting is your invitation's words (or its title) — write what actually happened`,
-    act: `world_leave_mark { slug: "${slug}", amend: true, … } — the spark as it stands, with properties: { recounting: "<what happened>" }`,
+    event: r.id, title: r.title ?? null, sparks, host: r.host, completed_at: r.completed_at,
+    cause: `your event "${r.title ?? r.id}" ended and became ${sparks.length === 1 ? `the spark ${sparks[0]}` : `${sparks.length} sparks, one per room: ${listed(sparks)}`}; ${sparks.length === 1 ? "its recounting is" : "each is recounted from"} your invitation's words (or its title) — write what actually happened`,
+    act: `world_leave_mark { slug: "${leaf(sparks[0])}", amend: true, … } — ${sparks.length === 1 ? "the spark" : "each spark"} as it stands, with properties: { recounting: "<what happened>" }`,
   };
 }
 
-/** The invitations waiting on these residents (`handles`, the hosts), newest completion first. `q` is a client or pool. */
+/** A staked event's invitations waiting on these residents (`handles`, the hosts), newest completion first. `q` is a client or pool. */
 export async function recountingsAwaitingVia(q, handles) {
   const list = [...(handles ?? [])].map(String);
   if (!list.length) return [];
@@ -491,66 +553,109 @@ export async function recountingsAwaitingVia(q, handles) {
 }
 
 /**
- * The same, through the office's own read pen (house-bundle § needsYou's default reader). Every failure is thrown — an office
- * pointed at no record included (NoRecordError: the events live only there, so the list cannot be established; that is unknown,
- * not empty, Rivet 03:56Z) — and the caller says the list is unknown, never empty. Known empty is a successful empty read.
+ * A free event's draft invitations: `events` its completed free events (FREE_COMPLETED_SQL rows), `draftsOf(host, ids)` the host's
+ * drafts read under the household its own acts file drafts in (the completion wrote them there). A draft waits while its
+ * recounting is still the completion's.
+ */
+export async function draftRecountingsVia(events, draftsOf) {
+  const byHost = new Map();
+  for (const e of events ?? []) byHost.set(String(e.host), [...(byHost.get(String(e.host)) ?? []), e]);
+  const out = [];
+  for (const [host, evs] of byHost) {
+    const drafts = await draftsOf(host, evs.map((e) => String(e.id)));
+    for (const e of evs) {
+      const waiting = drafts.filter((d) => d.event === String(e.id) && d.claimant === String(e.host) && d.recounting === e.recounting).map((d) => String(d.slug));
+      if (waiting.length) out.push({ ...e, drafts: waiting });
+    }
+  }
+  return out;
+}
+
+/**
+ * The same, through the office's own pens (house-bundle § needsYou's default reader): the staked events' through the read pen, and a
+ * free event's drafts under its own household's keys. Every failure is thrown — an office pointed at no record included
+ * (NoRecordError: the events live only there, so the list cannot be established; that is unknown, not empty, Rivet 03:56Z) — and
+ * the caller says the list is unknown, never empty. Known empty is a successful empty read. Newest completion first, at most
+ * RECOUNTINGS_AWAITING_MAX events.
  */
 export async function recountingsAwaitingAtOffice(handles, { env = process.env } = {}) {
   const pen = await import("./world2-pen.mjs");
-  return pen.officeRead((q) => recountingsAwaitingVia(q, handles), { env });
+  const list = [...(handles ?? [])].map(String);
+  if (!list.length) return [];
+  const staked = await pen.officeRead((q) => recountingsAwaitingVia(q, list), { env });
+  const free = (await pen.officeRead((q) => q.query(FREE_COMPLETED_SQL, [list]), { env })).rows;
+  // a draft is visible only under its household's own keys — the household the host's own acts file drafts in (world2-claims §
+  // claimHouseholdFor, the one the completion wrote them under); the write pen is the one that declares them (it writes nothing here)
+  const { claimHouseholdFor } = await import("./world2-claims.mjs");
+  const drafted = await draftRecountingsVia(free, async (host, ids) =>
+    pen.officeWrite(async (q) => (await q.query(EVENT_DRAFTS_SQL, [[host], ids])).rows, { household: await claimHouseholdFor({ actor: host }, env), env }));
+  return [...staked, ...drafted.map(recountingInvitation)]
+    .sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)) || String(a.event).localeCompare(String(b.event)))
+    .slice(0, RECOUNTINGS_AWAITING_MAX);
 }
 
+/** The most sparks one event's completion makes (Darko 23:10 EST: "whatever 20 make the cut … is the way it'll be for now"). */
+export const EVENT_SPARKS_MAX = 20;
+
 /**
- * The spark's place and time, and its properties, from the event and its evidence — SINGLE-ROOM v1 (Wright 04:08Z; Darko: "let's
- * try the single-room events first"). Answers `{ at, extent, properties }`, or `{ held, rooms? }` naming why no spark is made —
- * never a guessed place or a chosen room:
- *   · unknown history is not silence: held, never the no-conversation frame;
- *   · CONFIRMED silence (a complete history with no room) is the ruled standalone spark: the event's place and the locked circle;
- *   · ONE room: that room's own frame, frozen now (roomFrame: the exact midpoint and differences, zeros kept) — the room the
- *     conversations page names, even one that began before the doors;
- *   · SEVERAL rooms: held, every room named. v1 makes no automatic spark for them, picks none, and moves no money: what several
- *     rooms make is the sitting's (WLD-173/c).
- * ⚑ The record names the room as World's held artifact spells it today (`rooms: [<id>]`, #391 at 7b1278b3); the canonical
- * one-room field is being settled with Bevel, and this follows it when it lands — no Office alias meanwhile.
- */
-/**
- * WHY AN EVENT HAS NO AUTOMATIC ROOT, when `evidence.spark` is null (the v1 read contract's optional `spark_note`): so a null is
- * never read as a failed read. Undefined when there is a spark, or nothing to explain. The reasons, in the completion's order.
+ * WHY AN EVENT'S PUBLIC `sparks` SAY WHAT THEY SAY (the v1 read contract's optional `spark_note`): so an empty collection is never
+ * read as a failed read, and a capped one never as every room's. Undefined when there is nothing to explain. Never a private fact:
+ * a free event's drafts are its host's alone, so the note says only the rule, never whether or how many were made.
  */
 export function sparkNoteOf(row, evidence, { now = Date.now() } = {}) {
-  if (!evidence || evidence.spark) return undefined;
-  if (!row?.fields?.stake) return "this event was posted before events were staked: it stays free and ends without an automatic spark";
+  if (!evidence || !Array.isArray(evidence.sparks)) return undefined;
+  if (!row?.fields?.stake)
+    return "this event was posted before events were staked, so it stays free: at its end each room's spark is made as its host's draft, which is not the town's canon: none is public unless the host publishes it";
   if (row.fields.stake.returned && !row.fields.completed) return "its stake came home with its cancellation: no spark is made";
-  if (!evidence.complete || Date.parse(row.ends) > now) return "its spark is made after it ends";
-  if (evidence.room_history !== "complete") return "its rooms cannot be told yet, so its spark waits — unknown, not silence";
-  if (evidence.rooms.length > 1) return `${evidence.rooms.length} ${SEVERAL_ROOMS_HELD}`;
-  return "its spark is made at the office's next keeping tick";
+  if (evidence.sparks.length) {
+    const over = evidence.rooms.length - EVENT_SPARKS_MAX;
+    return over > 0
+      ? `${evidence.rooms.length} rooms formed, and an event makes at most ${EVENT_SPARKS_MAX} sparks, one per room in the order the rooms began — the last ${over} have none of their own (every room is still listed, and its gallery covered)`
+      : undefined;
+  }
+  if (!evidence.complete || Date.parse(row.ends) > now) return "its sparks are made after it ends, one per room";
+  if (evidence.room_history !== "complete") return "its rooms cannot be told yet, so its sparks wait — unknown, not silence";
+  return "its sparks are made at the office's next keeping tick";
 }
 
-export const SEVERAL_ROOMS_HELD ="conversations formed at its place in its window, and v1 makes an automatic spark only for an event with one room (Wright 04:08Z) — what several rooms make is for the sitting (WLD-173/c); no spark is made, nothing is signed and no stamp moves";
-export function sparkDeclaration(row, evidence) {
+/**
+ * THE SPARKS AN EVENT'S COMPLETION MAKES, from the event and its evidence (Darko 23:10 EST via Wright 04:11Z). Answers
+ * `{ sparks: [{ room?, at, extent, properties }…], beyond? }` — or `{ held }` naming why none is made, never a guessed place:
+ *   · unknown history is not silence: held, never the no-conversation frame;
+ *   · EACH ROOM its talk formed (the conversations page's rooms, even one that began before the doors) gets its own spark, frozen
+ *     to that room's frame now (roomFrame: the exact midpoint and differences, zeros kept) and naming that one room; at most
+ *     EVENT_SPARKS_MAX, in the rooms' own start order — no ranking and no chosen room. `beyond` names the rooms past the cap;
+ *   · CONFIRMED silence (a complete history with no room) makes ONE spark: the event's place and the locked circle, no room.
+ * Each carries the event's own words and window, its reference and its attendance.
+ */
+export function sparkDeclarations(row, evidence) {
   if (evidence.room_history !== "complete")
     return { held: `its rooms cannot be told (history ${evidence.room_history ?? "unknown"}) — no place is chosen` };
-  const ids = evidence.rooms.map((r) => r.id);
-  if (ids.length > 1) return { held: `${ids.length} ${SEVERAL_ROOMS_HELD}`, rooms: ids };
-  const [room] = evidence.rooms;
-  const frame = room ? (room.frame ?? roomFrame(room)) : placeFrame({ x: Number(row.place_x), y: Number(row.place_y) });
+  const own = {
+    recounting: recountingOf(row),
+    experienced_at: evidence.window.from, experienced_until: evidence.window.to,
+    event: row.id,
+    ...(evidence.present.length ? { present: evidence.present } : {}),
+  };
+  if (!evidence.rooms.length) {
+    const frame = placeFrame({ x: Number(row.place_x), y: Number(row.place_y) });
+    return { sparks: [{ at: frame.at, extent: frame.extent, properties: own }] };
+  }
+  const made = evidence.rooms.slice(0, EVENT_SPARKS_MAX);
   return {
-    at: frame.at, extent: frame.extent,
-    properties: {
-      recounting: recountingOf(row),
-      experienced_at: evidence.window.from, experienced_until: evidence.window.to,
-      event: row.id,
-      ...(room ? { rooms: [room.id] } : {}),
-      ...(evidence.present.length ? { present: evidence.present } : {}),
-    },
+    sparks: made.map((room) => {
+      const frame = room.frame ?? roomFrame(room);
+      return { room: room.id, at: frame.at, extent: frame.extent, properties: { ...own, ...sparkRoomProperty(room.id) } };
+    }),
+    ...(evidence.rooms.length > made.length ? { beyond: evidence.rooms.slice(made.length).map((r) => r.id) } : {}),
   };
 }
 
 /**
  * THE BATCH A COMPLETION SIGNS, FOUND IN THE LEDGER (the landed-but-uncommitted retry): this event's whole post-return to `by`,
- * immediately followed by `by`'s own 1-stamp world stake on a mark — the spark it names. Null when the ledger holds no such pair:
- * then a return that is there was not this completion's, and nothing is guessed.
+ * immediately followed by `by`'s own 1-stamp world stakes, one per spark, in the collection's order — the sparks it names. Null
+ * when the ledger holds no return followed by at least one: then a return that is there was not this completion's, and nothing is
+ * guessed. The caller holds the found collection to the one it would make, whole.
  */
 export function landedCompletionOf(entries, post, by, n) {
   const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
@@ -558,9 +663,14 @@ export function landedCompletionOf(entries, post, by, n) {
   const ret = new RegExp(`^- \\S+ · stake:post/${esc(post)} → ${esc(by)} · ${Number(n)} · for: post-return$`);
   const backing = new RegExp(`^- \\S+ · ${esc(by)} → stake:world-mark/([a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*) · ${EVENT_SPARK_BACKING} · via: \\S+$`);
   const i = lines.findIndex((l) => ret.test(l));
-  if (i < 0 || i + 1 >= lines.length) return null;
-  const m = backing.exec(lines[i + 1]);
-  return m ? { spark: m[1] } : null;
+  if (i < 0) return null;
+  const sparks = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    const m = backing.exec(lines[j]);
+    if (!m) break;
+    sparks.push(m[1]);
+  }
+  return sparks.length ? { sparks } : null;
 }
 
 /** Is a mark id free in every place an identity lives? (`q` holds the host household's keys, so its drafts are seen.) */
@@ -572,16 +682,22 @@ async function sparkIdFree(q, by, slug) {
     if ((await q.query(sql, [id])).rows.length) return false;
   return true;
 }
-async function freeSparkSlug(q, by, base) {
-  if (await sparkIdFree(q, by, base)) return base;
-  for (let i = 2; i < 1000; i++) if (await sparkIdFree(q, by, `${base}-${i}`)) return `${base}-${i}`;
-  return null;
+/** `k` distinct free slugs: the event's own, then the next unused numeric suffixes in order. Null when they run out. */
+async function freeSparkSlugs(q, by, base, k) {
+  const out = [];
+  for (let i = 1; i < 1000 && out.length < k; i++) {
+    const slug = i === 1 ? base : `${base}-${i}`;
+    if (await sparkIdFree(q, by, slug)) out.push(slug);
+  }
+  return out.length === k ? out : null;
 }
 
 /** `planLeave` is the mark road's planner (world.mjs § planSparkLeave); a test hands its own where the World pin lacks the class. */
 export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, registry = null }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   try {
+    // a free event signs nothing: its sparks are its host's private drafts, and the ledger is not its business
+    if (row?.fields && !row.fields.stake) return await completeFreeEvent(row, { env, now, edges, planLeave });
     if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
     if (Date.parse(row.ends) > now) return held("not ended");
     // 0 · NEVER ONTO A RED LEDGER (Rivet 20:11Z): before anything is read for it or signed, the ledger as it stands under the lock
@@ -600,11 +716,11 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     // 1 · the evidence, read whole (no transaction)
     const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
     if (!evidence?.complete) return held("its window is not over yet");
-    if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
-    // its place (single-room v1): one room's frozen frame, or confirmed silence's locked circle; several rooms are held HERE,
-    // before the ledger is read for it or anything is signed or written
-    const decl = sparkDeclaration(row, evidence);
-    if (decl.held) return held(decl.held, decl.rooms ? { rooms: decl.rooms } : {});
+    if (evidence.room_history !== "complete") return held("its rooms cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
+    // its sparks: one per room, each on its own frozen frame (at most EVENT_SPARKS_MAX, in start order), or confirmed silence's one
+    const decl = sparkDeclarations(row, evidence);
+    if (decl.held) return held(decl.held);
+    const k = decl.sparks.length;
 
     // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not
     const by = String(row.fields.stake.by);
@@ -622,56 +738,125 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
       if (!recovering)
         return refusal(503, `the ledger has returned "${row.id}"'s stake to ${by}, but not as this completion's batch (no spark backing follows it)`,
           "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
+      if (recovering.sparks.length !== k)
+        return refusal(503, `the ledger's batch for "${row.id}" backs ${recovering.sparks.length} spark(s), and its rooms make ${k}`,
+          "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
     } else if (position.n !== n)
       return refusal(503, `the ledger holds ${position.n} on "${row.id}" for ${by}, and the event's record says ${n}`,
         "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it");
+    if (n < k * EVENT_SPARK_BACKING)
+      return refusal(503, `"${row.id}"'s stake of ${n} cannot back its ${k} sparks`, "nothing was written — the operator reconciles it");
 
-    // 3b · the id, under the host household's own keys (its drafts count as used): the ledger's, on a retry
+    // 3b · the ids, under the host household's own keys (its drafts count as used): the ledger's, on a retry — each still unheld
     const base = String(row.id).split("/").slice(1).join("/");
-    const slug = recovering
-      ? (await pen.officeWrite((q) => sparkIdFree(q, by, recovering.spark.split("/").slice(1).join("/")), { household: row.household, env })
-        ? recovering.spark.split("/").slice(1).join("/") : null)
-      : await pen.officeWrite((q) => freeSparkSlug(q, by, base), { household: row.household, env });
-    if (recovering && (!slug || recovering.spark.split("/")[0] !== by))
-      return refusal(503, `the ledger's batch for "${row.id}" names ${recovering.spark}, which this office already holds as another mark or claim`,
-        "an existing mark is never adopted as an event's spark; nothing was written — the operator reconciles it");
-    if (!slug) return held("no free spark id under its slug");
-    const sparkId = `${by}/${slug}`;
+    let slugs;
+    if (recovering) {
+      slugs = recovering.sparks.map(leaf);
+      const unheld = recovering.sparks.every((id) => id.split("/")[0] === by) && new Set(slugs).size === k
+        && await pen.officeWrite(async (q) => { for (const s of slugs) if (!(await sparkIdFree(q, by, s))) return false; return true; }, { household: row.household, env });
+      if (!unheld)
+        return refusal(503, `the ledger's batch for "${row.id}" names ${listed(recovering.sparks)}, which this office already holds as other marks or claims`,
+          "an existing mark is never adopted as an event's spark; nothing was written — the operator reconciles it");
+    } else {
+      slugs = await pen.officeWrite((q) => freeSparkSlugs(q, by, base, k), { household: row.household, env });
+      if (!slugs) return held("no free spark ids under its slug");
+    }
+    const ids = slugs.map((s) => `${by}/${s}`);
 
-    // 2 · the spark, judged by the mark road's own leave, written by nobody yet
+    // 2 · every spark, judged by the mark road's own leave, written by nobody yet: one that would not go forward holds them all
     const planner = planLeave ?? (await import("./world.mjs")).planSparkLeave;
-    const leave = await planner({ by, household: row.household, slug, body: String(row.title), ...decl, stamps: EVENT_SPARK_BACKING });
-    if (leave?.refused) return held(`its spark would not go forward: ${leave.refused.defect}`, { hint: leave.refused.hint });
-    if (!leave?.planned || leave.put_forward !== true) return held("its spark would not go forward with its 1 stamp (the mark road kept it a draft)");
-    const prepared = await journal.prepareActFlipped(leave.entry);
+    const prepared = [];
+    for (let i = 0; i < k; i++) {
+      const { room, ...d } = decl.sparks[i];
+      const which = room ? `its spark for room ${room}` : "its spark";
+      const leave = await planner({ by, household: row.household, slug: slugs[i], body: String(row.title), ...d, stamps: EVENT_SPARK_BACKING });
+      if (leave?.refused) return held(`${which} would not go forward: ${leave.refused.defect}`, { hint: leave.refused.hint });
+      if (!leave?.planned || leave.put_forward !== true) return held(`${which} would not go forward with its 1 stamp (the mark road kept it a draft)`);
+      prepared.push(await journal.prepareActFlipped(leave.entry));
+    }
 
-    // 4 · signed (a fresh completion only): the whole return, then the spark's own stake
+    // 4 · signed (a fresh completion only): the whole return, then each spark's own stake, in the collection's order
     if (!recovering) {
       mint.appendSigned(clone, [mint.postReturnLine({ date, post: row.id, handle: by, n })], keyPem);
-      const staked = ws.worldStakeApply(clone, { handle: by, mark: sparkId, n: EVENT_SPARK_BACKING, via, date }, keyPem);
-      if (staked.applied !== EVENT_SPARK_BACKING) return refusal(503, `the spark's backing did not apply (${staked.reason ?? "applied " + staked.applied})`, "nothing was written; the lines are put back");
+      for (const id of ids) {
+        const staked = ws.worldStakeApply(clone, { handle: by, mark: id, n: EVENT_SPARK_BACKING, via, date }, keyPem);
+        if (staked.applied !== EVENT_SPARK_BACKING) return refusal(503, `${id}'s backing did not apply (${staked.reason ?? "applied " + staked.applied})`, "nothing was written; the lines are put back");
+      }
     }
     const plan = await planStampedCommit(clone, { env });
     const { syncStampLinesVia } = await import("./stamp-lines.mjs");
+    const backing = k * EVENT_SPARK_BACKING;
 
-    // 5 · ONE transaction: the spark, its lock, the receipt, and last the ledger
+    // 5 · ONE transaction: every spark and its lock, the receipt naming the collection, and last the ledger
     return await pen.officeWrite(async (client) => {
-      if (!(await sparkIdFree(client, by, slug))) throw Object.assign(new Error("moved"), { code: 409, defect: `${sparkId} was taken meanwhile`, hint: "nothing was written; the next tick tries again" });
-      const { actId: sparkAct } = await journal.writePreparedVia(client, prepared);
-      await stakeGuard(sparkId)(client);
-      const receipt = await store.recordCompletionVia(client, row.id, { spark: sparkId, n, to: by, backing: EVENT_SPARK_BACKING, now });
+      const acts = [];
+      for (let i = 0; i < k; i++) {
+        if (!(await sparkIdFree(client, by, slugs[i]))) throw Object.assign(new Error("moved"), { code: 409, defect: `${ids[i]} was taken meanwhile`, hint: "nothing was written; the next tick tries again" });
+        acts.push((await journal.writePreparedVia(client, prepared[i])).actId);
+        await stakeGuard(ids[i])(client);
+      }
+      const receipt = await store.recordCompletionVia(client, row.id, { sparks: ids, n, to: by, backing, now });
       // a fresh completion lands its lines last; a retry's lines are already in git, so only the store's copy of them is recorded
       const landed = recovering
         ? (plan ? (await syncStampLinesVia(client, clone, { engine: plan.engine }), { recovered: true }) : { recovered: true })
-        : await landPlannedVia(client, clone, plan, [path], `event complete: ${row.id} -> spark ${sparkId} · ${n} home, ${EVENT_SPARK_BACKING} backing`, { env });
+        : await landPlannedVia(client, clone, plan, [path], `event complete: ${row.id} -> ${k === 1 ? `spark ${ids[0]}` : `${k} sparks (${listed(ids)})`} · ${n} home, ${backing} backing`, { env });
       if (landed?.moved) throw Object.assign(new Error("moved"), { code: 409, defect: "the stamp ledger moved while the completion was landing", hint: "nothing was written; the next tick tries again" });
       if (landed?.error) throw Object.assign(new Error("not landed"), landed.error);
-      return { event: row.id, completed: true, spark: sparkId, spark_act: sparkAct, act_id: receipt.act_id,
-        stake: { returned: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, home: Number(row.fields.stake.n) - EVENT_SPARK_BACKING },
+      return { event: row.id, completed: true, sparks: ids, spark_acts: acts, act_id: receipt.act_id,
+        stake: { returned: n, to: by, backing, home: n - backing },
         ...(landed?.commit ? { commit: landed.commit } : {}), ...(recovering ? { recovered: "its lines were already in the ledger; only the store's half was written" } : {}),
-        rooms: evidence.rooms.map((r) => r.id), present: evidence.present };
-    }, { household: prepared.household ?? row.household, env });
+        rooms: evidence.rooms.map((r) => r.id), ...(decl.beyond ? { rooms_beyond_cap: decl.beyond } : {}), present: evidence.present };
+    }, { household: prepared[0].household ?? row.household, env });
   } catch (e) { return asAnswer(e); }
+}
+
+/**
+ * A FREE EVENT'S COMPLETION (Darko 23:15/23:17 EST via Wright 04:17Z): the same sparks, made as its host's PRIVATE DRAFTS through
+ * the same mark road, unstaked — the household's own draft road (007), so they are visible under its keys and nowhere else. No
+ * ledger line, no charge, no backing, no publication. ONE officeWrite: every draft (each must stay a private draft, or none is
+ * made) and the event's receipt — which names no draft, no count and no words: the public row and its act say only that it
+ * completed, free (events-store § recordFreeCompletionVia). The host is told through needs-you (§ THE HOST'S INVITATION).
+ */
+async function completeFreeEvent(row, { env, now, edges, planLeave }) {
+  const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
+  if (row.fields.completed) return held("already complete");
+  if (row.state === "cancelled") return held("cancelled: no spark is made");
+  if (Date.parse(row.ends) > now) return held("not ended");
+  const pen = await import("./world2-pen.mjs");
+  const store = await import("./events-store.mjs");
+  const journal = await import("./world-journal.mjs");
+  const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
+  if (!evidence?.complete) return held("its window is not over yet");
+  if (evidence.room_history !== "complete") return held("its rooms cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
+  const decl = sparkDeclarations(row, evidence);
+  if (decl.held) return held(decl.held);
+  const k = decl.sparks.length;
+  const by = String(row.author);
+  // the household the host's own acts file drafts in: its drafts are seen there (ids already used), and the new ones land there
+  const house = await (await import("./world2-claims.mjs")).claimHouseholdFor({ actor: by }, env);
+  const slugs = await pen.officeWrite((q) => freeSparkSlugs(q, by, String(row.id).split("/").slice(1).join("/"), k), { household: house, env });
+  if (!slugs) return held("no free spark ids under its slug");
+  const planner = planLeave ?? (await import("./world.mjs")).planSparkLeave;
+  const prepared = [];
+  for (let i = 0; i < k; i++) {
+    const { room, ...d } = decl.sparks[i];
+    const which = room ? `its draft for room ${room}` : "its draft";
+    const leave = await planner({ by, household: row.household, slug: slugs[i], body: String(row.title), ...d, stamps: 0 });
+    if (leave?.refused) return held(`${which} would not be made: ${leave.refused.defect}`, { hint: leave.refused.hint });
+    if (!leave?.planned || leave.put_forward === true) return held(`${which} would not stay a draft`);
+    const p = await journal.prepareActFlipped(leave.entry);
+    // a draft that would mirror a public act is not private: none is made
+    if (!p.draft) return held(`${which} would be written as a public act, not a draft — nothing was made`);
+    prepared.push(p);
+  }
+  return await pen.officeWrite(async (client) => {
+    for (let i = 0; i < k; i++) {
+      if (!(await sparkIdFree(client, by, slugs[i]))) throw Object.assign(new Error("moved"), { code: 409, defect: `${by}/${slugs[i]} was taken meanwhile`, hint: "nothing was written; the next tick tries again" });
+      await journal.writePreparedVia(client, prepared[i]);
+    }
+    const receipt = await store.recordFreeCompletionVia(client, row.id, { now });
+    return { event: row.id, completed: true, free: true, act_id: receipt.act_id, drafts: slugs.map((s) => `${by}/${s}`) };
+  }, { household: prepared[0].household ?? house, env });
 }
 
 async function execMain() {
