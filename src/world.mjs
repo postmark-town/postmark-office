@@ -156,15 +156,6 @@ async function sparkWorld() {
   } catch { return null; }
 }
 /**
- * A ROOM SET'S PLACE, THE WORLD'S ONE RULE (POS-1035; World #391 at 3dee06d4, tools/spark.mjs § roomsPlace): the rectangular
- * envelope over every member room's absolute bounds. Answers the engine's own function, or null when its engine has none (the
- * room-set class not at this office's pin) — the caller then holds; it never computes a place of its own.
- */
-export async function sparkRoomsPlace() {
-  const w = await sparkWorld();
-  return typeof w?.sp?.roomsPlace === "function" ? w.sp.roomsPlace : null;
-}
-/**
  * THE EVENT'S SPARK, JUDGED BY THE MARK ROAD AND WRITTEN BY NOBODY YET (POS-1035; event-sparks.mjs § completeEvent). The same
  * declaration the leave door builds for a spark — the World's own class answer, its properties carried by name, the World's
  * pre-check — then journalLeaveMark { plan }: every guard and the put-forward verdict a real leave runs, and the entry it would

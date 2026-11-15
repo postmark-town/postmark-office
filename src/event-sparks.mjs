@@ -254,8 +254,8 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   return {
     window: { from: iso(window.from), to: iso(window.to), ...(complete ? {} : { as_of: iso(until) }) },
     complete,
-    // every room of the event, in the order it started, each with its own frozen frame (the place they combine into is the
-    // World's one rule, tools/spark.mjs § roomsPlace, asked when the spark is made — never a second copy here)
+    // every room of the event, in the order it started, each with its own frozen frame — the whole public coverage, whatever the
+    // automatic spark makes of it (v1 makes one only for a single room; several stay listed here, never silently dropped)
     rooms: found.rooms.map((c) => ({ ...c, frame: roomFrame(c) })),
     room_history: found.history,
     ...(found.note ? { room_note: found.note } : {}),
@@ -424,9 +424,9 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
 //
 // At its end a staked event becomes ONE put-forward spark through the mark road, its 20 come home whole and the spark's own stake
 // of 1 backs it (19 home, 1 kept) — in ONE locked, signed batch and ONE store transaction, or not at all:
-//   1 · read (no transaction): the event's evidence. Every room at the place is the event's, placed together by the World's
-//       roomsPlace (the rectangular envelope); rooms that cannot be read, or that the World will not place, are HELD, nothing
-//       moves — never turned into the no-conversation radius.
+//   1 · read (no transaction): the event's evidence — single-room v1 (Wright 04:08Z): one room is the spark's place (its frame,
+//       frozen now), confirmed silence the locked circle; SEVERAL rooms, or rooms that cannot be told, are HELD before anything
+//       is signed or written — no spark, no return, no backing, never the no-conversation radius.
 //   2 · the spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
 //       World's spark pre-check, and the verdict — it must go forward with its 1 stamp, or the completion is HELD and says why.
 //   3 · its id: <host>/<event-slug>, else the first unused numeric suffix, checked against published marks, every claim (the
@@ -501,33 +501,47 @@ export async function recountingsAwaitingAtOffice(handles, { env = process.env }
 }
 
 /**
- * The spark's place and time, and its properties, from the event and its evidence. `roomsPlace` is the World's one rule for a room
- * set's place (tools/spark.mjs § roomsPlace, World #391: the rectangular envelope over every member room's absolute bounds, gaps
- * included). Answers `{ at, extent, properties }`, or `{ held }` naming why no place can be told — never a guessed one:
- *   · unknown history is not a proved empty set: held, never the no-conversation frame;
- *   · a PROVED empty set is the standalone spark: the event's place and the locked circle, and no `rooms` written;
- *   · rooms are placed by the World's roomsPlace alone; its null for rooms that exist (bounds it will not place), or an engine
- *     without it, is held — a null is never read as "no room".
- * The record names every room as the World's class spells it: `rooms`, the ids in start order (no singular alias).
+ * The spark's place and time, and its properties, from the event and its evidence — SINGLE-ROOM v1 (Wright 04:08Z; Darko: "let's
+ * try the single-room events first"). Answers `{ at, extent, properties }`, or `{ held, rooms? }` naming why no spark is made —
+ * never a guessed place or a chosen room:
+ *   · unknown history is not silence: held, never the no-conversation frame;
+ *   · CONFIRMED silence (a complete history with no room) is the ruled standalone spark: the event's place and the locked circle;
+ *   · ONE room: that room's own frame, frozen now (roomFrame: the exact midpoint and differences, zeros kept) — the room the
+ *     conversations page names, even one that began before the doors;
+ *   · SEVERAL rooms: held, every room named. v1 makes no automatic spark for them, picks none, and moves no money: what several
+ *     rooms make is the sitting's (WLD-173/c).
+ * ⚑ The record names the room as World's held artifact spells it today (`rooms: [<id>]`, #391 at 7b1278b3); the canonical
+ * one-room field is being settled with Bevel, and this follows it when it lands — no Office alias meanwhile.
  */
-export function sparkDeclaration(row, evidence, { roomsPlace = null } = {}) {
+/**
+ * WHY AN EVENT HAS NO AUTOMATIC ROOT, when `evidence.spark` is null (the v1 read contract's optional `spark_note`): so a null is
+ * never read as a failed read. Undefined when there is a spark, or nothing to explain. The reasons, in the completion's order.
+ */
+export function sparkNoteOf(row, evidence, { now = Date.now() } = {}) {
+  if (!evidence || evidence.spark) return undefined;
+  if (!row?.fields?.stake) return "this event was posted before events were staked: it stays free and ends without an automatic spark";
+  if (row.fields.stake.returned && !row.fields.completed) return "its stake came home with its cancellation: no spark is made";
+  if (!evidence.complete || Date.parse(row.ends) > now) return "its spark is made after it ends";
+  if (evidence.room_history !== "complete") return "its rooms cannot be told yet, so its spark waits — unknown, not silence";
+  if (evidence.rooms.length > 1) return `${evidence.rooms.length} ${SEVERAL_ROOMS_HELD}`;
+  return "its spark is made at the office's next keeping tick";
+}
+
+export const SEVERAL_ROOMS_HELD ="conversations formed at its place in its window, and v1 makes an automatic spark only for an event with one room (Wright 04:08Z) — what several rooms make is for the sitting (WLD-173/c); no spark is made, nothing is signed and no stamp moves";
+export function sparkDeclaration(row, evidence) {
   if (evidence.room_history !== "complete")
     return { held: `its rooms cannot be told (history ${evidence.room_history ?? "unknown"}) — no place is chosen` };
   const ids = evidence.rooms.map((r) => r.id);
-  let frame;
-  if (!ids.length) frame = placeFrame({ x: Number(row.place_x), y: Number(row.place_y) });
-  else {
-    if (typeof roomsPlace !== "function") return { held: "this office's World engine has no roomsPlace (the room-set class is not at its pin), so its rooms' place cannot be told" };
-    frame = roomsPlace(evidence.rooms.map(({ extent: { x0, y0, x1, y1 } }) => ({ x0, y0, x1, y1 })));
-    if (!frame) return { held: `the World's roomsPlace placed none of its ${ids.length} room(s)' bounds — a null is not "no room"`, rooms: ids };
-  }
+  if (ids.length > 1) return { held: `${ids.length} ${SEVERAL_ROOMS_HELD}`, rooms: ids };
+  const [room] = evidence.rooms;
+  const frame = room ? (room.frame ?? roomFrame(room)) : placeFrame({ x: Number(row.place_x), y: Number(row.place_y) });
   return {
     at: frame.at, extent: frame.extent,
     properties: {
       recounting: recountingOf(row),
       experienced_at: evidence.window.from, experienced_until: evidence.window.to,
       event: row.id,
-      ...(ids.length ? { rooms: ids } : {}),
+      ...(room ? { rooms: [room.id] } : {}),
       ...(evidence.present.length ? { present: evidence.present } : {}),
     },
   };
@@ -564,11 +578,8 @@ async function freeSparkSlug(q, by, base) {
   return null;
 }
 
-/**
- * `planLeave` is the mark road's planner (world.mjs § planSparkLeave) and `roomsPlace` the World's room-set place (world.mjs §
- * sparkRoomsPlace, tools/spark.mjs § roomsPlace); a test hands its own of each where the World pin lacks the class.
- */
-export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, roomsPlace = undefined, registry = null }) {
+/** `planLeave` is the mark road's planner (world.mjs § planSparkLeave); a test hands its own where the World pin lacks the class. */
+export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, registry = null }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   try {
     if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
@@ -590,10 +601,9 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
     if (!evidence?.complete) return held("its window is not over yet");
     if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
-    // its place: every room it formed, combined by the World's roomsPlace; a proved empty set is the locked circle at its place
-    const place = roomsPlace !== undefined ? roomsPlace
-      : evidence.rooms.length ? await (await import("./world.mjs")).sparkRoomsPlace() : null;
-    const decl = sparkDeclaration(row, evidence, { roomsPlace: place });
+    // its place (single-room v1): one room's frozen frame, or confirmed silence's locked circle; several rooms are held HERE,
+    // before the ledger is read for it or anything is signed or written
+    const decl = sparkDeclaration(row, evidence);
     if (decl.held) return held(decl.held, decl.rooms ? { rooms: decl.rooms } : {});
 
     // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not

@@ -81,28 +81,40 @@ test("CORE-97 × the event: a room that carries across a settlement inside the w
   assert.equal("binding" in two, false);
 });
 
-test("the spark's place: every room, placed by the World's roomsPlace from absolute bounds in start order; a proved empty set is the locked circle; unknown history or a null for real rooms is HELD", () => {
+test("spark_note (v1 read): a null root says why — free, cancelled, not ended, untellable rooms, several rooms, or the next tick; a root needs none", () => {
+  const now = Date.parse("2026-11-14T23:00:00Z");
+  const ended = "2026-11-14T22:00:00Z";
+  const staked = { ends: ended, fields: { stake: { n: 20, by: "wright" } } };
+  const ev = (over = {}) => ({ complete: true, room_history: "complete", rooms: [{ id: "t1-a" }], spark: null, ...over });
+  assert.match(S.sparkNoteOf({ ends: ended, fields: {} }, ev(), { now }), /posted before events were staked: it stays free/);
+  assert.match(S.sparkNoteOf({ ends: ended, fields: { stake: { n: 20, by: "w", returned: { n: 20 } } } }, ev(), { now }), /came home with its cancellation/);
+  assert.match(S.sparkNoteOf({ ...staked, ends: "2026-11-15T01:00:00Z" }, ev({ complete: false }), { now }), /made after it ends/);
+  assert.match(S.sparkNoteOf(staked, ev({ room_history: "unavailable", rooms: [] }), { now }), /cannot be told yet, .* unknown, not silence/);
+  assert.match(S.sparkNoteOf(staked, ev({ rooms: [{ id: "t1-a" }, { id: "t2-b" }] }), { now }), /^2 conversations formed .* one room/);
+  assert.match(S.sparkNoteOf(staked, ev(), { now }), /next keeping tick/);
+  assert.match(S.sparkNoteOf(staked, ev({ rooms: [] }), { now }), /next keeping tick/, "confirmed silence still makes its spark");
+  assert.equal(S.sparkNoteOf(staked, ev({ spark: { id: "wright/x", accepted: true } }), { now }), undefined, "a root needs no note");
+});
+
+test("single-room v1 (Wright 04:08Z): one room is the spark's place, that room's frame frozen; confirmed silence the locked circle; unknown history and SEVERAL rooms are HELD, every room named, none chosen", () => {
   const row = { id: "pica/sorbet-night", title: "Sorbet night", body: "sorbet on the counter", place_x: 100, place_y: 200 };
   const window = { from: "2026-11-14T20:00:00.000Z", to: "2026-11-14T22:00:00.000Z" };
   const a = { id: "t1-a", voice_count: 2, extent: { x0: 10, y0: 20, x1: 30, y1: 20, span_m: 20 } };   // a line room
-  const b = { id: "t2-b", voice_count: 3, extent: { x0: 55, y0: 18, x1: 61, y1: 26, span_m: 10 } };   // apart from it
-  const asked = [];
-  const roomsPlace = (bounds) => { asked.push(bounds); return { at: { x: 35.5, y: 22 }, extent: { w: 51, h: 8 } }; }; // World's answer, as given
-  const two = S.sparkDeclaration(row, { rooms: [a, b], room_history: "complete", window, present: ["pica-house"] }, { roomsPlace });
-  assert.deepEqual(asked, [[{ x0: 10, y0: 20, x1: 30, y1: 20 }, { x0: 55, y0: 18, x1: 61, y1: 26 }]], "the World is handed each room's absolute bounds, nothing else");
-  assert.deepEqual([two.at, two.extent], [{ x: 35.5, y: 22 }, { w: 51, h: 8 }], "its place is the World's, verbatim");
-  assert.deepEqual(two.properties.rooms, ["t1-a", "t2-b"], "every room, by id, in start order — the World's `rooms`");
-  assert.equal("room" in two.properties, false, "no singular alias");
-  const none = S.sparkDeclaration(row, { rooms: [], room_history: "complete", window, present: [] }, { roomsPlace: () => assert.fail("no room asks no place") });
-  assert.deepEqual([none.at, none.extent], [{ x: 100, y: 200 }, { w: 120, h: 120 }], "a PROVED empty set: the place and the locked circle");
+  const b = { id: "t2-b", voice_count: 9, extent: { x0: 55, y0: 18, x1: 61, y1: 26, span_m: 10 } };   // apart from it, and bigger
+  const one = S.sparkDeclaration(row, { rooms: [{ ...a, frame: S.roomFrame(a) }], room_history: "complete", window, present: ["pica-house"] });
+  assert.deepEqual([one.at, one.extent], [{ x: 20, y: 20 }, { w: 20, h: 0 }], "the one room's own frame: exact midpoint and differences, its zero kept");
+  assert.deepEqual(one.properties.rooms, ["t1-a"], "the room, by the page's id (World's held wire: `rooms: [<id>]`)");
+  assert.equal("room" in one.properties, false, "no Office alias");
+  assert.deepEqual(one.properties.present, ["pica-house"]);
+  const none = S.sparkDeclaration(row, { rooms: [], room_history: "complete", window, present: [] });
+  assert.deepEqual([none.at, none.extent], [{ x: 100, y: 200 }, { w: 120, h: 120 }], "CONFIRMED silence: the place and the ruled locked circle");
   assert.equal("rooms" in none.properties, false, "no rooms written for none");
-  assert.match(S.sparkDeclaration(row, { rooms: [], room_history: "unavailable", window, present: [] }, { roomsPlace }).held, /cannot be told/,
-    "unknown history is not a proved empty set");
-  const nulled = S.sparkDeclaration(row, { rooms: [a], room_history: "complete", window, present: [] }, { roomsPlace: () => null });
-  assert.match(nulled.held, /placed none .* a null is not "no room"/, "a null for real rooms holds; it never falls back to the locked circle");
-  assert.deepEqual(nulled.rooms, ["t1-a"]);
-  assert.match(S.sparkDeclaration(row, { rooms: [a], room_history: "complete", window, present: [] }, { roomsPlace: null }).held, /has no roomsPlace/,
-    "an engine without the World's rule holds: no place of the office's own");
+  assert.match(S.sparkDeclaration(row, { rooms: [], room_history: "unavailable", window, present: [] }).held, /cannot be told/,
+    "unknown history is not silence");
+  const two = S.sparkDeclaration(row, { rooms: [a, b], room_history: "complete", window, present: [] });
+  assert.match(two.held, /^2 conversations formed at its place .* v1 makes an automatic spark only for an event with one room .* for the sitting/);
+  assert.deepEqual(two.rooms, ["t1-a", "t2-b"], "every room named, in start order — the bigger is not chosen");
+  assert.equal("at" in two, false, "no place is made for several");
 });
 
 test("present: the households with a public act at the place in the window — once each, sorted; nothing without a household or a place", () => {
@@ -486,46 +498,61 @@ test("completion: a second tick does nothing — no second spark, no second retu
   assert.ok(!due.includes(row.id));
 });
 
-test("completion is HELD, nothing moved: before its end, when its rooms cannot be told or the World will not place them, or when its spark would not go forward — and several rooms complete as one spark", async () => {
+const sayAt = async (who, at, x, y) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
+  VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, $5, $6)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, y, `${who}-house`]);
+
+test("completion is HELD, nothing moved: before its end, when its rooms cannot be told, and — single-room v1 — when SEVERAL rooms formed: no spark, no plan, no line, no receipt, no claim", async () => {
   const dir = townInABottle();
   // its own place: the record is append-only, and the talk this test adds must not be any other event's
   const { row, after: now } = await endedEvent(dir, "Sorbet held", { at: { x: 900, y: 900 } });
-  const lines = ledgerText(dir);
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
   assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
   // a settlement the office knows that is newer than the window's start: the room cannot be told — never "no conversation"
   assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /room cannot be told/);
-  // two groups talking apart at the place: both rooms are the event's (all of them,
-  // combined), placed together by the World's roomsPlace — its null for real rooms, or an engine without it, is HELD, never the
-  // locked circle
-  const doors = Date.parse(row.fields.doors_open ?? row.starts);
-  const say = async (who, at, x) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
-    VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, 900, $5)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, `${who}-house`]);
   // two groups each 50 m from the place and 100 m apart (beyond earshot of each other): two rooms, whatever the settlements
-  await say("held-a", doors + 60_000, 850);
-  await say("held-b", doors + 30 * 60_000, 950);
-  const split = { edges: [doors - 3_600_000] };
-  const nulled = await complete(dir, row, now, { ...split, roomsPlace: () => null });
-  assert.match(nulled.held, /placed none of its 2 room\(s\)' bounds — a null is not "no room"/);
-  assert.equal(nulled.rooms.length, 2);
-  assert.match((await complete(dir, row, now, { ...split, roomsPlace: null })).held, /has no roomsPlace/);
-  const asked = [];
-  const worldPlace = (bounds) => { asked.push(bounds); return { at: { x: 910, y: 900 }, extent: { w: 20, h: 0 } }; }; // the World's answer, as given
-  // the mark road keeps it a draft, or refuses it: held, and says why
-  assert.match((await complete(dir, row, now, { ...split, roomsPlace: worldPlace, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,
-    /would not go forward: outside the world/);
-  assert.match((await complete(dir, row, now, { ...split, roomsPlace: worldPlace, planLeave: async (a) => ({ ...(await planLeave(a)), put_forward: false }) })).held, /kept it a draft/);
-  assert.equal(ledgerText(dir), lines, "no line signed by any held completion");
-  assert.equal((await postRow(row.id)).fields.completed, undefined);
+  const doors = Date.parse(row.fields.doors_open ?? row.starts);
+  await sayAt("held-a", doors + 60_000, 850, 900);
+  await sayAt("held-b", doors + 30 * 60_000, 950, 900);
+  const calls = plannerCalls.length;
+  const several = await complete(dir, row, now, { edges: [doors - 3_600_000] });
+  assert.match(several.held, /^2 conversations formed at its place .* v1 makes an automatic spark only for an event with one room .* no spark is made, nothing is signed and no stamp moves/);
+  assert.equal(several.rooms.length, 2, "both rooms named — neither chosen");
+  assert.equal(plannerCalls.length, calls, "held before the spark is even planned");
+  assert.equal(ledgerText(dir), lines, "no return, no backing: nothing signed");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
+  assert.equal((await postRow(row.id)).fields.completed, undefined, "no completion written");
+  assert.equal((await claimOf(`wright/${row.id.split("/").slice(1).join("/")}`)).length, 0, "no spark claim");
+  const ev = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => [doors - 3_600_000] })).event.evidence;
+  assert.equal(ev.rooms.length, 2, "the public evidence still lists every room — the coverage is not narrowed by v1's automatic spark");
+  assert.deepEqual(ev.gallery.rooms, ev.rooms.map((r) => r.id), "and the gallery still covers them all");
+  assert.equal(ev.spark, null);
+  assert.match(ev.spark_note, /2 conversations formed at its place .* one room/, "the null root says why");
+});
 
-  // and with the World's place, the two rooms complete as ONE spark that names both, placed where the World put them
-  const done = await complete(dir, row, now, { ...split, roomsPlace: worldPlace });
+test("single-room v1: the mark road's refusal or draft holds the completion; then ONE room completes with that room's own frame, frozen, under the page's id", async () => {
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet single", { at: { x: 700, y: 700 } });
+  const doors = Date.parse(row.fields.doors_open ?? row.starts);
+  await sayAt("solo-a", doors + 60_000, 700, 700);
+  await sayAt("solo-b", doors + 2 * 60_000, 731, 700);
+  const edges = [doors - 3_600_000];
+  const lines = ledgerText(dir);
+  assert.match((await complete(dir, row, now, { edges, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,
+    /would not go forward: outside the world/);
+  assert.match((await complete(dir, row, now, { edges, planLeave: async (a) => ({ ...(await planLeave(a)), put_forward: false }) })).held, /kept it a draft/);
+  assert.equal(ledgerText(dir), lines, "no line signed by any held completion");
+  const done = await complete(dir, row, now, { edges });
   assert.equal(done.completed, true, JSON.stringify(done));
-  assert.equal(done.rooms.length, 2);
-  assert.deepEqual(asked.at(-1), [{ x0: 850, y0: 900, x1: 850, y1: 900 }, { x0: 950, y0: 900, x1: 950, y1: 900 }], "each room's absolute bounds, in start order");
+  const ev = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => edges })).event.evidence;
+  assert.equal(ev.rooms.length, 1);
+  assert.match(ev.rooms[0].id, /^t\d+-solo-a$/, "the room is named by its first say, as the page names it");
+  assert.deepEqual(done.rooms, [ev.rooms[0].id], "the one room, by the page's id");
+  assert.equal(ev.spark?.id, done.spark, "the root is the completed spark (waiting on acceptance here)");
+  assert.equal("spark_note" in ev, false, "a root needs no note");
   const call = plannerCalls.at(-1);
-  assert.deepEqual(call.properties.rooms, done.rooms, "the record's rooms: every room id");
-  assert.equal("room" in call.properties, false);
-  assert.deepEqual([call.at, call.extent], [{ x: 910, y: 900 }, { w: 20, h: 0 }], "the World's place, its zero side kept");
+  assert.deepEqual(call.properties.rooms, done.rooms, "the record names it (World's held wire, `rooms: [<id>]`)");
+  assert.equal("room" in call.properties, false, "no Office alias");
+  assert.deepEqual([call.at, call.extent], [{ x: 715.5, y: 700 }, { w: 31, h: 0 }], "that room's own frame, frozen at completion: exact midpoint, half and zero kept");
 });
 
 test("completion interrupted after its lines landed and before the store committed: the retry finishes it from the ledger's own batch — no new line, no re-sign", async () => {
