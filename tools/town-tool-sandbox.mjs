@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// town-tool-sandbox.mjs — the crossing's town tools, run with none of the ferry's rights
-// (POS-994, shape A, Wright's go 2026-11-14 18:05 EST).
+// town-tool-sandbox.mjs — the crossing's town tools, run without the ferry's env, key, credential or network
+// (POS-994, shape A, Wright's go 2026-11-14 18:05 EST; what it does NOT keep from them is POS-1049, below).
 //
 //   node /srv/postmark-office/tools/town-tool-sandbox.mjs ferry  --clone <town clone> [--report <file>]   the client (the ferry, as meepo)
 //   node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone <town clone>
 //   node /srv/postmark-office/tools/town-tool-sandbox.mjs quests --clone <town clone>
-//   node /srv/postmark-office/tools/town-tool-sandbox.mjs serve  --clone <town clone>                     the sandbox (one connection on fd 0 and 1)
+//   node /srv/postmark-office/tools/town-tool-sandbox.mjs serve  --clone <town clone> [--in-unit]         the sandbox (one connection on fd 0 and 1;
+//                                                                                                         --in-unit, the unit's: the straggler kill fails closed)
 //
 // ── WHY ─────────────────────────────────────────────────────────────────────
 // postmark-ferry.service ran three of the town's own tools straight from the live
@@ -73,14 +74,22 @@
 // facts, and the crossing number is the witness's to derive, never the tool's
 // word (Truey's F3).
 //
-// ── NOT COVERED: SIGNALS (Truey's N2 on #1048) ──────────────────────────────
-// The tool can still SIGKILL or SIGSTOP other meepo processes (the office, the
-// waiting ferry client): signal permission compares uids across user namespaces,
-// and there is no PID namespace here. A PID namespace needs systemd 257
-// (PrivatePIDs) or an unprivileged user namespace, which this box's AppArmor
-// refuses (kernel.apparmor_restrict_unprivileged_userns=1, probed 2026-11-14:
-// unshare can't write its uid_map). That is availability, not secrets, and it is
-// POS-1049.
+// ── NOT COVERED: SIGNALS (Truey's N2 on #1048; POS-1049) ────────────────────
+// The tool can still signal other meepo processes: signal permission compares
+// uids across user namespaces, and there is no PID namespace here. A PID
+// namespace needs systemd 257 (PrivatePIDs) or an unprivileged user namespace,
+// which this box's AppArmor refuses (kernel.apparmor_restrict_unprivileged_userns=1,
+// probed 2026-11-14: unshare can't write its uid_map). It is MORE than
+// availability. A tool can find meepo's pids with kill(pid, 0) and SIGKILL the
+// office, and it can SIGKILL the waiting ferry client, its sh and its flock:
+//   · then no EXIT trap runs, so there is no undo (or one runs while the tool
+//     still writes), and town.lock is released to the next writer;
+//   · and what the tool goes on writing in WHITE_PAGES and TOWN_BULLETIN stays
+//     there until the next crossing's clean.
+// What bounds it here: serve's spawnSync SIGKILLs the tool at STEP_MS (5 min),
+// then kills everything it started, and the unit's RuntimeMaxSec (8 min) ends
+// the instance. It still can't read a secret, reach the network, or write
+// anywhere but those two directories.
 //
 // Exit codes (client): 0 the tool ran green and every check held; 1 a refusal (the
 // tool's own non-zero exit, the sandbox's refusal, a missing socket, a malformed
@@ -116,7 +125,10 @@ export const PASSED_ENV = ["TOWN_TZ"];
 const ENV_VALUE = /^[A-Za-z0-9_+\-/]{1,64}$/;
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_OUTPUT = 16 * 1024 * 1024;
-const STEP_MS = 15 * 60 * 1000;
+// The tools' real run times on the box (2026-11-15 00:00Z crossing): the ferry 9 s for 229 letters, a verify well
+// under a minute. Five minutes leaves headroom and bounds how long a tool that has killed its client (POS-1049) can
+// go on writing before serve SIGKILLs it and everything it started.
+const STEP_MS = 5 * 60 * 1000;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 function readAll(stream) {
@@ -175,28 +187,32 @@ export function stragglerPids(cgroupText, procsText, self, env = process.env) {
  * cgroup it can't read or doesn't recognize is a refusal, never a pass. Without it (a
  * test's stand-in) there is nothing to kill and it never kills.
  */
-export function killStragglers({ required = false } = {}) {
-  let cg = "";
-  try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { /* read as unknown below */ }
-  const path = /^0::(\/\S*)$/m.exec(cg)?.[1];
-  const list = () => stragglerPids(cg, readFileSync(`/sys/fs/cgroup${path}/cgroup.procs`, "utf8"), process.pid);
-  let left;
-  try { left = path ? list() : null; } catch { left = null; }
-  if (left === null) return !required;
+export function killStragglers({ required = false, list = null, signal = (pid, sig) => process.kill(pid, sig), pause = null } = {}) {
+  // `list`, `signal` and `pause` are the test's seam (a fake process table); serve passes none of them
+  if (!list) {
+    let cg = "";
+    try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { /* read as unknown below */ }
+    const path = /^0::(\/\S*)$/m.exec(cg)?.[1];
+    list = () => (path ? stragglerPids(cg, readFileSync(`/sys/fs/cgroup${path}/cgroup.procs`, "utf8"), process.pid) : null);
+  }
   const nap = new Int32Array(new SharedArrayBuffer(4));
+  pause ??= () => Atomics.wait(nap, 0, 0, 20);
+  let left;
+  try { left = list(); } catch { left = null; }
+  if (left === null) return !required;
   for (let round = 0; round < 50 && left.length; round += 1) {
     const frozen = new Set();
     for (let pass = 0; pass < 200 && left.some((p) => !frozen.has(p)); pass += 1) {
       for (const pid of left) {
         if (frozen.has(pid)) continue;
-        try { process.kill(pid, "SIGSTOP"); } catch { /* gone already */ }
+        try { signal(pid, "SIGSTOP"); } catch { /* gone already */ }
         frozen.add(pid);
       }
       left = list();
     }
     console.error(`[town-tool] killing ${frozen.size} process(es) the tool left running`);
-    for (const pid of frozen) { try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ } }
-    Atomics.wait(nap, 0, 0, 20);
+    for (const pid of frozen) { try { signal(pid, "SIGKILL"); } catch { /* gone already */ } }
+    pause();
     left = list();
   }
   return left.length === 0;
@@ -215,7 +231,7 @@ export async function serve(cloneArg, { inUnit = false } = {}) {
     const argv = TOOLS[tool].argv.map((a) => (a === REPORT_SLOT ? report : a));
     const r = spawnSync(process.execPath, argv, {
       cwd: ownClone, env: { PATH: "/usr/bin:/bin", HOME: dir, ...env }, stdio: ["ignore", "pipe", "pipe"],
-      timeout: STEP_MS, maxBuffer: MAX_OUTPUT,
+      timeout: STEP_MS, killSignal: "SIGKILL", maxBuffer: MAX_OUTPUT,
     });
     const exit = r.status ?? 1;
     console.error(`[town-tool] ${tool}: exit ${exit}${r.signal ? ` (${r.signal})` : ""}${r.error ? ` (${r.error.code})` : ""}`);
@@ -486,7 +502,7 @@ if (isMain) {
   const opt = (name) => { const i = rest.indexOf(name); return i === -1 ? null : rest[i + 1] ?? null; };
   const clone = opt("--clone");
   if (!clone || !(verb === "serve" || Object.hasOwn(TOOLS, verb))) {
-    console.error("usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone <town clone> [--report <file>] | serve --clone <town clone>");
+    console.error("usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone <town clone> [--report <file>] | serve --clone <town clone> [--in-unit]");
     process.exit(2);
   }
   if (verb === "serve") await serve(clone, { inUnit: rest.includes("--in-unit") });

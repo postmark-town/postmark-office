@@ -1822,48 +1822,49 @@ Darko's call. That means the git-mode mint (`tools/stamp-mint.mjs --append
 --key`) in the ferry and in the keep tick, and `tools/witness-chain.mjs` with
 the witness key. Also not covered are the owed path's
 `tools/stamp-verify-owed.mjs` (store mode only) and the keep tick's
-`tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`). **Signals are not
-covered either** (Truey's N2): a tool can still signal other meepo processes,
-because signal permission compares uids across user namespaces. A PID namespace
-needs systemd 257 (`PrivatePIDs`) or an unprivileged user namespace, and this
-box's AppArmor refuses that (`kernel.apparmor_restrict_unprivileged_userns=1`).
-This is availability, not secrets, and it is POS-1049.
+`tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`).
+
+**Signals are not covered either** (Truey's N2, POS-1049). A tool can still
+signal other meepo processes, because signal permission compares uids across
+user namespaces. A PID namespace needs systemd 257 (`PrivatePIDs`) or an
+unprivileged user namespace, and this box's AppArmor refuses that
+(`kernel.apparmor_restrict_unprivileged_userns=1`). It is more than
+availability:
+- **What a tool can kill:** the office, or the waiting ferry client, its sh and
+  its flock.
+- **What follows:** no undo runs, and `town.lock` is released. What the tool goes
+  on writing in `WHITE_PAGES` and `TOWN_BULLETIN` stays until the next
+  crossing's clean.
+- **The bound:** serve SIGKILLs the tool at 5 minutes and kills what it started,
+  and `RuntimeMaxSec=8min` ends the instance.
+- **What it still can't do:** read a secret, reach the network, or write
+  anywhere else.
 
 **Install after POS-988's**, since both replace the ferry unit. Do it by hand,
 away from a crossing (not 23:50–00:40 or 11:50–12:40 UTC), and only after the
 release carrying this change is live, so that
-`/srv/postmark-office/tools/town-tool-sandbox.mjs` exists. The order is the
-socket, then the proof, and only then the ferry unit. A ferry unit that calls a
-missing socket refuses its ferry stage before any mail moves, every crossing.
+`/srv/postmark-office/tools/town-tool-sandbox.mjs` exists. The order is:
+1. the probes, before anything of this is installed;
+2. the socket;
+3. the real verify through it;
+4. only then the ferry unit.
 
-**1. The socket.**
-```sh
-sudo cp /srv/postmark-office/deploy/postmark-town-tool.socket \
-        /srv/postmark-office/deploy/postmark-town-tool@.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now postmark-town-tool.socket
-systemctl show postmark-town-tool.socket -p ActiveState -p Listen    # active, /run/postmark-town-tool.sock (Stream)
-stat -c '%U %a' /run/postmark-town-tool.sock                          # meepo 600
-```
+A ferry unit that calls a missing socket refuses its ferry stage before any mail
+moves, every crossing. None of the probes writes in the town clone, or anywhere
+outside its own temp directory.
 
-**2. The proof.** It writes nothing in the town clone, and nothing outside its
-own temp directory.
+**1. The probes, BEFORE the template is installed.** Each is a transient unit
+with the template's own settings, read from the release's copy in
+`/srv/postmark-office/deploy/`. They come first because systemd refuses a
+transient `postmark-town-tool@….service` once the template's file is installed,
+and (d) needs exactly that name so that its cgroup matches the kill's guard.
 
-(a) The real verify through the socket, under the lock, as the crossing runs it:
-```sh
-sudo -u meepo flock -w 300 /srv/postmark-office/town.lock \
-  node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone /srv/postmark-office/town-clone; echo "exit $?"
-# the town's own "✓ stamp-ledger verified", exit 0
-sudo -u meepo git -C /srv/postmark-office/town-clone status --porcelain   # nothing
-```
-
-(b) A probe under the unit's own settings, as a transient unit. It replaces
-nothing and starts no instance of the template. It prints only whether each
-thing was reachable (an error code, or `ok`), never what it read. The probe file
-is POS-994's (2026-11-14 23:16Z) and is kept on the issue.
+(b) Reach. It prints only whether each thing was reachable (an error code, or
+`ok`), never what it read. The probe file is POS-994's (2026-11-14 23:16Z) and is
+kept on the issue.
 ```sh
 d=$(mktemp -d); chmod 755 "$d"   # put the probe there as $d/probe.mjs, mode 644
-args=(); while IFS= read -r l; do args+=(-p "$l"); done < <(grep -E '^[A-Za-z]+=' /etc/systemd/system/postmark-town-tool@.service \
+args=(); while IFS= read -r l; do args+=(-p "$l"); done < <(grep -E '^[A-Za-z]+=' /srv/postmark-office/deploy/postmark-town-tool@.service \
   | grep -vE '^(ExecStart|StandardInput|StandardOutput|StandardError|CollectMode|BindReadOnlyPaths=/srv/postmark-office/tools/)')
 sudo systemd-run --quiet --wait --pipe --collect "${args[@]}" -p "BindReadOnlyPaths=$d/probe.mjs:/srv/postmark-office/tools/town-tool-sandbox.mjs" \
   /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs
@@ -1894,11 +1895,33 @@ detached process that ignores SIGTERM and keeps forking, then calls
 itself left in its cgroup. On 2026-11-14, 9 processes were cleared in 56 ms,
 then 2 more that were born mid-round, and 0 remained. The probe file is POS-994's.
 
-Then remove the probes and `$d` by name. If (a) is not green, (b) or (c)
-reaches anything, or (d) leaves a process, stop here: the ferry still runs the
-tools itself, and nothing has changed for it.
+Then remove the probes and `$d` by name. If (b) or (c) reaches anything, or (d)
+leaves a process, stop here: nothing is installed, and the ferry still runs the
+tools itself.
 
-**3. The ferry unit.**
+**2. The socket.**
+```sh
+sudo cp /srv/postmark-office/deploy/postmark-town-tool.socket \
+        /srv/postmark-office/deploy/postmark-town-tool@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-town-tool.socket
+systemctl show postmark-town-tool.socket -p ActiveState -p Listen    # active, /run/postmark-town-tool.sock (Stream)
+stat -c '%U %a' /run/postmark-town-tool.sock                          # meepo 600
+```
+
+**3. The real verify through the socket** (a), under the lock, as the crossing
+runs it. It writes nothing in the clone:
+```sh
+sudo -u meepo flock -w 300 /srv/postmark-office/town.lock \
+  node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone /srv/postmark-office/town-clone; echo "exit $?"
+# the town's own "✓ stamp-ledger verified", exit 0
+sudo -u meepo git -C /srv/postmark-office/town-clone status --porcelain   # nothing
+journalctl -u 'postmark-town-tool@*' --since -5min --no-pager | tail -3   # [town-tool] verify: exit 0
+```
+If it is not green, stop: the socket can stay or go (rollback below), and the
+ferry still runs the tools itself.
+
+**4. The ferry unit.**
 ```sh
 sudo cp -n /etc/systemd/system/postmark-ferry.service /var/backups/postmark-ferry.service.pre-pos994   # the rollback copy; -n keeps the first one
 sudo cp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/

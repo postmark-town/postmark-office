@@ -1,5 +1,6 @@
 // town-tool-sandbox.test.mjs — POS-994 (shape A): the crossing's town tools run
-// with none of the ferry's rights, and the client keeps the pull, commit and push.
+// without the ferry's env, key, credential or network (signals are POS-1049), and
+// the client keeps the pull, commit and push.
 //
 //   node --test test/town-tool-sandbox.test.mjs
 //
@@ -140,6 +141,27 @@ test("stragglerPids names the instance's other processes, and nothing outside a 
   // the belt (NOT enough alone: any systemd service, a CI runner among them, has an INVOCATION_ID)
   assert.equal(stragglerPids(unitCg, "100\n200\n", 200, {}), null, "no INVOCATION_ID, no kill");
   assert.equal(DECOY_ENV.INVOCATION_ID, undefined, "the stand-in's serve runs without one, so the belt holds for the tests below too");
+});
+
+// FREEZE, THEN KILL (Truey's re-review): a fake process table where a child appears while the first two are being
+// frozen. Every pid seen must be stopped before ANY is killed, the late child included, and the instance must end
+// empty. THE CAN-FAIL FLIP: drop the SIGSTOP pass (or kill as each pid is listed) and the order goes red.
+test("killStragglers freezes everything it sees, the late-born included, before it kills anything", () => {
+  const sent = [];
+  let alive = new Set([101, 102]);
+  let calls = 0;
+  const list = () => {
+    calls += 1;
+    if (calls === 2) alive.add(103); // born while 101 and 102 were being stopped
+    return [...alive];
+  };
+  const signal = (pid, sig) => { sent.push(`${sig} ${pid}`); if (sig === "SIGKILL") alive.delete(pid); };
+  assert.equal(killStragglers({ required: true, list, signal, pause: () => {} }), true, "serve is left alone");
+  assert.deepEqual(sent, ["SIGSTOP 101", "SIGSTOP 102", "SIGSTOP 103", "SIGKILL 101", "SIGKILL 102", "SIGKILL 103"]);
+  assert.deepEqual([...alive], []);
+  // and a table that never empties is a refusal, not a pass
+  const stubborn = () => [7];
+  assert.equal(killStragglers({ required: true, list: stubborn, signal: () => {}, pause: () => {} }), false);
 });
 
 test("killStragglers fails closed in the unit and never kills outside one", () => {

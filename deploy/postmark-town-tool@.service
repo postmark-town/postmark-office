@@ -47,13 +47,17 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 #     alone (Truey's F2). --in-unit makes that fail closed: a cgroup it can't
 #     read or recognize is a refusal. KillMode=control-group and TimeoutStopSec=5s
 #     are the belt: the unit's stop takes whatever is left at once, not in 90 s;
-#   · NOT COVERED, SIGNALS (Truey's N2): the tool can still signal other meepo
-#     processes, the office's and the waiting ferry client's among them. Signal
-#     permission compares uids across user namespaces, and a PID namespace needs
-#     systemd 257 (PrivatePIDs) or an unprivileged user namespace, which this
-#     box's AppArmor refuses (kernel.apparmor_restrict_unprivileged_userns=1).
-#     That is availability, not secrets: a killed ferry client fails the crossing
-#     and the undo runs. The follow-up is POS-1049;
+#   · NOT COVERED, SIGNALS (Truey's N2, POS-1049): the tool can still signal
+#     other meepo processes. Signal permission compares uids across user
+#     namespaces, and a PID namespace needs systemd 257 (PrivatePIDs) or an
+#     unprivileged user namespace, which this box's AppArmor refuses
+#     (kernel.apparmor_restrict_unprivileged_userns=1). It is more than
+#     availability. A tool can SIGKILL the office, or the waiting ferry client,
+#     its sh and its flock: then no undo runs, town.lock is released, and what
+#     the tool goes on writing in WHITE_PAGES and TOWN_BULLETIN stays until the
+#     next crossing's clean. The bound: serve SIGKILLs the tool at 5 minutes and
+#     kills what it started, and RuntimeMaxSec=8min ends the instance. It still
+#     reads no secret, reaches no network, and writes nowhere else;
 #   · CollectMode=inactive-or-failed: a refused run's instance is unloaded once
 #     it ends, so no failed per-connection instance lingers for the roll-call.
 # MemoryDenyWriteExecute is NOT set: node's JIT needs it.
@@ -110,7 +114,7 @@ SystemCallErrorNumber=EPERM
 PrivateIPC=yes
 KillMode=control-group
 TimeoutStopSec=5s
-RuntimeMaxSec=20min
+RuntimeMaxSec=8min
 MemoryMax=2G
 TasksMax=64
 LimitFSIZE=512M
