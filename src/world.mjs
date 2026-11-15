@@ -106,6 +106,7 @@ import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from
 import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -1637,14 +1638,17 @@ export function enterStackMatters(inPlay = {}) {
  *  the fossil (enter-exit-ledger.mjs § served), which could still hold a thing
  *  someone has since stepped out of, so it counts as unread: never let a thing's
  *  inside show because the record could not be read. */
+// POS-1048: every orient and every eyes of every act door reads this ledger, and a read is a count(*) over every passage on the ACTS pool (two
+// connections), so a crowd acting at once queued hundreds of scans and timed out on its acquire. Callers that arrive together share one read that
+// starts after the last of them asked (store-pool.mjs § trailingFlight): never an answer older than the ask, two scans for any burst.
+export const servedLedgerNow = trailingFlight(async () => (await import("./enter-exit-ledger.mjs")).servedEnterExitLedger(WORLD_CLONE));
 async function enteredNow(handle, inPlay) {
   if (!handle || !enterStackMatters(inPlay)) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
-    const { servedEnterExitLedger } = await import("./enter-exit-ledger.mjs");
     const law = await crossingLaw(WORLD_CLONE);
-    const served = await servedEnterExitLedger(WORLD_CLONE);
+    const served = await servedLedgerNow();
     if (served?.derived?.incomplete) throw new Error(`the passages since the cutover could not be read (${served.derived.journal_unread})`);
     return await occupiedNowBy(handle, law.thresholds, { ...crossingDeps(), ledger: async () => served.ledger });
   } catch (e) {
@@ -2533,7 +2537,7 @@ export async function worldAir(oriented) {
   } catch { return null; }
 }
 
-export async function worldOrient(args = {}, key = null, { roll = [], crowd = false } = {}) {
+export async function worldOrient(args = {}, key = null, { roll = [], crowd = false, note: withNote = true } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce; // a multi-resident key must name a handle
   const w = await sightFor(await world(), choice.handle, key, { lens: args.lens });
@@ -2561,7 +2565,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
   // the note is embodied property: only the body's standpoint carries it — a
   // spectator glance (coords) is nobody's, so it reads nobody's note.
-  const { note, unavailable: noteUnavailable } = choice.handle ? await noteForHandle(key, choice.handle) : { note: null };
+  const { note, unavailable: noteUnavailable } = choice.handle && withNote ? await noteForHandle(key, choice.handle) : { note: null };
   // the primer rides every orient — the one page to read before a first mark
   // (the door's own pointer; the full serve-on-first-arrival design stays filed)
   const primer = "https://raw.githubusercontent.com/postmark-town/postmark-world/main/WORLD/FURNISHING.md";
