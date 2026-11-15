@@ -693,11 +693,11 @@ async function freeSparkSlugs(q, by, base, k) {
 }
 
 /** `planLeave` is the mark road's planner (world.mjs § planSparkLeave); a test hands its own where the World pin lacks the class. */
-export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, registry = null }) {
+export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null, registry = null, draftsFrom = null }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   try {
-    // a free event signs nothing: its sparks are its host's private drafts, and the ledger is not its business
-    if (row?.fields && !row.fields.stake) return await completeFreeEvent(row, { env, now, edges, planLeave });
+    // a free event signs nothing: its sparks are its host's drafts, and the ledger is not its business
+    if (row?.fields && !row.fields.stake) return await completeFreeEvent(row, { env, now, edges, planLeave, draftsFrom });
     if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
     if (Date.parse(row.ends) > now) return held("not ended");
     // 0 · NEVER ONTO A RED LEDGER (Rivet 20:11Z): before anything is read for it or signed, the ledger as it stands under the lock
@@ -817,11 +817,15 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
  * made) and the event's receipt — which names no draft, no count and no words: the public row and its act say only that it
  * completed, free (events-store § recordFreeCompletionVia). The host is told through needs-you (§ THE HOST'S INVITATION).
  */
-async function completeFreeEvent(row, { env, now, edges, planLeave }) {
+async function completeFreeEvent(row, { env, now, edges, planLeave, draftsFrom }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   if (row.fields.completed) return held("already complete");
   if (row.state === "cancelled") return held("cancelled: no spark is made");
   if (Date.parse(row.ends) > now) return held("not ended");
+  // PROSPECTIVE ONLY (Wright 04:58:48Z): a free event's drafts are made only when its own end is after the one configured cutoff —
+  // the event's instant, never this tick's clock; none configured, none made. Here, at the boundary every caller passes.
+  if (!Number.isFinite(draftsFrom)) return held("no cutoff for free events' drafts is configured: none is made");
+  if (!(Date.parse(row.ends) > draftsFrom)) return held(`it ended at or before the free events' cutoff (${new Date(draftsFrom).toISOString()}): no drafts are made for it`);
   const pen = await import("./world2-pen.mjs");
   const store = await import("./events-store.mjs");
   const journal = await import("./world-journal.mjs");

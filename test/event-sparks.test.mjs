@@ -542,7 +542,7 @@ test("completion: a second tick does nothing — no second spark, no second retu
   assert.equal((await claimOf(`wright/${slug}`)).length, 1);
   assert.equal((await claimOf(`wright/${slug}-2`)).length, 0, "no second spark under a suffix");
   const { DUE_EVENTS_SQL } = await import("../deploy/event-sparks-pass.mjs");
-  const due = (await owner.query(DUE_EVENTS_SQL, [new Date(now + 60_000).toISOString()])).rows.map((r) => r.id);
+  const due = (await owner.query(DUE_EVENTS_SQL, [new Date(now + 60_000).toISOString(), null])).rows.map((r) => r.id);
   assert.ok(!due.includes(row.id));
 });
 
@@ -650,7 +650,21 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
   await sayAt("free-b", starts + 120_000, 3050, 3000);
   const edges = [starts - 3_600_000];
   const row = await eventRowAtOffice("wright/free-supper", { env: ENV });
-  const out = await complete(dir, row, Date.now(), { edges });
+  // PROSPECTIVE ONLY (Wright 04:58:48Z): no cutoff configured, none made; a cutoff at or after its end, none made — by its own end
+  const calls = plannerCalls.length;
+  assert.match((await complete(dir, row, Date.now(), { edges })).held, /no cutoff .* is configured/);
+  assert.match((await complete(dir, row, Date.now(), { edges, draftsFrom: ends })).held, /ended at or before the free events' cutoff/);
+  assert.equal(plannerCalls.length, calls, "held before a draft is even planned");
+  const { DUE_EVENTS_SQL, draftsCutoffOf } = await import("../deploy/event-sparks-pass.mjs");
+  const dueWith = async (cut) => (await owner.query(DUE_EVENTS_SQL, [new Date().toISOString(), cut == null ? null : new Date(cut).toISOString()])).rows.map((r) => r.id);
+  assert.ok(!(await dueWith(null)).includes(row.id), "no cutoff: the pass finds no free event due");
+  assert.ok(!(await dueWith(ends)).includes(row.id), "ended at the cutoff: not due");
+  assert.ok((await dueWith(ends - 1)).includes(row.id), "ended after it: due — whatever the tick's clock");
+  assert.equal(draftsCutoffOf(undefined), null);
+  assert.equal(draftsCutoffOf("2026-11-14T14:37:00Z"), Date.parse("2026-11-14T14:37:00Z"), "one UTC instant, any value");
+  assert.deepEqual(draftsCutoffOf("yesterday"), { invalid: "yesterday" });
+  assert.deepEqual(draftsCutoffOf("2026-11-14 14:37"), { invalid: "2026-11-14 14:37" }, "no zone, no guess");
+  const out = await complete(dir, row, Date.now(), { edges, draftsFrom: starts });
   assert.equal(out.completed, true, JSON.stringify(out));
   assert.equal(out.free, true);
   assert.deepEqual(out.drafts, ["wright/free-supper", "wright/free-supper-2"], "one per room");
@@ -681,9 +695,9 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
   assert.deepEqual(asked?.drafts, out.drafts);
   assert.match(asked.cause, /made as your drafts .* not the town's canon/);
   // never twice
-  const again = await complete(dir, await eventRowAtOffice(row.id, { env: ENV }), Date.now(), { edges });
+  const again = await complete(dir, await eventRowAtOffice(row.id, { env: ENV }), Date.now(), { edges, draftsFrom: starts });
   assert.match(again.held, /already complete/);
-  const raced = await complete(dir, row, Date.now(), { edges }); // the row as the first tick read it: ids taken, receipt refuses
+  const raced = await complete(dir, row, Date.now(), { edges, draftsFrom: starts }); // the row as the first tick read it: ids taken, receipt refuses
   assert.ok(raced.error || raced.held, JSON.stringify(raced));
   const { rows: after } = await owner.query("SELECT slug FROM claims WHERE slug LIKE 'wright/free-supper%'");
   assert.equal(after.length, 2, "no third draft");

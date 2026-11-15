@@ -483,9 +483,12 @@ keep_settle_unlanded() {
   # ledger the mint would not: with an event due, the pass first runs the
   # mint's own arrival check (owed mints are not red) and a red ledger is
   # refused (exit 4) — a quiet tick runs no verify of its own. Non-fatal.
+  # A free event (posted before events were staked) makes its rooms' drafts only when it ends after EVENT_DRAFTS_FROM, one UTC
+  # instant in the unit's env file (/etc/postmark-office.env), set once at deploy (POS-1035/e; Wright 04:58:48Z). Unset: none.
   sparks_rc=0
   node /srv/postmark-office/deploy/event-sparks-pass.mjs \
-      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" --registry "$REGISTRY_FILE" || sparks_rc=$?
+      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" --registry "$REGISTRY_FILE" \
+      ${EVENT_DRAFTS_FROM:+--drafts-from "$EVENT_DRAFTS_FROM"} || sparks_rc=$?
   case "$sparks_rc" in
     0) keep_step sparks ok ;;
     3) keep_step sparks skip prereq:clean_ledger ;;
