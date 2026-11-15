@@ -622,9 +622,28 @@ export function pathAtRef(repo, ref, path) {
   try { git(repo, ["cat-file", "-e", `${sha}:${String(path).replace(/\\/g, "/")}`]); return true; } catch { return false; }
 }
 
+// THE PARSE IS KEPT WITH THE CONTENT (POS-1057). A file at a commit never changes, and `readAtRef` already keeps its text by (repo, sha, path); the text
+// was then parsed again on EVERY call. `WORLD/world-state.json` is 2.5 MB: about 25 ms of synchronous main-thread time per parse here, and a household's
+// glance parsed it once for each of the house's members (published marks) and again for its stances, its drafts and its stakes, a doorstep three times, so a
+// nine-member house's agents polling together spent a third of a second of the one thread apiece on a file that had not moved. Kept by the same key, a few
+// at a time (a sha's parse is ~20 MB of heap), and only for a ref git's own files resolve to a sha: any other ref is read and parsed as before. THE OBJECT
+// IS SHARED, so a caller reads it and never writes to it (every caller of this and of `publishedState().state` filters, maps or copies: audited on POS-1057 by
+// running the 229 world, household, doorstep, stake, mark, stance and guard test files with the parse deep-frozen, which threw nowhere).
+const PARSED_CAP = 3;
+const parsedCache = new Map(); // "repo\0sha\0path" -> parsed JSON, insertion-ordered for eviction
 export function readJsonAtRef(repo, ref, path) {
-  return JSON.parse(readAtRef(repo, ref, path));
+  const rel = String(path).replace(/\\/g, "/");
+  const sha = refShaFromDisk(repo, ref);
+  if (!sha) return JSON.parse(readAtRef(repo, ref, path));
+  const key = `${repo}\0${sha}\0${rel}`;
+  if (parsedCache.has(key)) return parsedCache.get(key);
+  const parsed = JSON.parse(readAtRef(repo, ref, path));
+  parsedCache.set(key, parsed);
+  if (parsedCache.size > PARSED_CAP) parsedCache.delete(parsedCache.keys().next().value);
+  return parsed;
 }
+/** Tests only: forget the kept parses. */
+export const __forgetParsedForTest = () => parsedCache.clear();
 
 // Advance the SHARED clone's main when a pool worktree cannot (see below). The
 // shared clone stands on main after world-pool's one-time normalisation, so it
