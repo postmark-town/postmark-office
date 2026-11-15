@@ -69,8 +69,18 @@
 // For the ferry it also refuses a staged symlink or submodule, a report it can't
 // read, and counts that don't match what changed. The report it hands the
 // witness is rebuilt from the tool's counts and date alone: the town sha is the
-// client's own rev-parse, and committed, pushed and files are the client's own
-// facts, never the tool's word (Truey's F3).
+// client's own rev-parse, committed, pushed and files are the client's own
+// facts, and the crossing number is the witness's to derive, never the tool's
+// word (Truey's F3).
+//
+// ── NOT COVERED: SIGNALS (Truey's N2 on #1048) ──────────────────────────────
+// The tool can still SIGKILL or SIGSTOP other meepo processes (the office, the
+// waiting ferry client): signal permission compares uids across user namespaces,
+// and there is no PID namespace here. A PID namespace needs systemd 257
+// (PrivatePIDs) or an unprivileged user namespace, which this box's AppArmor
+// refuses (kernel.apparmor_restrict_unprivileged_userns=1, probed 2026-11-14:
+// unshare can't write its uid_map). That is availability, not secrets, and it is
+// the follow-up issue named in the unit.
 //
 // Exit codes (client): 0 the tool ran green and every check held; 1 a refusal (the
 // tool's own non-zero exit, the sandbox's refusal, a missing socket, a malformed
@@ -141,11 +151,13 @@ export function checkRequest(req, ownClone) {
  * The other processes in this instance's own cgroup, from /proc/self/cgroup's
  * line and that cgroup's cgroup.procs: what a tool left running. null outside a
  * postmark-town-tool@ instance (a test's stand-in), where there is nothing to kill.
- * TWO GUARDS, EACH ENOUGH ALONE: the cgroup must be a postmark-town-tool@ unit's,
- * AND systemd's INVOCATION_ID must be set (every service has it; no test does).
- * Outside the unit this kill would take every other process in the caller's
- * cgroup, and on 2026-11-14 a can-fail flip that removed the first guard did
- * exactly that to the seat house's shells in /init.scope (no seat was hit).
+ * THE GUARD THAT IS ENOUGH ALONE is the cgroup: it must be a postmark-town-tool@
+ * unit's. Outside one, this kill would take every other process in the caller's
+ * cgroup, and on 2026-11-14 a can-fail flip that removed this guard did exactly
+ * that to the seat house's shells in /init.scope (no seat was hit). systemd's
+ * INVOCATION_ID is a second belt that keeps a plain shell or a test's stand-in
+ * out even if the cgroup check is ever wrong, but it is NOT enough alone: every
+ * systemd service has one (a CI runner is one).
  */
 export function stragglerPids(cgroupText, procsText, self, env = process.env) {
   if (!env.INVOCATION_ID) return null;
@@ -154,27 +166,44 @@ export function stragglerPids(cgroupText, procsText, self, env = process.env) {
   return String(procsText).split("\n").map(Number).filter((p) => Number.isInteger(p) && p > 0 && p !== self);
 }
 
-/** SIGKILL every other process in this instance until none is left; false if they won't go. */
-export function killStragglers() {
-  if (!process.env.INVOCATION_ID) return true;
-  let cg;
-  try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { return true; }
+/**
+ * Kill every other process in this instance; true only once serve is alone in its cgroup.
+ * FREEZE, THEN KILL (Truey's re-review): a read-then-kill loses to a tool that keeps
+ * forking, so each round SIGSTOPs what it sees and re-lists until no new pid appears (a
+ * stopped process can't fork), and only then SIGKILLs them all.
+ * FAIL CLOSED IN THE UNIT: with `required` (serve --in-unit, the unit's ExecStart), a
+ * cgroup it can't read or doesn't recognize is a refusal, never a pass. Without it (a
+ * test's stand-in) there is nothing to kill and it never kills.
+ */
+export function killStragglers({ required = false } = {}) {
+  let cg = "";
+  try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { /* read as unknown below */ }
   const path = /^0::(\/\S*)$/m.exec(cg)?.[1];
+  const list = () => stragglerPids(cg, readFileSync(`/sys/fs/cgroup${path}/cgroup.procs`, "utf8"), process.pid);
+  let left;
+  try { left = path ? list() : null; } catch { left = null; }
+  if (left === null) return !required;
   const nap = new Int32Array(new SharedArrayBuffer(4));
-  for (let round = 0; round < 100; round += 1) {
-    let left;
-    try { left = stragglerPids(cg, readFileSync(`/sys/fs/cgroup${path}/cgroup.procs`, "utf8"), process.pid); } catch { return false; }
-    if (left === null) return true;
-    if (left.length === 0) return true;
-    console.error(`[town-tool] killing ${left.length} process(es) the tool left running`);
-    for (const pid of left) { try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ } }
+  for (let round = 0; round < 50 && left.length; round += 1) {
+    const frozen = new Set();
+    for (let pass = 0; pass < 200 && left.some((p) => !frozen.has(p)); pass += 1) {
+      for (const pid of left) {
+        if (frozen.has(pid)) continue;
+        try { process.kill(pid, "SIGSTOP"); } catch { /* gone already */ }
+        frozen.add(pid);
+      }
+      left = list();
+    }
+    console.error(`[town-tool] killing ${frozen.size} process(es) the tool left running`);
+    for (const pid of frozen) { try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ } }
     Atomics.wait(nap, 0, 0, 20);
+    left = list();
   }
-  return false;
+  return left.length === 0;
 }
 
 /** The sandbox's half: one request on fd 0, one answer on fd 1. Logs go to stderr (the journal). */
-export async function serve(cloneArg) {
+export async function serve(cloneArg, { inUnit = false } = {}) {
   const input = new Socket({ fd: 0, readable: true, writable: false, allowHalfOpen: true });
   let answer;
   let dir = null;
@@ -191,7 +220,7 @@ export async function serve(cloneArg) {
     const exit = r.status ?? 1;
     console.error(`[town-tool] ${tool}: exit ${exit}${r.signal ? ` (${r.signal})` : ""}${r.error ? ` (${r.error.code})` : ""}`);
     // F2: nothing the tool started may still be writing when the client checks the clone
-    if (!killStragglers()) throw new Error("a process the tool started would not die");
+    if (!killStragglers({ required: inUnit })) throw new Error("this instance can't be cleared of what the tool started");
     answer = {
       ok: exit === 0 && !r.signal && !r.error, exit,
       out: Buffer.from(r.stdout ?? "").toString("base64"), err: Buffer.from(r.stderr ?? "").toString("base64"),
@@ -398,10 +427,11 @@ export async function ferry(clone, reportPath, opts = {}) {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) said = parsed;
     } catch { /* an unreadable report is named below */ }
   }
-  // F3: the witness signs what this report says, so only the tool's counts, date and crossing number come from
-  // the tool, each checked; the sha is the client's own, and committed, pushed and files are the client's facts.
+  // F3: the witness signs what this report says, so only the tool's counts and date come from the tool, each
+  // checked; the sha is the client's own, and committed, pushed and files are the client's facts. No crossing
+  // number: the witness derives it from the decision time when a report names none (town witness-chain.mjs).
   report = {
-    ran: said?.ran === true, crossing: count(said?.crossing) ? said.crossing : null, town_sha: /^[0-9a-f]{40}$/.test(townSha) ? townSha : null,
+    ran: said?.ran === true, town_sha: /^[0-9a-f]{40}$/.test(townSha) ? townSha : null,
     date: /^\d{4}-\d{2}-\d{2}$/.test(String(said?.date)) ? said.date : null,
     delivered: count(said?.delivered) ? said.delivered : null, bounced: count(said?.bounced) ? said.bounced : null,
     committed: false, pushed: false, files: [],
@@ -410,8 +440,8 @@ export async function ferry(clone, reportPath, opts = {}) {
     return finish(1, typeof said?.error === "string" ? `the sandboxed ferry refused: ${said.error.slice(0, 500)}` : "the sandboxed ferry refused");
   }
   try {
-    if (!report.ran || report.crossing === null || report.delivered === null || report.bounced === null || report.date === null) {
-      throw new Error("the ferry exited 0 without a readable report (ran, crossing, delivered, bounced, date)");
+    if (!report.ran || report.delivered === null || report.bounced === null || report.date === null) {
+      throw new Error("the ferry exited 0 without a readable report (ran, delivered, bounced, date)");
     }
     mustGit(real, ["add", "-A", "--", "WHITE_PAGES"], "git add");
     const raw = mustGit(real, ["diff", "--cached", "--raw", "-z", "--no-renames"], "git diff --cached");
@@ -459,7 +489,7 @@ if (isMain) {
     console.error("usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone <town clone> [--report <file>] | serve --clone <town clone>");
     process.exit(2);
   }
-  if (verb === "serve") await serve(clone);
+  if (verb === "serve") await serve(clone, { inUnit: rest.includes("--in-unit") });
   else if (verb === "ferry") process.exitCode = await ferry(clone, opt("--report"));
   else process.exitCode = (await runTool(verb, clone)).code;
 }

@@ -1822,7 +1822,13 @@ Darko's call. That means the git-mode mint (`tools/stamp-mint.mjs --append
 --key`) in the ferry and in the keep tick, and `tools/witness-chain.mjs` with
 the witness key. Also not covered are the owed path's
 `tools/stamp-verify-owed.mjs` (store mode only) and the keep tick's
-`tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`).
+`tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`). **Signals are not
+covered either** (Truey's N2): a tool can still signal other meepo processes,
+because signal permission compares uids across user namespaces. A PID namespace
+needs systemd 257 (`PrivatePIDs`) or an unprivileged user namespace, and this
+box's AppArmor refuses that (`kernel.apparmor_restrict_unprivileged_userns=1`).
+This is availability, not secrets, and it has its own follow-up issue under
+POS-994.
 
 **Install after POS-988's**, since both replace the ferry unit. Do it by hand,
 away from a crossing (not 23:50–00:40 or 11:50–12:40 UTC), and only after the
@@ -1881,9 +1887,17 @@ pid=$(systemctl show -p MainPID --value postmark-office.service)
 never `OPENABLE`, and `/proc` must not list the pid. On 2026-11-14, without
 `PrivateUsers=yes`, all three read `OPENABLE`.
 
-Then remove the probes and `$d` by name. If (a) is not green, or (b) or (c)
-reaches anything, stop here: the ferry still runs the tools itself, and nothing
-has changed for it.
+(d) The straggler kill, under the same settings, in a transient unit named like
+an instance (`--unit=postmark-town-tool@proof-d.service`, so its cgroup matches
+the guard). The probe imports `killStragglers` from the installed tool, starts a
+detached process that ignores SIGTERM and keeps forking, then calls
+`killStragglers({ required: true })`. It must return true with nothing but
+itself left in its cgroup. On 2026-11-14, 9 processes were cleared in 56 ms,
+then 2 more that were born mid-round, and 0 remained. The probe file is POS-994's.
+
+Then remove the probes and `$d` by name. If (a) is not green, (b) or (c)
+reaches anything, or (d) leaves a process, stop here: the ferry still runs the
+tools itself, and nothing has changed for it.
 
 **3. The ferry unit.**
 ```sh

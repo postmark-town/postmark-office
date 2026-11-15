@@ -26,7 +26,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realp
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { changedBetween, checkRequest, ferry, fingerprint, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
+import { changedBetween, checkRequest, ferry, fingerprint, killStragglers, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
 import { DECOY_ENV } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,7 +57,8 @@ test("the sandbox unit: meepo with no environment, no network, and only the clon
   assert.deepEqual(s.filter((l) => /^(EnvironmentFile|Environment|LoadCredential|SetCredential|PassEnvironment|DynamicUser)=/.test(l)), [],
     "nothing hands a town tool a key or a token");
   for (const line of [
-    "ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone",
+    "ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone --in-unit",
+    "SystemCallFilter=~@keyring", "PrivateIPC=yes",
     "StandardInput=socket", "StandardOutput=socket", "User=meepo", "Group=meepo",
     // Truey's F1 on #1048: as plain meepo, /proc/<pid>/environ and /proc/<pid>/root of every meepo process
     "PrivateUsers=yes", "SystemCallFilter=@system-service",
@@ -136,9 +137,18 @@ test("stragglerPids names the instance's other processes, and nothing outside a 
     "a test's stand-in, or anything that isn't the unit's own cgroup, kills nothing");
   assert.equal(stragglerPids("0::/system.slice/postmark-office.service\n", "1\n", 9, svc), null, "not the office's either");
   assert.equal(stragglerPids("", "1\n", 9, svc), null);
-  // THE SECOND GUARD, enough alone: even the unit's own cgroup kills nothing without systemd's INVOCATION_ID
-  assert.equal(stragglerPids(unitCg, "100\n200\n", 200, {}), null, "no INVOCATION_ID, no kill: no test or stand-in has one");
-  assert.equal(process.env.INVOCATION_ID, undefined, "this test runner is no systemd service (if it is, the stand-in tests below must not run serve)");
+  // the belt (NOT enough alone: any systemd service, a CI runner among them, has an INVOCATION_ID)
+  assert.equal(stragglerPids(unitCg, "100\n200\n", 200, {}), null, "no INVOCATION_ID, no kill");
+  assert.equal(DECOY_ENV.INVOCATION_ID, undefined, "the stand-in's serve runs without one, so the belt holds for the tests below too");
+});
+
+test("killStragglers fails closed in the unit and never kills outside one", () => {
+  // This runner's cgroup is no postmark-town-tool@ unit's (on CI, nor is the runner's service), so the cgroup guard
+  // holds whatever INVOCATION_ID says: nothing here is killed. THE CAN-FAIL FLIP: return true where the unit's
+  // cgroup can't be read or recognized, and the first assertion goes red.
+  assert.equal(killStragglers({ required: true }), false, "serve --in-unit refuses to answer when it can't clear its own instance");
+  assert.equal(killStragglers(), true, "a stand-in (no --in-unit) has nothing to kill and kills nothing");
+  assert.match(settings(unit("postmark-town-tool@.service")).find((l) => l.startsWith("ExecStart=")), / --in-unit$/, "the unit runs serve fail-closed");
 });
 
 // ── a scratch town ──────────────────────────────────────────────────────────
@@ -372,9 +382,9 @@ test("the report the witness reads takes the sha, committed, pushed and files fr
     assert.equal(await ferry(t.clone, report, { socketPath: s.path, env: {} }), 0);
   });
   assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), {
-    ran: true, crossing: 293, town_sha: head, date: "2026-11-15", delivered: 0, bounced: 0, committed: false, pushed: false, files: [],
-  }, "the sha is the clone's own, nothing was committed or pushed, and no field the client doesn't know rides along");
-  for (const bad of [{ crossing: -1 }, { crossing: "293" }, { date: "tomorrow" }, { delivered: 1.5 }]) {
+    ran: true, town_sha: head, date: "2026-11-15", delivered: 0, bounced: 0, committed: false, pushed: false, files: [],
+  }, "the sha is the clone's own, nothing was committed or pushed, no crossing number (the witness derives it), and no field the client doesn't know rides along");
+  for (const bad of [{ date: "tomorrow" }, { delivered: 1.5 }, { bounced: -1 }, { ran: "yes" }]) {
     const u = town();
     await withFake(u.clone, null, { report: JSON.stringify({ ...JSON.parse(lie), ...bad, committed: false, pushed: false, files: [] }) }, async (s) => {
       assert.equal(await ferry(u.clone, join(u.root, "r.json"), { socketPath: s.path, env: {} }), 1, JSON.stringify(bad));

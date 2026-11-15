@@ -39,11 +39,21 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 #     writes only its own /tmp. MemoryMax and TasksMax bound it; LimitFSIZE
 #     bounds each file, not the total, so a tool could still fill the disk
 #     through WHITE_PAGES (the disk alarm is the backstop, not this unit);
-#   · SystemCallFilter=@system-service: the system calls a service needs, and no
-#     others (no mount, no ptrace, no kernel keyring);
-#   · KillMode=control-group and TimeoutStopSec=5s: serve kills whatever the tool
-#     left running before it answers (Truey's F2), and the unit's stop takes what
-#     is left at once instead of in 90 s;
+#   · SystemCallFilter=@system-service, less @keyring: the system calls a
+#     service needs, and no mount, no ptrace, no kernel keyring. PrivateIPC: no
+#     System V or POSIX IPC shared with anything outside;
+#   · serve --in-unit: before it answers, serve freezes, re-lists and kills
+#     every other process in this instance's cgroup, and answers only once it is
+#     alone (Truey's F2). --in-unit makes that fail closed: a cgroup it can't
+#     read or recognize is a refusal. KillMode=control-group and TimeoutStopSec=5s
+#     are the belt: the unit's stop takes whatever is left at once, not in 90 s;
+#   · NOT COVERED, SIGNALS (Truey's N2): the tool can still signal other meepo
+#     processes, the office's and the waiting ferry client's among them. Signal
+#     permission compares uids across user namespaces, and a PID namespace needs
+#     systemd 257 (PrivatePIDs) or an unprivileged user namespace, which this
+#     box's AppArmor refuses (kernel.apparmor_restrict_unprivileged_userns=1).
+#     That is availability, not secrets: a killed ferry client fails the crossing
+#     and the undo runs. The follow-up issue is POS-994's;
 #   · CollectMode=inactive-or-failed: a refused run's instance is unloaded once
 #     it ends, so no failed per-connection instance lingers for the roll-call.
 # MemoryDenyWriteExecute is NOT set: node's JIT needs it.
@@ -52,7 +62,7 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 # key (POS-994's B, Darko's call).
 
 [Service]
-ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone
+ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone --in-unit
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
@@ -95,7 +105,9 @@ RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+SystemCallFilter=~@keyring
 SystemCallErrorNumber=EPERM
+PrivateIPC=yes
 KillMode=control-group
 TimeoutStopSec=5s
 RuntimeMaxSec=20min
