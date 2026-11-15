@@ -533,10 +533,10 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
       const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
       const files = listing.split("\0").filter(Boolean);
       if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
-      for (const rel of files) {
+      for (const [rel, bytes] of blobsAt(repo, sha, files)) {
         const out = join(dir, rel);
         mkdirSync(dirname(out), { recursive: true });
-        writeFileSync(out, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" }));
+        writeFileSync(out, bytes);
       }
       writeFileSync(stamp, `${sha}\n${ref}\n`);
       built = true;
@@ -547,6 +547,30 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
     }
   }
   throw new Error(`the engine checkout ${name} could not be held: it kept being removed while it was asked for`);
+}
+
+// EVERY FILE OF THE TREE IN ONE GIT PROCESS (POS-1057). A cold extraction (a new blessing, or the first read under a new cache namespace) used to spawn one
+// `git show` per file, synchronously: 326 of them for tools/. A spawn forks the CALLING process, and a fork costs in proportion to its address space, so on a
+// small heap the extraction took ~1 s and with 2 GB resident it took 13.6 s (measured, test/pos-1057-cold-extraction.test.mjs's note), on the box's 3.4-4.6 GB
+// office more than a minute with every read worker doing it at once: the loops of the threads that took the first read after a blessing stood still, and the
+// pen connections their transactions held went idle until Postgres ended them. `git cat-file --batch` streams every blob of the list through one child: the
+// same bytes, two forks in all (this and the listing). A path git cannot name on one line of that input (a newline in it) takes the per-file route.
+function blobsAt(repo, sha, files) {
+  if (files.some((rel) => /[\r\n]/.test(rel))) return files.map((rel) => [rel, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" })]);
+  const out = execFileSync("git", ["-C", repo, "cat-file", "--batch"], {
+    input: files.map((rel) => `${sha}:${rel}`).join("\n") + "\n", stdio: ["pipe", "pipe", "pipe"], maxBuffer: GIT_MAX_BUFFER,
+  });
+  const got = [];
+  let pos = 0;
+  for (const rel of files) {
+    const eol = out.indexOf(10, pos);
+    const head = eol < 0 ? [] : out.toString("utf8", pos, eol).split(" ");
+    if (head[1] !== "blob" || !Number.isInteger(Number(head[2]))) throw new Error(`git cat-file --batch did not give ${rel} as a blob at ${sha}: ${eol < 0 ? "no answer" : head.join(" ")}`);
+    const size = Number(head[2]);
+    got.push([rel, Buffer.from(out.subarray(eol + 1, eol + 1 + size))]);
+    pos = eol + 1 + size + 1;
+  }
+  return got;
 }
 
 // THE ENGINE CHECKOUT IS IN USE FOR THE LIFE OF THIS PROCESS (POS-989). What a caller gets back is a path it imports from, and an
