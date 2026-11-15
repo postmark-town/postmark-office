@@ -53,7 +53,7 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 #     systemd 257 (PrivatePIDs) or an unprivileged user namespace, which this
 #     box's AppArmor refuses (kernel.apparmor_restrict_unprivileged_userns=1).
 #     That is availability, not secrets: a killed ferry client fails the crossing
-#     and the undo runs. The follow-up issue is POS-994's;
+#     and the undo runs. The follow-up is POS-1049;
 #   · CollectMode=inactive-or-failed: a refused run's instance is unloaded once
 #     it ends, so no failed per-connection instance lingers for the roll-call.
 # MemoryDenyWriteExecute is NOT set: node's JIT needs it.

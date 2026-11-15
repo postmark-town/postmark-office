@@ -80,7 +80,7 @@
 // (PrivatePIDs) or an unprivileged user namespace, which this box's AppArmor
 // refuses (kernel.apparmor_restrict_unprivileged_userns=1, probed 2026-11-14:
 // unshare can't write its uid_map). That is availability, not secrets, and it is
-// the follow-up issue named in the unit.
+// POS-1049.
 //
 // Exit codes (client): 0 the tool ran green and every check held; 1 a refusal (the
 // tool's own non-zero exit, the sandbox's refusal, a missing socket, a malformed

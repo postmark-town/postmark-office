@@ -1827,8 +1827,7 @@ covered either** (Truey's N2): a tool can still signal other meepo processes,
 because signal permission compares uids across user namespaces. A PID namespace
 needs systemd 257 (`PrivatePIDs`) or an unprivileged user namespace, and this
 box's AppArmor refuses that (`kernel.apparmor_restrict_unprivileged_userns=1`).
-This is availability, not secrets, and it has its own follow-up issue under
-POS-994.
+This is availability, not secrets, and it is POS-1049.
 
 **Install after POS-988's**, since both replace the ferry unit. Do it by hand,
 away from a crossing (not 23:50–00:40 or 11:50–12:40 UTC), and only after the
