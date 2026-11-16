@@ -43,7 +43,10 @@
 //
 //   rid       an opaque random id, joined across the handover: the same on both threads, on a retry, and never derived from the request
 //   route     "main" | "worker"; worker the slot (0-based) the read was handed to, `tries` how many workers were asked (2: the first stopped before it answered)
-//   door      "doorstep" | "doorsteps" | "household" | "mcp" | "mcp-doorstep"; `read` the household read's own name when it is one of the office's fixed set
+//   door      "doorstep" | "doorsteps" | "household" | "mcp" | "mcp-doorstep"; `read` the household read's own name when it is one of the office's fixed set, and only
+//             for a single-call request; `batch` the number of tools/calls when an MCP request carried more than one (the record describes the whole request).
+//             READS ONLY: a REST GET, or an MCP request whose every message is a household/doorstep read (classifyMcpRead); an act, an explain, a letter opening, a
+//             batch holding any of them or any other tool, carries no timing
 //   status    the response's status; `ok: false` is a refusal or a failure, not an absent measurement
 //
 // ABSENT, ZERO AND FAILED ARE THREE THINGS: null is "this was not measured here" (no worker ran it, no lease was taken on that thread, no bundle ran), 0 is a
@@ -72,7 +75,41 @@ export function newTiming(t0 = nowMs(), rid = null) {
 
 /** Run `fn` with `tm` as the current request's context (every async continuation under it sees it, and no other request does). */
 export function runTiming(tm, fn) {
-  try { return als.run(tm, fn); } catch { return fn(); }
+  // ONE invocation, and the callback's own result or exception, untouched: there is no catch here that could run `fn` a second time or replace what it threw.
+  return tm ? als.run(tm, fn) : fn();
+}
+
+// ── WHICH REQUESTS THIS RECORD IS FOR ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The doorstep and household READS, and nothing that writes. A REST read is a GET (server.mjs § timingFields); an MCP request is classified here from the WHOLE
+// request, never from its last tool: every message must be a tools/call to a household or doorstep READ, so a batch holding an act, an explain, a letter opening,
+// any other tool or any non-call message carries NO timing at all (it is not a request this record covers, said in docs/read-workers.md), and an act can never be
+// made to look like a read by a read that follows it.
+const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+
+/** The door of one MCP message when it is a doorstep/household read, else null. */
+function mcpReadDoor(m) {
+  if (m?.method !== "tools/call" || !isObject(m.params)) return null;
+  const name = m.params.name;
+  const args = m.params.arguments ?? {};
+  if (name === "read_doorstep") return isObject(args) ? "mcp-doorstep" : null;
+  if (name !== "household" && name !== "doorstep") return null;
+  if (!isObject(args)) return null;
+  if ((args.do != null && args.do !== "") || args.explain != null) return null;                  // an act, or the grammar's explain
+  if (name === "household" && String(args.read ?? "").trim() === "letter") return null;         // opening a letter clears it for the key: a write
+  return name === "doorstep" ? "mcp-doorstep" : "mcp";
+}
+
+/**
+ * `{ door, calls }` for an MCP request whose EVERY message is a doorstep or household read (door "mcp" when any is a household read, "mcp-doorstep" when all are
+ * doorstep), else null. `calls` is how many tools/calls the one request carried: the record describes the whole request.
+ */
+export function classifyMcpRead(messages) {
+  try {
+    if (!Array.isArray(messages) || !messages.length) return null;
+    const doors = messages.map(mcpReadDoor);
+    if (doors.some((d) => d === null)) return null;
+    return { door: doors.includes("mcp") ? "mcp" : "mcp-doorstep", calls: messages.length };
+  } catch { return null; }
 }
 
 /** The context of the request this code runs under, or undefined (a boot task, a test, a request that has none). */
@@ -146,7 +183,7 @@ const num = (x) => (Number.isFinite(x) ? round(x) : null);
  * The `timing` object for the access line: the main thread's context plus whatever the worker reported. `label` is `{ door, read }` chosen from fixed sets by
  * the caller; anything outside them is dropped here too. Null when the request is not on a path this record is for.
  */
-export function timingLine(tm, { door = null, read = null, status = null, finish = nowMs() } = {}) {
+export function timingLine(tm, { door = null, read = null, calls = 1, status = null, finish = nowMs() } = {}) {
   try {
     if (!tm || !DOORS.has(door)) return null;
     const h = tm.hand;
@@ -157,7 +194,7 @@ export function timingLine(tm, { door = null, read = null, status = null, finish
     const onWorker = h != null;
     const exec = onWorker ? (w ? num(w.done - w.taken) : null) : (routed != null ? num(finish - routed) : null);
     return {
-      v: 1, rid: tm.rid, door, ...(typeof read === "string" && /^[a-z0-9-]{1,24}$/.test(read) ? { read } : {}),
+      v: 1, rid: tm.rid, door, ...(Number.isInteger(calls) && calls > 1 ? { batch: Math.min(calls, 99) } : {}), ...(typeof read === "string" && /^[a-z0-9-]{1,24}$/.test(read) ? { read } : {}),
       route: onWorker ? "worker" : "main", worker: onWorker ? h.slot : null, tries: onWorker ? h.tries : null,
       ok: status == null ? null : status < 400, status,
       routed_ms: num(routed != null ? routed - tm.t0 : null),

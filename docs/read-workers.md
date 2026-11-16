@@ -112,7 +112,7 @@ fresh as the main thread:
 ## Where a doorstep or household read's time goes (POS-1064/b)
 
 Measurement only (`src/read-timing.mjs`; nothing about routing, pools, transactions or answers changes). The doorstep and household doors (REST
-`/doorstep/<h>`, `/doorsteps`, `/household`; MCP `household`, `doorstep`) put a `timing` object on their ONE access line
+`/doorstep/<h>`, `/doorsteps`, `/household`; MCP `household`, `doorstep`, flat `read_doorstep`) put a `timing` object on their ONE access line
 (`telemetry/access-YYYY-MM-DD.jsonl`, written by the main thread on finish; a worker writes no line, it reports back with its answer). Every other path's line is
 unchanged. Units are milliseconds to 0.1.
 
@@ -126,6 +126,13 @@ inside another is part of the outer one). `leases` is `{ main, worker }`: each p
 `{ n, failed, acquire_ms: { sum, max }, held_ms: { sum, max }, failed_wait_ms }`: `acquire_ms` is the wait for a connection, `held_ms` is acquired→released (SQL and
 the JavaScript between statements alike). `rid` joins the two threads' records for one request, across a retry, and is random, never derived from the request;
 `route`, `worker` (slot), `tries`, `door`, `read` (the household read's own fixed name), `status`/`ok` say what ran and how it ended.
+
+**Reads only, classified from the whole request.** A REST read is a GET (a GET `/household` that names `do`, `explain` or `read=letter` is not one; `POST /household` never is). An
+MCP request carries `timing` only when EVERY message in it is a `tools/call` to a household or doorstep read (no `do`, no `explain`, not `read: "letter"`, which clears a
+letter and is a write): a request holding an act, an explain, a letter opening, any other tool or any non-call message has no `timing`, whichever tool is last, so an act
+can never be made to look like a read by a read after it. A batch of reads is one request: its line has `batch` (the number of calls) and no single `read`, its
+`bundle`/`leases` cover the whole request. A line with no `timing` is a request this record does not cover (and, unless `timing_dropped` says otherwise, never one whose
+measurement was cut).
 
 **Do not add these up as wall time.** `bundle` and `leases` are measured inside `exec_ms`, overlap it and each other, and are sums of durations. A bundle's
 time is not SQL time and is never lease time. **`null` is "not measured here"** (no worker ran it: `queue_ms`, `return_ms` and `leases.worker` are null; no bundle ran:

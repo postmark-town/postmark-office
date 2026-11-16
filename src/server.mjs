@@ -854,11 +854,19 @@ async function handOverRead(req, res, raw, messages, key = null) {
 // from call-shape's fixed sets); null for every other request, and never a fault.
 const timingFields = (req, res, path) => {
   try {
-    const tool = req.tel?.mcp;
-    const door = /^\/doorstep\/[a-z0-9-]+$/.test(path) ? "doorstep" : path === "/doorsteps" ? "doorsteps" : path === "/household" ? "household"
-      : path === "/mcp" && tool === "household" ? "mcp" : path === "/mcp" && (tool === "doorstep" || tool === "read_doorstep") ? "mcp-doorstep" : null;
+    // READS ONLY. A REST read is a GET, and a GET /household that names an act, an explain or a letter opening is not one. An MCP request is classified from the whole
+    // request (read-timing.mjs § classifyMcpRead, set where mcp.mjs parses the body), never from its last tool: a batch holding an act carries no timing.
+    let door = null, calls = 1;
+    if (path === "/mcp") {
+      const k = req.tm?.klass;
+      if (k) { door = k.door; calls = k.calls; }
+    } else if (req.method === "GET") {
+      const q = new URL(req.url, "http://localhost").searchParams;
+      const actShaped = (q.get("do") ?? "") !== "" || q.has("explain") || String(q.get("read") ?? "").trim() === "letter";
+      door = /^\/doorstep\/[a-z0-9-]+$/.test(path) ? "doorstep" : path === "/doorsteps" ? "doorsteps" : path === "/household" && !actShaped ? "household" : null;
+    }
     if (!door) return {};
-    const timing = timingLine(req.tm, { door, read: req.tel?.call?.read, status: res.statusCode });
+    const timing = timingLine(req.tm, { door, calls, read: calls === 1 ? req.tel?.call?.read : null, status: res.statusCode });
     return timing ? { timing } : {};
   } catch { return {}; }
 };

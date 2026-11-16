@@ -12,14 +12,16 @@
 //      acquisition is counted in `failed` and keeps its error;
 //   4. BEHAVIOUR PRESERVED: the lease's release/discard handling and the error are the read's own, and a telemetry fault never fails a read;
 //   5. A RETRY: the first worker stopping before it answered shows tries 2, a retry_ms and the same rid;
-//   6. NO SECRET: a planted secret in the URL, query, header, body and handle appears nowhere in the timing line or the access line.
+//   6. NO SECRET: a planted secret in the URL, query, header, handle and client address appears nowhere in the timing line or the access line;
+//   7. ONE INVOCATION: a callback that throws synchronously runs once and its own exception comes out unchanged, with or without a request context;
+//   8. READS ONLY: an MCP request is classified from its WHOLE batch (an act, an explain, a letter opening, any other tool or non-call message anywhere in it: no timing).
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { startReadPool } from "../src/read-workers.mjs";
-import { newTiming, runTiming, markRouted, timingLine, leaseStart, bundleSpan, nowMs, currentTiming } from "../src/read-timing.mjs";
+import { newTiming, runTiming, markRouted, timingLine, leaseStart, bundleSpan, nowMs, currentTiming, classifyMcpRead } from "../src/read-timing.mjs";
 import { onPenClient, StoreAcquireTimeout } from "../src/store-pool.mjs";
 import { accessLine } from "../src/telemetry.mjs";
 
@@ -199,7 +201,7 @@ test("5 · A RETRY: the first worker stopping before it answers shows two tries,
   assert.match(t.rid, /^[0-9a-f]{12}$/);
 });
 
-test("6 · NO SECRET: a planted secret in the URL, query, header, body and handle is in neither the timing line nor the access line", async () => {
+test("6 · NO SECRET: a planted secret in the URL, query, header, handle and client address is in neither the timing line nor the access line", async () => {
   const SECRET = "S3CR3T-sentinel-0451";
   const pool = mkPool(1);
   await ready(pool, 1);
@@ -211,10 +213,65 @@ test("6 · NO SECRET: a planted secret in the URL, query, header, body and handl
   assert.ok(!line.includes(SECRET) && Buffer.byteLength(line) + 1 <= 4000, "nor in the bounded access line, which stays within one atomic write");
   // the keys of a timing line are a fixed set of names and numbers
   for (const [k, v] of Object.entries(t)) assert.ok(["string", "number", "boolean", "object"].includes(typeof v) || v === null, k);
-  const allowed = new Set(["v", "rid", "door", "read", "route", "worker", "tries", "ok", "status", "routed_ms", "admit_ms", "retry_ms", "queue_ms", "exec_ms", "return_ms", "total_ms", "bundle", "leases", "cov"]);
+  const allowed = new Set(["v", "rid", "door", "batch", "read", "route", "worker", "tries", "ok", "status", "routed_ms", "admit_ms", "retry_ms", "queue_ms", "exec_ms", "return_ms", "total_ms", "bundle", "leases", "cov"]);
   for (const k of Object.keys(t)) assert.ok(allowed.has(k), `an unexpected field ${k}`);
   // a read name outside the fixed shape is dropped
   const odd = newTiming(); runTiming(odd, () => markRouted(odd));
   assert.ok(!("read" in timingLine(odd, { door: "household", read: `stamps ${SECRET}`, status: 200 })));
   assert.ok(nowMs() > 0);
+});
+
+test("7 · ONE INVOCATION: a callback that throws synchronously runs once and its own exception comes out unchanged (and a rejection, and a return, likewise)", async () => {
+  const boom = new Error("the callback's own error");
+  for (const tm of [newTiming(), undefined]) {
+    let runs = 0;
+    assert.throws(() => runTiming(tm, () => { runs += 1; throw boom; }), (e) => e === boom, "the identical exception object");
+    assert.equal(runs, 1, "the business callback ran exactly once");
+    let asyncRuns = 0;
+    await assert.rejects(runTiming(tm, async () => { asyncRuns += 1; throw boom; }), (e) => e === boom);
+    assert.equal(asyncRuns, 1);
+    const sentinel = { answer: 42 };
+    assert.equal(runTiming(tm, () => sentinel), sentinel, "a return is the callback's own value");
+  }
+  // the context is still the callback's own inside it, and gone outside
+  const tm = newTiming();
+  assert.equal(runTiming(tm, () => currentTiming()), tm);
+  assert.equal(currentTiming(), undefined);
+  // a bundle span and a lease do not run their callbacks twice either
+  let spans = 0, leases = 0;
+  const pool = { options: { max: 3 }, connect: async () => ({ query() {}, on() {}, removeListener() {}, release() {} }) };
+  await runTiming(newTiming(), async () => {
+    await assert.rejects(bundleSpan(async () => { spans += 1; throw boom; }), (e) => e === boom);
+    await assert.rejects(onPenClient(pool, "x", async () => { leases += 1; throw boom; }), (e) => e === boom);
+  });
+  assert.equal(spans, 1); assert.equal(leases, 1);
+});
+
+test("8 · READS ONLY: an MCP request is classified from its whole batch; an act, an explain, a letter opening, another tool or a non-call anywhere in it carries no timing", () => {
+  const call = (name, args, id = 1) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+  const READ = call("household", { read: "doorstep", handle: "wright" }), DOOR = call("doorstep", {}), FLAT = call("read_doorstep", { handle: "wright" });
+  assert.deepEqual(classifyMcpRead([READ]), { door: "mcp", calls: 1 });
+  assert.deepEqual(classifyMcpRead([call("household", {})]), { door: "mcp", calls: 1 }, "the bare glance/standing is a household read");
+  assert.deepEqual(classifyMcpRead([DOOR]), { door: "mcp-doorstep", calls: 1 });
+  assert.deepEqual(classifyMcpRead([FLAT]), { door: "mcp-doorstep", calls: 1 });
+  assert.deepEqual(classifyMcpRead([READ, call("household", { read: "stamps" }, 2)]), { door: "mcp", calls: 2 }, "a batch of reads is one request of 2 calls");
+  assert.deepEqual(classifyMcpRead([DOOR, FLAT]), { door: "mcp-doorstep", calls: 2 });
+  assert.deepEqual(classifyMcpRead([DOOR, READ]), { door: "mcp", calls: 2 });
+  const ACT = call("household", { do: "mark-all-read" }), EXPLAIN = call("household", { explain: "send" }), LETTER = call("household", { read: "letter", id: "x" });
+  const WORLD = call("world_orient", {}), WORLD_ACT = call("world", { do: "say", args: { text: "hi" } });
+  for (const [label, msgs] of [
+    ["an act", [ACT]], ["an explain", [EXPLAIN]], ["a letter opening", [LETTER]], ["a doorstep apex act", [call("doorstep", { do: "send" })]],
+    ["an act then a read (the read is last)", [ACT, READ]], ["a read then an act", [READ, ACT]], ["a read between acts", [ACT, READ, ACT]],
+    ["a read then an explain", [READ, EXPLAIN]], ["a read then a letter opening", [READ, LETTER]],
+    ["a read and another tool", [READ, WORLD]], ["a read and a world act", [READ, WORLD_ACT]],
+    ["a read and a non-call message", [READ, { jsonrpc: "2.0", id: 9, method: "tools/list" }]], ["a lone non-call message", [{ jsonrpc: "2.0", id: 1, method: "initialize" }]],
+    ["arguments that are not an object", [call("household", "read")]], ["an array as arguments", [call("household", [1])]],
+    ["empty", []], ["not an array", null], ["a malformed message", [null, READ]],
+  ]) assert.equal(classifyMcpRead(msgs), null, `${label}: no timing`);
+  // classification never looks at a value it records: it returns fixed labels and a count
+  assert.deepEqual(Object.keys(classifyMcpRead([READ])).sort(), ["calls", "door"]);
+  // a batch's line says how many calls it describes
+  const tm = newTiming(); runTiming(tm, () => markRouted(tm));
+  assert.equal(timingLine(tm, { door: "mcp", calls: 2, read: null, status: 200 }).batch, 2);
+  assert.ok(!("batch" in timingLine(tm, { door: "mcp", calls: 1, status: 200 })));
 });

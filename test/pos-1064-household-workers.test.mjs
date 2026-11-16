@@ -191,18 +191,40 @@ test("§ 4 the access line carries each doorstep/household read's timing: worker
     const restDoor = await fetch(`${o.base}/doorstep/wright`);                                      // REST, handed to the worker
     const restHouse = await fetch(`${o.base}/household`, { headers: { authorization: `Bearer ${KEY}` } });   // REST, main only
     const plain = await fetch(`${o.base}/town`);                                                    // not a doorstep/household door
+    // the same doors' ACTS and act-shaped asks, which this record must not cover (POS-1064/b: reads only, classified from the whole request)
+    const batch = async (...items) => (await fetch(`${o.base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${KEY}` },
+      body: JSON.stringify(items.map((a, i) => ({ jsonrpc: "2.0", id: i + 1, method: "tools/call", params: { name: "household", arguments: a } }))) })).status;
+    const READ = { read: "stamps", handle: "wright" }, ACT = { do: "mark-all-read" };
+    await o.post(KEY, "household", ACT);                              // MCP act
+    await o.post(KEY, "household", { explain: "send" });              // MCP explain
+    await batch(ACT, READ);                                           // an act, then a read (the read is the LAST tool)
+    await batch(READ, ACT);                                           // a read, then an act
+    const twoReads = await batch(READ, { read: "quests", handle: "wright" });   // two reads: one request, two calls
+    await fetch(`${o.base}/household`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${KEY}` }, body: JSON.stringify(ACT) });   // REST act
+    await fetch(`${o.base}/household?do=mark-all-read`, { headers: { authorization: `Bearer ${KEY}` } });   // a GET that names an act (refused)
     for (const r of [mcpDoor, restDoor, restHouse, plain]) assert.ok((r.status ?? 0) >= 200);
+    assert.equal(twoReads, 200);
     assert.equal(mcpDoor.reader, "worker-0"); assert.equal(mcpMail.reader, null);
     await new Promise((r) => setTimeout(r, 300));   // the line is written on finish
     const lines = readdirSync(logs).flatMap((f) => readFileSync(join(logs, f), "utf8").split("\n").filter(Boolean)).map((l) => JSON.parse(l));
     const timed = lines.filter((l) => l.timing);
     const by = (door, route) => timed.filter((l) => l.timing.door === door && l.timing.route === route);
-    const mcpW = by("mcp", "worker"), mcpM = by("mcp", "main"), restW = by("doorstep", "worker"), restM = by("household", "main");
+    const mcpW = by("mcp", "worker").filter((l) => !l.timing.batch), mcpM = by("mcp", "main"), restW = by("doorstep", "worker"), restM = by("household", "main");
     assert.equal(mcpW.length, 1, JSON.stringify(timed.map((l) => l.timing)));
-    assert.equal(mcpM.length, 1);
+    assert.equal(mcpM.length, 1 + 0, "the mail read, on the main thread");
     assert.equal(restW.length, 1);
     assert.equal(restM.length, 1);
     assert.equal(lines.filter((l) => l.path === "/town").every((l) => !l.timing), true, "a door outside the family carries no timing");
+    // READS ONLY: every act, explain, act-bearing batch (whichever tool is last) and act-shaped GET is on the log WITHOUT timing; the two-read batch is one line of 2 calls
+    const mcp = lines.filter((l) => l.path === "/mcp");
+    assert.equal(mcp.length, 7, "seven MCP requests: doorstep read, mail read, act, explain, act+read, read+act, two reads");
+    assert.equal(mcp.filter((l) => l.timing).length, 3, "only the three pure-read requests carry timing: " + JSON.stringify(mcp.map((l) => [l.mcp, !!l.timing])));
+    const batched = mcp.filter((l) => l.timing?.batch);
+    assert.equal(batched.length, 1); assert.equal(batched[0].timing.batch, 2); assert.ok(!("read" in batched[0].timing), "a batch names no single read");
+    const post = lines.filter((l) => l.path === "/household" && l.method === "POST");
+    assert.equal(post.length, 1); assert.ok(!post[0].timing, "POST /household (an act) carries no timing");
+    const getAct = lines.filter((l) => l.path === "/household" && l.method === "GET" && !l.timing);
+    assert.equal(getAct.length, 1, "the GET that names an act carries no timing, and the plain GET /household still does");
     if (process.env.POS1064_PRINT_TIMING) for (const l of timed) console.log("TIMING", JSON.stringify({ path: l.path, status: l.status, ms: l.ms, timing: l.timing }));   // the operator's example line
     const w = mcpW[0].timing;
     assert.equal(w.worker, 0); assert.equal(w.tries, 1);
