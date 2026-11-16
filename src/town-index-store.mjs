@@ -1144,8 +1144,16 @@ async function standingRoots(q, standing) {
   return out;
 }
 
-// sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character
-const like = (col, param) => likeAscii(col, param, "");
+// sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character.
+//
+// THE FOLD IS `lower(x COLLATE "C")`, NOT `translate(x, 'A-Z', 'a-z')` (POS-1072). Both fold exactly the ASCII letters A-Z and nothing else: under the
+// explicit C collation `lower` is Postgres's byte-wise ASCII lower-case (every other byte, so every multi-byte character, is left alone), and the two folds
+// agree on every code point from U+0001 to U+10FFFF (checked exhaustively on PG 18, and re-checked by test/pos-1072-search.test.mjs on the suite's own Postgres).
+// They do not cost the same: `translate` on a 53 MB `json` column took 66 s for the fold alone (the LIKE over the raw text, 1.4 s), and search ran it four
+// times per call, 16-23 s each in production, inside pen transactions. `lower(... COLLATE "C")` does the same fold in 0.7 s. Not `ilike`/`lower(x)`: those fold
+// by the database's locale (1,407 more code points on a C.UTF-8 database), which is not sqlite's LIKE. The pattern is cast to text (an untyped parameter
+// cannot carry a COLLATE), and ESCAPE '' keeps the pattern's `\` an ordinary character, as it always was here.
+const like = (col, param) => `lower(${col} COLLATE "C") LIKE lower(${param}::text COLLATE "C") ESCAPE ''`;
 
 /** Search over letters and residents (page shape: queries.mjs § searchPage). */
 export async function search(q, term, { limit, offset } = {}) {
