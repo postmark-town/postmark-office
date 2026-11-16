@@ -139,6 +139,18 @@ export function townTool(clone, name, { root = pinRoot() } = {}) {
   return join(root, rel);
 }
 
+/**
+ * The PINNED tools/ folder, for a child script that imports town modules by
+ * folder (the ledger pen's signer, the house-key checks, the first-idea sweep),
+ * after every one of `names` and its closure is checked against the clone as
+ * townTool checks it. The child is handed the clone as its repo, explicitly.
+ */
+export function pinnedToolsDir(clone, names, opts) {
+  let dir = null;
+  for (const n of names) dir = dirname(townTool(clone, n, opts));
+  return dir;
+}
+
 /** Did the pin stop this (a mismatch, or a module the office never pinned)? A caller answers it by name, never as "the town has no such module". */
 export const isPinStop = (e) => e?.code === "TOWN_PIN_MISMATCH" || e?.code === "TOWN_TOOL_UNPINNED";
 

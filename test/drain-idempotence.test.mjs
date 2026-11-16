@@ -42,7 +42,7 @@
 // replays, and a row that carries no outcome at all (every row written before
 // this fix) replays exactly as it did.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -87,6 +87,7 @@ function postmasterClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, "tools", "households.json"),
     JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git(dir, "init", "-q");
   git(dir, "add", "-A");
   git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid",
@@ -228,6 +229,7 @@ test("F2b · a committed clear is not re-imposed over the rewrite that supersede
   mkdirSync(join(clone, "tools"), { recursive: true });
   writeFileSync(join(clone, "tools", "households.json"),
     JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
+  stageEngine(clone); // POS-994: the clone carries the stand-in engine the pins vouch for
   git(clone, "init", "-q"); git(clone, "add", "-A");
   git(clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid",
     "commit", "-q", "-m", "fixture: a profile with a bio");

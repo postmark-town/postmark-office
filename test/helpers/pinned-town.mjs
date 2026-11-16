@@ -8,7 +8,7 @@
 // every file the pins name, copied from the pins in force (TOWN_PINS_DIR when
 // the suite's helper set it, else src/town-pins), and nothing else.
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PIN_ROOT, relativeImports } from "../../src/town-tool.mjs";
@@ -73,6 +73,26 @@ export function copyTownModule(fromTown, toTown, name) {
   };
   walk(`tools/${name}`);
 }
+
+/**
+ * A throwaway clone that carried no tools/ used to borrow a town's engine by
+ * folder (STAMP_ENGINE_DIR, gone with POS-994). Now the clone carries the town's
+ * own modules (with their closures), copied from `town`, so the office's pin
+ * check reads them in the clone as it does on the box. In a git clone the copies
+ * are listed in .git/info/exclude, so they never read as dirt to the pen.
+ */
+export function stageTownTools(clone, town, names = ["stamp-mint.mjs", "stamp-verify.mjs", "household-keys.mjs"]) {
+  const before = new Set(existsSync(join(clone, "tools")) ? readdirSyncSafe(join(clone, "tools")) : []);
+  for (const n of names) if (existsSync(join(town, "tools", n))) copyTownModule(town, clone, n);
+  const exclude = join(clone, ".git", "info", "exclude");
+  if (existsSync(join(clone, ".git"))) {
+    mkdirSync(dirname(exclude), { recursive: true });
+    const added = readdirSyncSafe(join(clone, "tools")).filter((n) => !before.has(n)).map((n) => `/tools/${n}`);
+    if (added.length) writeFileSync(exclude, (existsSync(exclude) ? readFileSync(exclude, "utf8") : "") + added.join("\n") + "\n");
+  }
+  return clone;
+}
+function readdirSyncSafe(d) { try { return readdirSync(d); } catch { return []; } }
 
 /** The pinned path of a town module, as townTool returns it. */
 export const pinnedPath = (name) => join(pinRootNow(), "tools", name);

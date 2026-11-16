@@ -18,6 +18,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town modules
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
@@ -591,14 +592,14 @@ test("P16 · declare-exec.mjs: the founder's house-key line rides the declaratio
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   sh(t.clone, "add", "-A"); sh(t.clone, ...BOT, "commit", "-qm", "sealed ledger"); sh(t.clone, "push", "-q");
 
-  const was = { key: process.env.STAMP_KEY, dir: process.env.STAMP_ENGINE_DIR };
+  const was = { key: process.env.STAMP_KEY, dir: process.env.TOWN_PINS_DIR };
   process.env.STAMP_KEY = keyFile;
-  process.env.STAMP_ENGINE_DIR = join(HK_TOWN, "tools");
+  process.env.TOWN_PINS_DIR = pinTown(stageTownTools(t.clone, HK_TOWN));
   let out;
   try { out = runStubbed(t, "declare-exec.mjs", { args: { handle: "newcomer" }, key: {}, dbPath: t.dbPath }); }
   finally {
     if (was.key === undefined) delete process.env.STAMP_KEY; else process.env.STAMP_KEY = was.key;
-    if (was.dir === undefined) delete process.env.STAMP_ENGINE_DIR; else process.env.STAMP_ENGINE_DIR = was.dir;
+    if (was.dir === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = was.dir;
   }
   assert.equal(out.error, undefined, JSON.stringify(out));
   const files = sh(t.clone, "show", "--name-only", "--format=", "HEAD").split("\n");

@@ -420,3 +420,72 @@ test("DEV: the dev units name dev's pins; no prod unit names TOWN_PINS_DIR, and 
   const envReads = readFileSync(join(ROOT, "src", "town-tool.mjs"), "utf8").match(/process\.env\.[A-Z_]+/g) ?? [];
   assert.deepEqual([...new Set(envReads)], ["process.env.TOWN_PINS_DIR"]);
 });
+
+// ── THE STRONG SOURCE LAW (Truey's review of #1065, finding 1 and 6) ────────
+// The join-shaped law above missed a child script that named the module inside
+// a string (`import(pathToFileURL(engineDir + '/stamp-mint.mjs'))`). This one
+// reads every line outside comments: a string (any quote, a template literal
+// included) naming a pinned module, on a line that imports, spawns or builds a
+// path, is a reach unless it goes through the loader. Shell and unit files too:
+// a pinned module run by `node … tools/<module>` is a reach unless it is the
+// loader's door (`src/town-tool.mjs run`).
+const STRONG_EXEMPT = new Map([
+  ["src/town-tool.mjs", "the loader itself"],
+  ["tools/town-pins.mjs", "the pin writer reads the town's modules to pin them"],
+  ["tools/stamp-sandbox.mjs", "the stamp sandbox: exempt by name (Wright, POS-994); it refuses to run where a key is"],
+  ["tools/stamp-sandbox-script.mjs", "the stamp sandbox's script, run only by the sandbox"],
+]);
+// Known shell reaches, each named with the issue that removes it.
+const SHELL_ALLOW = [
+  { file: "deploy/settlement-auto.sh", text: "node tools/world-stake.mjs --escrow --json", why: "until #1022 rewrites settlement-auto.sh (POS-1083, the POS-994 follow-up)" },
+  { file: "deploy/settlement-shadow.sh", text: "node tools/world-stake.mjs --escrow --json", why: "until #1022 (POS-1083, the POS-994 follow-up)" },
+];
+
+test("THE STRONG SOURCE LAW: no string names a pinned module on a reach outside the loader, in code, shell or unit files", () => {
+  const names = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
+  // A town module named inside a string: the bare filename as a whole string
+  // ("stamp-mint.mjs"), or after a "/" that is not "./" ('/stamp-mint.mjs',
+  // `${dir}/tools/stamp-mint.mjs`). The office's own modules of the same name are
+  // imported as "./crossings.mjs" or "../src/world-stake.mjs", and a longer name
+  // that ends in one ("world-crossings.mjs") is not one.
+  const townName = new RegExp(`(?:['"\`](?:${names})['"\`])|(?:(?<!\\.)(?<!\\.\\.)/(?:${names})\\b)`);
+  const ownModule = new RegExp(`\\.\\.?/(?:src/|world2/tools/|tools/)?(?:${names})\\b`, "g");
+  const inString = { test: (line) => townName.test(line.replace(ownModule, "")) };
+  const reachy = /\bimport\s*\(|\brequire\s*\(|\bspawn(Sync)?\s*\(|\bexec(File)?(Sync)?\s*\(|\bjoin\s*\(|\bresolve\s*\(|pathToFileURL|\+\s*['"`]\/|['"`]\/(tools\/)?[a-z-]+\.mjs/;
+  const throughLoader = /importTownTool(At|AtHead)?\s*\(|townToolArgv\s*\(|pinnedToolsDir\s*\(|\btownTool\s*\(|town-tool\.mjs["']?\s*run\b|existsSync\s*\(/;
+  const code = ["src", "tools", "world2", "deploy"].flatMap((d) => walk(join(ROOT, d)))
+    .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`) && !p.includes(`${sep}node_modules${sep}`));
+  const found = [];
+  for (const p of code) {
+    const rel = relative(ROOT, p).split(sep).join("/");
+    if (STRONG_EXEMPT.has(rel)) continue;
+    const text = readFileSync(p, "utf8");
+    // A child script that imports by folder (`engineDir + '/stamp-mint.mjs'`) passes
+    // only where EVERY engineDir in the file is the loader's pinnedToolsDir(...):
+    // the folder it is handed was checked against the clone and is the pinned one.
+    const assigns = [...text.matchAll(/\bengineDir\s*=\s*([^;\n]+)/g)].map((m) => m[1].trim());
+    const childPinned = assigns.length > 0 && assigns.every((a) => /^pinnedToolsDir\(/.test(a));
+    text.split("\n").forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+      if (childPinned && /engineDir \+ '\/[a-z-]+\.mjs'/.test(line)) return;
+      if (inString.test(line) && reachy.test(line) && !throughLoader.test(line)) found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
+    });
+  }
+  const shellRe = new RegExp(`\\bnode\\b[^#]*?\\btools/(${names})|"\\$[A-Z_]+[^"]*/tools/(${names})"`);
+  const shells = walk(join(ROOT, "deploy")).filter((p) => /\.(sh|service|conf)$/.test(p));
+  for (const p of shells) {
+    const rel = relative(ROOT, p).split(sep).join("/");
+    readFileSync(p, "utf8").split("\n").forEach((line, i) => {
+      if (/^\s*#/.test(line)) return;
+      if (!shellRe.test(line) || /town-tool\.mjs run/.test(line) || /\[ !? ?-f /.test(line)) return;
+      if (SHELL_ALLOW.some((a) => a.file === rel && line.includes(a.text))) return;
+      found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
+    });
+  }
+  assert.deepEqual(found, [], `pinned town modules reached around the loader:\n${found.join("\n")}`);
+  // NO FOLDER SWITCH AROUND THE PIN (Truey, #1065 finding 1): STAMP_ENGINE_DIR is gone from office code.
+  const switches = [...code, ...shells].filter((p) => /STAMP_ENGINE_DIR/.test(readFileSync(p, "utf8").replace(/^\s*(\/\/|\*|#).*$/gm, "")));
+  assert.deepEqual(switches.map((p) => relative(ROOT, p)), [], "an engine-folder switch reads past the loader");
+  // every allowlisted shell line still exists (a stale allowance is a red, not a silent pass)
+  for (const a of SHELL_ALLOW) assert.ok(readFileSync(join(ROOT, a.file), "utf8").includes(a.text), `${a.file} no longer holds "${a.text}": drop it from the allowlist (${a.why})`);
+});

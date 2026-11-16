@@ -61,6 +61,7 @@
 import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 import { join } from "node:path";
 import { DRAIN_KEY_PATH, signedRegistryLines } from "./ledger-pen.mjs";
 
@@ -72,7 +73,7 @@ export const registryLine = (date, handle, householdSlug) =>
 
 /** handle -> current mint key, from the clone's own `currentHouseholds`. */
 export function currentKeysOf(clone) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]); // POS-994: the pinned copy, checked against the clone
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { pathToFileURL } = await import('node:url');",
@@ -122,7 +123,7 @@ export function houseKeyLines(joins, { date, keys }) {
  * join over it would fix nothing. One sentence per defect, the town's.
  */
 export function householdKeySplits(clone, lines, registry) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "household-keys.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { readFileSync } = await import('node:fs');",
@@ -162,7 +163,7 @@ export function ledgerTail(text) {
  * the lines would add.
  */
 export function replayHolds(clone, { signed, handles, date }) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "stamp-verify.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir, date] = process.argv.slice(1);",
     "const fs = (await import('node:fs')).default;",

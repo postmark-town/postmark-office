@@ -23,6 +23,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town modules
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { beforeEach as beforeEachPins } from "node:test";
 // POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
@@ -361,7 +362,7 @@ function declareExec(args, key, { at = clone } = {}) {
   const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({ args, key })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: at, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(at, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, `declare-exec answers rather than trips: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split("\n").at(-1));
@@ -432,7 +433,7 @@ test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-816/d): ?invite=wright lands the
     key: { ghId: 5164, ghLogin: "guest-gh", handles: [] } })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(clone, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim().split("\n").at(-1));
