@@ -141,6 +141,22 @@ test("I3 · refused by name, crediting nobody: your own household, the town's ow
     { refused: "own", named: "wick" });
 });
 
+test("I3d · a reserved name the meep law also names gets the MEEP line, not the town-house one (POS-885, review note 1)", () => {
+  // LAW (POS-655, the receipt): a meep named in an invite "is one of the town's meeps". The postmaster and the ferry are both reserved
+  // names and meeps, and the reserved-name rule used to answer first with the town-house sentence.
+  const meepsAlso = (h) => isMeep(h) || h === "postmaster" || h === "ferry";
+  for (const name of ["postmaster", "ferry"]) {
+    const judged = judge(name, { isMeep: meepsAlso });
+    assert.deepEqual(judged, { refused: "meep", named: name }, name);
+    assert.match(inviteReceipt(judged), /is one of the town's meeps/, name);
+  }
+  // CONTROLS: a reserved name that is no meep stays the town's; the law unread still fails closed as the town's, and a
+  // non-reserved meep still reads meep.
+  assert.deepEqual(judge("office", { isMeep: meepsAlso }), { refused: "town", named: "office" });
+  assert.deepEqual(judge("postmaster", { isMeep: null }), { refused: "town", named: "postmaster" });
+  assert.deepEqual(judge("ember-lamp", { isMeep: meepsAlso }), { refused: "meep", named: "ember-lamp" });
+});
+
 test("I3c · THE FOUNDERS PAY LIKE ANY OTHER (POS-816/d): ?invite=wright credits starforge as ?invite=wick credits lantern-row; a meep of that house, and the town's own, are still refused", async () => {
   // Until 2026-11-03 this asserted POS-576/e ("No, never", Darko 2026-10-22 22:07): ?invite=wright resolved into
   // starforge and was refused as "founders", logged like a miss, nothing written. Darko 2026-11-03 09:31 EDT:
