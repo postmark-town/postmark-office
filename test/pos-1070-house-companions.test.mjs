@@ -194,7 +194,7 @@ test("6 · ONE OFFICE REQUEST: one outbox read and one board read per declared m
 });
 
 test("7 · THE DOORS' HANDLE GRAMMAR: a declared member spelled outside `[a-z0-9-]+` is null in both maps, key kept, no reader called; accepted spellings are unchanged", { skip: SKIP }, async () => {
-  const ODD = ["Zed", "under_score", "dotted.name"];
+  const ODD = ["Zed", "under_score", "dotted.name", "__proto__"];
   const houses = { ...HOUSES, keemin: { ...HOUSES.keemin, residents: ["wright", ...ODD, "quiet"] } };
   const real = store.storeIndexPooled(TOWN);
   const calls = { mailList: [], questBoard: [] };
@@ -205,9 +205,14 @@ test("7 · THE DOORS' HANDLE GRAMMAR: a declared member spelled outside `[a-z0-9
   assert.deepEqual(Object.keys(h.outboxes), ["wright", ...ODD, "quiet"], "every declared member keeps its key, spelled as declared");
   assert.deepEqual(Object.keys(h.quests), ["wright", ...ODD, "quiet"]);
   for (const odd of ODD) {
-    assert.equal(h.outboxes[odd], null, `${odd}: the legacy /mail door refuses this spelling`);
-    assert.equal(h.quests[odd], null, `${odd}: the legacy /quests door refuses this spelling`);
+    assert.ok(Object.hasOwn(h.outboxes, odd) && Object.hasOwn(h.quests, odd), `${odd}: an own data key in both maps (not the prototype setter)`);
+    assert.equal(Object.getOwnPropertyDescriptor(h.outboxes, odd).value, null, `${odd}: the legacy /mail door refuses this spelling`);
+    assert.equal(Object.getOwnPropertyDescriptor(h.quests, odd).value, null, `${odd}: the legacy /quests door refuses this spelling`);
   }
+  assert.equal(Object.getPrototypeOf(h.outboxes), Object.prototype, "the maps' prototype is untouched");
+  const wire = JSON.parse(JSON.stringify(h));
+  for (const odd of ODD) assert.ok(Object.hasOwn(wire.outboxes, odd) && wire.outboxes[odd] === null && Object.hasOwn(wire.quests, odd) && wire.quests[odd] === null, `${odd}: a serialised null entry in both maps`);
+  assert.ok(JSON.stringify(h.outboxes).includes('"__proto__":null') && JSON.stringify(h.quests).includes('"__proto__":null'), "on the wire");
   assert.deepEqual(calls.mailList, ["wright", "quiet"], "no outbox read for a refused spelling");
   assert.deepEqual(calls.questBoard.filter(([, opts]) => opts === undefined).map(([m]) => m), ["wright", "quiet"], "no canonical board read for a refused spelling");
   assert.deepEqual(json(h.outboxes.wright), json(await legacyOutbox("wright")), "an accepted spelling is the canonical read, unchanged");

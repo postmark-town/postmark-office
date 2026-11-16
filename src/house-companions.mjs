@@ -30,13 +30,14 @@ async function soft(read, { what, handle, log }) {
  * connections at a time for this.
  */
 export async function houseCompanions(members, { ix, log = (line) => console.error(line) } = {}) {
-  const outboxes = {};
-  const quests = {};
+  // entries, then `Object.fromEntries`: every declared spelling is an OWN data key (assigning into a plain `{}` would run the prototype setter for a declared `__proto__` and keep no key)
+  const outboxes = [];
+  const quests = [];
   for (const handle of members ?? []) {
     // a spelling the legacy doors refuse (not `[a-z0-9-]+`, as declared: no lower-casing, no alias) is `null` in both maps and no reader is called
-    if (!isDoorHandle(handle)) { outboxes[handle] = null; quests[handle] = null; continue; }
-    outboxes[handle] = await soft(async () => (await ix.mailList(handle, "outbox", {})).letters, { what: "outbox", handle, log });
-    quests[handle] = await soft(() => ix.questBoard(handle), { what: "quest board", handle, log });
+    if (!isDoorHandle(handle)) { outboxes.push([handle, null]); quests.push([handle, null]); continue; }
+    outboxes.push([handle, await soft(async () => (await ix.mailList(handle, "outbox", {})).letters, { what: "outbox", handle, log })]);
+    quests.push([handle, await soft(() => ix.questBoard(handle), { what: "quest board", handle, log })]);
   }
-  return { outboxes, quests };
+  return { outboxes: Object.fromEntries(outboxes), quests: Object.fromEntries(quests) };
 }
