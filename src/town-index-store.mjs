@@ -377,6 +377,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     return r.out;
   };
   return {
+    // one box, newest first, paged: the public outbox the full house read carries for each declared member (house-companions.mjs, POS-1070)
+    mailList: via((c, handle, box, opts) => mailList(c, handle, box, opts)),
     stampsDetail: via((c, handle) => stampsDetail(c, handle)),
     // the estate's escrow split: each resident's open pot stakes (POS-718)
     potStakes: via((c, handles) => potStakes(c, handles)),
