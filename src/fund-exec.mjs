@@ -34,7 +34,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
-import { isPinStop, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
+import { isPinStop, pinStopHint, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { lastLedgerLine } from "./stamp-tail.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -107,7 +107,7 @@ async function main() {
       "--key", KEY_PATH, "--repo", CLONE,
     ]);
   } catch (e) {
-    if (isPinStop(e)) return err(503, "town-pin-mismatch", e.message);
+    if (isPinStop(e)) return err(503, "town-pin-mismatch", pinStopHint(e));
     throw e;
   }
 

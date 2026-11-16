@@ -30,7 +30,11 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLONE = join(ROOT, "town-clone");
 
-if (!process.env.TOWN_PINS_DIR && existsSync(join(CLONE, ".git"))) {
+// Only an UNSET name is filled. A fixture that sets TOWN_PINS_DIR="" means "the
+// pins beside the office under test" (a fixture office's own src/town-pins), and
+// this helper rides NODE_OPTIONS into that fixture's children too, so it must
+// never read "" as "unset" and point them at the suite clone's pins.
+if (process.env.TOWN_PINS_DIR === undefined && existsSync(join(CLONE, ".git"))) {
   try {
     const git = (args) => execFileSync("git", ["-C", CLONE, ...args], { maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] });
     const head = git(["rev-parse", "HEAD"]).toString().trim();

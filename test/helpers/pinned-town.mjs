@@ -45,6 +45,7 @@ export function pinnedTown(into = null) {
  */
 let pinSeq = 0;
 export function pinTown(town, root = `${town}-pins-${process.pid}-${++pinSeq}`) {
+  mkdirSync(root, { recursive: true }); // a town holding no pinned module still gets its (empty) pins
   const present = MODULES.filter((m) => existsSync(join(town, "tools", m)));
   const files = collect((p) => readFileSync(join(town, p)), present);
   for (const [p, { bytes }] of files) {

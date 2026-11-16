@@ -22,7 +22,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
-import { importTownTool, isPinStop, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
+import { importTownTool, isPinStop, pinStopHint, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { lastLedgerLine } from "./stamp-tail.mjs";
 import { heldFor } from "./stamps-preview.mjs";
@@ -58,7 +58,7 @@ async function main() {
   // POS-994: the pinned copy, checked against the clone BEFORE anything is written.
   try { townToolArgv(CLONE, "stamp-mint.mjs"); }
   catch (e) {
-    if (isPinStop(e)) return err(503, "town-pin-mismatch", e.message);
+    if (isPinStop(e)) return err(503, "town-pin-mismatch", pinStopHint(e));
     throw e;
   }
 
@@ -78,7 +78,7 @@ async function main() {
       run(["--append"]);
       run(["--gift", handle, "--amount", String(amount), "--slug", slug, "--by", by, "--date", date]);
     } catch (e) {
-      if (isPinStop(e)) return refusal(503, "town-pin-mismatch", e.message);
+      if (isPinStop(e)) return refusal(503, "town-pin-mismatch", pinStopHint(e));
       const { code, defect, hint } = classifyFatal(e.stderr ?? e.message ?? e);
       return refusal(code, defect, hint);
     }

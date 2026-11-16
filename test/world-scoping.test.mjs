@@ -162,6 +162,11 @@ const {
 const houseA = { household: "house-a", handles: new Set(["alpha"]) };
 const houseB = { household: "house-b", handles: new Set(["beta"]) };
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("ruling 9 scopes reads by household and every write lands off main", async () => {
   // §1c: "the signed-in fold-on-read path (`stateForKey`'s draft arm) has no
   // remaining caller and can be DELETED". The read is canon for everyone; the

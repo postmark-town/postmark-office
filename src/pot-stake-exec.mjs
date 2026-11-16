@@ -32,7 +32,7 @@ import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
-import { importTownTool, isPinStop } from "./town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,7 @@ async function main() {
   try { ({ potStakeLine, appendSigned } = await importTownTool(CLONE, "stamp-mint.mjs")); }
   catch (e) {
     if (!isPinStop(e)) throw e;
-    console.log(JSON.stringify(err(503, "town-pin-mismatch", e.message)));
+    console.log(JSON.stringify(err(503, "town-pin-mismatch", pinStopHint(e))));
     return;
   }
 

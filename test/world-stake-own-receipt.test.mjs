@@ -18,6 +18,7 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -298,6 +299,10 @@ export function worldStakeApply(repo, args, keyPem) {
 }
 `);
   git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, wrapped for one test");
+  // POS-994: the exec runs the office's pinned copy of the stake engine; the wrapped engine is
+  // pinned to itself for this one test, so the wrapper is what runs.
+  const pinsBefore = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = pinTown(FX.repo);
   const b = await markOf("south-keeper");
   setEnv("POS922_RESET_AFTER_APPLY", b);
   try {
@@ -306,6 +311,7 @@ export function worldStakeApply(repo, args, keyPem) {
     assert.match(rb.hint, /nothing was staked and your stamps are untouched/);
   } finally {
     delete process.env.POS922_RESET_AFTER_APPLY;
+    if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore;
     writeFileSync(join(tools, "world-stake.mjs"), real);
     rmSync(join(tools, "world-stake-real.mjs"), { force: true });
     git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, unwrapped");

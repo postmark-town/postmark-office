@@ -44,7 +44,7 @@
 // a clone at the new town code stops each pinned step by name.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -137,6 +137,17 @@ export function townTool(clone, name, { root = pinRoot() } = {}) {
 
 /** Did the pin stop this (a mismatch, or a module the office never pinned)? A caller answers it by name, never as "the town has no such module". */
 export const isPinStop = (e) => e?.code === "TOWN_PIN_MISMATCH" || e?.code === "TOWN_TOOL_UNPINNED";
+
+// What a resident reads when the pin stops a door (the defect is
+// `town-pin-mismatch`): the office's own words. What differs, the file, both
+// blobs and the clone's path on the box, goes to the office's log, never into an
+// answer (POS-568's rule, fault-words.mjs).
+export const PIN_STOP_HINT = "the office runs only town code it has reviewed, and the town's copy of the code this act needs is not the copy the office reviewed, so nothing was written. What differs is in the office's log; the office's next release carries the review.";
+/** Logs the pin stop's own words and hands back PIN_STOP_HINT for the answer. */
+export function pinStopHint(e) {
+  console.error(`[town-tool] ${e?.message ?? e}`);
+  return PIN_STOP_HINT;
+}
 
 /** `import()` of the pinned module, checked as townTool checks it. */
 export async function importTownTool(clone, name, opts) {
@@ -257,4 +268,10 @@ async function main(argv) {
   return r.status ?? 1;
 }
 
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) process.exit(await main(process.argv.slice(2)));
+// The junction lesson (test/cli-guard.test.mjs): compare real paths, so the entry fires through a link too.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)); }
+})();
+if (isMain) process.exit(await main(process.argv.slice(2)));

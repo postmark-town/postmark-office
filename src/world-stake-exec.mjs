@@ -15,7 +15,7 @@ import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { importTownTool, isPinStop } from "./town-tool.mjs"; // POS-994: the town's stake engine is the office's pinned copy
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's stake engine is the office's pinned copy
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
@@ -44,7 +44,7 @@ async function main() {
   try { ({ worldStakeApply, worldUnstakeApply } = await importTownTool(CLONE, "world-stake.mjs")); }
   catch (e) {
     if (!isPinStop(e)) throw e;
-    console.log(JSON.stringify({ error: { code: 503, defect: "town-pin-mismatch", hint: e.message } }));
+    console.log(JSON.stringify({ error: { code: 503, defect: "town-pin-mismatch", hint: pinStopHint(e) } }));
     return;
   }
 

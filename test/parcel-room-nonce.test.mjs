@@ -35,6 +35,11 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";

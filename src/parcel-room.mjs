@@ -36,7 +36,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { importTownTool, importTownToolAtHead, isPinStop } from "./town-tool.mjs"; // POS-994: the live clone's engine is the office's pinned copy
+import { importTownTool, importTownToolAtHead, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the live clone's engine is the office's pinned copy
 
 /**
  * A key → the house's canonical `hh:<slug>`, by the registry: a slug the house
@@ -335,7 +335,7 @@ export function parcelRoomBought({ registry, entries, engine, household, nth }) 
 export async function quoteAt(clone, handle, date, { expect = null } = {}) {
   let engine;
   try { engine = await townEngineNow(clone); }
-  catch (e) { if (isPinStop(e)) return refuse(503, "town-pin-mismatch", e.message); throw e; }
+  catch (e) { if (isPinStop(e)) return refuse(503, "town-pin-mismatch", pinStopHint(e)); throw e; }
   if (!engine) return refuse(503, "not-yet-open", "the office has no town clone to read the ledger from");
   const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");

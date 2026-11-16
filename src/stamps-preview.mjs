@@ -120,7 +120,7 @@ export function clipTo(requested, ceiling) {
 export async function heldFor(clone, handle, { env = process.env } = {}) {
   const { readFileSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { importTownTool, isPinStop } = await import("./town-tool.mjs");
+  const { importTownTool, isPinStop, pinStopHint } = await import("./town-tool.mjs");
   const ledgerPath = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   if (!existsSync(ledgerPath) || !existsSync(join(clone, "tools", "stamp-mint.mjs")))
     return { liquid: 0, staked: 0, unread: "the office has no town clone carrying the stamp ledger, so what you hold could not be read here" };
@@ -140,7 +140,7 @@ export async function heldFor(clone, handle, { env = process.env } = {}) {
       staked: mint.foldStaked(entries).get(handle) ?? 0,
     };
   } catch (e) {
-    if (isPinStop(e)) return { liquid: 0, staked: 0, unread: `the stamp ledger was not read: ${e.message}` };
+    if (isPinStop(e)) return { liquid: 0, staked: 0, unread: `the stamp ledger was not read: ${pinStopHint(e)}` };
     const { plainReason } = await import("./fault-words.mjs"); // POS-657: the plain reason, the raw error to the log
     return { liquid: 0, staked: 0, unread: `the stamp ledger could not be folded here: ${plainReason(e, "files", "the stamp ledger")}` };
   }

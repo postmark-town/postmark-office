@@ -18,6 +18,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import {
@@ -382,7 +383,9 @@ function execTown() {
 function runExec(t, exec, payload, { push = true } = {}) {
   const r = spawnSync(process.execPath, [join(ROOT, "src", exec), JSON.stringify(payload)], {
     encoding: "utf8",
-    env: { ...process.env, ...IX.env, TOWN_CLONE: t.clone, STAMP_KEY: t.keyPath, TOWN_PUSH: push ? "1" : "", BOT_NAME: "fixture", BOT_EMAIL: "fixture@test.invalid" },
+    // POS-994: the execs run the office's pinned copies of the town's mint, close, ballot and stake;
+    // this clone's stubs are pinned to themselves, so the stubs are what run.
+    env: { ...process.env, ...IX.env, TOWN_PINS_DIR: pinTown(t.clone), TOWN_CLONE: t.clone, STAMP_KEY: t.keyPath, TOWN_PUSH: push ? "1" : "", BOT_NAME: "fixture", BOT_EMAIL: "fixture@test.invalid" },
   });
   assert.equal(r.status, 0, `${exec} answers rather than trips: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split("\n").at(-1));
@@ -525,7 +528,7 @@ function stubbedTown() {
 function runStubbed(t, exec, payload) {
   const r = spawnSync(process.execPath, ["--import", pathToFileURL(t.register).href, join(ROOT, "src", exec), JSON.stringify(payload)], {
     encoding: "utf8",
-    env: { ...process.env, ...IX.env, TOWN_CLONE: t.clone, TOWN_PUSH: "1", BOT_NAME: "fixture", BOT_EMAIL: "fixture@test.invalid",
+    env: { ...process.env, ...IX.env, TOWN_PINS_DIR: pinTown(t.clone), TOWN_CLONE: t.clone, TOWN_PUSH: "1", BOT_NAME: "fixture", BOT_EMAIL: "fixture@test.invalid",
       PEN_TX_STUBS: JSON.stringify(t.stubs[exec]), PEN_TX_PARENT: `/src/${exec}` },
   });
   assert.equal(r.status, 0, `${exec} answers rather than trips: ${r.stderr}`);

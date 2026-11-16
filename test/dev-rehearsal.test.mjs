@@ -135,8 +135,13 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
 /** Every job a box shell text runs: office scripts as office-relative paths, the town's (run from the clone) as `town:`. */
 function jobsIn(text) {
   const out = new Set();
-  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1/g)) {
+  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1(?:\s+run\s+([A-Za-z0-9_.-]+\.mjs))?/g)) {
     if (m[3].startsWith("$")) continue;
+    // POS-994: `src/town-tool.mjs run X --clone …` IS the town's job X, run as the
+    // office's pinned copy; the census names it as before, `town:tools/X`. The
+    // witness was never in this census (the unit named it by "$TOWN_CLONE/…", which
+    // the line above skips) and the rehearsal does not run it, so it stays out.
+    if (m[3] === "src/town-tool.mjs" && m[4]) { if (m[4] !== "witness-chain.mjs") out.add(`town:tools/${m[4]}`); continue; }
     out.add(m[2] ? m[3] : `town:${m[3]}`);
   }
   return out;

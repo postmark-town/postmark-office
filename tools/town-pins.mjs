@@ -20,7 +20,7 @@
 // changes a pinned file rides with that PR in the same train (SHIPPING).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PIN_ROOT, gitBlobSha, relativeImports } from "../src/town-tool.mjs";
@@ -132,4 +132,10 @@ async function main(argv) {
   return 2;
 }
 
-if (process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) process.exit(await main(process.argv.slice(2)));
+// The junction lesson (test/cli-guard.test.mjs): compare real paths, so the entry fires through a link too.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url)); }
+})();
+if (isMain) process.exit(await main(process.argv.slice(2)));

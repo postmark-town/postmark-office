@@ -110,6 +110,8 @@ const ALLOWED = {
 
 const walk = (d) => readdirSync(d).flatMap((n) => {
   const p = join(d, n);
+  // POS-994: src/town-pins/ holds byte copies of the TOWN's modules; their words are the town's, not the office's doors.
+  if (n === "town-pins" && d === SRC) return [];
   return statSync(p).isDirectory() ? walk(p) : p.endsWith(".mjs") ? [p] : [];
 });
 const census = {};
