@@ -87,7 +87,7 @@ export const RETIRED_KIND = "retired";
  * split on `,` and trimmed, in their written order. An EMPTY handle list
  * (`<key>=<household>:`, POS-1041) is a key that acts for no resident: `handles: []`.
  * The colon is what says "none on purpose": an entry with no colon at all is still
- * malformed and skipped. A `#` with no numeric id
+ * malformed and skipped, and so is one with an empty piece in its list (`:,`, `:wright,`). A `#` with no numeric id
  * after it pins nothing (the row holds no roles), and is named in `warnings`.
  * `skipped` counts the malformed entries the boot parse passed over silently.
  */
@@ -107,7 +107,11 @@ export function parseOfficeKeys(spec) {
     const ghId = /^[1-9][0-9]*$/.test(idPart) ? Number(idPart) : null;
     if (hash !== -1 && ghId === null)
       warnings.push(`the entry for "${household}" has a "#" but no numeric gh_id after it, so it holds no roles`);
-    keys.set(token, { household, handles: handleList.trim() === "" ? [] : handleList.split(",").map((s) => s.trim()), ghId });
+    // An empty list is "no residents"; a list with an EMPTY PIECE (`:,`, `: ,`, `:wright,`, `:a,,b`) is a typo,
+    // never a resident named "" (that would read as one resident at every gate that counts handles). Skipped and counted.
+    const pieces = handleList.trim() === "" ? [] : handleList.split(",").map((s) => s.trim());
+    if (pieces.includes("")) { skipped += 1; continue; }
+    keys.set(token, { household, handles: pieces, ghId });
   }
   return { keys, warnings, skipped };
 }

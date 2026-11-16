@@ -102,13 +102,20 @@ test("§ 1 an empty handle list is handles [], on every spelling of it", () => {
   assert.deepStrictEqual(keys.get(SCOPED).handles, ["wright"], "a scoped key beside them is unchanged");
 });
 
-test("§ 1b what was malformed is still malformed: the colon, the household and the key are required", () => {
+test("§ 1b what was malformed is still malformed: the colon, the household and the key are required", async () => {
   const cases = {
     "no colon at all (a typo must not become a no-resident key)": "k1=founder-hearth",
     "an empty household": "k2=:wright",
     "an empty household and no handles": "k3=:",
     "no key": "=founder-hearth:wright",
     "nothing": "",
+    // an EMPTY PIECE is a typo, never a resident named "" (that Set has size 1 and reads as one resident at every gate that counts handles)
+    "a lone comma": "k4=founder-hearth:,",
+    "a spaced comma": "k5=founder-hearth: , ",
+    "a trailing comma": "k6=founder-hearth:wright,",
+    "a leading comma": "k7=founder-hearth:,wright",
+    "a doubled comma": "k8=founder-hearth:wright,,rei",
+    "a pinned lone comma": "k9=founder-hearth#583231:,",
   };
   for (const [why, spec] of Object.entries(cases)) {
     const { keys, skipped } = parseOfficeKeys(spec);
@@ -119,6 +126,10 @@ test("§ 1b what was malformed is still malformed: the colon, the household and 
   const mixed = parseOfficeKeys("bad=founder-hearth;good=founder-hearth:");
   assert.deepEqual([...mixed.keys.keys()], ["good"]);
   assert.equal(mixed.skipped, 1);
+  // and through the import: the typo is counted, never stored, and no row holds ""
+  const imported = await importStaticKeys(fileDb("s1b-oauth.db"), "typo=founder-hearth:,;good=founder-hearth:");
+  assert.deepEqual([imported.entries, imported.skipped, imported.added], [1, 1, 1]);
+  assert.equal(await staticLookup(fileDb("s1b-empty.db"), "typo"), null);
 });
 
 test("§ 1c old-code falsifier: the boot parse's `(.+)` skips an empty list, the module's parse does not", () => {
@@ -320,8 +331,9 @@ test("§ 4g as: human: a human's voice needs a resident to stand beside", async 
   const said = await worldSayHuman({ text: "hello?", human: true }, none);
   assert.equal(said.error, "bounce");
   assert.equal(said.defect, "no residents on this key");
-  const named = await worldSayHuman({ text: "hello?", human: true, handle: "wright" }, none);
-  assert.equal(named.error, "bounce", "a resident named beside human: true is refused too");
+  // control: a one-resident key is NOT told "no residents on this key" for the same call (whatever the world door says next)
+  const one = await credentialFor(SCOPED);
+  assert.notEqual((await worldSayHuman({ text: "hello?", human: true }, one).catch((e) => e))?.defect, "no residents on this key");
 });
 
 test("§ 4h the other doors that stand a caller as a resident: describe and note", async () => {
@@ -336,6 +348,8 @@ test("§ 4h the other doors that stand a caller as a resident: describe and note
   assert.match(n.hint, /no residents on this key — sign in, or use a household key/);
   const n2 = await rejection(() => worldNoteViaOffice(null, { handle: "wright", body: "a note" }, none));
   assert.equal(n2?.code, 403);
+  assert.match(n2.defect, /"wright" is not one of your residents/);
+  assert.match(n2.hint, /no residents on this key — sign in, or use a household key/);
 });
 
 // ── § 5 the door ─────────────────────────────────────────────────────────────
