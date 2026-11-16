@@ -73,7 +73,7 @@ import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE roo
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "979163d79fb961435ba1c046ea3d460a04407b38", at: "067fd1b09eda246e16244881ea4485b2bf5b06fd" },
+            blob: "55a9ae3b59ace489d15f321f5857ab4b45bf0558", at: "98b54d96fcdf10c8dd3136cca62c4ea864028eeb" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -230,6 +230,30 @@ export function threadOf(cluster, { live, voiceCap }) {
     })),
   };
 }
+
+/**
+ * voices.mjs `pagedThread`, verbatim (POS-951): a thread's voices PAGED BACK by `voicesBefore`, the page widened to keep every voice tied on its oldest instant, with `voices_earlier`
+ * saying where the next page begins. `memoryMax` is the office's memory bound, which the store's page does not have: it passes none, and the note says the page is read from the record.
+ */
+export function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+  const meta = threadOf(cluster, { live, voiceCap: 1 });
+  const pool = Number.isFinite(voicesBefore) ? cluster.voices.filter((v) => v.at < voicesBefore) : cluster.voices;
+  let from = Math.max(0, pool.length - voiceCap);
+  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
+  const raw = pool.slice(from);
+  const voices = raw.length ? threadOf({ voices: raw }, { live, voiceCap: raw.length }).voices : [];
+  return {
+    ...meta,
+    ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ": this page is read from the record"}` } } : {}),
+    voices,
+  };
+}
+
+/** The feed's own teaching (POS-951), the same words voices.mjs `conversations()` carries (test/pos-779-vendor-equality.test.mjs holds them equal). */
+export const PLACE_NOTE = "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.";
+export const voicesNote = (voiceCap) => `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`;
+
 
 /**
  * world-journal.mjs `composeAnchor`, verbatim.
@@ -450,7 +474,7 @@ export function unplacedDisclosure(unplaced = []) {
  * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
  * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
@@ -471,8 +495,10 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
     settlement_since: marks.length ? new Date(since).toISOString() : null,
     ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-    live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-    closed: page.map((c) => threadOf(c, { live: false, voiceCap })),
+    place_note: PLACE_NOTE,
+    voices_note: voicesNote(voiceCap),
+    live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => pagedThread(c, { live: true, voiceCap, voicesBefore })),
+    closed: page.map((c) => pagedThread(c, { live: false, voiceCap, voicesBefore })),
     earlier: { source: "record", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null },
   };
 }

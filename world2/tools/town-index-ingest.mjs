@@ -701,6 +701,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   ];
   if (hasStamps) metaRows.push(["stamps_minted", minted], ["stamps_tip", tip]);
   if (q) metaRows.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
+  if (q?.invites) metaRows.push(["quest_invites", q.invites]); // POS-961: bring a neighbour's monthly count, as the seed writes it
   await diffTable(client, "meta", metaRows, tally);
   lap("bulletin+atlas+meta");
 

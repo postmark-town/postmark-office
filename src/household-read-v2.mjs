@@ -291,14 +291,16 @@ export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, 
  */
 export function marksBlock({ counts = {}, published = [], effects = null, atRisk = null } = {}) {
   const n = (v) => (Number.isFinite(v) && v > 0 ? v : null);
-  const decided = (effects ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused"));
+  // POS-731: a withdrawn mark of the house's leaving canon is decided at its crossing too
+  const decided = (effects ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused" || e.kind === "mark-withdrawn"));
   const last = decided.reduce((c, e) => Math.max(c, Number(e.crossing) || 0), 0);
   const at = decided.filter((e) => Number(e.crossing) === last);
   const refused = at.filter((e) => e.kind === "claim-refused");
-  // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>)"
-  const landed = at.length - refused.length;
+  const withdrawn = at.filter((e) => e.kind === "mark-withdrawn");
+  // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>) · 1 withdrawn (<first>)"
+  const landed = at.length - refused.length - withdrawn.length;
   const lastCrossing = at.length
-    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${oneLine(refused[0].cause ?? "no cause recorded")})` : null].filter(Boolean).join(" · ")}`
+    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${oneLine(refused[0].cause ?? "no cause recorded")})` : null, withdrawn.length ? `${withdrawn.length} withdrawn (${withdrawn[0].mark})` : null].filter(Boolean).join(" · ")}`
     : null;
   const risky = (atRisk ?? []).filter((r) => r.mark ?? r.id);
   const newest = [...published].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || String(a.id).localeCompare(String(b.id)))

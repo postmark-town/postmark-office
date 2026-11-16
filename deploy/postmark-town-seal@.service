@@ -25,8 +25,11 @@ Description=Postmark town seal — one sandboxed seal and verify, for the ferry 
 #     /tmp, and MemoryMax, TasksMax and LimitFSIZE bound how much of it;
 #   · CollectMode=inactive-or-failed: a refused seal's instance is unloaded once
 #     it ends, so no failed per-connection instance lingers for the roll-call.
+#     It is a [Unit] setting: under [Service] systemd ignores it with "Unknown
+#     key name 'CollectMode' in section 'Service'" (crossing 314, 2026-11-16).
 # MemoryDenyWriteExecute is NOT set: node's JIT needs it. What stays readable is
 # what any user can read under /etc and /usr; every secret on the box is 0600.
+CollectMode=inactive-or-failed
 
 [Service]
 ExecStart=/usr/bin/node /srv/postmark-office/tools/town-seal-sandbox.mjs serve
@@ -64,4 +67,3 @@ RuntimeMaxSec=20min
 MemoryMax=2G
 TasksMax=64
 LimitFSIZE=512M
-CollectMode=inactive-or-failed

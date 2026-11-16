@@ -90,6 +90,7 @@ import {
   engineDescend, // WLD-83 P10: the engine's one descent, for an appearance tree
   isOutsiderLens, OUTSIDER_LENS, // WLD-26: the outsider lens, one switch on the owner rule
   lensNoteFor, // POS-823: the line a lens read carries when the lens changed nothing for the household
+  servedLedgerNow, // POS-1048: one enter-record scan for every ledger read of a burst of acts
 } from "./world.mjs";
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
@@ -108,7 +109,6 @@ import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOf
 // is the block now, and an import this file no longer reads would be a false
 // claim about what it reads.
 import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopDoorsNearest, stopsOfService, vesselIdOf } from "./world-ride.mjs";
-import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
 import { ACTION_STANCE, STANCE_TOOLS, declareStanceViaOffice, readNeverPerforms, stanceShadow, stancesBlock, withEdgeWords } from "./world-stance.mjs";
@@ -499,7 +499,7 @@ export function crossingDeps() {
     // folding occupancy out of a fossil — so a resident who entered a room and
     // entered again was adjudicated as though he had never been inside.
     // src/enter-exit-ledger.mjs is the one deriver; this is one of its readers.
-    ledger: async () => { try { return (await servedEnterExitLedger(WORLD_CLONE)).ledger; } catch { return ""; } },
+    ledger: async () => { try { return (await servedLedgerNow()).ledger; } catch { return ""; } },
     standpointOf: async (who) => standpointForCrossing(await residentStandpoint(who).catch(() => null), who),
     // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12; postmark-town/postmark #2685).
     // `walking` is the ONE reader of "where is this resident" (residentStandpoint:
@@ -3263,7 +3263,7 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
+  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [], note: false }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
   // no porch lights: this answer shows no houses (WLD-29)
   const seen = await worldEyes(args, key, { lights: false });
