@@ -335,6 +335,7 @@ const { join, resolve, dirname } = await import("node:path");
 const { execFileSync, spawnSync } = await import("node:child_process");
 const { fileURLToPath } = await import("node:url");
 const { copyTownTools } = await import("./helpers/town-tools.mjs");
+const { pinTown } = await import("./helpers/pinned-town.mjs");
 const { tempDir } = await import("./helpers/temp-dir.mjs");
 const { postAtTown, closeAtTown } = await import("../src/events-store.mjs");
 
@@ -367,13 +368,15 @@ function townInABottle() {
   git(dir, "config", "core.autocrlf", "false");
   git(dir, "add", "-A");
   git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
+  process.env.TOWN_PINS_DIR = pinTown(dir); // POS-994: the office verifies with the PINNED public key, so a fixture signed with its own key is pinned to itself
   return dir;
 }
 const liquidOf = async (dir, handle) => {
   const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
   return mint.foldBalances(mint.parseStampLedger(ledgerText(dir))).get(handle) ?? 0;
 };
-const stakeEnv = (dir) => ({ ...ENV, TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, TOWN_LOCK: join(bottle, `town-${townN}.lock`), TOWN_PUSH: "" });
+// the executor's child reads the pins this bottle was pinned to (POS-994), not the suite clone's
+const stakeEnv = (dir) => ({ ...ENV, TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, TOWN_LOCK: join(bottle, `town-${townN}.lock`), TOWN_PUSH: "", TOWN_PINS_DIR: process.env.TOWN_PINS_DIR });
 const keyOf = (handle) => ({ handles: new Set([handle]), household: `${handle}-house` });
 const T_POST = Date.now();
 const eventArgs = (title) => ({ class: "event", title, body: "sorbet on the counter", place: { at: { x: 10, y: 20 } },
@@ -503,8 +506,15 @@ async function endedEvent(dir, title, { at = null } = {}) {
   // each bottle is its own town with its own ledger: the store's copy of the lines starts empty for it, as at a town's genesis
   await owner.query("TRUNCATE stamp_lines");
   const posted = await postAtTown({ ...eventArgs(title), ...(at ? { place: { at } } : {}) }, keyOf("wright"), { env: completionEnv(dir) });
+  // posting needs a window ahead; completing it must not need a FUTURE clock: the pen files a row by the real crossing
+  // (world2-pen § lateCrossingGuard), so an act stamped at "now + 2h" fails whenever a crossing boundary falls in between.
+  // So the posted event's window is moved 3 h into the past, and the completion runs at the real clock, as the tick does.
+  const shift = (v) => new Date(Date.parse(v) - 3 * 3_600_000).toISOString();
+  const was = await eventRowAtOffice(posted.post.id, { env: ENV });
+  await owner.query("UPDATE posts SET starts = $2, ends = $3, fields = $4 WHERE id = $1",
+    [was.id, shift(was.starts), shift(was.ends), JSON.stringify({ ...was.fields, ...(was.fields?.doors_open ? { doors_open: shift(was.fields.doors_open) } : {}) })]);
   const row = await eventRowAtOffice(posted.post.id, { env: ENV });
-  return { row, after: Date.parse(row.ends) + 60_000 };
+  return { row, after: Date.now() };
 }
 const complete = (dir, row, now, opts = {}) => penTransaction(dir, () =>
   completeEvent(row, { clone: dir, keyPem: keyPem(), env: completionEnv(dir), now, date: townDay(), planLeave, roomsPlace: worldRoomsPlace, ...opts }));
@@ -883,6 +893,8 @@ test("the pass never signs onto a RED ledger: an event due meets its completion'
   git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qam", "a red line, committed");
   assert.notEqual(verifies(dir).status, 0, "the fixture ledger is red to the town's own verifier");
   const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  // a quiet tick: the earlier tests' events (ended, some still held) are closed first, so nothing is due here
+  await owner.query("UPDATE posts SET state = 'cancelled' WHERE class = 'event' AND NOT (fields ? 'completed')");
   const quiet = [console.error, process.stderr.write]; console.error = () => {}; process.stderr.write = () => true;
   try {
     assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 0, "nothing due: the ledger is not judged at all");

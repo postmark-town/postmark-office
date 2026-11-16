@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 // ── THE HOSTING STAKE (call 22; Darko 11:00 EST and 17:37:45Z) ───────────────
 //
@@ -384,15 +385,20 @@ export function ledgerArrivalRed(clone, { registry = null } = {}) {
   const tool = fileURLToPath(new URL("../tools/stamp-verify-owed.mjs", import.meta.url));
   return spawnSync(process.execPath, [tool, "--repo", clone, ...(registry ? ["--registry", registry] : [])], { stdio: ["ignore", 2, 2] }).status !== 0;
 }
-const asAnswer = (e) => { if (e?.code && e?.defect) return refusal(e.code, e.defect, e.hint); throw e; };
+// a PIN STOP (POS-994: the clone's town code is not the copy the office reviewed) is the step stopping by name, nothing written
+const asAnswer = (e) => {
+  if (isPinStop(e)) return { error: { code: 503, reason: "town-pin-mismatch", defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+  if (e?.code && e?.defect) return refusal(e.code, e.defect, e.hint);
+  throw e;
+};
 
 /** The town's engine and the ledger as it stands, for one act under the lock. */
 async function ledgerOf(clone) {
   const { readFileSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { pathToFileURL } = await import("node:url");
-  const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
-  const ballot = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")).href).catch(() => null);
+  const mint = await importTownTool(clone, "stamp-mint.mjs");
+  // the ballot module stays optional as before — but a pin stop is never swallowed: the step stops by name
+  const ballot = await importTownTool(clone, "ballot.mjs").catch((e) => { if (isPinStop(e)) throw e; return null; });
   const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const entries = mint.parseStampLedger(readFileSync(path, "utf8"));
   return { mint, ballot, path, entries };
@@ -727,7 +733,6 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     const { stakeGuard } = await import("./mark-stake-lock.mjs");
     const { planStampedCommit, landPlannedVia } = await import("./stamp-lines.mjs");
     const { join } = await import("node:path");
-    const { pathToFileURL } = await import("node:url");
 
     // 1 · the evidence, read whole (no transaction)
     const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
@@ -741,8 +746,9 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not
     const by = String(row.fields.stake.by);
     const n = Number(row.fields.stake.n);
-    const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
-    const ws = await import(pathToFileURL(join(clone, "tools", "world-stake.mjs")).href);
+    // the town's engine is the office's pinned copy, checked against the clone (POS-994): a pin stop answers by name, nothing signed
+    const mint = await importTownTool(clone, "stamp-mint.mjs");
+    const ws = await importTownTool(clone, "world-stake.mjs");
     const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
     const { readFileSync } = await import("node:fs");
     const entries = mint.parseStampLedger(readFileSync(path, "utf8"));
