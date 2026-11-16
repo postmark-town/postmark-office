@@ -230,26 +230,23 @@ test("the key's commit carries only the ledger and tools/: anything else already
   assert.equal(t.g("diff", "--cached", "--name-only"), "README.md", "the staged edit is still staged, not committed");
 });
 
-test("--verify: a red town verifier refuses, and the clone is put back on the seed's key, clean (#453 review F7)", { skip: SKIP }, async () => {
-  // THE CAN-FAIL FLIP: drop the checkout in resignDevTown's --verify branch; the clone is left
-  // re-signed and dirty, and this goes red
+// POS-994: --verify is retired. The office verifies with the PINNED public key, and a
+// re-signed clone holds dev's key (and re-signed exceptions inside the town's tools),
+// so no verifier pinned before the re-sign can read it. The freshen pins the re-signed
+// town and verifies through those pins, putting a red one back on the seed
+// (test/box-rollcall.test.mjs drives that sequence; test/town-tool.test.mjs § dev's own pins).
+test("--verify is retired: the CLI refuses it by name and touches nothing", { skip: SKIP }, async () => {
   const prod = keys(), dev = keys();
   const t = seedTown(prod);
-  writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "console.log('stamp-verify: RED (a fixture that refuses)'); process.exit(1);\n");
-  t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that refuses");
-  process.env.TOWN_PINS_DIR = pinTown(t.dir); // POS-994: the stub verifier is what the pinned loader runs
   const head = t.g("rev-parse", "HEAD");
-  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true });
-  assert.equal(r.status, "refused");
-  assert.match(r.why, /the town's verifier is red on the re-signed ledger \(exit 1\): stamp-verify: RED \(a fixture that refuses\); the clone is put back/);
+  const keyFile = join(t.dir, "..", `dev-key-${Date.now()}.pem`);
+  writeFileSync(keyFile, dev.key);
+  const r = spawnSync(process.execPath, [join(OFFICE_ROOT, "tools", "dev-ledger-resign.mjs"), "--town", t.dir, "--key", keyFile, "--not-key", keyFile, "--verify"], { encoding: "utf8" });
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /--verify is retired \(POS-994\): the freshen pins the re-signed town and verifies through those pins/);
   assert.equal(t.g("rev-parse", "HEAD"), head);
-  assert.equal(t.g("status", "--porcelain"), "", "nothing re-signed is left in the working tree");
-  assert.equal(readFileSync(join(t.dir, "tools", "stamp-pubkey.pem"), "utf8"), prod.pub, "the seed's (prod's) public key is back");
-  // and a green verifier lets the re-sign land
-  writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "process.exit(0);\n");
-  t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that passes");
-  process.env.TOWN_PINS_DIR = pinTown(t.dir);
-  assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true })).status, "resigned");
+  assert.equal(t.g("status", "--porcelain"), "", "nothing re-signed");
+  assert.equal(readFileSync(join(t.dir, "tools", "stamp-pubkey.pem"), "utf8"), prod.pub, "the seed's public key stands");
 });
 
 // ── A LINE THAT NAMES ANOTHER BY ITS SIGNATURE (the w45 dev rehearsal, 2026-11-01) ──

@@ -61,15 +61,21 @@ export function pinTown(town, root = `${town}-pins-${process.pid}-${++pinSeq}`) 
  * Copy a town module AND its relative-import closure from one town to another
  * (a fixture that used to copy stamp-mint.mjs alone now also needs
  * registry-source.mjs: the loader checks the whole closure).
+ *
+ * The data a module trusts (the verifier's public key, tools/town-pins.mjs §
+ * DATA_DEPS) comes along only where the fixture has none: a fixture that signs
+ * with its own key keeps its own, and pinning it (pinTown) pins that key.
  */
 export function copyTownModule(fromTown, toTown, name) {
   const seen = new Set();
   const walk = (p) => {
     if (seen.has(p) || !existsSync(join(fromTown, p))) return;
     seen.add(p);
+    const data = !/\.m?js$/.test(p);
+    if (data && existsSync(join(toTown, p))) return; // the fixture's own key stands
     mkdirSync(dirname(join(toTown, p)), { recursive: true });
     copyFileSync(join(fromTown, p), join(toTown, p));
-    if (!/\.m?js$/.test(p)) return; // data (the verifier's public key): no imports
+    if (data) return; // data: no imports
     for (const d of [...relativeImports(p, readFileSync(join(fromTown, p), "utf8")), ...(DATA_DEPS[p] ?? [])]) walk(d);
   };
   walk(`tools/${name}`);

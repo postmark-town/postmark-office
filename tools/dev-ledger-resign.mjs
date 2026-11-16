@@ -19,7 +19,7 @@
 // ── WHAT IT RUNS ────────────────────────────────────────────────────────────
 //
 //   node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem>
-//                                    --not-key <prod's key> [--verify]
+//                                    --not-key <prod's key>
 //
 //   --town     a dev clone only: every remote's push URL disabled, its real
 //              path under /srv/postmark-office-dev or the temp dir (§ WHICH CLONE)
@@ -29,7 +29,12 @@
 //              is this one's. Unreadable is a refusal. Independently, a key whose
 //              public half is the seed's tools/stamp-pubkey.pem (prod's) is
 //              refused with no prod path at all (§ NOT PROD'S KEY)
-//   --verify   run the town's own verifier (tools/stamp-verify.mjs) on the result
+//   --verify   RETIRED (POS-994). The office verifies with the PINNED public key,
+//              and a re-signed clone holds dev's key and re-signed exceptions inside
+//              the town's own tools, so no verifier pinned before the re-sign can
+//              read it. The freshen pins the re-signed town and runs the pinned
+//              verifier through THOSE pins (deploy/postmark-dev-freshen.sh), and a
+//              red one puts the clone back on the seed. The flag is refused by name.
 //
 // ONE COMMIT, THE SAME EVERY NIGHT. The re-sign is committed on the clone (never
 // pushed) with a fixed author, committer and date (the seed commit's), and
@@ -47,7 +52,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
 
 import { resignTown } from "./stamp-sandbox.mjs";
 
@@ -148,7 +153,7 @@ export function prodKeyRefusal(pub, { town, notKey = null }) {
  * Move `town` onto `keyPem`. Answers `{ status, ... }`: `already` (nothing to
  * do), `resigned` (committed; `sha`, `lines`, `carried`), or `refused` (`why`).
  */
-export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath = null, verify = false, allowedRoots }) {
+export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath = null, allowedRoots }) {
   const wrongClone = cloneRefusal(town, allowedRoots ? { allowedRoots } : {});
   if (wrongClone) return { status: "refused", why: wrongClone };
   if (!existsSync(join(town, LEDGER_REL))) return { status: "refused", why: `no ${LEDGER_REL} under ${town}: --town must be a town checkout` };
@@ -166,13 +171,6 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath
     git(town, ["checkout", "HEAD", "--", LEDGER_REL, "tools"]);
     return { status: "refused", why: `after the re-sign, ${left.bad.length} line(s) still do not verify under the key (first: line ${left.bad[0]}); the clone is put back` };
   }
-  if (verify) {
-    const r = spawnSync(process.execPath, townToolArgv(town, "stamp-verify.mjs"), { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-    if (r.status !== 0) {
-      git(town, ["checkout", "HEAD", "--", LEDGER_REL, "tools"]);
-      return { status: "refused", why: `the town's verifier is red on the re-signed ledger (exit ${r.status}): ${`${r.stdout}${r.stderr}`.trim().split("\n").slice(-3).join(" | ")}; the clone is put back` };
-    }
-  }
   // the seed commit's date, so the same seed under the same key is the same commit
   const when = git(town, ["log", "-1", "--format=%cI", "HEAD"]);
   const env = { GIT_AUTHOR_NAME: WHO.name, GIT_AUTHOR_EMAIL: WHO.email, GIT_COMMITTER_NAME: WHO.name, GIT_COMMITTER_EMAIL: WHO.email, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when };
@@ -187,18 +185,19 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath
   return { status: "resigned", sha: git(town, ["rev-parse", "HEAD"]), lines, carried };
 }
 
-const USAGE = "usage: node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem> --not-key <prod's key, public or private> [--verify]";
+const USAGE = "usage: node tools/dev-ledger-resign.mjs --town <dev town clone> --key <dev key pem> --not-key <prod's key, public or private>";
 
 async function main(argv = process.argv.slice(2)) {
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
-  const known = new Set(["--town", "--key", "--not-key", "--verify"]);
+  if (argv.includes("--verify")) { console.error("dev-ledger-resign: --verify is retired (POS-994): the freshen pins the re-signed town and verifies through those pins\n" + USAGE); return 2; }
+  const known = new Set(["--town", "--key", "--not-key"]);
   for (const a of argv) if (a.startsWith("--") && !known.has(a)) { console.error(`unknown flag ${a}\n${USAGE}`); return 2; }
   const town = arg("--town"), keyPath = arg("--key"), notKey = arg("--not-key");
   // --not-key is mandatory (the #453 review, F1): the CLI never runs without the key it must refuse
   if (!town || !keyPath || !notKey) { console.error(USAGE); return 2; }
   if (!existsSync(keyPath)) { console.error(`dev-ledger-resign: REFUSED, no key at ${keyPath}: generate dev's own key first (deploy/DEPLOY.md § The dev rehearsal)`); return 1; }
   // --not-key is read inside, where a path that cannot be read is a refusal (never a skip)
-  const r = await resignDevTown({ town, keyPem: readFileSync(keyPath, "utf8"), notKeyPath: notKey, verify: argv.includes("--verify") });
+  const r = await resignDevTown({ town, keyPem: readFileSync(keyPath, "utf8"), notKeyPath: notKey });
   if (r.status === "refused") { console.error(`dev-ledger-resign: REFUSED, ${r.why}`); return 1; }
   if (r.status === "already") { console.log(`dev-ledger-resign: ${town} is already on the key (its public key is the key's and every signed line verifies)`); return 0; }
   console.log(`dev-ledger-resign: ${r.lines} ledger lines re-signed under dev's key, committed ${r.sha.slice(0, 9)} (never pushed)` +

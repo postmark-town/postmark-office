@@ -1716,9 +1716,11 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
  */
 export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null } = {}) {
   try {
-    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+    // POS-994: the town's code is checked first, so a pin stop is said the same
+    // whether or not the store answers (the office path and the store path agree)
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
+    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
     const { paperGapRows, worldSitedFor } = await import("./household-apex.mjs");
     // ONE world read, shared by the paper gaps and the onboarding row — the
     // block is not free, and two reads could in principle disagree.
@@ -1842,8 +1844,11 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     };
   } catch (e) {
     // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
+    // One case is a true absence, not a stop: a town with no tools/quest-progress.mjs
+    // at all has no quests to step through (as an older checkout without
+    // composeNextSteps, above). A changed file, or a missing piece of its closure, is a stop.
     const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
-    if (isPinStop(e)) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    if (isPinStop(e) && !(e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
     return null;
   }
 }

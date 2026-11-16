@@ -590,11 +590,13 @@ test("P16 · declare-exec.mjs: the founder's house-key line rides the declaratio
   writeFileSync(join(t.clone, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
   const keyFile = join(t.dir, "real-stamp-key.pem");
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
+  // POS-994: the town's real modules replace the stubs IN this commit, so the clone the pen checks is clean
+  stageTownTools(t.clone, HK_TOWN);
   sh(t.clone, "add", "-A"); sh(t.clone, ...BOT, "commit", "-qm", "sealed ledger"); sh(t.clone, "push", "-q");
 
   const was = { key: process.env.STAMP_KEY, dir: process.env.TOWN_PINS_DIR };
   process.env.STAMP_KEY = keyFile;
-  process.env.TOWN_PINS_DIR = pinTown(stageTownTools(t.clone, HK_TOWN));
+  process.env.TOWN_PINS_DIR = pinTown(t.clone);
   let out;
   try { out = runStubbed(t, "declare-exec.mjs", { args: { handle: "newcomer" }, key: {}, dbPath: t.dbPath }); }
   finally {

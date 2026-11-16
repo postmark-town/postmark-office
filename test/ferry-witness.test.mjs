@@ -331,7 +331,7 @@ test("KEEP RUNNING: a witness that cannot owe or publish changes nothing about t
   assert.deepEqual(r.witness.map((c) => c.split(" ")[1]), ["owe-open", "owe-mail", "owe-incomplete", "publish"],
     "a crossing whose outcome cannot be composed is owed as incomplete, then published: it never vanishes");
   assert.match(r.witness[2], /--kind mail-crossing --attempt ferry-inv-1 --why owe-mail failed after stage done, exit 0/);
-  assert.match(r.stderr, /\[witness\] the outcome of this crossing could not be composed: it is owed as incomplete/);
+  assert.match(r.stderr, /\[witness\] the outcome of this crossing could not be composed \(owe-mail failed after stage done, exit 0\): it is owed as incomplete/);
   assert.match(r.stderr, /\[witness\] the record is owed, not published: the next crossing or settlement pays it/);
 
   const refused = fixture({ ledger: ["a RED line"] });
