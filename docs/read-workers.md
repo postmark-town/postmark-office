@@ -26,6 +26,20 @@ stays true:
 - **MAIN ONLY.** The answer is main-thread RAM and no message keeps a copy. The
   read stays on the main thread (`MAIN_ONLY_READS`).
 
+## HANDED OVER WITH THE CALL (agents' MCP reads)
+
+An agent's `POST /mcp` read is admitted and charged on the main thread, then handed to a worker (`mcpWorkerTakes`). Two reads that name main-thread RAM
+carry it over with the call, read at admission and never held by the worker:
+
+| Read | RAM | Carried as |
+|---|---|---|
+| the bare `world` read at v2, and the `doorstep` apex (its `world` item) | `voices.mjs` earshot | `earshot` (`wantsEarshot`), snapshotted with no listen mark |
+| `household` bare / `read: "standing"` (the glance, the checklist, the standing) | `bouncer.mjs` `worldWriteBudget`: the standing's `world_writes` | `worldWrites` (`wantsWorldWrites`), the key's household and its budget; a worker's own bouncer is empty and would say 0 used. No number to hand over (the read threw) and the main thread answers |
+
+POS-1064 added `household` (`read:` doorstep, stamps, quests, stances, outcomes, stakes, waiting, marks, needs-you, happened, closer, correspondents, posts, standing, and the bare
+call) and the `doorstep` apex. Left on the main thread: every `do:`, `read: "letter"` (opening a letter clears it for the key's residents: a write), `explain:`, and the
+household reads not audited for this lane (mail, window, address, home, media, earpiece, fund, blocks, settings, house, day, hearth). A batch goes only if every call in it does.
+
 ## MESSAGE
 
 | Cache | Moved by | Kind |
