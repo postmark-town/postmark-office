@@ -154,13 +154,13 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
     }
     return { recorded: true };
   } catch (e) {
+    // A store that is absent or not yet migrated is said once; anything else is said each time, with the error's own words in the log only.
+    const known = e?.name === "NoRecordError" || isMissingTable(e);
     const why = e?.name === "NoRecordError" ? "the office is pointed at no record"
       : isMissingTable(e) ? "refused_acts is not on this store yet (migration 098)"
-      : String(e?.message ?? e).slice(0, 160);
-    if (!absentSaid || !(e?.name === "NoRecordError" || isMissingTable(e))) {
-      if (e?.name === "NoRecordError" || isMissingTable(e)) absentSaid = true;
-      console.error(`[office] refusal log: a refusal was not kept (${why})`);
-    }
+      : "the store could not take the write";
+    if (!known) console.error(`[office] refusal log: a refusal was not kept (${String(e?.message ?? e).slice(0, 160)})`);
+    else if (!absentSaid) { absentSaid = true; console.error(`[office] refusal log: a refusal was not kept (${why})`); }
     return { recorded: false, why };
   }
 }
