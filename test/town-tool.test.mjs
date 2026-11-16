@@ -314,13 +314,18 @@ test("the stamp sandbox refuses to run where a stamp key is present, and runs wh
   const base = mkdtempSync(join(tmpdir(), "sandbox-key-"));
   try {
     const key = join(base, "stamp-key.pem");
-    assert.equal(stampKeyRefusal([key, join(base, "nor-this.pem")]), null, "no key, no refusal");
+    assert.equal(stampKeyRefusal([key, join(base, "nor-this.pem")], { storeUrl: "" }), null, "no key, no store, no refusal");
+    // the store's credentials are refused like a key (Truey's re-read of #1065, finding 6)
+    assert.match(stampKeyRefusal([key], { storeUrl: "postgres://office@127.0.0.1/world2" }), /^stamp-sandbox: refused — the store's credentials are present \(WORLD2_PG_URL\)/);
+    const viaEnv = spawnSync(process.execPath, [join(ROOT, "tools", "stamp-sandbox.mjs")], { encoding: "utf8", env: { ...process.env, STAMP_KEY: "", WITNESS_KEY: "", WORLD2_PG_URL: "postgres://office@127.0.0.1/world2" } });
+    assert.equal(viaEnv.status, 3, viaEnv.stderr);
+    assert.match(viaEnv.stderr, /the store's credentials are present/);
     writeFileSync(key, "a stand-in, not a key\n");
-    const said = stampKeyRefusal([join(base, "nor-this.pem"), key]);
+    const said = stampKeyRefusal([join(base, "nor-this.pem"), key], { storeUrl: "" });
     assert.match(said, /^stamp-sandbox: refused — a stamp key is present at /);
     assert.ok(said.includes(key), "it names the path it found");
     // the CLI exits nonzero with that sentence before it does anything, here via STAMP_KEY
-    const r = spawnSync(process.execPath, [join(ROOT, "tools", "stamp-sandbox.mjs")], { encoding: "utf8", env: { ...process.env, STAMP_KEY: key } });
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "stamp-sandbox.mjs")], { encoding: "utf8", env: { ...process.env, STAMP_KEY: key, WORLD2_PG_URL: "" } });
     assert.equal(r.status, 3, r.stderr);
     assert.match(r.stderr, /stamp-sandbox: refused — a stamp key is present at/);
   } finally { rmSync(base, { recursive: true, force: true }); }
@@ -445,53 +450,107 @@ const SHELL_ALLOW = [
   { file: "deploy/settlement-shadow.sh", text: "node tools/world-stake.mjs --escrow --json", why: "until #1022 (POS-1083, the POS-994 follow-up)" },
 ];
 
+const LAW_NAMES = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
+// A town module named inside a string: the bare filename as a whole string
+// ("stamp-mint.mjs"), or after a "/" that is not "./" ('/stamp-mint.mjs',
+// `${dir}/tools/stamp-mint.mjs`). The office's own modules of the same name are
+// imported as "./crossings.mjs" or "../src/world-stake.mjs", and a longer name
+// that ends in one ("world-crossings.mjs") is not one.
+const townName = new RegExp(`(?:['"\`](?:${LAW_NAMES})['"\`])|(?:(?<!\\.)(?<!\\.\\.)/(?:${LAW_NAMES})\\b)`);
+const ownModule = new RegExp(`\\.\\.?/(?:src/|world2/tools/|tools/)?(?:${LAW_NAMES})\\b`, "g");
+const namesPinned = (line) => townName.test(line.replace(ownModule, ""));
+const reachy = /\bimport\s*\(|\brequire\s*\(|\bspawn(Sync)?\s*\(|\bexec(File)?(Sync)?\s*\(|\bjoin\s*\(|\bresolve\s*\(|pathToFileURL|\+\s*['"`]\/|['"`]\/(tools\/)?[a-z-]+\.mjs/;
+const runs = /\bimport\s*\(|\brequire\s*\(|\bspawn(Sync)?\s*\(|\bexec(File)?(Sync)?\s*\(/;
+const throughLoader = /importTownTool(At|AtHead)?\s*\(|townToolArgv\s*\(|pinnedToolsDir\s*\(|\btownTool\s*\(|town-tool\.mjs["']?\s*run\b/;
+// existsSync( is a look, not a reach, only on a line that runs nothing (Truey's
+// re-read, finding 3a: `if (existsSync(c)) return import(…stamp-mint.mjs…)` was exempt whole).
+const onlyLooks = (line) => /existsSync\s*\(/.test(line) && !runs.test(line);
+// A reach whose module name arrives by variable (Truey's re-read, 3b and 3c):
+// `import(…join(c, "tools", f)…)`. In a file that holds one, every string naming a
+// pinned module counts as a reach unless its line goes through the loader.
+const varReach = /(?:\bimport\s*\(|\brequire\s*\(|\bspawn(?:Sync)?\s*\(|\bexec(?:File)?(?:Sync)?\s*\()[^\n]*\bjoin\s*\([^\n]*['"]tools['"]\s*,\s*[A-Za-z_$][\w$]*\s*\)/;
+
+/** The reaches around the loader in one code file (an office .mjs/.js), as "rel:line: text". */
+function strongCodeReaches(rel, text) {
+  // A child script that imports by folder (`engineDir + '/stamp-mint.mjs'`) passes
+  // only where EVERY engineDir in the file is the loader's pinnedToolsDir(...):
+  // the folder it is handed was checked against the clone and is the pinned one.
+  const assigns = [...text.matchAll(/\bengineDir\s*=\s*([^;\n]+)/g)].map((m) => m[1].trim());
+  const childPinned = assigns.length > 0 && assigns.every((a) => /^pinnedToolsDir\(/.test(a));
+  const lines = text.split("\n");
+  const code = (line) => !/^\s*(\/\/|\*|\/\*)/.test(line);
+  const byVariable = lines.some((l) => code(l) && varReach.test(l) && !throughLoader.test(l));
+  const found = [];
+  lines.forEach((line, i) => {
+    if (!code(line)) return;
+    if (childPinned && /engineDir \+ '\/[a-z-]+\.mjs'/.test(line)) return;
+    if (!namesPinned(line) || throughLoader.test(line) || onlyLooks(line)) return;
+    if (reachy.test(line) || byVariable) found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
+  });
+  return found;
+}
+
+const shellRe = new RegExp(`\\bnode\\b[^#]*?\\btools/(${LAW_NAMES})|"\\$[A-Z_]+[^"]*/tools/(${LAW_NAMES})"`);
+/** The reaches around the loader in one shell or unit file. */
+function strongShellReaches(rel, text) {
+  const found = [];
+  text.split("\n").forEach((line, i) => {
+    if (/^\s*#/.test(line)) return;
+    if (!shellRe.test(line) || /town-tool\.mjs run/.test(line)) return;
+    // an existence test is a look, not a reach, only on a line that runs no node
+    // (Truey's re-read, finding 3d: `[ -f … ] && node "$TOWN_CLONE/tools/stamp-mint.mjs"` was exempt whole)
+    if (/\[ !? ?-f /.test(line) && !/\bnode\b/.test(line)) return;
+    if (SHELL_ALLOW.some((a) => a.file === rel && line.includes(a.text))) return;
+    found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
+  });
+  return found;
+}
+
 test("THE STRONG SOURCE LAW: no string names a pinned module on a reach outside the loader, in code, shell or unit files", () => {
-  const names = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
-  // A town module named inside a string: the bare filename as a whole string
-  // ("stamp-mint.mjs"), or after a "/" that is not "./" ('/stamp-mint.mjs',
-  // `${dir}/tools/stamp-mint.mjs`). The office's own modules of the same name are
-  // imported as "./crossings.mjs" or "../src/world-stake.mjs", and a longer name
-  // that ends in one ("world-crossings.mjs") is not one.
-  const townName = new RegExp(`(?:['"\`](?:${names})['"\`])|(?:(?<!\\.)(?<!\\.\\.)/(?:${names})\\b)`);
-  const ownModule = new RegExp(`\\.\\.?/(?:src/|world2/tools/|tools/)?(?:${names})\\b`, "g");
-  const inString = { test: (line) => townName.test(line.replace(ownModule, "")) };
-  const reachy = /\bimport\s*\(|\brequire\s*\(|\bspawn(Sync)?\s*\(|\bexec(File)?(Sync)?\s*\(|\bjoin\s*\(|\bresolve\s*\(|pathToFileURL|\+\s*['"`]\/|['"`]\/(tools\/)?[a-z-]+\.mjs/;
-  const throughLoader = /importTownTool(At|AtHead)?\s*\(|townToolArgv\s*\(|pinnedToolsDir\s*\(|\btownTool\s*\(|town-tool\.mjs["']?\s*run\b|existsSync\s*\(/;
   const code = ["src", "tools", "world2", "deploy"].flatMap((d) => walk(join(ROOT, d)))
     .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`) && !p.includes(`${sep}node_modules${sep}`));
   const found = [];
   for (const p of code) {
     const rel = relative(ROOT, p).split(sep).join("/");
     if (STRONG_EXEMPT.has(rel)) continue;
-    const text = readFileSync(p, "utf8");
-    // A child script that imports by folder (`engineDir + '/stamp-mint.mjs'`) passes
-    // only where EVERY engineDir in the file is the loader's pinnedToolsDir(...):
-    // the folder it is handed was checked against the clone and is the pinned one.
-    const assigns = [...text.matchAll(/\bengineDir\s*=\s*([^;\n]+)/g)].map((m) => m[1].trim());
-    const childPinned = assigns.length > 0 && assigns.every((a) => /^pinnedToolsDir\(/.test(a));
-    text.split("\n").forEach((line, i) => {
-      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
-      if (childPinned && /engineDir \+ '\/[a-z-]+\.mjs'/.test(line)) return;
-      if (inString.test(line) && reachy.test(line) && !throughLoader.test(line)) found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
-    });
+    found.push(...strongCodeReaches(rel, readFileSync(p, "utf8")));
   }
-  const shellRe = new RegExp(`\\bnode\\b[^#]*?\\btools/(${names})|"\\$[A-Z_]+[^"]*/tools/(${names})"`);
   const shells = walk(join(ROOT, "deploy")).filter((p) => /\.(sh|service|conf)$/.test(p));
-  for (const p of shells) {
-    const rel = relative(ROOT, p).split(sep).join("/");
-    readFileSync(p, "utf8").split("\n").forEach((line, i) => {
-      if (/^\s*#/.test(line)) return;
-      if (!shellRe.test(line) || /town-tool\.mjs run/.test(line) || /\[ !? ?-f /.test(line)) return;
-      if (SHELL_ALLOW.some((a) => a.file === rel && line.includes(a.text))) return;
-      found.push(`${rel}:${i + 1}: ${line.trim().slice(0, 150)}`);
-    });
-  }
+  for (const p of shells) found.push(...strongShellReaches(relative(ROOT, p).split(sep).join("/"), readFileSync(p, "utf8")));
   assert.deepEqual(found, [], `pinned town modules reached around the loader:\n${found.join("\n")}`);
   // NO FOLDER SWITCH AROUND THE PIN (Truey, #1065 finding 1): STAMP_ENGINE_DIR is gone from office code.
   const switches = [...code, ...shells].filter((p) => /STAMP_ENGINE_DIR/.test(readFileSync(p, "utf8").replace(/^\s*(\/\/|\*|#).*$/gm, "")));
   assert.deepEqual(switches.map((p) => relative(ROOT, p)), [], "an engine-folder switch reads past the loader");
   // every allowlisted shell line still exists (a stale allowance is a red, not a silent pass)
   for (const a of SHELL_ALLOW) assert.ok(readFileSync(join(ROOT, a.file), "utf8").includes(a.text), `${a.file} no longer holds "${a.text}": drop it from the allowlist (${a.why})`);
+});
+
+// THE LAW'S OWN FALSIFIERS (Truey's re-read of #1065, finding 3): each shape the
+// re-read planted and the law missed is planted here and must be caught; beside
+// each, the loader's own shape of the same line, which must pass.
+test("THE STRONG SOURCE LAW catches the four planted shapes, and passes the loader's shape of each", () => {
+  const planted = {
+    "(a) existsSync( on the line that imports": [
+      `if (existsSync(c)) return import(pathToFileURL(join(c, "tools", "stamp-mint.mjs")).href);`,
+      `if (existsSync(join(c, "tools", "stamp-mint.mjs"))) return importTownTool(c, "stamp-mint.mjs");`,
+    ],
+    "(b) the name in a variable, the reach on another line": [
+      `const f = "stamp-mint.mjs";\nconst m = await import(pathToFileURL(join(clone, "tools", f)).href);`,
+      `const f = "stamp-mint.mjs";\nconst m = await importTownTool(clone, f);`,
+    ],
+    "(c) the name handed to a helper": [
+      `const T = (c, f) => import(pathToFileURL(join(c, "tools", f)).href);\nconst m = await T(clone, "stamp-mint.mjs");`,
+      `const T = (c, f) => importTownTool(c, f);\nconst m = await T(clone, "stamp-mint.mjs");`,
+    ],
+  };
+  for (const [shape, [reach, loader]] of Object.entries(planted)) {
+    assert.notDeepEqual(strongCodeReaches("planted.mjs", reach), [], `${shape}: the law misses it`);
+    assert.deepEqual(strongCodeReaches("planted.mjs", loader), [], `${shape}: the loader's shape is not a reach`);
+  }
+  // (d) in shell: an existence test on the same line as the run
+  assert.notDeepEqual(strongShellReaches("deploy/planted.sh", '[ -f "$TOWN_CLONE/x" ] && node "$TOWN_CLONE/tools/stamp-mint.mjs" --append'), [], "(d): the law misses it");
+  assert.deepEqual(strongShellReaches("deploy/planted.sh", 'if [ ! -f "$TOWN_CLONE/tools/witness-chain.mjs" ]; then echo none; fi'), [], "(d): a look that runs nothing is not a reach");
+  assert.deepEqual(strongShellReaches("deploy/planted.sh", '[ -f "$TOWN_CLONE/x" ] && node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append'), [], "(d): the loader's door is not a reach");
 });
 
 // ── THE SHELL'S DOOR: 3 is a pin stop, and only that (Truey, #1065 findings 5 and 3) ──

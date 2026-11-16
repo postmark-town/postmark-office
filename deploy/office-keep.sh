@@ -316,6 +316,12 @@ keep_settle_unlanded() {
       echo "[office-keep] mint catch-up OFF — the town's code is not the office's pinned copy (the line above names the file), so this tick appended nothing; it resumes once the pin and the town agree" >&2
       keep_step mint refused town-pin-mismatch
       exit 0
+    elif [ "$arrived_rc" -eq 2 ]; then
+      # POS-994: the office could not prepare the check (no pins, or pins without
+      # the public key): its own defect, not a red ledger
+      echo "[office-keep] mint catch-up OFF — the office could not prepare the arrival check (the line above says why), so this tick appended nothing; it is the office's to tend, not the ledger's" >&2
+      keep_step mint refused prep-failed
+      exit 0
     elif [ "$arrived_rc" -ne 0 ]; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       # exit 0 keeps the tick's flow as it was; the receipt says what it is: the mint REFUSED

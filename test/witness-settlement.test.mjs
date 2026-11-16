@@ -20,7 +20,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -210,6 +210,37 @@ test("KEEP RUNNING: an owe or a publish that fails leaves the tool at exit 0, sa
   const pubFails = runTool(stubTown(), { env: { STUB_PUBLISH_EXIT: "3" } });
   assert.equal(pubFails.status, 0, 'LAW: "the record is owed"');
   assert.match(pubFails.stderr, /the record is owed, not published/);
+});
+
+// POS-994 (Truey's re-read of #1065, finding 2): the settlement half of the pin
+// stop. The town's witness-chain changes after the office pinned it: the opening
+// and the incomplete owe still run, from the pinned copy, without the clone's
+// check (CLONE_FREE_VERBS); the owe of the decided outcome stops by name and is
+// owed as incomplete, "town-pin-mismatch: <file>"; the publish stops, and the
+// record stays owed for the first publish after the re-pin.
+test("A PIN STOP is witnessed too: the run is opened, its outcome owed as incomplete town-pin-mismatch, and the record stays owed", () => {
+  const town = stubTown();
+  const pinned = `${pinsOf(town)}-before`;
+  cpSync(`${town}-pins`, pinned, { recursive: true });
+  writeFileSync(join(town, "tools", "witness-chain.mjs"), readFileSync(join(town, "tools", "witness-chain.mjs"), "utf8") + "// a town change the office has not reviewed\n");
+
+  // the opening: clone-free, so the pinned copy owes it whatever the clone holds
+  const d = dir("open-pinstop");
+  const calls = join(d, "calls.jsonl");
+  const open = spawnSync(process.execPath, [TOOL, "--open", "--attempt", "1", "--event", "2026-11-06T18:00:01Z", "--town", town, "--pid", "4242"], {
+    encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinned, WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
+  });
+  assert.equal(open.status, 0, open.stderr);
+  assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l).verb), ["owe-open"], "the run is opened from the pinned copy");
+
+  // the decision: the owe stops by name; the incomplete owe lands; the publish is held
+  const r = runTool(town, { env: { TOWN_PINS_DIR: pinned } });
+  assert.equal(r.status, 0, `LAW: "the town keeps running": ${r.stderr}`);
+  assert.deepEqual(r.seen.map((c) => c.verb), ["owe-incomplete"], "nothing the clone was checked for ran; the incomplete owe did");
+  assert.ok(r.seen[0].rest.join(" ").includes("--why town-pin-mismatch: tools/witness-chain.mjs"), r.seen[0].rest.join(" "));
+  assert.match(r.stderr, /tools\/witness-chain\.mjs is not the copy the office pinned/);
+  assert.match(r.stderr, /owed as incomplete: town-pin-mismatch: tools\/witness-chain\.mjs/);
+  assert.match(r.stderr, /the record is owed, not published \(the pin stopped it\)/);
 });
 
 // ── the crossing, with the town's real witness ──────────────────────────────

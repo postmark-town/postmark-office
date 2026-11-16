@@ -19,7 +19,7 @@
 // Run only through townToolArgv(clone, "stamp-verify.mjs"), never by hand.
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 async function main(argv) {
@@ -30,6 +30,13 @@ async function main(argv) {
   }
   const dir = argv[pi + 1];
   const repo = resolve(argv[ri + 1]);
+  // the loader's own rule (tools/town-pins.mjs § outInsideTown): pinned code is
+  // never read from inside the town it is checked against (Truey's re-read, finding 6)
+  const rel = relative(repo, resolve(dir));
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    console.error(`✗ stamp-ledger NOT verified: --pinned ${dir} is inside --repo ${repo}; the pinned verifier is never read from the town it checks`);
+    return 2;
+  }
   const town = [...argv.slice(0, pi), ...argv.slice(pi + 2)];
   // no pinned key, no verdict: the clone's key is never the fallback (it is what a forger would swap)
   const keyPath = join(dir, "stamp-pubkey.pem");

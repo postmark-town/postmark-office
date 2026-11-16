@@ -331,3 +331,38 @@ test("the town's quest-progress.mjs is importable from the clone the office serv
     assert.equal(typeof mod[fn], "function", `the town tool must export ${fn} — the office imports it live`);
   }
 });
+
+// ── A PIN STOP IS SAID; ONLY A TOWN WITH NO QUEST TOOL HAS NO STEPS (POS-994) ──
+// Truey's review of #1065: a pin stop on next steps is a named unavailable, never
+// null. The one true absence is a town with no tools/quest-progress.mjs at all
+// (as an older checkout). Pins that hold no quest-progress while the town DOES
+// (TownToolUnpinned, an --out dev folder made without it) are a stop, not absence.
+test("next steps: pins without quest-progress over a town that has it is a named stop; a town without it at all has none", async () => {
+  const { pinnedTown, pinRootNow } = await import("./helpers/pinned-town.mjs");
+  const { cpSync, writeFileSync: write } = await import("node:fs");
+  const was = process.env.TOWN_PINS_DIR;
+  const base = mkdtempSync(join(tmpdir(), "next-steps-pins-"));
+  try {
+    // pins exactly the suite's, less quest-progress (its own entry, not its closure)
+    const pins = join(base, "pins");
+    cpSync(pinRootNow(), pins, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(pins, "PINS.json"), "utf8"));
+    delete manifest.files["tools/quest-progress.mjs"];
+    write(join(pins, "PINS.json"), JSON.stringify(manifest));
+    rmSync(join(pins, "tools", "quest-progress.mjs"));
+    const town = pinnedTown(join(base, "town"));      // copied while the suite's pins were in force: it HAS quest-progress
+    process.env.TOWN_PINS_DIR = pins;
+    const stop = await nextStepsFor("wright", town, { ix: {} });
+    assert.equal(stop?.unavailable?.defect, "town-pin-mismatch", `a named stop, not absence: ${JSON.stringify(stop)}`);
+    assert.deepEqual(stop.steps, []);
+    // the one true absence: the town holds no quest tool, the pins do
+    process.env.TOWN_PINS_DIR = was ?? "";
+    if (!process.env.TOWN_PINS_DIR) delete process.env.TOWN_PINS_DIR;
+    const bare = pinnedTown(join(base, "bare"));
+    rmSync(join(bare, "tools", "quest-progress.mjs"));
+    assert.equal(await nextStepsFor("wright", bare, { ix: {} }), null, "a town with no quest tool has no next steps");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = was;
+    rmSync(base, { recursive: true, force: true });
+  }
+});

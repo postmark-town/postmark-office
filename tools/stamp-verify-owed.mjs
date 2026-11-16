@@ -60,7 +60,14 @@ if (isMain) {
   let argv;
   try { argv = townToolArgv(repo, "stamp-verify.mjs", i !== -1 ? [...args.slice(0, i), ...args.slice(i + 2)] : args); }
   catch (e) {
-    if (!isPinStop(e)) throw e;
+    // POS-994 (Truey's re-read of #1065, finding 4): a pin stop is 3; anything else
+    // the loader refuses (no pins, an unreadable PINS.json) is the office's own
+    // defect, 2, never a red ledger. The runner's own 2 (the pins carry no public
+    // key) passes through below as 2.
+    if (!isPinStop(e)) {
+      console.error(`[stamp-verify-owed] the office could not prepare the town's verifier (not a ledger verdict): ${e?.message ?? e}`);
+      process.exit(2);
+    }
     console.error(`[stamp-verify-owed] ${e.message}`);
     process.exit(3);
   }

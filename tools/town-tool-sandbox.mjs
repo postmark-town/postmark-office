@@ -99,8 +99,11 @@
 // TOWN_TOOL_SOCKET overrides the socket path, for the tests' stand-in of the
 // socket unit; on the box it is unset and the client uses SOCKET below.
 //
-// Built-ins only, and nothing imported from this tree: the sandbox can see this
-// one file and the clone, and nothing else under /srv (deploy/postmark-town-tool@.service).
+// Built-ins, and from this tree only src/town-tool.mjs (POS-994: the loader that
+// checks verify and quests against the pins). Under /srv the sandbox sees this
+// file, the clone, and the three read-only paths that check needs:
+// src/town-tool.mjs, src/stamp-verify-pinned.mjs and src/town-pins
+// (deploy/postmark-town-tool@.service).
 
 import { createConnection, Socket } from "node:net";
 import { spawnSync } from "node:child_process";

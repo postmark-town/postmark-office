@@ -28,7 +28,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
@@ -489,6 +489,37 @@ test("mint · POS-994: the town's mint is not the pinned copy: mint refused town
   assert.match(s.rollback, /^ok:/);
   assert.equal(calls(fx).includes("mint"), false, "the town's mint never ran");
   assert.equal(status(fx), "");
+});
+
+// Truey's re-read of #1065 (finding 2): the household-keys predicate's pin stop is
+// named as one in the receipt, apart from a predicate that left no JSON.
+test("hhkeys · POS-994: the town's household-keys is not the pinned copy: hhkeys refused town-pin-mismatch, never unchecked; the line still lands", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/household-keys.mjs");
+  const r = run(fx, { ...OWED });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), { ...GREEN, hhkeys: "refused:town-pin-mismatch" });
+  assert.equal(calls(fx).includes("hhkeys"), false, "the town's predicate never ran");
+  const line = JSON.parse(readFileSync(join(fx.harbor, "household-keys.jsonl"), "utf8").trim().split("\n").pop());
+  assert.equal(line.checked, false, "a predicate the pin stopped is a line that says it did not run");
+  assert.match(line.error, /tools\/household-keys\.mjs is not the copy the office pinned/);
+});
+
+// Truey's re-read of #1065 (finding 4): an arrival check the office could not
+// prepare (here, pins that carry no public key) is the office's defect, named
+// prep-failed, never a red ledger.
+test("mint · POS-994: the office's pins carry no public key: the arrival check exits 2, mint refused prep-failed, not ledger-red", { skip }, () => {
+  const fx = fixture();
+  rmSync(join(fx.office, "src", "town-pins", "tools", "stamp-pubkey.pem"));
+  const r = run(fx, { ...OWED, STUB_WELCOME: "a welcome" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), {
+    ...GREEN, mint: "refused:prep-failed", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
+    verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
+  });
+  assert.match(r.stderr, /the office could not prepare the arrival check/);
+  assert.doesNotMatch(r.stderr, /the ledger arrived red/);
+  assert.equal(calls(fx).includes("verify"), false, "the town's verifier never ran");
 });
 
 test("mint · the verify after the write is red: verify-red, rolled back, nothing committed", { skip }, () => {

@@ -601,8 +601,13 @@ export const stampKeyPaths = (env = process.env) => [
   env.WITNESS_KEY,                           // the witness's key (Truey's review of #1065: "a key or the store")
 ].filter(Boolean);
 
-/** Null where none of `paths` exists; else the sentence the sandbox refuses with. */
-export function stampKeyRefusal(paths = stampKeyPaths()) {
+/**
+ * Null where none of `paths` exists and no store credential is named; else the
+ * sentence the sandbox refuses with. The store's credentials (WORLD2_PG_URL) are
+ * refused like a key (Truey's re-read of #1065, finding 6: "a key or the store").
+ */
+export function stampKeyRefusal(paths = stampKeyPaths(), { storeUrl = process.env.WORLD2_PG_URL } = {}) {
+  if (storeUrl) return `stamp-sandbox: refused — the store's credentials are present (WORLD2_PG_URL). The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where the store can be reached; it opens its own store.`;
   const hit = paths.find((p) => existsSync(p));
   return hit ? `stamp-sandbox: refused — a stamp key is present at ${hit}. The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where a mint key can be reached; run it on a machine without one.` : null;
 }

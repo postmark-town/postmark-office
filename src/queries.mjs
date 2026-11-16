@@ -1846,9 +1846,10 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
     // One case is a true absence, not a stop: a town with no tools/quest-progress.mjs
     // at all has no quests to step through (as an older checkout without
-    // composeNextSteps, above). A changed file, or a missing piece of its closure, is a stop.
+    // composeNextSteps, above). A changed file, a missing piece of its closure, or
+    // pins that hold no quest-progress while the town does (TownToolUnpinned), is a stop.
     const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
-    if (isPinStop(e) && !(e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    if (isPinStop(e) && !(e.code === "TOWN_PIN_MISMATCH" && e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
     return null;
   }
 }
