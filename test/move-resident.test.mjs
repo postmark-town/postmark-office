@@ -39,6 +39,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -133,7 +134,7 @@ async function town({ houses = HOUSES(), pins = PINS(), ledger = KEYED, berth = 
 }
 
 const withPen = async (t, fn) => {
-  const over = { STAMP_KEY: t.keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools") };
+  const over = { STAMP_KEY: t.keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(t.dir, TOWN)) };
   const prev = {};
   for (const [k, v] of Object.entries(over)) { prev[k] = process.env[k]; process.env[k] = v; }
   try { return await fn(); }

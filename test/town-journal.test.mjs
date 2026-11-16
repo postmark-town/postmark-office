@@ -7,7 +7,7 @@
 // the acceptance rows, and three of them are testable at this layer; the fourth
 // (eyes move from gate to audit) is a lane change, not a code path.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -76,6 +76,7 @@ function townClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
   writeFileSync(join(dir, "WHITE_PAGES/stamp-ledger.md"), "# the ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   return dir;
 }
 

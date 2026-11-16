@@ -12,17 +12,27 @@
 // town's real stamp-mint + stamp-verify as its oracle. Keeping that distinction
 // here makes these tests portable without pretending a fixture engine proves
 // the town's cryptographic implementation.
+//
+// POS-994: the office runs only the town code it pinned, checked against the clone,
+// so the stand-in engine is a small TOWN (`ENGINE_TOWN`, its tools/ holding the
+// stand-in modules), pinned once for this process (TOWN_PINS_DIR), and every
+// fixture clone a drain runs on carries the same files: call `stageEngine(clone)`
+// where the clone is built, before its first commit. There is no folder switch
+// (STAMP_ENGINE_DIR is gone): the clone's own files are what the pin checks.
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDir } from "./temp-dir.mjs";
+import { pinTown } from "./pinned-town.mjs";
 
 const { privateKey } = generateKeyPairSync("ed25519");
 const dir = tempDir("pm-drainpen-");
 const keyFile = join(dir, "stamp-key.pem");
 writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
 
-const engineDir = join(dir, "engine");
+export const ENGINE_TOWN = join(dir, "engine-town");
+export const ENGINE_DIR = join(ENGINE_TOWN, "tools");
+const engineDir = ENGINE_DIR;
 const engineFile = join(engineDir, "stamp-mint.mjs");
 mkdirSync(engineDir, { recursive: true });
 writeFileSync(engineFile, `
@@ -141,5 +151,22 @@ export function describe({ split, shared }) {
 }
 `);
 
+// THE DATING RULE's step 2 runs the town's verifier over the planned ledger, and the
+// office checks stamp-verify (with the public key it trusts) against the pins before
+// the replay starts (src/house-key.mjs § replayHolds). These fixtures' drains are
+// not tests of the verifier (drain-signs runs the real one), so a stand-in that
+// finds no problem, and a stand-in key, pinned with the rest.
+writeFileSync(join(engineDir, "stamp-verify.mjs"), `
+export function verifyStampLedger() { return { ok: true, lines: 0, minted: 0, notes: [], problems: [] }; }
+`);
+writeFileSync(join(engineDir, "stamp-pubkey.pem"), "a stand-in public key\n");
+
 process.env.STAMP_KEY = keyFile;
-process.env.STAMP_ENGINE_DIR = engineDir;
+process.env.TOWN_PINS_DIR = pinTown(ENGINE_TOWN);
+
+/** Copy the stand-in engine into a fixture clone's tools/ (before its first commit), so the pin's check of the clone holds. */
+export function stageEngine(clone) {
+  mkdirSync(join(clone, "tools"), { recursive: true });
+  for (const n of readdirSync(ENGINE_DIR)) copyFileSync(join(ENGINE_DIR, n), join(clone, "tools", n));
+  return clone;
+}

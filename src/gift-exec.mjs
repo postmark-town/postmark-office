@@ -19,9 +19,10 @@
 import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
+import { importTownTool, isPinStop, pinStopHint, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { lastLedgerLine } from "./stamp-tail.mjs";
 import { heldFor } from "./stamps-preview.mjs";
@@ -52,9 +53,14 @@ async function main() {
   const { handle, amount, slug, by, date } = JSON.parse(process.argv[2] ?? "{}");
   if (!existsSync(KEY_PATH))
     return err(409, "not-yet-open", "the office has no pen key configured for the stamp-ledger");
-  const mint = join(CLONE, "tools", "stamp-mint.mjs");
-  if (!existsSync(mint))
+  if (!existsSync(join(CLONE, "tools", "stamp-mint.mjs")))
     return err(409, "not-yet-open", "the office has no town clone with the mint engine");
+  // POS-994: the pinned copy, checked against the clone BEFORE anything is written.
+  try { townToolArgv(CLONE, "stamp-mint.mjs"); }
+  catch (e) {
+    if (isPinStop(e)) return err(503, "town-pin-mismatch", pinStopHint(e));
+    throw e;
+  }
 
   // WHOLE OR NOTHING (POS-296): a refused gift leaves no catch-up rows and no
   // gift line behind, and a push that cannot land leaves no commit. A gift
@@ -65,12 +71,14 @@ async function main() {
 
     // Catch the ledger up so the gift lands on a settled tail (idempotent — the
     // ferry --appends each crossing, so between crossings this is a no-op), then
-    // mint the gift. Both are the town's own CLI; nothing here reimplements minting.
-    const run = (args) => execFileSync(process.execPath, [mint, ...args, "--key", KEY_PATH, "--repo", CLONE], { encoding: "utf8" });
+    // mint the gift. Both are the town's own CLI (the office's pinned copy,
+    // POS-994); nothing here reimplements minting.
+    const run = (args) => execFileSync(process.execPath, townToolArgv(CLONE, "stamp-mint.mjs", [...args, "--key", KEY_PATH, "--repo", CLONE]), { encoding: "utf8" });
     try {
       run(["--append"]);
       run(["--gift", handle, "--amount", String(amount), "--slug", slug, "--by", by, "--date", date]);
     } catch (e) {
+      if (isPinStop(e)) return refusal(503, "town-pin-mismatch", pinStopHint(e));
       const { code, defect, hint } = classifyFatal(e.stderr ?? e.message ?? e);
       return refusal(code, defect, hint);
     }
@@ -91,7 +99,7 @@ async function main() {
     // heldFor answers `unread` where its folds can't run; the receipt then reads
     // the balance the way it always did, the town's foldBalances over the file.
     const balance = held.unread ? await (async () => {
-      const { parseStampLedger, foldBalances } = await import(pathToFileURL(mint));
+      const { parseStampLedger, foldBalances } = await importTownTool(CLONE, "stamp-mint.mjs");
       return foldBalances(parseStampLedger(readFileSync(join(CLONE, "WHITE_PAGES", "stamp-ledger.md"), "utf8"))).get(handle) ?? 0;
     })() : held.liquid;
 

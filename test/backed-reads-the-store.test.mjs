@@ -55,6 +55,12 @@ installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
 after(() => { uninstallActsPen(); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; });
 
 process.env.TOWN_CLONE = town;
+// POS-994: the office runs its pinned copy of the town's stake engine, checked
+// against the clone; this town's stub gets pins of its own, so the stub runs.
+const { pinTown } = await import("./helpers/pinned-town.mjs");
+const pinsBefore = process.env.TOWN_PINS_DIR;
+process.env.TOWN_PINS_DIR = await pinTown(town);
+after(() => { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; });
 const { worldPortfolioStakeSlice } = await import(pathToFileURL(join(OFFICE, "src", "world-stake.mjs")).href);
 
 const MARKS = [

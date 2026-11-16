@@ -13,7 +13,7 @@
 // Every reserved handle below passes the handle grammar, so the refusal it meets is the
 // prefix rule's and no other, and an ordinary handle beside it is admitted.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -76,6 +76,7 @@ function townClone() {
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q");
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

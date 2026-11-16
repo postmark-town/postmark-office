@@ -51,6 +51,12 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
@@ -220,6 +226,7 @@ function crossing(label, env = {}, { redSuite = true, gate = true } = {}) {
   writeFileSync(join(townSeed, "tools", "github-ids.json"),
     `${JSON.stringify({ alpha: { login: "alpha-hub", id: 1 } }, null, 2)}\n`);
   writeFileSync(join(townSeed, "tools", "stamp-mint.mjs"), STAMP_MINT_STUB);
+  process.env.TOWN_PINS_DIR = pinTown(townSeed); // POS-994: the crossing runs pinned town code; this seed (and its clone) pinned to itself
   g(".", "init", "-q", "-b", "main", townSeed);
   g(townSeed, "config", "user.email", "seed@postmark.invalid");
   g(townSeed, "config", "user.name", "seed");

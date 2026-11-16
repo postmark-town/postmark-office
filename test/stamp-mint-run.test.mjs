@@ -36,6 +36,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import { mintInputsVia, writeMintInputs } from "../src/mint-inputs.mjs";
 import { stampLinesVia, syncStampLinesVia, verifyStampLinesVia } from "../src/stamp-lines.mjs";
+import { pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the fixture town, signed with its own key, pinned to itself
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
@@ -70,6 +71,7 @@ before(async () => {
   engine.appendSigned(A, canon, PRIV);
   git(A, "init", "-q"); git(A, "config", "core.autocrlf", "false");
   git(A, "add", "-A"); git(A, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the fixture town");
+  process.env.TOWN_PINS_DIR = pinTown(A); // POS-994: the office verifies with the PINNED public key, so a fixture signed with its own key is pinned to itself (B and C are copies of A)
   cpSync(A, B, { recursive: true });
 
   // B's inputs, in a real store

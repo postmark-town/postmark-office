@@ -88,6 +88,11 @@ const { reCheckGrant } = await import(pathToFileURL(join(OFFICE, "world2", "tool
 const PARCEL = { id: `${LYRA}/the-starling-house`, kind: "parcel", by: LYRA, household: LYRA,
   at: { x: 900, y: 1250 }, extent: { w: 25, h: 25 } };
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("householdOf groups housemates by the HOUSE, whichever ledger key each wears", async () => {
   const householdOf = await householdLookup();
   const lyra = householdOf(LYRA), kino = householdOf(KINO);

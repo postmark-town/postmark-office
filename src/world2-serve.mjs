@@ -805,6 +805,10 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   if (before != null && !Number.isFinite(before)) {
     return { code: 422, body: { error: "bounce", defect: `"${rawBefore}" is not a cursor`, hint: "?before=<the earlier.before of the page before, an ISO-8601 instant>" } };
   }
+  // POS-951: `voices_before` pages a thread's voices back, as on the memory feed (an unreadable one is no cursor)
+  const rawVoicesBefore = searchParams?.get("voices_before");
+  const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
+  const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
   const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
     p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
               WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
@@ -826,7 +830,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     boundaries: edges,
     fadeMs: dials.fade_min.ms,
     closedMax: n("closed", 40), voiceCap: n("voices", 80),
-    before,
+    before, voicesBefore,
     find: findOf(searchParams), // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
   });
   if (body.find?.refused) return { code: 422, body: { error: "bounce", ...body.find.refused } };

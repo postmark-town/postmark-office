@@ -156,6 +156,42 @@ export function isStoreUnreachable(e, depth = 0) {
   return isStoreUnreachable(e.cause, depth + 1);
 }
 
+// ── ONE SCAN AT A TIME FOR A WHOLE BURST (POS-1048) ──────────────────────────
+//
+// La Cave's opening, 2026-11-14 20:10Z: about 70 residents acting at once, and
+// the office logged "timeout exceeded when trying to connect" 25 times. The
+// store was not out of connections. The ACTS pool is two, and every act door
+// read the enter/exit record on it up to six times (once per orient and per
+// eyes, each a `count(*)` over every passage ever made, then the whole table on
+// a changed mark): 70 acts queued some 400 scans on two connections, so a
+// request waited its 10 s in the pool's line and failed while Postgres sat idle
+// (test/crowd-store-connections.test.mjs measures it).
+//
+// `trailingFlight(fn)` is the fix's one shape: callers that arrive while a run
+// is in flight share ONE run that begins after the last of them arrived. A
+// caller therefore never takes an answer older than its own ask (a run already
+// in flight may have read the record before the act that came after it), and a
+// burst of any size costs two scans, not one per caller. Errors go to the
+// callers that shared the run; nothing is kept between bursts.
+export function trailingFlight(fn) {
+  let running = null;
+  let waiting = null;
+  const start = () => {
+    const p = (async () => fn())();
+    running = p;
+    const done = () => { if (running === p) running = null; };
+    p.then(done, done);
+    return p;
+  };
+  return () => {
+    if (!running) return start();
+    if (!waiting) {
+      waiting = running.then(() => {}, () => {}).then(() => { waiting = null; return start(); });
+    }
+    return waiting;
+  };
+}
+
 // ── ONE PEN CONNECTION PER CALL CHAIN ────────────────────────────────────────
 
 const holding = new AsyncLocalStorage();

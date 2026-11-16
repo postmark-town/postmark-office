@@ -127,11 +127,11 @@ const META_SQL = `
  * it stays the entry point for everything that is not already holding one.)
  */
 export async function registryRowsVia(q) {
-  const [households, pins, meta] = await Promise.all([
-    q.query(HOUSEHOLDS_SQL).then((r) => r.rows),
-    q.query(PINS_SQL).then((r) => r.rows),
-    q.query(META_SQL).then((r) => r.rows),
-  ]);
+  // ONE AT A TIME (POS-1057). `q` is often a HELD client (the pen's transaction, POS-963's fix): pg queues a second query on a client that is
+  // already running one and warns that it will stop doing so (pg 9), so the three reads are awaited in turn. The same three statements, the same answer.
+  const households = (await q.query(HOUSEHOLDS_SQL)).rows;
+  const pins = (await q.query(PINS_SQL)).rows;
+  const meta = (await q.query(META_SQL)).rows;
   return foldRegistryRows(households, pins, meta);
 }
 

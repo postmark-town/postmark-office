@@ -34,6 +34,12 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -130,6 +136,7 @@ function standInTown({ purse = 200 } = {}) {
   execFileSync("git", ["init", "-q"], { cwd: town });
   execFileSync("git", ["add", "-A"], { cwd: town });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: town });
+  process.env.TOWN_PINS_DIR = pinTown(town); // POS-994: the stand-in engine is what the pinned loader runs
   return town;
 }
 const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n")

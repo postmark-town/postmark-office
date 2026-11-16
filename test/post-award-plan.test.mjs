@@ -45,6 +45,14 @@ import { copyTownTools } from "./helpers/town-tools.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { pinnedPath, pinnedTown, pinTown } from "./helpers/pinned-town.mjs";
+import { beforeEach as beforeEachPins } from "node:test";
+// every test starts from the suite's own pins, so one synthetic town's pins never judge the next test's town
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
+// POS-994: the argv builders check the town against the office's pins, so the
+// pure argv tests name a town that holds exactly the pinned files (removed at exit).
+const PT = pinnedTown();
 
 const { planAwards, renderPlan, parseAwardPlan, planDiffers, townEngine, storeFacts, awardMintArgv, lockedArgv, planDigest, scheduled, main } =
   await import("../tools/post-award-plan.mjs");
@@ -95,6 +103,7 @@ function syntheticTown({ meep = null } = {}) {
   if (meep) mint("--declare-rules", "stamps-v2", "--meeps", meep, "--date", "2026-06-13");
   git(repo, "init", "-q", "-b", "main"); git(repo, "config", "core.autocrlf", "false");
   git(repo, "add", "-A"); git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "founded");
+  process.env.TOWN_PINS_DIR = pinTown(repo); // POS-994: the office verifies with the PINNED public key, so a fixture signed with its own key is pinned to itself (reset before each test)
   const origin = `${repo}.git`;
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
   git(repo, "remote", "add", "origin", origin); git(repo, "push", "-q", "-u", "origin", "main");
@@ -375,7 +384,7 @@ test("whole or nothing: a verb that refuses the second row, or a verifier that g
     const real = (cwd, argv) => spawnSync(process.execPath, argv, { cwd, encoding: "utf8" });
     const cases = [
       [(cwd, argv) => (argv.includes("ada") ? { status: 1, stderr: "FATAL: refused for the test\n" } : real(cwd, argv)), /REFUSED post:\S+\/the-hook → ada — FATAL: refused for the test\. The whole apply is put back/],
-      [(cwd, argv) => (argv[0].endsWith("stamp-verify.mjs") ? { status: 1, stdout: "LAWFUL fails — for the test\n" } : real(cwd, argv)), /stamp-verify is red after the award lines — LAWFUL fails — for the test/],
+      [(cwd, argv) => (/stamp-verify(-pinned)?\.mjs$/.test(argv[0]) ? /* POS-994: the verify runs through the office's pinned-key runner */ { status: 1, stdout: "LAWFUL fails — for the test\n" } : real(cwd, argv)), /stamp-verify is red after the award lines — LAWFUL fails — for the test/],
     ];
     const digest = await reviewed(town.repo);
     for (const [spawn, why] of cases) {
@@ -456,10 +465,10 @@ test("a ledger line that already pays the (post, label) is already paid, and say
 
 test("the verb is the town's --award-mint, handed the act's own hand, amount and label; on linux the apply runs under the town's exclusive flock", () => {
   const r = { post: "errant/x", label: "the-hook", handle: "ada", n: 7, hand: "keemin" };
-  const argv = awardMintArgv("/town", r, { date: DATE, keyPath: "/k.pem" });
+  const argv = awardMintArgv(PT, r, { date: DATE, keyPath: "/k.pem" });
   assert.deepEqual(argv.slice(1), ["--award-mint", "ada", "--post", "errant/x", "--label", "the-hook", "--amount", "7", "--by", "keemin",
-    "--date", DATE, "--key", "/k.pem", "--repo", "/town"]);
-  assert.match(argv[0].replace(/\\/g, "/"), /\/town\/tools\/stamp-mint\.mjs$/);
+    "--date", DATE, "--key", "/k.pem", "--repo", PT]);
+  assert.equal(argv[0], pinnedPath("stamp-mint.mjs"), "the office's pinned copy (POS-994), checked against the town");
   const [file, args] = lockedArgv("/srv/postmark-office/tools/post-award-plan.mjs", ["--town", "/t", "--apply"], "/srv/postmark-office/town.lock");
   assert.equal(file, "/usr/bin/flock");
   assert.deepEqual(args, ["-w", "300", "/srv/postmark-office/town.lock", process.execPath, "/srv/postmark-office/tools/post-award-plan.mjs", "--town", "/t", "--apply"],

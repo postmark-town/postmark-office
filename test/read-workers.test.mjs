@@ -227,7 +227,8 @@ test("the MCP dispatch rule: orient, open-your-eyes and the apex's reads go to w
   assert.equal(mcpWorkerTakes(call("world", { do: "say", args: { text: "hi" } })), false, "an act");
   assert.equal(mcpWorkerTakes(call("world", { read: "say" })), false, "a listen marks the listener present, in the main thread's RAM");
   assert.equal(mcpWorkerTakes(call("world", { read: " say " })), false);
-  assert.equal(mcpWorkerTakes(call("household", {})), false, "the standing read carries the bouncer's budget");
+  assert.equal(mcpWorkerTakes(call("household", { do: "send", args: { to: "limen", body: "hi" } })), false, "a household act");
+  assert.equal(mcpWorkerTakes(call("household", { read: "letter", id: "x" })), false, "opening a letter is a write (POS-1064: the standing read now goes to a worker, with the bouncer's budget handed over)");
   assert.equal(mcpWorkerTakes(call("world_say", { text: "hi" })), false);
   assert.equal(mcpWorkerTakes([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }]), false);
   assert.equal(mcpWorkerTakes([{ jsonrpc: "2.0", method: "tools/call", params: { name: "world_orient" } }]), false, "a notification has no answer to hand back");

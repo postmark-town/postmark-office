@@ -41,7 +41,7 @@ let dev;
 before(async () => { dev = await localDevTarget({ mistsAtLastKeyframe: true }); }, { timeout: 20 * 60_000 });
 after(async () => { await dev?.stop(); });
 
-const target = (extra = {}) => ({ ...targetFromFiles({ envFile: dev.envFile, rolesFile: dev.rolesFile, office: dev.officeBase, prodPubKey: dev.prodKey }), ...extra });
+const target = (extra = {}) => ({ ...targetFromFiles({ envFile: dev.envFile, rolesFile: dev.rolesFile, office: dev.officeBase, prodPubKey: dev.prodKey, pinsDir: dev.pinsDir }), ...extra });
 
 test("the rehearsal refuses a pen pointed at PROD's database before it writes anything", async () => {
   const t = target();

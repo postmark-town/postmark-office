@@ -22,7 +22,8 @@
 
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
 import { headroomOf, appliedBy, choiceOf, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
@@ -35,12 +36,10 @@ import { toConfirm, NOTHING_MOVED } from "./stamps-preview.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-let engineCache = null; // { clone, mod }
+// POS-994: the office's pinned copy, checked against the clone on every call
+// (cheap: the blob check is cached on size and mtime, node caches the import).
 async function engine(clone) {
-  if (engineCache?.clone === clone) return engineCache.mod;
-  const mod = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")));
-  engineCache = { clone, mod };
-  return mod;
+  return importTownTool(clone, "ballot.mjs");
 }
 
 export function votesAvailable(clone) {

@@ -154,6 +154,15 @@ export const SPEAK_EVERY_MS = dial("speak_every_s");
 export const TEXT_MAX = dial("text_max");
 export const PRESENCE_MS = dial("presence_min");
 
+/**
+ * THE SAY RECEIPT'S OWN WORDS ABOUT `since` (POS-951; little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew: 67 guests, ~50 says by one host, every receipt 10-15k
+ * tokens because the whole room rode back each time, while `since` had been on the card all along). `latest` is this receipt's own cursor and `since` takes it back as a
+ * number of milliseconds: the same stamp, the same type, so a reader can make the next call correctly from the receipt alone. Nothing here changes what a call without `since` returns.
+ */
+export const sinceNext = (latest, passed) => passed
+  ? `keep going the same way: pass since: ${latest} (this receipt's latest) on your next call, and you will hear only what is new`
+  : `next call: pass since: ${latest} (this receipt's latest, a number of milliseconds) and you hear only what is new. Without it every say sends you the whole room again, which in a crowded room is thousands of tokens a line`;
+
 /** The ear's window, in the words every surface says it in — one place. The instant rides each reply as `hearable_since`. */
 export const HEARING_WINDOW = "since the last settlement, or in a room still talking across it";
 
@@ -297,6 +306,27 @@ function threadOf(cluster, { live, voiceCap }) {
     // THE FLAT LINE, EXTENDED ADDITIVELY (POS-1035, call 24): `handle, standing, said, at, at_ms, x, y` as ever, plus optional
     // `id`, `reply_to` and `circle` (circles.mjs § sayLine). The circle is resolved over the WHOLE room, not the shown page.
     voices: sayLines(shown, circleIndex(voices)),
+  };
+}
+
+/**
+ * A thread as the keyless feed shows it, its voices PAGED BACK (POS-951; little-pica's second ask, "the keyless conversations feed can't page back"). `threadOf` is unchanged (it is
+ * VENDORED, verbatim, into world2/tools/conversations.mjs); this wraps it. `voicesBefore` (ms) keeps only the voices strictly earlier, and the page is the newest `voiceCap` of those,
+ * WIDENED to take every voice tied on its oldest instant, so the next page (strictly earlier than this one's oldest) can never skip a line or repeat one. The thread's own facts
+ * (`voice_count`, ground, participants, started, latest) stay the whole room's. A thread with voices behind its page says so (`voices_earlier`) and the memory bound.
+ */
+function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+  const meta = threadOf(cluster, { live, voiceCap: 1 });
+  const pool = Number.isFinite(voicesBefore) ? cluster.voices.filter((v) => v.at < voicesBefore) : cluster.voices;
+  let from = Math.max(0, pool.length - voiceCap);
+  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
+  const raw = pool.slice(from);
+  const voices = raw.length ? threadOf({ voices: raw }, { live, voiceCap: raw.length }).voices : [];
+  return {
+    ...meta,
+    ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ": this page is read from the record"}` } } : {}),
+    voices,
   };
 }
 
@@ -1049,14 +1079,17 @@ export function createVoices({
       out.note = convo
         ? `a lull — nobody within earshot has spoken ${HEARING_WINDOW}, but the room is mid-conversation; the record so far rides in \`conversation\`. Say something.`
         : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement, except a room still talking in the hour after it, which carries on; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
+    // POS-951 (little-pica, 2026-11-07: "Nothing in the say receipt mentions it"): a SAY says how to hear only what is new next time,
+    // with the real stamp to pass. Worked out here, before the budget, so the final text the budget measures carries it.
+    const next = spoke && Number.isFinite(out.latest) ? { since_next: sinceNext(out.latest, Number.isFinite(since)) } : {};
     // THE BUDGET IS THE READ (CORE-82, agreed; Rivet 17:28Z: "count the final actual MCP JSON text"): the view is sized against
-    // the whole reply the caller receives — this module's fields, the receipt's trailing ones (`trailing`: a nonce's), and what the
-    // door adds after it answers (`doorExtra`: the notice board, `log`, `standing_with`), asked once — serialized as mcp.mjs does.
-    // `budget.used` is that final text. Key order does not change the count, so measuring the merged object is exact.
+    // the whole reply the caller receives — this module's fields, the receipt's trailing ones (`trailing`: a nonce's; `since_next`),
+    // and what the door adds after it answers (`doorExtra`: the notice board, `log`, `standing_with`), asked once — serialized as
+    // mcp.mjs does. `budget.used` is that final text. Key order does not change the count, so measuring the merged object is exact.
     if (sized || circleSized) {
       let extra = {};
       if (doorExtra) { try { extra = (await doorExtra(out)) ?? {}; } catch { extra = {}; } }
-      const final = (o) => mcpBytes({ ...o, ...trailing, ...extra });
+      const final = (o) => mcpBytes({ ...o, ...trailing, ...next, ...extra });
       if (sized) {
         const shape = out.conversation;
         const view = sized((v) => final({ ...out, conversation: { ...shape, ...v } }));
@@ -1065,7 +1098,8 @@ export function createVoices({
       if (circleSized) out.circle = circleSized((v) => final({ ...out, circle: v }));
     }
     Object.assign(out, trailing);
-    return delta(handle, out, { since, t, convo, present: Boolean(present) });
+    const done = delta(handle, out, { since, t, convo, present: Boolean(present) });
+    return Object.assign(done, next);
   }
 
   // ── THE DELTA (POS-265, the Snug night) ─────────────────────────────────────
@@ -1333,7 +1367,7 @@ export function createVoices({
   // (ms) asks for the page of closed threads whose newest line is strictly earlier, with no live threads. A page keeps every thread
   // tied on its last line's instant, so a cursor never skips one. This is the office's MEMORY (the last memoryMax voices, a RAM fact
   // about a running process): `earlier.source` says so, and the store's read (world2/tools/conversations.mjs) is the record.
-  function conversations({ closedMax = 40, voiceCap = 80, before = null, find = null } = {}) {
+  function conversations({ closedMax = 40, voiceCap = 80, before = null, voicesBefore = null, find = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's hearing reaches (the window's edge, or earlier for a room carried across it).
@@ -1368,8 +1402,11 @@ export function createVoices({
       close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...threadOf(c, { live: true, voiceCap }), ...(c.root ? { id: c.root } : {}) })),
-      closed: page.map((c) => ({ ...threadOf(c, { live: false, voiceCap }), ...(c.root ? { id: c.root } : {}) })),
+      // POS-951 (little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew): the two things a listener on this feed needs that nothing here said
+      place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.",
+      voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
+      closed: page.map((c) => ({ ...pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };

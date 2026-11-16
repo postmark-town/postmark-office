@@ -501,7 +501,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
   // but its gap-shaped half is gated on the same ownership test above.
   try {
     const ns = await nextStepsFor(handle, clone, { own, key, ix, odb, asOf });
-    if (ns?.steps?.length) d.next_steps = ns;
+    if (ns?.steps?.length || ns?.unavailable) d.next_steps = ns; // POS-994: a pin stop is shown by name, not dropped
   } catch { /* garnish only */ }
   return d;
 }

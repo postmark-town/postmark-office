@@ -14,6 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -79,7 +80,7 @@ test("GREEN, the real pipe: a drained join appends a registry line the town's ow
   const { dir, keyFile } = sealedTown();
   const db = odb();
   await appendTownJournal(db, joinRow());
-  await withEnv({ STAMP_KEY: keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools") }, () => withRecordFrom(dir, async () => {
+  await withEnv({ STAMP_KEY: keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(dir, TOWN)) }, () => withRecordFrom(dir, async () => {
     const plan = await planTownDrain(db, dir, { date: "2026-08-29" });
     const touched = await writeTownDrain(dir, plan, { date: "2026-08-29" });
     assert.ok(touched.includes("WHITE_PAGES/stamp-ledger.md"), "the ledger was appended");
@@ -95,7 +96,7 @@ test("CAN-FAIL: a mangled sig on the drain's line turns the town's verifier red 
   const { dir, keyFile } = sealedTown();
   const db = odb();
   await appendTownJournal(db, joinRow());
-  await withEnv({ STAMP_KEY: keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools") }, () => withRecordFrom(dir, async () => {
+  await withEnv({ STAMP_KEY: keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(dir, TOWN)) }, () => withRecordFrom(dir, async () => {
     await writeTownDrain(dir, await planTownDrain(db, dir, { date: "2026-08-29" }), { date: "2026-08-29" });
   }));
   const p = join(dir, "WHITE_PAGES/stamp-ledger.md");
@@ -115,7 +116,7 @@ test("REFUSE, never degrade: with the pen key absent the crossing writes NOTHING
   const db = odb();
   await appendTownJournal(db, joinRow());
   const before = readFileSync(join(dir, "WHITE_PAGES/stamp-ledger.md"), "utf8");
-  const report = await withEnv({ TOWN_SINGLE_LOG: "1", STAMP_KEY: join(dir, "no-such-key.pem"), STAMP_ENGINE_DIR: join(TOWN, "tools") }, () =>
+  const report = await withEnv({ TOWN_SINGLE_LOG: "1", STAMP_KEY: join(dir, "no-such-key.pem"), TOWN_PINS_DIR: pinTown(stageTownTools(dir, TOWN)) }, () =>
     withRecordFrom(dir, () => runTownDrain(db, { db, clone: dir, lockHeld: () => true, log: () => {} })));
   assert.equal(report.refused, "ledger-pen-not-ready", "the crossing refuses by name");
   assert.equal(readFileSync(join(dir, "WHITE_PAGES/stamp-ledger.md"), "utf8"), before, "the ledger is byte-identical");

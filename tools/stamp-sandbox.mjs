@@ -585,7 +585,36 @@ export function fullVerify(sb) {
  * Stops at the first red step: what follows a red step would be judged against
  * a state the script did not intend.
  */
+// ── WHERE IT NEVER RUNS (POS-994, Wright 2026-11-16 08:5x EST) ───────────────
+// This sandbox is exempt from the office's pin law (test/town-tool.test.mjs §
+// the source law) BY NAME, for one reason: its whole job is to run the --town
+// checkout's OWN engines (stamp-mint, ballot, epoch-close, the ferry), often a
+// town PR's, against this office tree, which is exactly the code the office
+// otherwise refuses to run unpinned. That is safe only where no real mint key
+// can be reached. So it refuses to start where one is present: the box's key
+// path, or the path the office environment names for the mint (STAMP_KEY).
+/** The places a real stamp key would be on a machine that mints. */
+export const stampKeyPaths = (env = process.env) => [
+  "/srv/postmark-office/stamp-key.pem",      // prod's mint key
+  "/srv/postmark-office-dev/stamp-key.pem",  // dev's own mint key (POS-354)
+  env.STAMP_KEY,                             // the office env's mint key
+  env.WITNESS_KEY,                           // the witness's key (Truey's review of #1065: "a key or the store")
+].filter(Boolean);
+
+/**
+ * Null where none of `paths` exists and no store credential is named; else the
+ * sentence the sandbox refuses with. The store's credentials (WORLD2_PG_URL) are
+ * refused like a key (Truey's re-read of #1065, finding 6: "a key or the store").
+ */
+export function stampKeyRefusal(paths = stampKeyPaths(), { storeUrl = process.env.WORLD2_PG_URL } = {}) {
+  if (storeUrl) return `stamp-sandbox: refused — the store's credentials are present (WORLD2_PG_URL). The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where the store can be reached; it opens its own store.`;
+  const hit = paths.find((p) => existsSync(p));
+  return hit ? `stamp-sandbox: refused — a stamp key is present at ${hit}. The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where a mint key can be reached; run it on a machine without one.` : null;
+}
+
 export async function runSandbox({ townSource, keep = false, log = () => {} } = {}) {
+  const refused = stampKeyRefusal();
+  if (refused) throw new Error(refused);
   const t0 = Date.now();
   const report = { green: false, office_head: null, town_source: null, town_sha: null, steps: [], verifies: 0 };
   try { report.office_head = git(OFFICE, "rev-parse", "HEAD"); } catch { /* an exported tree */ }
@@ -848,6 +877,8 @@ const USAGE = "usage: node tools/stamp-sandbox.mjs [--town <town checkout>] [--k
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
+  const refused = stampKeyRefusal();
+  if (refused) { console.error(refused); return 3; }
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
   const known = new Set(["--town", "--keep", "--json", "--report"]);
   for (let i = 0; i < argv.length; i++) {

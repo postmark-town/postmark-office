@@ -24,6 +24,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -133,7 +134,7 @@ const withEnv = async (over, fn) => {
   for (const [k, v] of Object.entries(over)) { prev[k] = process.env[k]; if (v == null) delete process.env[k]; else process.env[k] = v; }
   try { return await fn(); } finally { for (const [k, v] of Object.entries(prev)) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 };
-const engineEnv = (town) => ({ STAMP_KEY: town.keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools") });
+const engineEnv = (town) => ({ STAMP_KEY: town.keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(town.dir, TOWN)) });
 
 /** The writer alone (the bare caller: no entry snapshot handed over). */
 async function crossOnce(town, db, { date, failing = null, judge } = {}) {
