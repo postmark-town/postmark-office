@@ -590,7 +590,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   house: { household: { type: "string", description: "the house's slug, as /households/<slug>/ spells it — omit for the house your key holds" },
            limit: { type: "number", description: "how many members a page carries (default 10, at most 50)" },
            offset: { type: "number", description: "walk past the first members" },
-           full: { type: "boolean", description: "true answers the whole house as it was before POS-720: every resident's doorstep segments and the town-wide blocks" } },
+           full: { type: "boolean", description: "true answers the whole house as it was before POS-720: every resident's doorstep segments and the town-wide blocks, and each declared member's public outbox and quest board" } },
   "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" },
                  part: { type: "string", description: "connector only: one part of a paged answer: set_downs_awaiting | takes_awaiting | unplaced_bounces | key_asks | likeness_question | stakes_at_risk | alerts" },
                  cursor: { type: "string", description: "connector only, with part: walk it from where the last page ended" } },

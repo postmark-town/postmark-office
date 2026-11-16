@@ -17,6 +17,7 @@
 // tokens table since POS-352: OFFICE_KEYS='devkey1=keemin:wright,postmaster'
 // node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
+import { MAIL_DOOR, QUESTS_DOOR } from "./door-handle.mjs";
 import { dateFilterDefect } from "./date-filter.mjs";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
@@ -2122,7 +2123,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
       }
 
-      if ((m = /^\/mail\/([a-z0-9-]+)$/.exec(path))) {
+      if ((m = MAIL_DOOR.exec(path))) {
         const box = url.searchParams.get("box") ?? "inbox";
         if (!["inbox", "outbox"].includes(box)) return bounce(res, 400, "box must be inbox or outbox", "GET /mail/{handle}?box=inbox|outbox");
         // ── THIS ROUTE ANSWERS THE BARE ARRAY, AND THAT IS A PROMISE ────────
@@ -2274,7 +2275,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 
       // quest board for one resident (registry × today's progress). The handle
       // regex IS the arg validation; the board zeroes on a rolled TOWN_TZ day.
-      if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
+      if ((m = QUESTS_DOOR.exec(path))) {
         const handle = m[1];
         // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
         // composition after the connection is back), the thread that ran it and that thread's event-loop lag; until then only nginx

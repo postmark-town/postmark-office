@@ -14,8 +14,9 @@
 //       days:     [ { via: { door: "household", read: "day", args: { handle, date } }, data }, … ],   one per ashore member, in the house's order
 //       pairs:    [ { via: { door: "town", read: "pair", args: { a, b } }, data }, … ] } }           the pairs the closer page represents, sorted by (a, b)
 //
-// PUBLIC FOR EVERY CALLER, THE OWNER INCLUDED: every part is read with no key, so no needs-you, private mail, pending or unsailed letter, raw registry,
-// account or consent record, or any owner overlay can ride it, even on the house's own key. Each part keeps its own paging, cursors, source dates and
+// PUBLIC FOR EVERY CALLER, THE OWNER INCLUDED: every part is read with no key (the house part is the anonymous standalone full-house read, which carries each declared member's
+// committed PUBLIC outbox rows and quest board, POS-1070, as POS-1027/R6 rules public data and part equality), so no needs-you, private standing or pending mail, raw registry,
+// account or consent record, or any owner addition can ride it, even on the house's own key. Each part keeps its own paging, cursors, source dates and
 // unavailable markers, and no common snapshot is invented across their different clocks (`as_of` on each part is that part's own source). The limits are
 // the first page of each part, not a hidden loss: every part carries the continuation its standalone read does.
 //
