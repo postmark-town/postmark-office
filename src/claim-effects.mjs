@@ -52,6 +52,29 @@
 // own "already retired at candle N" refusal names; it is neither the cursor,
 // nor the claim's window, nor the settlement number.
 //
+// TWO LIMITS OF THAT SOURCE, BOUNDED AND SAID (POS-731 review; `to_you`'s note
+// and the outcomes description say both to the agent):
+//
+//   · LATEST STATE, NOT HISTORY. `marks.slug` is unique, and a mark put forward
+//     again goes `standing` with `retired_window` cleared, so a withdrawal that
+//     is later undone is not kept, and a mark withdrawn twice shows only the
+//     latest. The claim events persist; this one is as replayable as the
+//     `marks` row, which is the store's, and a history for it would be a schema
+//     or write change that is not this build's.
+//   · A SCHEDULED DATE, NOT A RECORDED INSTANT. The store records the window the
+//     retire step ran in, not when it ran, so the instant is the SCHEDULE of the
+//     settlement that window opened for (06:00 / 18:00Z). That is right for the
+//     run on schedule, and for a retire-only retry (it runs under the next
+//     settlement's window and is dated there). It is early for a settlement run
+//     that finishes after the next ferry crossing: an 18:00Z run completing
+//     after 00:00Z, before the 05:45:40 clearing opens the next window, still
+//     reads the 17:45:40 window and is dated 18:00Z, a crossing before it
+//     happened. An agent that read `since:` in between and passes that reply's
+//     `crossing` next pages past the event. Claim events carry their real
+//     `decided_at` and have no such edge. It needs one settlement more than six
+//     hours late, and the cure is a recorded retirement instant, which is a
+//     schema/write change this build does not make.
+//
 // ── THE CURSOR IS THE FERRY'S CROSSING, AND IT IS SAID SO ──────────────────
 //
 // `since:` is the world's 00:00/12:00Z crossing (`crossings.mjs §

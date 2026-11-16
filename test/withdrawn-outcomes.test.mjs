@@ -199,10 +199,11 @@ function retire({ withdrawn = [], unpublished = [] }) {
 }
 
 // the office reading its own store, as the doors do: the `office_api` pen, no household key
-async function officeReads(fn, { breakMarks = false, marksRows = null } = {}) {
+async function officeReads(fn, { breakMarks = false, marksRows = null, spy = null } = {}) {
   const c = await store.connect("office_api");
   process.env.WORLD2_PG = "1"; process.env.WORLD2_PG_URL = store.url("office_api");
   __setPoolForTest({ query: async (text, args) => {
+    spy?.(text);
     if (breakMarks && /FROM marks m/.test(text)) throw new Error("connection to the marks table was lost");
     const out = await c.query(text, args);
     // the retirement read's rows, handed to a function that damages them (an undated window); the docket's are never touched
@@ -281,6 +282,41 @@ test("UNDATED: a retirement whose window the store cannot date is named, with th
     assert.equal(r.events.filter((e) => e.kind === "mark-withdrawn").length, 0, "no event is invented for it");
     assert.ok(r.events.some((e) => e.kind === "claim-locked"), "and the claim events stay");
   }, { marksRows: (rows) => rows.map((x) => ({ ...x, opens_at: null })) });
+});
+
+test("NO SILENT CUT: the retirement read has no row cap, and 510 withdrawn marks of one owner all come back", { skip }, async () => {
+  await seed();
+  await owner((c) => c.query(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, retired_window, retired_cause, data)
+     SELECT ('e0000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'rei/many-' || g, 'sited', 'rei', 'hh:starforge', 'one of many', '{"at":{"x":1,"y":1},"extent":{"w":1,"h":1}}'::jsonb,
+            box(point(g * 10, 0), point(g * 10 + 1, 1)), 'retired', $1, $2, 'settlement-withdraw', '{}'
+       FROM generate_series(1, 510) g`, [WIN - 1, WIN]));
+  const sqls = [];
+  await officeReads(async () => {
+    const r = await effectsFor(["rei"]);
+    assert.equal(r.readable, true);
+    assert.equal(slugsOf(r).length, 510, "none cut past 500: the newest are not the ones dropped");
+  }, { spy: (text) => sqls.push(text) });
+  const marksSql = sqls.filter((t) => /FROM marks m LEFT JOIN windows w/.test(t));
+  assert.equal(marksSql.length, 1, "the retirement query was asked once");
+  assert.doesNotMatch(marksSql[0], /\bLIMIT\b/i, "and it carries no row cap, as claimRowsSince beside it carries none");
+});
+
+test("THE WORDS: the outcomes description and to_you's note both say latest-state, a scheduled date and the late-run limit, and the bound claim sentence is whole", { skip }, async () => {
+  const { HOUSEHOLD_READS } = await import("../src/household-apex.mjs");
+  const said = (s) => {
+    assert.match(s, /latest state, not a history \(a withdrawal later undone is not kept\)/, "latest state, not durable history");
+    assert.match(s, /dated by its window's scheduled settlement, not a retirement instant/, "a scheduled date, not a recorded instant");
+    assert.match(s, /a settlement run that finishes after the next crossing is dated a crossing early/, "the late-run cursor limit");
+  };
+  said(HOUSEHOLD_READS.outcomes);
+  assert.match(HOUSEHOLD_READS.outcomes, /A refusal names its cause in the bulletin's own words\./, "the description's earlier sentences stand");
+  const whole = toYou({ claimEffects: { readable: true, events: [] }, sinceCrossing: CROSS - 1, nowCrossing: CROSS + 1 });
+  said(whole.note);
+  assert.match(whole.note, /every claim effect on your marks and on your ground rides here too/, "the bound claim-effect sentence, contiguous (test/since-claim-effects.test.mjs binds it)");
+  assert.ok(whole.note.indexOf("every claim effect on your marks and on your ground rides here too") < whole.note.indexOf("latest state"), "the qualification is appended after it, not spliced into it");
+  const unread = toYou({ claimEffects: { readable: false, events: [], reason: "x", missing: "y" }, sinceCrossing: CROSS - 1, nowCrossing: CROSS + 1 });
+  assert.match(unread.note, /^INCOMPLETE — x\./, "an incomplete answer keeps its own sentence");
 });
 
 test("THE WHOLE SHARED PATH: the house line, to_you, the doorstep and the house's outcomes agree on the event and its cursor", { skip }, async () => {

@@ -1313,9 +1313,10 @@ export async function claimRowsSince(since, { claimants = [], slugs = [], key = 
  * public record (no row policy: `002_grants.sql` lets the office role read it
  * whole), so no household key rides here; the owners named are the scope.
  *
- * BOUNDED: rows whose window opened a day before `since` or later, newest
- * settlements last, at most 500. A day of margin because the settlement a
- * window names is the NEXT one (up to twelve hours after the opening); the
+ * BOUNDED by the window, not by a row count: rows whose window opened a day
+ * before `since` or later, oldest settlements first, none dropped (as
+ * `claimRowsSince` beside it drops none). A day of margin because the settlement
+ * a window names is the NEXT one (up to twelve hours after the opening); the
  * caller filters by crossing again, and over-reading is the safe direction. A
  * retirement whose window is not in the store (the foreign key makes that a
  * defect, not a state) comes back with `opens_at: null` and is NOT filtered out:
@@ -1330,8 +1331,7 @@ export async function withdrawnRetirementsSince(since, { owners = [], env = proc
       WHERE m.status = 'retired' AND m.retired_cause = $1
         AND m.owner = ANY($2::text[])
         AND (w.opens_at IS NULL OR w.opens_at >= $3::timestamptz - interval '1 day')
-      ORDER BY w.opens_at ASC NULLS FIRST, m.slug COLLATE "C" ASC
-      LIMIT 500`,
+      ORDER BY w.opens_at ASC NULLS FIRST, m.slug COLLATE "C" ASC`,
     ["settlement-withdraw", owners, since]);
   return rows;
 }
