@@ -7,9 +7,13 @@
 // Every house, handle, login, id, token and name here is INVENTED.
 //
 //   § 1  the record: the tail column renders in template order when set and is no key at all when not
-//   § 2  the fields: judged as the resident's profile door judges its own
+//   § 1b the public print (POS-845's named list): the profile is named, cut to its three text fields,
+//        and the private name stays off it
+//   § 2  the fields: judged as the resident's profile door judges its own, one line of text
+//   § 2b the writer's refusals, in order: the fields first, then no such house (404), an unbound
+//        account (403), and a store without 098 (503), each keeping nothing
 //   § 3  the store write, on a real Postgres: merge, clear, nothing left is NULL, another house's
-//        account writes nothing, 091's shape refuses anything else, and the landed probe answers
+//        account writes nothing, 098's shape refuses anything else, and the landed probe answers
 //   § 4  the reads: every phrase that names the house's human says the town name and pronouns
 //   § 5  the door on a booted office: no key, an agent's key and another house's sign-in are refused;
 //        the house's sign-in sets and clears, the town's file and the glance follow, and the private
@@ -26,8 +30,9 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 
-import { rowsFromRegistry, renderRegistry, registryFromRows, HOUSEHOLD_KEYS, HUMAN_PROFILE_KEYS } from "../src/registry-rows.mjs";
-import { judgeHumanProfile, HUMAN_PROFILE_CAPS } from "../src/human-profile.mjs";
+import { rowsFromRegistry, renderRegistry, renderPublicRegistry, registryFromRows, HOUSEHOLD_KEYS, HUMAN_PROFILE_KEYS } from "../src/registry-rows.mjs";
+import { publicHouse } from "../src/registry-public.mjs";
+import { judgeHumanProfile, setHumanProfile, HUMAN_PROFILE_CAPS } from "../src/human-profile.mjs";
 import { setHouseholdHumanProfile, loadRegistryRows } from "../src/registry-store.mjs";
 import { humanPhrase, happenedRow, happenedKey } from "../src/household-read-v2.mjs";
 import { landedIn } from "../world2/tools/migrations-landed.mjs";
@@ -75,6 +80,25 @@ test("§ 1 human_profile is the tail column; nothing set renders no key, a set p
   assert.deepEqual(rowsFromRegistry(JSON.parse(printed), structuredClone(PINS)).households.find((h) => h.slug === "lantern-row").human_profile, FULL);
 });
 
+test("§ 1b the public print names the profile (POS-845's named list): cut to its three text fields, in template order, and the private name is never on it", () => {
+  const rows = seed();
+  assert.ok(!renderPublicRegistry(rows).households.includes("human_profile"), "nothing set: the public file carries no key, as before");
+  rows.households.find((h) => h.slug === "lantern-row").human_profile = { pronouns: "he/him", town_name: "DARKO", short_line: "builds lanterns" };
+  const printed = renderPublicRegistry(rows).households;
+  const house = JSON.parse(printed).households["lantern-row"];
+  // LAW (Wright, settled 2026-11-06): "the public reads show them"
+  assert.deepEqual(house.human_profile, FULL, "the public print carries the profile the human set");
+  assert.deepEqual(Object.keys(house.human_profile), ["town_name", "short_line", "pronouns"], "in the template's order");
+  assert.ok(!printed.includes(PRIVATE_NAME), "and never the private name");
+  assert.equal(Object.hasOwn(house, "human"), false);
+  // the public file folds back to the same row, so the drain's law (public render of the files' rows === the files) holds
+  assert.equal(renderPublicRegistry(rowsFromRegistry(JSON.parse(printed), structuredClone(PINS))).households, printed);
+  // a value outside the writer's shape is not carried: other keys, non-text, empty text, or no object at all
+  assert.deepEqual(publicHouse({ name: "X", human_profile: { town_name: "DARKO", real_name: "Avery", pronouns: 7, short_line: "" } }).human_profile, { town_name: "DARKO" });
+  assert.equal(Object.hasOwn(publicHouse({ name: "X", human_profile: { pronouns: null } }), "human_profile"), false, "nothing left: no key");
+  assert.equal(Object.hasOwn(publicHouse({ name: "X", human_profile: "DARKO" }), "human_profile"), false, "not an object: no profile");
+});
+
 test("§ 2 the fields are judged as the resident's profile door judges its own: text, trimmed, capped in code points, one line; an empty string clears; nothing else is a field", () => {
   const refused = (body, re) => assert.throws(() => judgeHumanProfile(body), (e) => e.code === 422 && re.test(e.defect), JSON.stringify(body));
   assert.deepEqual(judgeHumanProfile({ town_name: "  DARKO  ", pronouns: "" }), { set: { town_name: "DARKO" }, clear: ["pronouns"] });
@@ -84,6 +108,14 @@ test("§ 2 the fields are judged as the resident's profile door judges its own: 
   refused({ town_name: "DARKO", human: "Avery" }, /^human is not a field of the human's profile$/);
   refused({ town_name: 7 }, /^town_name must be text$/);
   refused({ short_line: "two\nlines" }, /^short_line is one line$/);
+  refused({ short_line: "two\r\nlines" }, /^short_line is one line$/);
+  // one line means no control character and no line or paragraph separator either: each would break the phrase that says the name
+  refused({ town_name: "DAR\tKO" }, /^town_name is one line$/);
+  const LS = String.fromCharCode(0x2028), PS = String.fromCharCode(0x2029);   // built, so the source holds no raw separator
+  refused({ town_name: `DARKO${LS}Row` }, /^town_name is one line$/);
+  refused({ pronouns: `he${PS}him` }, /^pronouns is one line$/);
+  refused({ town_name: "DAR\u0000KO" }, /^town_name is one line$/);
+  assert.deepEqual(judgeHumanProfile({ town_name: "Ðárkø the Lamplighter" }).set, { town_name: "Ðárkø the Lamplighter" }, "letters of any script are one line");
   refused({ town_name: "x".repeat(73) }, /^town_name is longer than 72 characters$/);
   assert.equal(judgeHumanProfile({ town_name: "x".repeat(72) }).set.town_name.length, 72);
   refused({ short_line: "y".repeat(241) }, /^short_line is longer than 240 characters$/);
@@ -95,7 +127,37 @@ test("§ 2 the fields are judged as the resident's profile door judges its own: 
   assert.deepEqual(HUMAN_PROFILE_CAPS, { town_name: 72, short_line: 240, pronouns: 56 });
 });
 
-test("§ 3 on a real Postgres: one statement merges and clears, a profile left empty is NULL, another house's account writes nothing, the private name is untouched, and 091's shape refuses anything else", async () => {
+test("§ 2b the writer refuses in order, keeping nothing: the fields before the record is read, then no such house 404, an unbound account 403, a store without 098 503", async () => {
+  const calls = [];
+  const loadRows = async () => { calls.push("read"); return seed(); };
+  const write = async (w) => { calls.push(`write ${w.slug}`); return { slug: w.slug, human_profile: w.set }; };
+  const drain = async () => { calls.push("drain"); return { ran: true, commit: "c0ffee" }; };
+  const io = { loadRows, write, drain, clone: null };
+  const refusal = async (args, code, re, deps = io) => {
+    calls.length = 0;
+    await assert.rejects(setHumanProfile(args, deps), (e) => e.code === code && re.test(e.defect), JSON.stringify(args));
+    return [...calls];
+  };
+  // the fields are judged first: a bad body never reads the record
+  assert.deepEqual(await refusal({ slug: "lantern-row", body: { name: "Avery" }, ghId: KEEPER.id }, 422, /^name is not a field/), []);
+  assert.deepEqual(await refusal({ slug: "lantern-row", body: FULL, ghId: null }, 401, /^no signed-in account$/), []);
+  // the record: no such house, and a house this account does not keep, are refused before any write
+  assert.deepEqual(await refusal({ slug: "no-such-house", body: FULL, ghId: KEEPER.id }, 404, /^no household "no-such-house"$/), ["read"]);
+  assert.deepEqual(await refusal({ slug: "lantern-row", body: FULL, ghId: STRANGER.id }, 403, /^this account does not keep "lantern-row"$/), ["read"]);
+  // a store without the column: the write answers missingColumn, and nothing is drained
+  const noColumn = { ...io, write: async () => { calls.push("write"); return { missingColumn: true }; } };
+  assert.deepEqual(await refusal({ slug: "lantern-row", body: FULL, ghId: KEEPER.id }, 503, /^the human's profile is not on this store yet$/, noColumn), ["read", "write"]);
+  // the record unbinds between the read and the write: the statement's own binding answers no row, and nothing is drained
+  const raced = { ...io, write: async () => { calls.push("write"); return { slug: null }; } };
+  assert.deepEqual(await refusal({ slug: "lantern-row", body: FULL, ghId: KEEPER.id }, 403, /^this account does not keep "lantern-row"$/, raced), ["read", "write"]);
+  // and the control: the bound account's request reads, writes and drains, in that order
+  calls.length = 0;
+  const done = await setHumanProfile({ slug: "lantern-row", body: FULL, ghId: KEEPER.id }, io);
+  assert.deepEqual(calls, ["read", "write lantern-row", "drain"]);
+  assert.deepEqual(done, { household: "lantern-row", human_profile: FULL, registry: { rendered: true }, commit: "c0ffee" });
+});
+
+test("§ 3 on a real Postgres: one statement merges and clears, a profile left empty is NULL, another house's account writes nothing, the private name is untouched, and 098's shape refuses anything else", async () => {
   const ix = await indexStore(null, { db: "human_profile_store" });
   CLEANUP.push(() => ix.stop());
   await seedRegistry(ix.store, REGISTRY, PINS);
@@ -121,13 +183,13 @@ test("§ 3 on a real Postgres: one statement merges and clears, a profile left e
 
   const pen = await ix.store.connect("office_api");
   try {
-    // 091's shape, as the office's own pen: nothing but the three fields, each a string, and never an empty object
+    // 098's shape, as the office's own pen: nothing but the three fields, each a string, and never an empty object
     for (const bad of ["{}", '{"name": "Avery"}', '{"town_name": 7}', "[]", '"DARKO"'])
       await assert.rejects(pen.query("UPDATE households SET human_profile = $1::jsonb WHERE slug = 'lantern-row'", [bad]), (e) => e.code === "23514", bad);
     await pen.query(`UPDATE households SET human_profile = '{"pronouns": "they/them"}'::jsonb WHERE slug = 'lantern-row'`);
-    // the landed probe reads this store's 091 as landed
-    const [r] = await landedIn((q) => pen.query(q), ["091_household_human_profile.sql"]);
-    assert.deepEqual(r, { file: "091_household_human_profile.sql", state: "landed" });
+    // the landed probe reads this store's 098 as landed
+    const [r] = await landedIn((q) => pen.query(q), ["098_household_human_profile.sql"]);
+    assert.deepEqual(r, { file: "098_household_human_profile.sql", state: "landed" });
   } finally { await pen.end(); }
 });
 
@@ -217,7 +279,12 @@ test("§ 5 the door on a booted office: no key 401, an agent's key 403, another 
   assert.deepEqual(set.body.registry, { rendered: true });
   assert.ok(!JSON.stringify(set.body).includes(PRIVATE_NAME), "the answer never carries the private name");
   assert.deepEqual(inFile(), FULL, "the town's file carries the profile");
+  assert.ok(!readFileSync(join(clone, "tools", "households.json"), "utf8").includes(PRIVATE_NAME), "and the town's file never the private name");
   assert.equal(commits(), c0 + 1, "one drain commit");
+  // the public registry read carries it too, signed out
+  const listed = await (await fetch(`${base}/households`)).json();
+  assert.deepEqual(listed.registry?.households?.["lantern-row"]?.human_profile, FULL, JSON.stringify(listed).slice(0, 400));
+  assert.ok(!JSON.stringify(listed).includes(PRIVATE_NAME), "GET /households never says the private name");
 
   const seen = await glance();
   assert.equal(seen.house?.human, "DARKO (he/him), Lantern Row's human", JSON.stringify(seen).slice(0, 600));

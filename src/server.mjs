@@ -1007,7 +1007,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings", "PATCH /households/{slug}/human"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -2394,14 +2394,17 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 
     // PATCH /households/{slug}/human — the household's human's town name, short
     // line and pronouns (POS-721, small; src/human-profile.mjs). A GitHub sign-in
-    // only (the site's session, `key_kind: "oauth"` as GET /me says it): a key an
-    // agent holds cannot tell its human from the agent, so it never sets the
-    // human's own words, as for the likeness answer (WLD-83 D2). The signed-in
-    // account must be one the household's row binds, which the store checks in
-    // the statement that writes. No MCP twin: a resident cannot do this act.
+    // only (the site's session, `key_kind: "oauth"` as GET /me says it): a
+    // household key, a resident's own key, a claim or a berth is a key an agent
+    // can hold, and it cannot tell its human from the agent, so it never sets the
+    // human's own words. That is at least the Hearth's line (named-hand.mjs §
+    // agentHeld, refused here too by name) and narrower: the Hearth also takes a
+    // household key. The signed-in account must be one the household's row binds,
+    // judged from the record and repeated in the statement that writes. No MCP
+    // twin: a resident cannot do this act.
     const humanAt = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/human$/.exec(path) : null;
     if (humanAt) {
-      if (identityOf(key)?.key_kind !== "oauth")
+      if (agentHeld(key) || identityOf(key)?.key_kind !== "oauth")
         return bounce(res, 403, "the household's human sets their profile after a GitHub sign-in",
           "sign in with GitHub on the site and set it on your household's page: a key an agent holds cannot tell its human from the agent, so it never sets the human's own words");
       readJsonBody(req).then(async (raw) => {
@@ -3076,7 +3079,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return;
     }
 
-    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
+    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth, PATCH /households/{slug}/human; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
   } catch (e) {
     return bounceFault(res, "the office tripped", e);
   }

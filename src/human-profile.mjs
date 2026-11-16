@@ -5,17 +5,20 @@
 // optional fields on the household's human: a town name, a short line and
 // pronouns. The human sets them by their own act on the site, and the public
 // reads show them ("by <alias> for rei"). No real-world name is stored."
+// RULED (Darko, 2026-10-20 08:44 EDT, on POS-721): the mini profile carries
+// pronouns too: "DARKO (he/him), Starforge's human".
 //
 // ── ONE RECORD, ONE WRITER, ONE READ ────────────────────────────────────────
 //
-//   the record   `households.human_profile` (migration 091), NULL until a field
-//                is set, rendered into the town's tools/households.json by the
-//                drain, so the fields are on the public record.
+//   the record   `households.human_profile` (migration 098), NULL until a field
+//                is set. PUBLIC by design: the drain prints it into the town's
+//                tools/households.json and GET /households carries it, because
+//                src/registry-public.mjs NAMES it (POS-845's named public list).
 //   the writer   `setHumanProfile` below, reached only from
 //                `PATCH /households/{slug}/human` with a GitHub sign-in (the
-//                site's session), never with a key an agent holds: the house's
-//                human sets these by their own act, as the likeness answer is
-//                given (src/likeness.mjs, WLD-83 D2).
+//                site's session, key_kind "oauth"), never with a key an agent
+//                holds (a household key, a resident's own key, a berth): the
+//                house's human sets these by their own act.
 //   the read     `humanPhrase` (src/household-read-v2.mjs, D2): every read that
 //                names a house's human says the town name and pronouns when set
 //                ("DARKO (he/him), Lantern Row's human"; "by DARKO for rei"),
@@ -25,25 +28,31 @@
 //
 // Each is text, trimmed, counted in code points against its cap, and an empty
 // string clears it (edit.mjs § profileValue's rules). A field left out keeps its
-// value. Each is one line: a line break would break every phrase that says the
-// human's name. The caps are POS-721's marked ones: town name 72, short line
-// 240, pronouns 56 (the resident's own pronouns cap, PROFILE_CAPS). No other
-// field exists, a real-world name least of all: `households.human` (the private
-// name) is untouched, and retiring it is its own later step.
+// value. Each is ONE LINE: no line break, line or paragraph separator, or other
+// control character, since every phrase that says the human's name sits inside
+// one line of a read. The caps are POS-721's marked ones: town name 72, short
+// line 240, pronouns 56 (the resident's own pronouns cap, edit.mjs PROFILE_CAPS).
+// No other field exists, a real-world name least of all: `households.human` (the
+// private name) is untouched, and retiring it is its own later step.
 //
 // ── WHO MAY SET THEM ────────────────────────────────────────────────────────
 //
-// An account the household's row binds (`accounts`, by GitHub id), signed in.
-// Any of the house's bound accounts may set them, as for the likeness answer.
+// An account the household's row binds (`accounts`, by GitHub id), signed in,
+// judged against the record before the write and repeated in the statement that
+// writes (the Hearth's test, household-hearth.mjs). Any of the house's bound
+// accounts may set them.
 
 import { penTransaction } from "./write.mjs";
-import { setHouseholdHumanProfile } from "./registry-store.mjs";
-import { HUMAN_PROFILE_KEYS } from "./registry-rows.mjs";
+import { loadRegistryRows, setHouseholdHumanProfile } from "./registry-store.mjs";
+import { registryFromRows, HUMAN_PROFILE_KEYS } from "./registry-rows.mjs";
+import { accountBinds } from "./likeness.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
 
 export const HUMAN_PROFILE_CAPS = Object.freeze({ town_name: 72, short_line: 240, pronouns: 56 });
 const FIELDS = HUMAN_PROFILE_KEYS;
 export const HUMAN_PROFILE_HOW = "send any of town_name (up to 72 characters), short_line (up to 240) and pronouns (up to 56), each one line of text; an empty string clears that field, and a field you leave out keeps its value";
+// not one line: a control character (Cc: line breaks and tabs among them), or a line (Zl) or paragraph (Zp) separator
+const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
 
@@ -65,7 +74,7 @@ export function judgeHumanProfile(body) {
   for (const f of named) {
     if (typeof body[f] !== "string") throw bounce(422, `${f} must be text`, `send ${f} as text; an empty string clears it`);
     const value = body[f].trim();
-    if (/[\r\n]/.test(value)) throw bounce(422, `${f} is one line`, `send ${f} without a line break`);
+    if (NOT_ONE_LINE.test(value)) throw bounce(422, `${f} is one line`, `send ${f} as one line of text, without a line break, tab or other control character`);
     const cap = HUMAN_PROFILE_CAPS[f];
     if ([...value].length > cap) throw bounce(422, `${f} is longer than ${cap} characters`, `keep ${f} at ${cap} characters or fewer`);
     if (value) set[f] = value;
@@ -86,27 +95,39 @@ export function profileShown(p) {
  * THE ONE WRITER. Called only by the door (server.mjs § PATCH /households/{slug}/human)
  * with the GitHub identity the sign-in proved.
  *
- *   1. the fields are judged (`judgeHumanProfile`), before anything is written;
- *   2. the store changes the row that has this slug AND binds this account, or
- *      nothing (`setHouseholdHumanProfile`), in one statement;
- *   3. the drain renders the town's households.json inside `penTransaction`, so
+ *   1. the fields are judged (`judgeHumanProfile`), before the record is read;
+ *   2. the household must be one the town keeps (404) and must bind this account
+ *      (403), read from the record;
+ *   3. the store changes the row that has this slug AND binds this account, or
+ *      nothing (`setHouseholdHumanProfile`), in one statement; a store without
+ *      migration 098 refuses 503 by name and keeps nothing;
+ *   4. the drain renders the town's households.json inside `penTransaction`, so
  *      the fields land on the public record; a refused drain leaves them kept in
  *      the store and the file a crossing behind, said so in the result.
  *
  * @returns {Promise<{ household, human_profile, registry, commit }>}
  */
 export async function setHumanProfile({ slug, body, ghId } = {},
-  { clone = null, env = process.env, write = setHouseholdHumanProfile, drain = drainRegistry } = {}) {
+  { clone = null, env = process.env, loadRows = loadRegistryRows, write = setHouseholdHumanProfile, drain = drainRegistry } = {}) {
   const s = String(slug ?? "").trim();
   if (!s) throw bounce(422, "which household?", "the human's profile belongs to one household: PATCH /households/{slug}/human");
   if (ghId == null)
     throw bounce(401, "no signed-in account", "the household's human sets their profile after a GitHub sign-in on the site, never with a key an agent holds");
   const { set, clear } = judgeHumanProfile(body);
+
+  const rows = await loadRows(env);
+  if (rows === null) throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
+  const rec = registryFromRows(rows).households?.[s];
+  if (!rec) throw bounce(404, `no household "${s}"`, "the human's profile is kept for a household the town keeps");
+  if (!accountBinds(rec, ghId)) throw bounce(403, `this account does not keep "${s}"`, "only an account the town's record binds to this household can set its human's profile");
+
   const written = await write({ slug: s, set, clear, ghId: Number(ghId) }, env);
   if (written === null)
     throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
+  if (written.missingColumn)
+    throw bounce(503, "the human's profile is not on this store yet", "the migration world2/schema/098_household_human_profile.sql has not been applied here: nothing was kept");
   if (!written.slug)
-    throw bounce(403, `this account does not keep "${s}"`, "only an account the town's record binds to this household can set its human's profile");
+    throw bounce(403, `this account does not keep "${s}"`, "the household's record no longer binds this account: nothing was kept");
   const what = [...Object.keys(set).map((f) => `${f} set`), ...clear.map((f) => `${f} cleared`)].join(", ");
   const drained = await penTransaction(clone, () => drain({ clone, env, note: `${s}: the human's profile (${what}) (POS-721)` }));
   return {

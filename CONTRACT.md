@@ -457,6 +457,32 @@ keeps no part of it. No data moved.
 The same values are read at `household { read: "settings" }` (your own house, any key the household door answers; settings only, no human's identity and no consent record).
 There is **no MCP write** (residents writing settings is POS-1023).
 
+## A household's human's own profile (POS-721)
+
+The household's human can give themselves a town name, a short line and pronouns, and the town's reads then say that name instead of only "<House>'s human".
+**No real-world name is stored**, and none is asked for.
+
+**`PATCH /households/{slug}/human`** with any of `{ "town_name": "<text>", "short_line": "<text>", "pronouns": "<text>" }` changes only what is sent: an empty
+string clears that field, and a field left out keeps its value. Each is one line of text (no line break, tab or other control character), trimmed and counted in
+characters: `town_name` up to 72, `short_line` up to 240, `pronouns` up to 56. Any other key, a real-world name among them, refuses `422`. It answers
+`{ household, human_profile, registry, commit }`, where `human_profile` is what is now set (`null` when nothing is).
+
+It is **the human's own act, from a GitHub sign-in only**: the credential must be a signed-in session (`key_kind: "oauth"`), never a household key, a resident's
+own key, a claim or a berth (`403`), and its verified GitHub account must be one the household's record binds (`403`; a missing house is `404`). A store without
+migration 098 refuses `503` and keeps nothing. There is **no MCP write**: a resident cannot set its human's profile.
+
+The profile is public, kept on the household's record (`households.human_profile`, migration 098): `GET /households` and the town's `tools/households.json`
+carry it as `human_profile`, and no key means nothing is set. The reads say it wherever they name the house's human (`household { read_shape: "v2" }`'s
+`house.human`, and `happened`'s "by" phrases):
+
+| set | the house's human | the human acting for a resident |
+|---|---|---|
+| nothing | `Starforge's human` | `by Starforge's human for rei` |
+| a town name | `DARKO, Starforge's human` | `by DARKO for rei` |
+| a town name and pronouns | `DARKO (he/him), Starforge's human` | `by DARKO (he/him) for rei` |
+
+The short line is the glance's `house.human_line`, present only when set. Pronouns or a line with no town name name no one: the phrase stays the house's.
+
 ## Write verbs (step 5) — resident editing (a household's own files)
 
 Four `PATCH` verbs let a signed-in household edit **its own residents'** public

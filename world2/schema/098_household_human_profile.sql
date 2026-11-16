@@ -1,4 +1,4 @@
--- 091 — households.human_profile: THE HOUSEHOLD'S HUMAN'S TOWN NAME, SHORT LINE AND PRONOUNS (POS-721, small)
+-- 098 — households.human_profile: THE HOUSEHOLD'S HUMAN'S TOWN NAME, SHORT LINE AND PRONOUNS (POS-721, small)
 --
 -- SETTLED (Wright, 2026-11-06 00:51:44Z, on POS-721), verbatim:
 --   "POS-721, rebuilt small. Darko's ask (10-19, 10-20, POS-845 "Town name
@@ -26,15 +26,22 @@
 -- `COLUMNS`, for 050's and 081's reason: a ceremony's upsert rebuilds a row from
 -- what it knew and would erase the profile.
 --
--- The drain renders it into the town's tools/households.json when present
--- (`registry-rows.mjs`: absent renders as no key, so the first crossing after
--- this lands rewrites nothing). The fields are public by design: a town name,
--- a line and pronouns the human chose to show.
+-- It is PUBLIC by design (a town name, a line and pronouns the human chose to
+-- show), and named so in src/registry-public.mjs (POS-845's named list): the
+-- drain prints it into the town's tools/households.json and GET /households
+-- carries it, each only when present (absent renders as no key, so the first
+-- crossing after this lands rewrites nothing).
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/091_household_human_profile.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/098_household_human_profile.sql
+--
+-- THE PRODUCTION MIGRATION IS THE OPERATOR'S BOX ACT, on Darko's go; nothing in
+-- the code lane applies it. Until it lands every registry read answers as
+-- before (the column is read through the row's own jsonb, like `hearth`), and
+-- the write refuses 503 by name. So it can land any time before or after the
+-- code; the door works once both are in.
 --
 -- ── HOW TO PROVE IT LANDED ──────────────────────────────────────────────────
 --
@@ -44,7 +51,9 @@
 --   SELECT count(*) FROM households WHERE human_profile IS NOT NULL;      -- 0 until the first set
 --   node tools/registry-drain.mjs --check                                 -- still byte-equal
 --
--- 088, 089 and 090 are held by open PRs (#896, #769, #906); this is 091 on purpose.
+-- This was 091 on its branch; 092–097 reached the train first, so it is 098,
+-- the next number free on the train and in every open office PR (095 is #1022's,
+-- 090 is #906's).
 --
 -- No new grants: `office_api` already holds UPDATE on `households` (019).
 

@@ -60,6 +60,14 @@
 //   - `likeness` and `invited_by` are cut as before: an object to its named
 //     keys, each holding a single value (a list is walked, and a single value
 //     passes as it is).
+//   - `human_profile` (098, POS-721) is NAMED public: the town name, short line
+//     and pronouns the household's human chose to show (Wright, settled
+//     2026-11-06: "the public reads show them"). It is what its one writer
+//     writes (src/human-profile.mjs): an object of those three keys, each a
+//     non-empty string. So an object rides cut to them, each only while it holds
+//     text; anything else under the key is no profile, and a profile left with
+//     nothing is no key. It never carries the private name, which is its own
+//     column (`human`, above) and is on no list here.
 // A pin is cut to its named keys, each holding a single value.
 //
 // A HOUSE OR A PIN THAT IS NOT AN OBJECT has no named shape, so nothing of it
@@ -79,13 +87,15 @@ export const PRIVATE_HOUSE_KEYS = Object.freeze(["human"]);
 const PUBLIC_REGISTRY_KEYS = Object.freeze(["schema_version", "note", "households"]);
 const PUBLIC_HOUSE_KEYS = Object.freeze([
   "name", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by", "hearth",
+  "provisional", "home_images", "likeness", "invited_by", "hearth", "human_profile",
 ]);
 const PUBLIC_PIN_KEYS = Object.freeze(["login", "id", "pinned", "renamed", "note", "retired", "renamed_to"]);
 const PUBLIC_ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 const PUBLIC_LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "words"]);
 // `backfill` (POS-947): a credit named after joining says so in public, and the town's judge reads it (its pay clock and cap differ)
 const PUBLIC_INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
+// POS-721: the household's human's own words, each a string; spelled out by hand like every list here
+const PUBLIC_HUMAN_PROFILE_KEYS = Object.freeze(["town_name", "short_line", "pronouns"]);
 
 // The named house keys that are jsonb and cut by `cut`, and which of an object's keys may ride in each.
 // `accounts` and `home_images` have shapes of their own (`publicAccounts`, `publicHomeImages`).
@@ -124,6 +134,14 @@ const publicHomeImages = (v, residents) => {
   return Object.keys(out).length ? out : undefined;
 };
 
+/** `human_profile`: its named keys holding non-empty text, in the record's order; undefined when none is left or it is no object. */
+const publicHumanProfile = (v) => {
+  if (!isRecord(v)) return undefined;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) if (PUBLIC_HUMAN_PROFILE_KEYS.includes(k) && typeof x === "string" && x) out[k] = x;
+  return Object.keys(out).length ? out : undefined;
+};
+
 /**
  * One house row, cut to its named keys; key order kept. A house that is not an object reads as null.
  *
@@ -139,6 +157,7 @@ export function publicHouse(rec) {
     if (!PUBLIC_HOUSE_KEYS.includes(k)) continue;
     if (k === "accounts") { if (Array.isArray(v)) out[k] = publicAccounts(v); }
     else if (k === "home_images") { const pictures = publicHomeImages(v, rec.residents); if (pictures) out[k] = pictures; }
+    else if (k === "human_profile") { const profile = publicHumanProfile(v); if (profile) out[k] = profile; }
     else if (Object.hasOwn(JSONB_SHAPES, k)) out[k] = cut(v, JSONB_SHAPES[k]);
     else if (isLeaves(v)) out[k] = v;
   }

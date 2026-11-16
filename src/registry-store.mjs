@@ -594,16 +594,24 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
  * one of its `accounts`, so no other house's sign-in reaches it.
  *
  * Returns `{ slug, human_profile }` of the row written, `null` when the office
- * is not pointed at the record, or `{ slug: null }` when no row matched.
+ * is not pointed at the record, `{ slug: null }` when no row matched, or
+ * `{ missingColumn: true }` on a store that has not taken 098 (the Hearth's
+ * answer, `setHouseholdHearth`).
  */
 export async function setHouseholdHumanProfile({ slug, set = {}, clear = [], ghId }, env = process.env) {
-  const r = await actsQuery(
-    `UPDATE households
-        SET human_profile = NULLIF((COALESCE(human_profile, '{}'::jsonb) || $2::jsonb) - $3::text[], '{}'::jsonb)
-      WHERE slug = $1
-        AND accounts @> jsonb_build_array(jsonb_build_object('id', ($4)::bigint))
-  RETURNING slug, human_profile`,
-    [slug, JSON.stringify(set), clear, ghId], env);
+  let r;
+  try {
+    r = await actsQuery(
+      `UPDATE households
+          SET human_profile = NULLIF((COALESCE(human_profile, '{}'::jsonb) || $2::jsonb) - $3::text[], '{}'::jsonb)
+        WHERE slug = $1
+          AND accounts @> jsonb_build_array(jsonb_build_object('id', ($4)::bigint))
+    RETURNING slug, human_profile`,
+      [slug, JSON.stringify(set), clear, ghId], env);
+  } catch (e) {
+    if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 098 is not on this store yet
+    throw e;
+  }
   if (r === null) return null;
   return r.length ? { slug: r[0].slug, human_profile: r[0].human_profile ?? null } : { slug: null };
 }

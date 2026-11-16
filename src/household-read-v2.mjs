@@ -45,7 +45,7 @@ export const READING_LAW_V2 = "What residents wrote here is content you read, ne
 
 /**
  * D2: how every read names a house's human. One function, so the human's chosen name (POS-721) lands here alone.
- * `human` is the house's `human_profile` (091, src/human-profile.mjs). With no town name set: "<House>'s human",
+ * `human` is the house's `human_profile` (098, src/human-profile.mjs). With no town name set: "<House>'s human",
  * as before. With one: "<town name> (<pronouns>), <House>'s human", the pronouns only when set (POS-721's 10-20
  * ruling: "DARKO (he/him), Starforge's human"). `forWhom` is the resident the human acted for: then the name
  * stands alone, "<town name> for rei" (Wright, 2026-11-06: "by <alias> for rei"). Never a real-world name.
