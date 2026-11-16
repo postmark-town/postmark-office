@@ -52,7 +52,10 @@ done
 # POS-994: dev runs its own pinned town. The freshen moves the stood-back clone onto
 # dev's key and pins the re-signed town at $D/town-pins-dev (postmark-dev-freshen.sh),
 # so a reset runs it too: without it the dev office would meet a seed it never pinned.
+# The freshen's unit restarts the dev office when it succeeds, so it is stopped again
+# here before the derived state goes, and started at the end as before.
 sudo systemctl start postmark-dev-freshen.service
+sudo systemctl stop postmark-office-dev.service
 export TOWN_PINS_DIR="$D/town-pins-dev"
 
 echo "== derived state: delete + rebuild =="

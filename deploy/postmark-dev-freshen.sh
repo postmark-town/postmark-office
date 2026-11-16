@@ -59,6 +59,9 @@
 #      clone back on the seed, pins the seed again, and fails the unit, as the
 #      re-sign's own --verify used to (it ran before the second pin could exist).
 # There is no switch that skips this: an unpinned dev clone stops every pinned step.
+# A running office reads its pins once, so the unit restarts the dev office after
+# this script exits 0 (postmark-dev-freshen.service § ExecStartPost); the script
+# itself restarts nothing, so a failed freshen leaves the dev office as it was.
 #
 # POSTMARK_DEV_ROOT, POSTMARK_DEV_FLOCK and the two key paths exist for
 # test/box-rollcall.test.mjs only; the unit sets none, so the box runs the

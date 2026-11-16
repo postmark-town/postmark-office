@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, resolvePinRoot, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
+import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
 import { stampKeyRefusal } from "../tools/stamp-sandbox.mjs";
 import { MODULES, checkPins, collect, manifest } from "../tools/town-pins.mjs";
 
@@ -354,28 +354,45 @@ test("DEV: the freshen's pin, run after the re-sign, matches the re-signed clone
   const t = devTown();
   try {
     assert.equal(freshenPin(t).status, 0, "the seed's pin");
-    const seedPins = JSON.parse(readFileSync(join(resolvePinRoot(t.pins), "PINS.json"), "utf8"));
-    assert.equal(seedPins.town_commit, t.seed);
+    assert.equal(JSON.parse(readFileSync(join(t.pins, "PINS.json"), "utf8")).town_commit, t.seed);
     const signed = t.resign();
     // the seed's pins no longer vouch for the re-signed verifier
     assert.throws(() => townTool(t.repo, "stamp-verify.mjs", { root: t.pins }), (e) => e instanceof TownPinMismatch && e.file === "tools/stamp-verify.mjs");
     const r = freshenPin(t);
     assert.equal(r.status, 0, r.stderr);
-    const pins = JSON.parse(readFileSync(join(resolvePinRoot(t.pins), "PINS.json"), "utf8"));
-    assert.equal(pins.town_commit, signed, "the pins name the re-signed commit");
+    assert.equal(JSON.parse(readFileSync(join(t.pins, "PINS.json"), "utf8")).town_commit, signed, "the pins name the re-signed commit");
     const townBlob = (c, p) => { try { return t.git("rev-parse", `${c}:${p}`); } catch { return null; } };
     assert.deepEqual(checkPins(t.pins, { townBlob }), [], "every pinned file is the re-signed town's, byte for byte");
-    const mod = await importTownTool(t.repo, "stamp-verify.mjs", { root: t.pins });
-    assert.deepEqual([...mod.RULED], ["dev-sig-21582"], "and the re-signed verifier is what loads");
-    // the folder moved under this RUNNING process (as under the dev office): CURRENT names the
-    // re-signed commit's folder, the seed's is kept one night for a process still holding it,
-    // and no half-written folder is left
-    assert.deepEqual(readdirSync(t.pins).sort(), ["CURRENT", t.seed, signed].sort());
-    assert.equal(readFileSync(join(t.pins, "CURRENT"), "utf8").trim(), signed);
-    // a third pin (the next night, the same town) keeps CURRENT and prunes nothing it needs
-    assert.equal(freshenPin(t).status, 0);
-    assert.deepEqual(readdirSync(t.pins).sort(), ["CURRENT", signed].sort(), "the seed's folder goes once it is two pins old");
+    // A RUNNING process keeps the manifest it read: this one still holds the seed's. That is
+    // why the freshen restarts the dev office after it re-pins (deploy/postmark-dev-freshen.service).
+    assert.throws(() => townTool(t.repo, "stamp-verify.mjs", { root: t.pins }), TownPinMismatch, "the running process still reads the seed's pins");
+    // A RESTARTED process (the dev office after the freshen) reads the new pins and loads the re-signed verifier.
+    const fresh = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `const { importTownTool } = await import(${JSON.stringify(pathToFileURL(join(ROOT, "src", "town-tool.mjs")).href)});
+       const m = await importTownTool(process.argv[1], "stamp-verify.mjs", { root: process.argv[2] });
+       console.log([...m.RULED].join(","));`, t.repo, t.pins], { encoding: "utf8" });
+    assert.equal(fresh.status, 0, fresh.stderr);
+    assert.equal(fresh.stdout.trim(), "dev-sig-21582", "the restarted office runs the re-signed verifier");
   } finally { t.done(); }
+});
+
+test("DEV: the freshen restarts the dev office only after the pins are written, and never after a failure", () => {
+  // The order: the freshen's ExecStart (the script) writes the pins, last of all after
+  // the re-signed town's verify; its ExecStartPost restarts the dev office. A oneshot's
+  // ExecStartPost runs only once ExecStart has exited 0, so a red verify (the script
+  // puts the clone back on the seed, pins the seed again and exits 1) restarts nothing:
+  // the dev office keeps the pins it was running, and the unit reads failed.
+  const unit = readFileSync(join(ROOT, "deploy", "postmark-dev-freshen.service"), "utf8").split("\n");
+  const at = (re) => unit.findIndex((l) => re.test(l));
+  assert.notEqual(at(/^Type=oneshot$/), -1, "a oneshot: ExecStartPost waits for ExecStart to exit 0");
+  const start = at(/^ExecStart=\/srv\/postmark-office-dev\/postmark-dev-freshen\.sh$/);
+  const post = at(/^ExecStartPost=\+\/usr\/bin\/systemctl restart postmark-office-dev\.service$/);
+  assert.ok(start !== -1 && post > start, "the restart is the unit's step after the script, never inside it");
+  const script = readFileSync(join(ROOT, "deploy", "postmark-dev-freshen.sh"), "utf8");
+  assert.doesNotMatch(script, /systemctl/, "the script itself restarts nothing: only a freshen that exited 0 does");
+  const body = script.slice(script.indexOf("bash -c '"));
+  const lastPin = body.lastIndexOf("\n  pin\n"), verify = body.indexOf("town-tool.mjs\" run stamp-verify.mjs");
+  assert.ok(lastPin !== -1 && verify > lastPin, "the re-signed town is pinned before its verify, and the script's success follows the verify");
 });
 
 test("DEV: an --out inside the --town checkout is refused, and nothing is written", () => {

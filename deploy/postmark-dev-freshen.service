@@ -7,3 +7,10 @@ User=meepo
 # POS-994: dev's own pins (the script writes them after the re-sign and exports the same path)
 Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev
 ExecStart=/srv/postmark-office-dev/postmark-dev-freshen.sh
+# POS-994 (Wright, 2026-11-16): a running office reads its pins once, so the dev office
+# restarts onto the pins the freshen just wrote. ExecStartPost runs only after
+# ExecStart exited 0 (a oneshot), so a freshen that failed (a refused re-sign, a red
+# verify put back on the seed) restarts nothing. The `+` runs this one line with full
+# privileges; the freshen itself stays meepo. No live user at 08:10Z: the dev office's
+# access log showed 0 requests 07:55-08:30Z on 11-13, 11-14 and 11-15.
+ExecStartPost=+/usr/bin/systemctl restart postmark-office-dev.service
