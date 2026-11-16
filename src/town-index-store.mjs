@@ -388,7 +388,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     copy: via((c) => indexCopy(c)),
     // the page's rows under the connection, its composition after it is back (POS-1064; storeAnswer § then)
     doorstep: via((c, handle, _asOf, opts) => doorstepRows(c, handle, opts), (rows, handle, _asOf, opts) => (rows ? doorstepFromRows(rows, handle, opts) : null)),
-    residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
+    // the house read's per-resident segments: their rows under the connection, their composition after it is back (POS-1081; storeAnswer § then)
+    residentSegments: via((c, handle, _fresh, standing) => residentSegmentsRows(c, handle, standing), (rows, handle, fresh, standing) => residentSegmentsFromRows(rows, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
     lastActiveFor: via((c, handles) => lastActiveFor(c, handles)),
@@ -886,20 +887,44 @@ export async function mailWindow(q, handles, house, sinceDay) {
     UNION SELECT ${cols} FROM town_letters WHERE from_h = ANY($2::text[]) AND date >= $3`, [[...handles], [...house], sinceDay])).rows;
 }
 
-/** One resident's own segments, at the house read's bounds (composed by house-bundle.mjs § residentSegmentsOf). */
+/** One resident's own segments, at the house read's bounds (composed by house-bundle.mjs § residentSegmentsOf): the rows, then the composition (POS-1081). */
 export async function residentSegments(q, handle, fresh, standing = null) {
-  const { residentSegmentsOf, DOORSTEP_INBOX: HOUSE_INBOX } = await import("./house-bundle.mjs");
+  return residentSegmentsFromRows(await residentSegmentsRows(q, handle, standing), handle, fresh, standing);
+}
+
+/**
+ * ONE RESIDENT'S SEGMENTS, LOADED (POS-1081). The SQL half of `residentSegments`: every row the five segments need, read in the one READ ONLY snapshot the caller
+ * holds, in the order they were always read, and NOTHING composed: no letter excerpted, no law or card parsed, no page built. `storeIndexPooled` hands the
+ * connection back after this and runs `residentSegmentsFromRows` after it, so the house read's per-resident JavaScript no longer runs with a pen transaction open
+ * (the same boundary `doorstepRows` / `doorstepFromRows` drew for the doorstep, POS-1064).
+ */
+export async function residentSegmentsRows(q, handle, standing = null) {
+  const { DOORSTEP_INBOX: HOUSE_INBOX } = await import("./house-bundle.mjs");   // the caller's own module, already loaded: the house read's inbox bound, as before
   const one = (sql, params) => count(q, sql, params);
-  return residentSegmentsOf({
-    mail: await mailList(q, handle, "inbox", { limit: HOUSE_INBOX }),
-    awaiting: await mailAwaiting(q, handle, { offset: 0, standing }),
-    stamps: await stampsDetail(q, handle),
-    window: await windowRead(q, handle, fresh),
+  return {
+    mail: await mailPageRows(q, handle, "inbox", { limit: HOUSE_INBOX }),
+    awaiting: await mailAwaitingRows(q, handle, { offset: 0, standing }),
+    stamps: await stampsDetailRows(q, handle),
+    window: await cardRow(q, handle),
+    asOf: await townIndexAsOf(q),
     pendingOutbox: await outboxSettled(q, handle),
     counts: {
       received: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND to_h = $1", [handle]),
       sent: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND from_h = $1", [handle]),
     },
+  };
+}
+
+/** ONE RESIDENT'S SEGMENTS, COMPOSED (POS-1081): the segments from `residentSegmentsRows`' rows, with no store and no connection. */
+export async function residentSegmentsFromRows(rows, handle, fresh, standing = null) {
+  const { residentSegmentsOf } = await import("./house-bundle.mjs");
+  return residentSegmentsOf({
+    mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
+    awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset: 0, standing }),
+    stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
+    window: windowOfRow(rows.window, handle, fresh, rows.asOf),
+    pendingOutbox: rows.pendingOutbox,
+    counts: rows.counts,
   }, handle);
 }
 
