@@ -160,7 +160,12 @@ export async function regionOne(q, slug) {
 
 /** The bulletin's listing: every posting's listing line, by slug, bytewise. */
 export async function bulletinList(q) {
-  return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows.map(bulletinListing);
+  return (await bulletinRows(q)).map(bulletinListing);
+}
+
+/** The bulletin's rows as the store holds them: the SQL half of bulletinList (POS-1064: the doorstep loads rows under the connection and lists them after). */
+async function bulletinRows(q) {
+  return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows;
 }
 
 /** The bulletin's teaser page (read_bulletin's paged answer, and the doorstep's teaser). */
@@ -193,6 +198,12 @@ export async function stampsRoster(q, { limit, offset } = {}) {
 
 /** One handle's stamps detail: its balance row, with the funding and keeping rows of its parties. */
 export async function stampsDetail(q, handle) {
+  const r = await stampsDetailRows(q, handle);
+  return stampsDetailOf(r.row, { holoRows: r.holoRows, keepingRows: r.keepingRows });
+}
+
+/** The SQL half of stampsDetail: the balance row and the funding rows of the handle's parties (the doorstep composes them after the connection is back). */
+async function stampsDetailRows(q, handle) {
   const row = (await q.query("SELECT balance, mint_count, staked FROM town_stamps WHERE handle = $1", [handle])).rows[0];
   const parties = await stampParties(handle, q);   // the registry through the held client, never a second pool while this transaction is open (POS-963)
   const holoRows = (await q.query(
@@ -201,7 +212,7 @@ export async function stampsDetail(q, handle) {
       WHERE h.party = ANY($1::text[]) ORDER BY h.date COLLATE "C", h.seq, r.seq`, [parties])).rows;
   const keepingRows = (await q.query(
     `SELECT pot, n, epoch, date FROM town_funding_keeping_mint WHERE party = ANY($1::text[]) ORDER BY date COLLATE "C", seq`, [parties])).rows;
-  return stampsDetailOf(row, { holoRows, keepingRows });
+  return { row, holoRows, keepingRows };
 }
 
 /** The pot board's rows: each pot with its roll, receipts, escrow and stakers, by id (bytewise where sqlite compared text), and the funding ledger's invalid lines. */
@@ -373,7 +384,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     // the doorstep's and the house's reads (group 3)
     asOf: via((c) => townIndexAsOf(c)),
     copy: via((c) => indexCopy(c)),
-    doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
+    // the page's rows under the connection, its composition after it is back (POS-1064; storeAnswer § then)
+    doorstep: via((c, handle, _asOf, opts) => doorstepRows(c, handle, opts), (rows, handle, _asOf, opts) => (rows ? doorstepFromRows(rows, handle, opts) : null)),
     residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
@@ -432,7 +444,12 @@ export async function mailList(q, handle, box = "inbox", opts = {}) {
 }
 
 /** One box's page: { total, limit, offset, letters }. */
-export async function mailPage(q, handle, box, { since, until, limit, offset } = {}) {
+export async function mailPage(q, handle, box, opts = {}) {
+  return mailPageOf(await mailPageRows(q, handle, box, opts));
+}
+
+/** The SQL half of mailPage: the box's total and its page of rows, unexcerpted. */
+async function mailPageRows(q, handle, box, { since, until, limit, offset } = {}) {
   const where = [`${box === "outbox" ? "from_h" : "to_h"} = $1`];
   if (box !== "outbox") where.push("(box = 'inbox' OR box IS NULL)");
   const params = [handle];
@@ -444,8 +461,9 @@ export async function mailPage(q, handle, box, { since, until, limit, offset } =
   const total = await count(q, `SELECT COUNT(*) AS n FROM town_letters ${clause}`, params);
   const rows = (await q.query(`SELECT ${LETTER_COLS} FROM town_letters ${clause} ORDER BY ${NEWEST} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, n, start])).rows;
-  return { total, limit: n, offset: start, letters: rows.map(excerpt) };
+  return { total, n, start, rows };
 }
+const mailPageOf = ({ total, n, start, rows }) => ({ total, limit: n, offset: start, letters: rows.map(excerpt) });
 
 /** How many letters sit in a resident's outbox. */
 export async function outboxSettled(q, handle) {
@@ -476,12 +494,20 @@ export async function officeHandles(q) {
 // by the readers that want it, residentList for one), never a card.
 let _roster = { asOf: undefined, entries: null };
 export async function roster(q) {
+  return rosterOf(await rosterRows(q));
+}
+
+/** The SQL half of roster: the kept entries when the store's head has not moved, else the cards' rows (POS-1064: parsed after the connection is back). */
+async function rosterRows(q) {
   const asOf = await townIndexAsOf(q);
-  if (_roster.entries && _roster.asOf === asOf) return _roster.entries;
-  const rows = (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows;
-  const entries = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
-  _roster = { asOf, entries };
-  return entries;
+  if (_roster.entries && _roster.asOf === asOf) return { asOf, entries: _roster.entries };
+  return { asOf, rows: (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows };
+}
+function rosterOf({ asOf, entries, rows }) {
+  if (entries) return entries;
+  const built = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
+  _roster = { asOf, entries: built };
+  return built;
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
@@ -595,8 +621,11 @@ export async function townSummary(q) {
 
 /** A resident's stored card, parsed, or null. */
 async function card(q, handle) {
-  const row = (await q.query("SELECT json FROM town_residents WHERE handle = $1", [handle])).rows[0];
+  const row = await cardRow(q, handle);
   return row ? JSON.parse(row.json) : null;
+}
+async function cardRow(q, handle) {
+  return (await q.query("SELECT json FROM town_residents WHERE handle = $1", [handle])).rows[0];
 }
 
 /** The freshness context for a row the STORE answered: dated by the store's head (home's rule). */
@@ -616,15 +645,21 @@ export async function resident(q, handle, fresh = null) {
 
 /** A resident's window read (queries.mjs § windowReadOf), or null. */
 export async function windowRead(q, handle, fresh = null) {
-  const d = await card(q, handle);
+  return windowOfRow(await cardRow(q, handle), handle, fresh, await townIndexAsOf(q));
+}
+/** The window from the resident's stored card row (the card is parsed here, after the SQL: POS-1064). The freshness is dated by the store's head `asOf`, as storeFresh dates it. */
+function windowOfRow(row, handle, fresh, asOf) {
+  const d = row ? JSON.parse(row.json) : null;
   if (!d) return null;
-  return windowReadOf(d.window_state ?? null, handle, await storeFresh(q, handle, fresh));
+  return windowReadOf(d.window_state ?? null, handle, freshnessFor(handle, { ...fresh, asOf }));
 }
 
 /** The public-service-announcements fold over the PSA posting (queries.mjs § psaFoldOf). */
 export async function psaFold(q, opts = {}) {
-  const row = (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0];
-  return psaFoldOf(row?.json ?? null, opts);
+  return psaFoldOf(await psaRow(q), opts);
+}
+async function psaRow(q) {
+  return (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0]?.json ?? null;
 }
 
 // ── the household read v2's deep reads (POS-633 part 2) ──────────────────────
@@ -885,32 +920,33 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
-  // `nowMs` is injected only so the PSA window is testable against a fixed day —
-  // the doorstep is a page generated fresh each morning, so its default clock is
-  // the wall clock, exactly as "the last week" reads.
-  // `fresh` rides through to the window segment for one reason and it is a hard
-  // one: the bundle falsifier dispatches every segment's `serves` pointer through
-  // the real apex and deep-equals the answer. A window composed at
-  // `household read: "window"` and not composed here would fail that test — which
-  // is the falsifier doing exactly its job, and the reason to thread the context
-  // rather than to compose at the doors.
-  // `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see
-  // queries.mjs's bounds note above DOORSTEP_INBOX_SLIM, and its slimAwaiting,
-  // slimPsa and slimStamps helpers.
-  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
+  const rows = await doorstepRows(q, handle, opts);
+  return rows ? doorstepFromRows(rows, handle, opts) : null;
+}
+
+/**
+ * THE DOORSTEP, LOADED (POS-1064). The SQL half of `doorstep`: every row the page needs, read in the one READ ONLY snapshot the caller holds, in the order
+ * the page was always read, and NOTHING composed: no card parsed, no law folded, no page built. `storeIndexPooled` hands the connection back after this
+ * and runs `doorstepFromRows` (the composition) after it, so the page's JavaScript no longer runs with a transaction open on the pen (measured on an idle
+ * office: ~25 ms of 98-120 ms held was JavaScript between the core's statements, and under load that is a connection idle in its transaction while the
+ * thread is busy). Null when the store holds no such resident.
+ */
+export async function doorstepRows(q, handle, opts = {}) {
+  const { conversationsOffset = 0, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
   const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
   const one = (sql, params = []) => count(q, sql, params);
-  const parts = {
-    arrivals: (await roster(q)).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
-    awaiting: await mailAwaiting(q, handle, { offset, standing }),
-    mail: await mailList(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
-    stamps: await stampsDetail(q, handle),
-    bulletin: await bulletinTeaser(q, { limit: DOORSTEP_SIZES.bulletin }),
-    pulse: await metricsMail(q, { days: DOORSTEP_SIZES.pulseDays }),
-    window: await windowRead(q, handle, fresh),
-    psa: await psaFold(q, { now: nowMs }),
+  return {
+    asOf,
+    arrivals: await rosterRows(q),
+    awaiting: await mailAwaitingRows(q, handle, { offset, standing }),
+    mail: await mailPageRows(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
+    stamps: await stampsDetailRows(q, handle),
+    bulletin: await bulletinRows(q),
+    pulse: await metricsMailRows(q),
+    window: await cardRow(q, handle),
+    psa: await psaRow(q),
     pendingOutbox: await outboxSettled(q, handle),
     counts: {
       received: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND to_h = $1", [handle]),
@@ -921,6 +957,31 @@ export async function doorstep(q, handle, _asOf, opts = {}) {
       deliveries: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
       lastDelivery: (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE kind = 'delivery'`)).rows[0]?.d ?? null,
     },
+  };
+}
+
+/**
+ * THE DOORSTEP, COMPOSED (POS-1064): the page from `doorstepRows`' rows, with no store and no connection. The bundle's `as_of` is the STORE's head,
+ * whatever the caller passes: the segments came from this index. `nowMs` is injected only so the PSA window is testable against a fixed day; `fresh`
+ * rides through to the window segment (the bundle falsifier dispatches every segment's `serves` pointer through the real apex and deep-equals the
+ * answer); `slim` is the CONNECTOR SKIN's bound (queries.mjs's bounds note above DOORSTEP_INBOX_SLIM).
+ */
+export function doorstepFromRows(rows, handle, opts = {}) {
+  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false } = opts;
+  const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
+  const { asOf } = rows;
+  const parts = {
+    arrivals: rosterOf(rows.arrivals).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
+    awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset, standing: opts.standing ?? null }),
+    mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
+    stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
+    bulletin: bulletinTeaserOf(rows.bulletin.map(bulletinListing), { limit: DOORSTEP_SIZES.bulletin }),
+    pulse: metricsMailFrom(rows.pulse, { days: DOORSTEP_SIZES.pulseDays }),
+    window: windowOfRow(rows.window, handle, fresh, asOf),
+    psa: psaFoldOf(rows.psa, { now: nowMs }),
+    pendingOutbox: rows.pendingOutbox,
+    counts: rows.counts,
+    town: rows.town,
   };
   return doorstepOf(parts, handle, asOf, opts);
 }
@@ -999,14 +1060,25 @@ async function threadRoot(q, id) {
  * WRITTEN REPLY IS A QUEUED REPLY, POS-375).
  */
 export async function mailAwaiting(q, handle, opts = {}) {
+  const rows = await mailAwaitingRows(q, handle, opts);
+  const out = mailAwaitingFrom(rows, handle, opts);
+  return opts.resends?.size ? withResends(q, out, handle, opts.resends) : out;
+}
+/**
+ * The SQL half of mailAwaiting: the law's row, the standing letters' roots and the ledger's newest day. The standing roots are read when the row exists
+ * (a bent law is learned only when the row is parsed, after the connection is back; its roots are then dropped, as they always were).
+ */
+async function mailAwaitingRows(q, handle, opts = {}) {
   const row = (await q.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0];
+  const standing = row ? await standingRoots(q, opts.standing) : [];
+  return { row, standing, newest: await ledgerNewest(q) };
+}
+function mailAwaitingFrom({ row, standing, newest }, handle, opts = {}) {
   // a bent law (json that does not parse) is no law: null
   let law = null;
   try { law = row ? JSON.parse(row.json) : null; } catch { law = null; }
-  const standing = law ? await standingRoots(q, opts.standing) : [];
-  const { resends, ...rest } = opts;
-  const out = mailAwaitingOf(law, await ledgerNewest(q), handle, { ...rest, standing });
-  return resends?.size ? withResends(q, out, handle, resends) : out;
+  const { resends: _resends, ...rest } = opts;
+  return mailAwaitingOf(law, newest, handle, { ...rest, standing: law ? standing : [] });
 }
 
 /**
@@ -1097,9 +1169,12 @@ export async function search(q, term, { limit, offset } = {}) {
 
 /** The mail pulse from the ledger, letters and threads (queries.mjs § metricsMailOf). */
 export async function metricsMail(q, opts = {}) {
+  return metricsMailFrom(await metricsMailRows(q), opts);
+}
+/** The SQL half of metricsMail (the pulse's rows, unfolded: POS-1064). */
+async function metricsMailRows(q) {
   const newest = await ledgerNewest(q);
-  const dayCounts = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind")).rows
-    .map((r) => ({ date: r.date, kind: r.kind, n: Number(r.n) }));
+  const dayCountRows = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind")).rows;
   const totals = {
     deliveries: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
     bounces: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'bounce'"),
@@ -1108,6 +1183,10 @@ export async function metricsMail(q, opts = {}) {
     residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
   };
   const threadJsons = newest ? (await q.query("SELECT json FROM town_threads")).rows.map((t) => t.json) : [];
+  return { newest, dayCountRows, totals, threadJsons };
+}
+function metricsMailFrom({ newest, dayCountRows, totals, threadJsons }, opts) {
+  const dayCounts = dayCountRows.map((r) => ({ date: r.date, kind: r.kind, n: Number(r.n) }));
   return metricsMailOf({ newest, dayCounts, totals, threadJsons: () => threadJsons }, opts);
 }
 
