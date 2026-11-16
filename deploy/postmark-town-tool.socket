@@ -1,0 +1,29 @@
+[Unit]
+Description=Postmark town tools — the socket the ferry's town-tool stages call (POS-994)
+# The ferry (deploy/postmark-ferry.service) runs the town's tools/ferry.mjs,
+# tools/stamp-verify.mjs and tools/quest-progress.mjs --snapshot through
+# tools/town-tool-sandbox.mjs, which connects here. Each connection starts one
+# postmark-town-tool@.service: the one named tool, run in the town clone with no
+# environment, no network and every secret on the box out of sight. The why and
+# the exchange are in the header of tools/town-tool-sandbox.mjs.
+#
+# Only meepo (the ferry's user) and root can connect: the socket is meepo's,
+# 0600. meepo gains no right by it; it only connects to a socket, and connect()
+# works from the ferry's ProtectSystem=strict mount (a socket is not a file it
+# writes). One connection at a time, since only the ferry calls it and the
+# ferry runs under town.lock.
+#
+# Installed BEFORE the ferry unit that calls it, or that crossing's ferry stage
+# refuses ("the town-tool sandbox did not answer") before any mail moves; the
+# undo then puts the clone back. DEPLOY.md § POS-994.
+
+[Socket]
+ListenStream=/run/postmark-town-tool.sock
+Accept=yes
+SocketUser=meepo
+SocketGroup=meepo
+SocketMode=0600
+MaxConnections=1
+
+[Install]
+WantedBy=sockets.target

@@ -28,10 +28,11 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
+import { startToolSocket, stopToolSockets } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-ferry-witness-"));
-after(() => { stopSealSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
+after(() => { stopSealSockets(); stopToolSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const works = (shell) => spawnSync(shell, ["-c", "true"], { stdio: "ignore" }).status === 0;
 const SH = works("dash") ? "dash" : works("sh") ? "sh" : null;
@@ -46,11 +47,21 @@ const GIT_ENV = {
   GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@postmark.invalid",
 };
 
+// POS-994: the ferry, the verify and the quests run in the town-tool sandbox,
+// whose tools see PATH, HOME and TOWN_TZ only, so the stubs read their orders
+// from the environment merged with an orders file at a fixed path (__ORDERS__,
+// filled in per fixture) that runFerry() writes from the same STUB_ values.
+const ORDERS = `
+import { existsSync, readFileSync } from "node:fs";
+export const O = { ...process.env, ...(existsSync("__ORDERS__") ? JSON.parse(readFileSync("__ORDERS__", "utf8")) : {}) };
+`;
 const CALLS = `
 import { appendFileSync } from "node:fs";
-export const call = (line) => { if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, line + "\\n"); };
+import { O } from "./stub-orders.mjs";
+export const call = (line) => { if (O.STUB_CALLS) appendFileSync(O.STUB_CALLS, line + "\\n"); };
 `;
 const TOWN_TOOLS = {
+  "tools/stub-orders.mjs": ORDERS,
   "tools/stub-calls.mjs": CALLS,
   "tools/stamp-verify.mjs": `
 import { readFileSync } from "node:fs";
@@ -68,14 +79,16 @@ if (process.env.STUB_APPEND) appendFileSync("${LEDGER}", process.env.STUB_APPEND
 `,
   // The ferry's shell-facing contract here: it is passed --report <path>, and
   // writes what it did there (town tools/ferry.mjs § the crossing's report).
+  // POS-994: it runs --no-git in the sandbox; the client hands the report on.
   "tools/ferry.mjs": `
 import { writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 const a = process.argv;
 const report = a.includes("--report") ? a[a.indexOf("--report") + 1] : null;
-call("ferry " + (report ? "--report " + report : "(no report)"));
-if (report) writeFileSync(report, JSON.stringify({ ran: true, crossing: 293, delivered: 0, bounced: 0 }) + "\\n");
-process.exit(Number(process.env.STUB_FERRY_EXIT || 0));
+call("ferry " + (a.includes("--no-git") ? "--no-git " : "") + (report ? "--report" : "(no report)"));
+if (report) writeFileSync(report, JSON.stringify({ ran: true, crossing: 293, town_sha: null, date: "2026-11-15", delivered: 0, bounced: 0, committed: false, pushed: false, files: [] }) + "\\n");
+process.exit(Number(O.STUB_FERRY_EXIT || 0));
 `,
   "tools/quest-progress.mjs": `import { call } from "./stub-calls.mjs"; call("quests");\n`,
   // THE WITNESS, stubbed: records its verb and arguments, whether the clone was
@@ -117,6 +130,8 @@ const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
   // POS-988: the real client, which sends the seal to the socket stand-in
   "tools/town-seal-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-seal-sandbox.mjs"), "utf8"),
+  // POS-994: the real client, which runs the town's ferry, verify and quests through the socket stand-in
+  "tools/town-tool-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-tool-sandbox.mjs"), "utf8"),
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   // STUB_DRAIN_HANG names a marker: the drain writes it and then hangs, so a test
   // can kill the crossing mid-run, as an OOM or a stop timeout would.
@@ -154,7 +169,8 @@ function fixture({ ledger = ["row 1"], witnessTool = true, realWitness = false }
   const town = join(root, "town");
   const office = join(root, "office");
   const g = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...GIT_ENV } });
-  const tools = { ...TOWN_TOOLS, ...sealStubs(fwd(join(root, "seal-ctl.json"))) };
+  const orders = fwd(join(root, "orders.json"));
+  const tools = { ...Object.fromEntries(Object.entries(TOWN_TOOLS).map(([k, v]) => [k, v.replaceAll("__ORDERS__", orders)])), ...sealStubs(fwd(join(root, "seal-ctl.json"))) };
   if (!witnessTool || realWitness) delete tools["tools/witness-chain.mjs"];
   let key = null;
   if (realWitness) {
@@ -191,12 +207,12 @@ function ferryPayload() {
 
 function runFerry(fx, extra = {}) {
   fx.sealSocket ??= startSealSocket(join(fx.root, "seal.sock"));
+  fx.toolSocket ??= startToolSocket(join(fx.root, "tool.sock"), fx.town);
   writeFileSync(join(fx.root, "seal-ctl.json"), JSON.stringify({ calls: join(fx.root, "calls.txt"), verifyExit: extra.STUB_SEAL_VERIFY_EXIT }));
   const script = ferryPayload().replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
-  const res = spawnSync(SH, ["-c", script], {
-    cwd: fx.office, encoding: "utf8", timeout: 120000,
-    env: { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", TOWN_SEAL_SOCKET: fx.sealSocket, ...extra },
-  });
+  const env = { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", TOWN_SEAL_SOCKET: fx.sealSocket, TOWN_TOOL_SOCKET: fx.toolSocket, ...extra };
+  writeFileSync(join(fx.root, "orders.json"), JSON.stringify(Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith("STUB_")))));
+  const res = spawnSync(SH, ["-c", script], { cwd: fx.office, encoding: "utf8", timeout: 120000, env });
   const calls = existsSync(join(fx.root, "calls.txt")) ? readFileSync(join(fx.root, "calls.txt"), "utf8").trim().split("\n") : [];
   return { ...res, calls, witness: calls.filter((c) => c.startsWith("witness ")) };
 }
@@ -224,8 +240,10 @@ test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and 
   const r = runFerry(fx, env);
   assert.equal(r.status, 0, r.stderr);
   const ferry = r.calls.find((c) => c.startsWith("ferry "));
-  const report = ferry.replace("ferry --report ", "");
-  assert.notEqual(report, "(no report)", "the ferry is asked for its report");
+  assert.equal(ferry, "ferry --no-git --report", "the ferry runs --no-git in the sandbox and is asked for its report (POS-994)");
+  // the client hands the sandbox's report on to the unit's own path, which the witness reads
+  const report = /wreport=(\S+);/.exec(ferryPayload())[1];
+  assert.equal(JSON.parse(readFileSync(report, "utf8")).ran, true, "the report reached the unit's path");
   assert.equal(r.witness.length, 3, r.calls.join("\n"));
   assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`);
   assert.equal(r.calls[0], r.witness[0], "the crossing is owed before it does anything (Rivet's FIX: an outcome must never vanish)");
