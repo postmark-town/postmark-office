@@ -191,6 +191,15 @@ test("§ 3 on a real Postgres: one statement merges and clears, a profile left e
     const [r] = await landedIn((q) => pen.query(q), ["098_household_human_profile.sql"]);
     assert.deepEqual(r, { file: "098_household_human_profile.sql", state: "landed" });
   } finally { await pen.end(); }
+
+  // A STORE WITHOUT 098 (the code can deploy before the box migration): the column taken off this test store by its owner.
+  // Every registry read still answers, the house reading "nothing set", and the writer answers missingColumn rather than throwing.
+  const own = await ix.store.connect("world2_owner");
+  try { await own.query("ALTER TABLE households DROP COLUMN human_profile"); } finally { await own.end(); }
+  const before098 = await house();
+  assert.equal(before098.slug, "lantern-row", "the registry read answers on a store without 098");
+  assert.equal(before098.human_profile ?? null, null, "and reads nothing set");
+  assert.deepEqual(await setHouseholdHumanProfile({ slug: "lantern-row", set: { town_name: "DARKO" }, clear: [], ghId: KEEPER.id }), { missingColumn: true });
 });
 
 test("§ 4 every phrase that names the house's human says the town name and pronouns when set, and the house's words when not", () => {
@@ -290,6 +299,24 @@ test("§ 5 the door on a booted office: no key 401, an agent's key 403, another 
   assert.equal(seen.house?.human, "DARKO (he/him), Lantern Row's human", JSON.stringify(seen).slice(0, 600));
   assert.equal(seen.house.human_line, "builds lanterns");
   assert.ok(!JSON.stringify(seen).includes(PRIVATE_NAME), "the glance never says the private name");
+
+  // THE "BY" PHRASES, through the real reads (LAW, Wright 2026-11-06: "the public reads show them ("by <alias> for rei")"):
+  // the human's own act (human-of-*), and an act at a resident's wheel (079's hand and for), both inside the 12-hour window
+  const owner = await ix.store.connect("world2_owner");
+  try {
+    await owner.query("INSERT INTO acts (at, crossing, actor, action, object, class, household, payload) VALUES (now(), 1, 'human-of-lantern-row', 'say', 'the-town/porch', 'voice', 'hh:lantern-row', '{}')");
+    await owner.query("INSERT INTO acts (at, crossing, actor, action, object, class, household, payload, hand, for_handle, route) VALUES (now(), 1, 'wright', 'say', 'the-town/quay', 'voice', 'hh:lantern-row', '{}', 'human', 'wright', 'site')");
+  } finally { await owner.end(); }
+  const BYS = ["DARKO (he/him) for wright", "DARKO (he/him), Lantern Row's human"];
+  const own = await (await fetch(`${base}/household?read=happened`, { headers: { authorization: `Bearer ${keeperSignIn}` } })).json();
+  assert.deepEqual((own.rows ?? []).map((r) => r.by).sort(), BYS, `the house's own happened read: ${JSON.stringify(own).slice(0, 600)}`);
+  const pub = await (await fetch(`${base}/household?read=happened&household=lantern-row`)).json();
+  assert.equal(pub.public, true, JSON.stringify(pub).slice(0, 300));
+  assert.deepEqual((pub.rows ?? []).map((r) => r.by).sort(), BYS, `the public happened read (POS-1027): ${JSON.stringify(pub).slice(0, 600)}`);
+  assert.ok(!JSON.stringify(pub).includes(PRIVATE_NAME), "the public happened read never says the private name");
+  const lines = (await glance()).happened;
+  assert.ok(lines?.rows?.some((l) => l.includes("by DARKO (he/him), Lantern Row's human")), JSON.stringify(lines));
+  assert.equal(lines.key, "by <resident> · by DARKO (he/him), Lantern Row's human (acting themselves) · by DARKO (he/him) for <resident> (at its wheel)");
 
   const cleared = await patch({ pronouns: "" }, keeperSignIn);
   assert.equal(cleared.status, 200);
