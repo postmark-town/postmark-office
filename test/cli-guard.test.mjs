@@ -115,6 +115,7 @@ const ROSTER = {
   // src/
   "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
   "src/town-tool.mjs": { args: [], code: 2, needle: "usage: town-tool.mjs run <name> --clone <town clone>" }, // POS-994: the shell's door to a pinned town module
+  "src/stamp-verify-pinned.mjs": { args: [], code: 2, needle: "usage: stamp-verify-pinned.mjs --pinned" }, // POS-994: the pinned verifier, with the pinned key
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
@@ -219,6 +220,8 @@ const ROSTER = {
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   // POS-988: the sandboxed seal's client refuses with no --clone before it reads a file or a socket.
   "tools/town-seal-sandbox.mjs": { args: [], code: 2, needle: "usage: town-seal-sandbox.mjs --clone" },
+  // POS-994: the sandboxed town tools' client refuses with no tool or no --clone before it reads a file or a socket.
+  "tools/town-tool-sandbox.mjs": { args: [], code: 2, needle: "usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone" },
   "tools/train-week-check.mjs": { args: [], code: 2, needle: "usage: node tools/train-week-check.mjs" },
   "tools/usdc-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/vessel-parity.mjs": { args: ["--world", NOWHERE], env: NO_PG, code: 9, needle: "vessel-parity tripped" },

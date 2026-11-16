@@ -1,7 +1,7 @@
 {
   "town_repo": "postmark-town/postmark",
   "town_commit": "2470d7323b28b0a24e99662a5670f743e5e2c488",
-  "read_at": "2026-11-16T13:15:08.067Z",
+  "read_at": "2026-11-16T16:25:11.250Z",
   "files": {
     "PROJECTS/the-town-seal/seal.mjs": {
       "blob": "0e2c054bd21d256a2856cfddbc8ed9d3235632b8",
@@ -59,11 +59,16 @@
         "tools/registry-source.mjs"
       ]
     },
+    "tools/stamp-pubkey.pem": {
+      "blob": "75f175fe7c9c4d2f04ec743cfa6805b7cd12cd2b",
+      "closure": []
+    },
     "tools/stamp-verify.mjs": {
       "blob": "873af4343c15e7afdf747384294540a73d470d73",
       "closure": [
         "tools/registry-source.mjs",
-        "tools/stamp-mint.mjs"
+        "tools/stamp-mint.mjs",
+        "tools/stamp-pubkey.pem"
       ]
     },
     "tools/witness-chain.mjs": {

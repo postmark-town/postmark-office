@@ -37,7 +37,7 @@ import { existsSync, realpathSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { importTownTool } from "../../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
+import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS-994: the town modules are the office pinned copies, checked against the clone
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
 import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia } from "../../src/stamp-lines.mjs";
@@ -140,7 +140,12 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
   const putBack = () => {
     if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived && git(clone, "rev-parse", "HEAD") === arrivedAt) writeFileSync(ledger, arrived);
   };
-  const verifyLedger = verify ?? (await importTownTool(clone, "stamp-verify.mjs")).verifyStampLedger; // POS-994: the pinned copy
+  // POS-994: the pinned verifier, answering to the PINNED public key (the trust root)
+  const verifyLedger = verify ?? await (async () => {
+    const { verifyStampLedger } = await importTownTool(clone, "stamp-verify.mjs");
+    const pubkeyPem = readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8");
+    return (repo, opts = {}) => verifyStampLedger(repo, { ...opts, pubkeyPem });
+  })();
   arrive();
   let raced = 0;
   try {

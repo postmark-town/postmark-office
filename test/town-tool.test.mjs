@@ -172,8 +172,11 @@ function walk(dir) {
 // EXEMPT BY NAME (Wright, POS-994, 2026-11-16 08:5x EST). The stamp sandbox's
 // purpose is to run the --town checkout's own engines against this office tree;
 // it refuses to start where a mint key is present (stamp-sandbox.mjs §
-// stampKeyRefusal, held below). Nothing else is exempt.
-const SOURCE_LAW_EXEMPT = new Set(["tools/stamp-sandbox.mjs"]);
+// stampKeyRefusal, held below). The one other: the pinned verifier's runner
+// (src/stamp-verify-pinned.mjs), which imports only from the pinned folder that
+// townToolArgv checked against the clone and handed it (Wright's pubkey pin,
+// POS-994, 2026-11-16). Nothing else is exempt.
+const SOURCE_LAW_EXEMPT = new Set(["tools/stamp-sandbox.mjs", "src/stamp-verify-pinned.mjs"]);
 
 test("no office file reaches a pinned town module except through the loader", () => {
   const names = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
@@ -434,6 +437,7 @@ const STRONG_EXEMPT = new Map([
   ["tools/town-pins.mjs", "the pin writer reads the town's modules to pin them"],
   ["tools/stamp-sandbox.mjs", "the stamp sandbox: exempt by name (Wright, POS-994); it refuses to run where a key is"],
   ["tools/stamp-sandbox-script.mjs", "the stamp sandbox's script, run only by the sandbox"],
+  ["src/stamp-verify-pinned.mjs", "the pinned verifier's runner: it imports only from the folder townToolArgv checked and handed it"],
 ]);
 // Known shell reaches, each named with the issue that removes it.
 const SHELL_ALLOW = [

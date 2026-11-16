@@ -39,7 +39,7 @@
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { importTownTool } from "../../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
+import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS-994: the town modules are the office pinned copies, checked against the clone
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf, takesKeyBase } from "../../src/mint-inputs.mjs";
 
@@ -171,7 +171,8 @@ async function main() {
   if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 067 first"); return 2; }
   const quests = existsSync(join(clone, "tools", "quest-progress.mjs")) ? await importTownTool(clone, "quest-progress.mjs") : null;
   const report = parityOf(engine, clone, store, { quests });
-  const control = verifyStampLedger(clone);
+  // POS-994: the verifier answers to the PINNED public key, the trust root
+  const control = verifyStampLedger(clone, { pubkeyPem: readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8") });
   report.control = { ok: control.ok, problems: control.problems.slice(0, 5) };
   report.ok = report.ok && control.ok;
   if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));

@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PIN_ROOT, relativeImports } from "../../src/town-tool.mjs";
-import { MODULES, collect, manifest } from "../../tools/town-pins.mjs";
+import { DATA_DEPS, MODULES, collect, manifest } from "../../tools/town-pins.mjs";
 
 /** The pin root the loader reads in this process. */
 export const pinRootNow = () => process.env.TOWN_PINS_DIR || PIN_ROOT;
@@ -69,7 +69,8 @@ export function copyTownModule(fromTown, toTown, name) {
     seen.add(p);
     mkdirSync(dirname(join(toTown, p)), { recursive: true });
     copyFileSync(join(fromTown, p), join(toTown, p));
-    for (const d of relativeImports(p, readFileSync(join(fromTown, p), "utf8"))) walk(d);
+    if (!/\.m?js$/.test(p)) return; // data (the verifier's public key): no imports
+    for (const d of [...relativeImports(p, readFileSync(join(fromTown, p), "utf8")), ...(DATA_DEPS[p] ?? [])]) walk(d);
   };
   walk(`tools/${name}`);
 }

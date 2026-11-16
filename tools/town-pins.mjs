@@ -49,13 +49,25 @@ export const MODULES = [
 export { relativeImports };
 
 /** { path: { bytes, deps } } for the modules and their closures, read by `read(path)`. */
+// DATA THE CODE TRUSTS, pinned beside it (Wright, POS-994, 2026-11-16). The stamp
+// ledger's public key is what the verifier's signatures answer to: pinned as part
+// of stamp-verify's closure, the clone's copy is held to it like a module (a swapped
+// key stops by name), and the office verifies with the PINNED key
+// (src/stamp-verify-pinned.mjs). A town without the file pins none (a fixture).
+export const DATA_DEPS = Object.freeze({ "tools/stamp-verify.mjs": Object.freeze(["tools/stamp-pubkey.pem"]) });
+
 export function collect(read, modules = MODULES) {
   const files = new Map();
   const walk = (p) => {
     if (files.has(p)) return;
     if (p.startsWith("..")) throw new Error(`${p} is outside the town repo`);
     const bytes = read(p);
-    const deps = relativeImports(p, bytes.toString("utf8"));
+    const deps = /\.m?js$/.test(p) ? relativeImports(p, bytes.toString("utf8")) : [];
+    for (const d of DATA_DEPS[p] ?? []) {
+      let data = null;
+      try { data = read(d); } catch { /* a town without it pins none */ }
+      if (data != null) { deps.push(d); if (!files.has(d)) files.set(d, { bytes: data, deps: [] }); }
+    }
     files.set(p, { bytes, deps });
     deps.forEach(walk);
   };
@@ -106,6 +118,7 @@ export function checkPins(root = PIN_ROOT, { townBlob, complete = resolve(root) 
   }
   for (const p of listPinned(root)) if (!pins.files[p]) problems.push(`${p}: a file under the pins that PINS.json does not name`);
   if (complete) for (const m of MODULES) if (!pins.files[`tools/${m}`]) problems.push(`tools/${m}: in MODULES, not pinned`);
+  if (complete) for (const [m, data] of Object.entries(DATA_DEPS)) for (const d of data) if (!pins.files[m]?.closure.includes(d)) problems.push(`${d}: the data ${m} trusts, not pinned in its closure`);
   return problems;
 }
 

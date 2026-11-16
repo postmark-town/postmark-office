@@ -151,6 +151,16 @@ export function describe({ split, shared }) {
 }
 `);
 
+// THE DATING RULE's step 2 runs the town's verifier over the planned ledger, and the
+// office checks stamp-verify (with the public key it trusts) against the pins before
+// the replay starts (src/house-key.mjs § replayHolds). These fixtures' drains are
+// not tests of the verifier (drain-signs runs the real one), so a stand-in that
+// finds no problem, and a stand-in key, pinned with the rest.
+writeFileSync(join(engineDir, "stamp-verify.mjs"), `
+export function verifyStampLedger() { return { ok: true, lines: 0, minted: 0, notes: [], problems: [] }; }
+`);
+writeFileSync(join(engineDir, "stamp-pubkey.pem"), "a stand-in public key\n");
+
 process.env.STAMP_KEY = keyFile;
 process.env.TOWN_PINS_DIR = pinTown(ENGINE_TOWN);
 

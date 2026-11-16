@@ -50,6 +50,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const PIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "town-pins");
+const VERIFY_RUNNER = join(dirname(fileURLToPath(import.meta.url)), "stamp-verify-pinned.mjs");
 
 // The office suite reads a town clone pinned by test/clone-pins.json, which is
 // not the commit these pins were read at, so its helper writes pins for THAT
@@ -293,6 +294,10 @@ export function townToolArgv(clone, name, args = [], opts = {}) {
     throw new Error(`townToolArgv(${name}): --repo ${args[at + 1]} is not the clone the pin was checked against (${clone})`);
   }
   const named = at === -1 && REPO_DEFAULTING.has(name) ? [...args, "--repo", clone] : [...args];
+  // The verifier runs with the PINNED public key, the trust root (Wright, POS-994,
+  // 2026-11-16): the town's CLI reads the clone's key, so the office's runner calls
+  // the pinned verifier's library with the pinned key instead (src/stamp-verify-pinned.mjs).
+  if (name === "stamp-verify.mjs") return [VERIFY_RUNNER, "--pinned", dirname(path), ...named];
   return [path, ...named];
 }
 

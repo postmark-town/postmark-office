@@ -622,9 +622,10 @@ test("F8 · the unit runs the drain AFTER the crash recovery and BEFORE the swee
   const unit = readFileSync(join(ROOT, "deploy", "postmark-ferry.service"), "utf8");
   const at = (needle) => { const i = unit.indexOf(needle); assert.notEqual(i, -1, `the unit no longer contains: ${needle}`); return i; };
 
-  const clean = at('clean -fdq -- WHITE_PAGES');
+  const clean = at('clean -fdxq -- WHITE_PAGES TOWN_BULLETIN');
   const drain = at("tools/town-drain-run.mjs");
-  const sweep = at("node tools/ferry.mjs");
+  // POS-994: the sweep is the town's ferry.mjs, run through the town-tool sandbox
+  const sweep = at("town-tool-sandbox.mjs ferry");
 
   assert.ok(clean < drain,
     "AFTER the reset/clean pair, which would otherwise throw away everything the drain just wrote");

@@ -35,8 +35,13 @@ WorkingDirectory=/srv/postmark-office
 # twin assumed an ephemeral checkout): a crashed prior run leaves
 # moved-but-uncommitted letters; reset restores them to their outboxes (HEAD
 # keeps any committed-but-unpushed office work), clean is scoped to
-# WHITE_PAGES so nothing else is ever touched. The ledger-derived dedupe then
-# re-sweeps idempotently.
+# WHITE_PAGES and TOWN_BULLETIN so nothing else is ever touched. The
+# ledger-derived dedupe then re-sweeps idempotently. The clean takes ignored
+# files too (-x, POS-994): those two directories are where the sandboxed town
+# tools can write, and an ignored file a refused tool planted there would
+# otherwise outlive the refusal (git add and a plain clean both pass it by).
+# Neither directory holds an untracked or ignored file of anyone's between
+# crossings (read on the box 2026-11-14: none).
 # After the crossing, the mint pass (gold plan postmark-mint): derive any owed
 # stamp lines from the fresh mail-ledger, sign with the box key, verify
 # (chain + signatures + replay + conservation), and only a green verify
@@ -106,6 +111,26 @@ WorkingDirectory=/srv/postmark-office
 # outputs only when the sandboxed seal and verify both exit 0; anything else
 # exits 1 here. The stage, the undo, the witness record and this shell's commit
 # are unchanged. The sandbox is deploy/postmark-town-seal@.service.
+# THE TOWN'S TOOLS RUN WITH NONE OF THIS UNIT'S RIGHTS EITHER (POS-994, shape A,
+# Wright 2026-11-14). tools/ferry.mjs, tools/stamp-verify.mjs and
+# tools/quest-progress.mjs --snapshot are town code from the clone's tools/, and
+# measured they need TOWN_TZ, git reads and their own writes in the clone, and
+# no key, no credential and no network. So each runs through
+# tools/town-tool-sandbox.mjs in postmark-town-tool@.service: as meepo, with no
+# env file, no network, /srv, /etc and the homes out of sight, the clone
+# read-only but WHITE_PAGES and TOWN_BULLETIN, and its .git read-only. The ferry
+# runs there --no-git, and the client keeps what needs rights: the pull before,
+# and the commit and push after, with ferry.mjs's own message, push retry and
+# report fields. The client refuses (exit 1, so the undo below puts the clone
+# back) on a symlink in the clone's writable directories, or a change outside
+# what the tool writes. The stage names and the witness record are unchanged.
+# The sandbox runs the office's PINNED copies of stamp-verify and quest-progress
+# (POS-994 /b, through src/town-tool.mjs's check against the clone; a pin stop
+# there exits 3 here, by name); the ferry, which no pin covers, stays the clone's
+# own, keyless. The town tools that hold a key run outside the sandbox, as the
+# office's pinned copies through src/town-tool.mjs run: tools/stamp-mint.mjs
+# below (the stamp key) and tools/witness-chain.mjs above (the witness key); the
+# owed path's tools/stamp-verify-owed.mjs too (store mode only).
 # THE TOWN-LOG DRAIN RIDES FIRST (POS-44 wave 4, the ferry bridge). Flag-on,
 # a join, a paper edit and a sent letter are ROWS in the office's town log, and
 # this is the step that turns them into the record. Three things pin it to this
@@ -162,10 +187,11 @@ WorkingDirectory=/srv/postmark-office
 # configured and owes nothing. `wstage` names the step a refusal stopped at.
 #
 # THE TOWN'S CODE HERE IS THE OFFICE'S PINNED COPY (POS-994; Darko 2026-11-15
-# 18:03 EST: "a mismatch stops that part by name"). witness-chain, stamp-verify,
-# stamp-mint and quest-progress run through src/town-tool.mjs run, which hashes
-# the clone's copy and its closure against src/town-pins/PINS.json and runs the
-# office's pinned copy, handed the clone by --repo. A mismatch runs nothing,
+# 18:03 EST: "a mismatch stops that part by name"). witness-chain and stamp-mint
+# run through src/town-tool.mjs run; stamp-verify and quest-progress run in the
+# keyless sandbox (#1048), which takes the same check. Each hashes the clone's copy
+# and its closure against src/town-pins/PINS.json and runs the office's pinned
+# copy, handed the clone by --repo. A mismatch runs nothing,
 # says which file on stderr ([town-tool] ...) and exits 3: in the chain that is
 # a refused step at its wstage (undo puts the clone back, the witness owes the
 # crossing). The witness keeps owing when the pin stops it (Truey's review of
@@ -200,7 +226,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
              else echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; fi; }; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
       git -C "$TOWN_CLONE" reset --hard -q HEAD; \
-      git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES; \
+      git -C "$TOWN_CLONE" clean -fdxq -- WHITE_PAGES TOWN_BULLETIN; \
       echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; \
     witness "$rc"; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
@@ -208,12 +234,12 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
     /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
       || echo "[witness] this crossing could not be opened: its outcome is still owed when it decides" >&2; fi; \
   owed_ok=0; \
-  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else /usr/bin/node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" --; fi; }; \
+  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone "$TOWN_CLONE"; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
-  git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
+  git -C "$TOWN_CLONE" clean -fdxq -- WHITE_PAGES TOWN_BULLETIN && \
   wstage=drain && /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
   git -C "$TOWN_CLONE" push -q && \
-  wstage=ferry && cd "$TOWN_CLONE" && node tools/ferry.mjs --report "$wreport" && \
+  wstage=ferry && cd "$TOWN_CLONE" && /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs ferry --clone "$TOWN_CLONE" --report "$wreport" && \
   wstage=mint && if [ "$STAMP_LINES" = store ]; then \
     if /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh; then \
       node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem --clone "$TOWN_CLONE"; \
@@ -236,7 +262,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=quests && if [ "$STAMP_LINES" = store ]; then \
     node /srv/postmark-office/world2/tools/quest-snapshot-run.mjs --clone "$TOWN_CLONE"; \
   else \
-    /usr/bin/node /srv/postmark-office/src/town-tool.mjs run quest-progress.mjs --clone "$TOWN_CLONE" -- --snapshot; \
+    /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs quests --clone "$TOWN_CLONE"; \
   fi && \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \
