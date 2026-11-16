@@ -32,6 +32,26 @@
 // at them. `retracted` writes none either — the resident did it, and the
 // backlog is for what happened TO you.
 //
+// ── A FOURTH, AND IT IS NOT A CLAIM (POS-731) ─────────────────────────────
+//
+//   mark-withdrawn   a published mark its author withdrew LEFT CANON: the
+//                    settlement's sweep took it out of the world and the store
+//                    retired it (`marks.status = 'retired'`, `retired_cause =
+//                    'settlement-withdraw'`, WLD-88)
+//
+// It is read from the `marks` table, not from `claims`. The store records no
+// claim retirement status, and the author's own request to withdraw is not the
+// mark leaving canon (it is a request until the settlement acts on it), so a
+// still-standing mark, a withdrawn DRAFT, a mark another door retired and
+// somebody else's mark all write nothing. What the store records is the window
+// the retirement was ruled in, not an instant: the instant is the SETTLEMENT
+// that window opened for, the derivation `alerts.mjs § settlementOfWindow`
+// already holds for the same retire step ("the settlement that took it"), and
+// the crossing is the ferry's crossing of that instant. The retirement's
+// `window` is the candle window the retire step ran in, the number the door's
+// own "already retired at candle N" refusal names; it is neither the cursor,
+// nor the claim's window, nor the settlement number.
+//
 // ── THE CURSOR IS THE FERRY'S CROSSING, AND IT IS SAID SO ──────────────────
 //
 // `since:` is the world's 00:00/12:00Z crossing (`crossings.mjs §
@@ -43,9 +63,24 @@
 import { currentCrossing } from "./crossings.mjs";
 import { causeOf, refusalCheckOf, opposedLawOf, receiptFrom } from "./mark-receipt.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { settlementOfWindow } from "./alerts.mjs"; // POS-731: the settlement a retirement window names (review-220-577 4a)
 
 /** How many ferry crossings back the doorstep's `outcomes` and my-marks' `refused` look. */
 export const RULINGS_SINCE_CROSSINGS = 2;
+
+/** `marks.retired_cause` for a published mark its author withdrew (world2/tools/retire-unpublished.mjs § WITHDRAW_CAUSE; bound by test/withdrawn-outcomes.test.mjs). */
+export const WITHDRAW_RETIRE_CAUSE = "settlement-withdraw";
+
+/**
+ * The withdrawn retirements this read cannot place on a crossing: a row that
+ * names no window opening to date the settlement by. Pure. A caller owes the
+ * reader a disclosure for these: a retirement that cannot be dated is not a
+ * retirement that did not happen.
+ */
+export function unplacedWithdrawals(withdrawn = []) {
+  return (withdrawn ?? []).filter((w) => w?.slug && w.retired_cause === WITHDRAW_RETIRE_CAUSE
+    && !settlementOfWindow(w.opens_at)).map((w) => w.slug);
+}
 
 /**
  * The events a set of `claims` rows implies for one resident, in cursor order.
@@ -59,8 +94,14 @@ export const RULINGS_SINCE_CROSSINGS = 2;
  * @param nowCrossing   the crossing this read is taken at
  * @param mine          a predicate: is this mark one of my residents'?
  * @param onMyGround    a Set of mark ids standing on ground the caller holds
+ * @param withdrawn     `marks` rows the settlement retired as withdrawn (POS-731):
+ *                      { slug, owner, retired_window, retired_cause, opens_at }
+ * @param mineOwners    a Set of the handles whose marks are the house's: the
+ *                      withdrawn event is the mark OWNER's, and nothing else
+ *                      (no slug prefix, no custody, no ground: the ground a
+ *                      withdrawn mark stood on is history this read does not rebuild)
  */
-export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine = () => false, onMyGround = new Set() }) {
+export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine = () => false, onMyGround = new Set(), withdrawn = [], mineOwners = new Set() }) {
   const events = [];
   // `at` IS ISO (Keemin, 2026-09-27: "yeah everything iso please"). The store
   // hands `decided_at` back as a Date, and String(Date) is "Sat Sep 26 2026 …",
@@ -137,6 +178,25 @@ export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine =
       }
     }
   }
+
+  // THE WITHDRAWN MARK LEAVING CANON (POS-731). Only a retirement the settlement
+  // ruled under the withdraw cause, on a mark one of this house's owners holds,
+  // dated by the settlement its window opened for. A row with no such date
+  // writes nothing here and is the caller's to disclose (`unplacedWithdrawals`).
+  for (const w of withdrawn ?? []) {
+    if (!w?.slug || w.retired_cause !== WITHDRAW_RETIRE_CAUSE) continue;
+    if (!mineOwners.has(w.owner)) continue;
+    const when = settlementOfWindow(w.opens_at);
+    if (!when) continue;
+    const c = crossingAt(when);
+    if (!within(c)) continue;
+    const win = Number(w.retired_window);
+    events.push({
+      kind: "mark-withdrawn", mark: w.slug, at: at(when), crossing: c,
+      window: Number.isInteger(win) ? win : null, yours: true, on_your_ground: false,
+      summary: `${w.slug} was withdrawn and left the world, retired at candle ${Number.isInteger(win) ? win : "?"}`,
+    });
+  }
   // ISO sorts as text in instant order; a null `at` sorts first.
   return events.sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")));
 }
@@ -181,9 +241,30 @@ export async function readClaimEffects({ key, handles = [], sinceCrossing, nowCr
   }
 
   const mine = (id, row) => mineSet.has(row?.claimant) || mineSet.has(String(id).split("/")[0]);
+
+  // THE RETIREMENTS (POS-731), a second read beside the docket's, for the house's
+  // own marks only. It is its own try on purpose: a store that answered the
+  // docket and not the marks table cannot say a withdrawn mark of yours left, and
+  // "nothing of yours was withdrawn" would be the confident empty answer this
+  // read exists to refuse. The claim events it did read stay, the answer says it
+  // is not whole, and `to_you`'s `complete` follows.
+  let withdrawn = [];
+  let problem = null;
+  if (mineSet.size) {
+    try {
+      const { withdrawnRetirementsSince } = await import("./world2-claims.mjs");
+      withdrawn = await withdrawnRetirementsSince(since, { owners: [...mineSet] });
+    } catch (e) {
+      problem = `the retirements of your withdrawn marks could not be read (${plainReason(e, "record", "the retirement record")})`;
+    }
+    const unplaced = unplacedWithdrawals(withdrawn);
+    if (!problem && unplaced.length)
+      problem = `${unplaced.length} withdrawn mark${unplaced.length === 1 ? "" : "s"} of yours (${unplaced.slice(0, 3).join(", ")}) left the world at a window the store does not date, so ${unplaced.length === 1 ? "it" : "they"} cannot be placed on a crossing`;
+  }
+  const events = claimEffectsFrom({ rows, sinceCrossing, nowCrossing, mine, onMyGround, withdrawn, mineOwners: mineSet });
   return {
-    readable: true, store: "docket",
-    events: claimEffectsFrom({ rows, sinceCrossing, nowCrossing, mine, onMyGround }),
+    readable: problem === null, store: "docket", events,
+    ...(problem ? { reason: problem, missing: "your withdrawn marks' retirements" } : {}),
   };
 }
 

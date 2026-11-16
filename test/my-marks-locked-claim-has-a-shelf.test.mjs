@@ -171,6 +171,12 @@ function store(rows, { honourStatuses = true, down = false } = {}) {
       // The registry, three fixed SELECTs: empty, so every handle is its own `solo:` house.
       if (/FROM households/.test(q) || /FROM household_pins/.test(q) || /FROM identities/.test(q)) return { rows: [] };
       if (/FROM registry_meta/.test(q)) return { rows: [{ key: "schema_version", value: 1 }] };
+      // The effects reader's second question (POS-731, world2-claims.mjs § withdrawnRetirementsSince): which of the house's
+      // marks the settlement retired as withdrawn. None here; it breaks with the docket, as a store that is down is down.
+      if (/^SELECT/i.test(q) && /FROM marks m LEFT JOIN windows w/.test(q)) {
+        if (down) throw new Error("the docket is down");
+        return { rows: [] };
+      }
       if (/^SELECT/i.test(q) && /FROM claims/.test(q)) {
         if (/claimant = ANY\(\$1::text\[\]\)/.test(q)) {          // claim-effects.mjs → world2-claims.mjs § claimRowsSince
           const [claimants = [], slugs = [], since] = args;
