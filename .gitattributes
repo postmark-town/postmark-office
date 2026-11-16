@@ -14,6 +14,9 @@
 # Systemd units run on the box. A CRLF in ExecStart fails as a missing file.
 *.service text eol=lf
 *.timer text eol=lf
+# POS-994: sockets too (postmark-town-seal.socket, postmark-town-tool.socket); a CRLF
+# checkout also reddens the tests that pin their lines (Truey's nit on #1048).
+*.socket text eol=lf
 # …and so do their DROP-INS, which the two lines above did not cover (found
 # 2026-09-10 while adding deploy/postmark-world2-office-tree.conf). A drop-in is
 # read by systemd exactly like the unit it extends: a CRLF here makes

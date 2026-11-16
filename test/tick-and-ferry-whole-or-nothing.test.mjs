@@ -41,10 +41,11 @@ import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
+import { startToolSocket, stopToolSockets } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-whole-"));
-after(() => { stopSealSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
+after(() => { stopSealSockets(); stopToolSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const works = (shell) => spawnSync(shell, ["-c", "true"], { stdio: "ignore" }).status === 0;
 const SH = works("dash") ? "dash" : works("sh") ? "sh" : null;
@@ -60,32 +61,48 @@ const GIT_ENV = {
 };
 
 // ── the town's tools, stubbed to their shell-facing contract ────────────────
+// POS-994: the ferry, the verify and the quests run in the town-tool sandbox,
+// whose tools see PATH, HOME and TOWN_TZ only. So the stubs take their orders
+// from the environment where they have one (the tick runs them directly) and
+// from an orders file at a fixed path otherwise, which run() writes from the
+// same STUB_ values (the stand-in socket does not confine reads). __ORDERS__ is
+// that path, filled in per fixture.
+const ORDERS = `
+import { existsSync, readFileSync } from "node:fs";
+export const O = { ...process.env, ...(existsSync("__ORDERS__") ? JSON.parse(readFileSync("__ORDERS__", "utf8")) : {}) };
+`;
 const CALLS = `
 import { appendFileSync } from "node:fs";
-export const call = (name) => { if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, name + "\\n"); };
+import { O } from "./stub-orders.mjs";
+export const call = (name) => { if (O.STUB_CALLS) appendFileSync(O.STUB_CALLS, name + "\\n"); };
 `;
+// The ferry's commit message, as the client writes it from the stub's report.
+const FERRY_DATE = "2026-11-15";
+const FERRY_SUBJECT = `ferry: 1 delivered, 0 bounced (${FERRY_DATE})`;
 const APPEND = `
 import { appendFileSync } from "node:fs";
 export const append = (file, rows) => { for (const r of String(rows).split("|")) appendFileSync(file, r + "\\n"); };
 `;
 const TOWN_TOOLS = {
+  "tools/stub-orders.mjs": ORDERS,
   "tools/stub-calls.mjs": CALLS,
   "tools/stub-append.mjs": APPEND,
   "tools/stamp-verify.mjs": `
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("verify");
-const n = existsSync(process.env.STUB_VERIFY_COUNT) ? Number(readFileSync(process.env.STUB_VERIFY_COUNT, "utf8")) + 1 : 1;
-writeFileSync(process.env.STUB_VERIFY_COUNT, String(n));
-if (process.env.STUB_VERIFY_HANG === String(n)) {
-  writeFileSync(process.env.STUB_HANG_MARK, "hanging");
+const n = existsSync(O.STUB_VERIFY_COUNT) ? Number(readFileSync(O.STUB_VERIFY_COUNT, "utf8")) + 1 : 1;
+writeFileSync(O.STUB_VERIFY_COUNT, String(n));
+if (O.STUB_VERIFY_HANG === String(n)) {
+  writeFileSync(O.STUB_HANG_MARK, "hanging");
   await new Promise((r) => setTimeout(r, 8000));
 }
 const bad = readFileSync("${LEDGER}", "utf8").split("\\n").findIndex((l) => l.includes("RED"));
 // POS-341: STUB_OWED_UNTIL names the row that pays this crossing's mints; until
 // the ledger holds it, the town's own "behind the mail" sentence is printed, in
 // the town's own words and on stderr, as tools/stamp-verify.mjs prints it
-const owed = process.env.STUB_OWED_UNTIL && !readFileSync("${LEDGER}", "utf8").includes(process.env.STUB_OWED_UNTIL);
+const owed = O.STUB_OWED_UNTIL && !readFileSync("${LEDGER}", "utf8").includes(O.STUB_OWED_UNTIL);
 if (bad !== -1 || owed) {
   const problems = [];
   if (bad !== -1) problems.push("line " + (bad + 1) + ": RED");
@@ -101,24 +118,29 @@ import { append } from "./stub-append.mjs";
 call("mint " + process.argv.slice(2).filter((a) => a.startsWith("--") && a !== "--key").join(" "));
 if (process.env.STUB_APPEND) append("${LEDGER}", process.env.STUB_APPEND);
 `,
+  // POS-994: the ferry runs --no-git in the sandbox, as ferry.mjs does then: it
+  // moves the mail and writes its report, and the client commits and pushes.
   "tools/ferry.mjs": `
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("ferry");
-if (process.env.STUB_FERRY_DELIVER) {
+const a = process.argv;
+if (!a.includes("--no-git")) { console.error("the stub ferry was run with git"); process.exit(9); }
+const d = O.STUB_FERRY_DELIVER ? 1 : 0;
+if (d) {
   mkdirSync("WHITE_PAGES/inbox", { recursive: true });
-  writeFileSync("WHITE_PAGES/inbox/" + process.env.STUB_FERRY_DELIVER + ".md", "a delivered letter\\n");
-  execFileSync("git", ["add", "WHITE_PAGES/inbox"]);
-  execFileSync("git", ["commit", "-qm", "ferry: crossing"]);
-  execFileSync("git", ["push", "-q"]);
+  writeFileSync("WHITE_PAGES/inbox/" + O.STUB_FERRY_DELIVER + ".md", "a delivered letter\\n");
 }
+const report = a.includes("--report") ? a[a.indexOf("--report") + 1] : null;
+if (report) writeFileSync(report, JSON.stringify({ ran: true, crossing: 293, town_sha: null, date: "${FERRY_DATE}", delivered: d, bounced: 0, committed: false, pushed: false, files: [] }));
 `,
   "tools/quest-progress.mjs": `
 import { writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("quests");
-if (process.env.STUB_QUESTS) writeFileSync("TOWN_BULLETIN/quests.md", process.env.STUB_QUESTS + "\\n");
+if (O.STUB_QUESTS) writeFileSync("TOWN_BULLETIN/quests.md", O.STUB_QUESTS + "\\n");
 `,
   "TOWN_BULLETIN/quests.md": "quests at the founding\n",
   "PROJECTS/the-town-seal/seal.json": "{\"seal\":\"founding\"}\n",
@@ -156,6 +178,8 @@ const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
   // POS-988: the real client, which sends the seal to the socket stand-in
   "tools/town-seal-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-seal-sandbox.mjs"), "utf8"),
+  // POS-994: the real client, which runs the ferry, the verify and the quests through the socket stand-in
+  "tools/town-tool-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-tool-sandbox.mjs"), "utf8"),
   // POS-341: the real tool, run against the town's stub verifier above
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   "deploy/settle-pass.mjs": `
@@ -292,7 +316,9 @@ function fixture(ledger) {
   const bin = join(root, "bin");
   const g = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...GIT_ENV } });
 
-  write(seed, { ...TOWN_TOOLS, ...sealStubs(fwd(join(root, "seal-ctl.json"))), [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
+  const orders = fwd(join(root, "orders.json"));
+  const tools = Object.fromEntries(Object.entries(TOWN_TOOLS).map(([k, v]) => [k, v.replaceAll("__ORDERS__", orders)]));
+  write(seed, { ...tools, ...sealStubs(fwd(join(root, "seal-ctl.json"))), [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
   // Byte-exact on every platform: a CRLF checkout would read as a dirty clone.
   g("init", "-q", "-b", "main", seed);
   g("-C", seed, "config", "core.autocrlf", "false");
@@ -320,6 +346,7 @@ function envFor(fx, extra) {
     STUB_VERIFY_COUNT: join(fx.root, "verify-count.txt"),
     STUB_HANG_MARK: join(fx.root, "hanging"),
     TOWN_SEAL_SOCKET: fx.sealSocket,
+    TOWN_TOOL_SOCKET: fx.toolSocket,
     ...extra,
   };
 }
@@ -349,14 +376,17 @@ function ferryScript(fx) {
   assert.ok(payload.includes("/srv/postmark-office/tools/town-drain-run.mjs") && payload.includes("/usr/bin/node"),
     "the ferry's drain path moved; the fixture root substitution would miss it");
   fx.sealSocket ??= startSealSocket(join(fx.root, "seal.sock"));
+  fx.toolSocket ??= startToolSocket(join(fx.root, "tool.sock"), fx.town);
   return payload.replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
 }
 
-/** The seal stubs' orders, from the same STUB_ variables the other stubs read. */
+/** The seal stubs' orders, and the sandboxed town tools' (POS-994), from the same STUB_ variables the other stubs read. */
 function sealOrders(fx, extra = {}) {
   writeFileSync(join(fx.root, "seal-ctl.json"), JSON.stringify({
     calls: join(fx.root, "calls.txt"), seal: extra.STUB_SEAL, verifyExit: extra.STUB_SEAL_VERIFY_EXIT, env: extra.STUB_SEAL_ENV,
   }));
+  const env = envFor(fx, extra);
+  writeFileSync(join(fx.root, "orders.json"), JSON.stringify(Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith("STUB_")))));
 }
 
 const run = (fx, argv, extra) => (sealOrders(fx, extra), spawnSync(SH, argv, { cwd: fx.office, env: envFor(fx, extra), encoding: "utf8", timeout: 120000 }));
@@ -488,7 +518,7 @@ test("ferry · the unit's script survives systemd's reading of it", () => {
   assert.doesNotMatch(payload, /\$\{/, "systemd substitutes ${VAR} inside a word, from its own environment");
   const trap = payload.indexOf("trap undo EXIT");
   assert.ok(trap !== -1, "the ferry carries no EXIT trap");
-  assert.ok(trap < payload.indexOf("town-drain-run.mjs") && trap < payload.indexOf("node tools/ferry.mjs"),
+  assert.ok(trap < payload.indexOf("town-drain-run.mjs") && trap < payload.indexOf("town-tool-sandbox.mjs ferry"),
     "the trap is armed before the first write");
   assert.ok(payload.indexOf("reset --hard -q HEAD", trap) !== -1, "the opening reset/clean pair stays as the backstop");
 });
@@ -503,7 +533,7 @@ test("ferry · control: a green crossing commits every pass and ends clean, with
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
-  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
+  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", FERRY_SUBJECT]);
   assert.doesNotMatch(r.stderr, /a gate refused/);
 });
 
@@ -512,7 +542,7 @@ test("ferry · a red verify after the mint leaves the clone at its last commit, 
   const r = run(fx, ["-c", ferryScript(fx)], { STUB_FERRY_DELIVER: "letter-1", STUB_APPEND: "mint row 2 RED" });
   assert.notEqual(r.status, 0, "the refusal is still loud: the unit fails");
   assert.equal(status(fx), "", "no mint row left on disk");
-  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "ferry: crossing", "the committed delivery stays");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), FERRY_SUBJECT, "the committed delivery stays");
   assert.equal(ledgerAt(fx), "row 1\n");
   assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
 });
@@ -659,7 +689,7 @@ test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint com
   assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append"), `the switch took the runner: ${calls(fx).join(", ")}`);
   assert.ok(calls(fx).includes("quests-run") && !calls(fx).includes("quests"), `and the quest snapshot on the store's key base: ${calls(fx).join(", ")}`);
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
-  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
+  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", FERRY_SUBJECT]);
 });
 
 test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its committed rows", { skip: fskip }, () => {
@@ -699,7 +729,7 @@ test("ferry · STAMP_LINES=store: a failed ingest skips the store mint, names it
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
   assert.deepEqual(fx.g("-C", fx.town, "log", "--format=%s", "-3").trim().split("\n"),
-    ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ferry: crossing"], "no mint commit, and the rest landed");
+    ["seal: re-seal at the crossing", "quests: crossing leaderboard", FERRY_SUBJECT], "no mint commit, and the rest landed");
 });
 
 test("ferry · STAMP_LINES=store: after a skipped mint a real red still stops the crossing", { skip: fskip }, () => {
