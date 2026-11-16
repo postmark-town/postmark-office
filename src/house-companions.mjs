@@ -12,8 +12,11 @@
 //     outbox and no owner overlay can ride them, and the owner gets exactly what a stranger gets.
 //   · THE DECLARED MEMBER LIST, NOT `ashore`: a member the town index holds no resident card for may still have a public outbox or a quest row its legacy door answers, and a
 //     missing card must not erase it. `residents` and `not_ashore` keep their meanings; these maps are keyed by every declared member, in the house's order.
+//   · THE DOORS' OWN HANDLE GRAMMAR: a declared member spelled outside what `GET /mail/<h>` and `GET /quests/<h>` route (door-handle.mjs) is `null` in both maps, key kept, no read made.
 //   · UNAVAILABLE IS NULL, EMPTY IS EMPTY: a read that could not be made (the store, the clone) is `null` for that member, as the legacy door's non-answer was; a read that
 //     succeeded and found nothing is `[]` (an outbox) or the board it composed. A failure for one member never takes another's down, and never reads as an empty answer.
+
+import { isDoorHandle } from "./door-handle.mjs";
 
 /** One companion read: its answer, or `null` (logged by name only, never by the error's text) when it could not be made. */
 async function soft(read, { what, handle, log }) {
@@ -30,6 +33,8 @@ export async function houseCompanions(members, { ix, log = (line) => console.err
   const outboxes = {};
   const quests = {};
   for (const handle of members ?? []) {
+    // a spelling the legacy doors refuse (not `[a-z0-9-]+`, as declared: no lower-casing, no alias) is `null` in both maps and no reader is called
+    if (!isDoorHandle(handle)) { outboxes[handle] = null; quests[handle] = null; continue; }
     outboxes[handle] = await soft(async () => (await ix.mailList(handle, "outbox", {})).letters, { what: "outbox", handle, log });
     quests[handle] = await soft(() => ix.questBoard(handle), { what: "quest board", handle, log });
   }

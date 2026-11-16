@@ -192,3 +192,34 @@ test("6 · ONE OFFICE REQUEST: one outbox read and one board read per declared m
   assert.ok(calls.questBoard.filter(([, opts]) => opts !== undefined).every(([, opts]) => opts.givers === false), "the only other board reads are the doorstep's compact ones");
   assert.equal(fetched, 0, "no HTTP fan-out from the office, internal or external");
 });
+
+test("7 · THE DOORS' HANDLE GRAMMAR: a declared member spelled outside `[a-z0-9-]+` is null in both maps, key kept, no reader called; accepted spellings are unchanged", { skip: SKIP }, async () => {
+  const ODD = ["Zed", "under_score", "dotted.name"];
+  const houses = { ...HOUSES, keemin: { ...HOUSES.keemin, residents: ["wright", ...ODD, "quiet"] } };
+  const real = store.storeIndexPooled(TOWN);
+  const calls = { mailList: [], questBoard: [] };
+  const ix = { ...real,
+    mailList: async (handle, box, opts) => { calls.mailList.push(handle); return real.mailList(handle, box, opts); },
+    questBoard: async (handle, opts) => { calls.questBoard.push([handle, opts]); return real.questBoard(handle, opts); } };
+  const h = await houseBundle({ household: "keemin" }, ctxFor(null, { ix, readers: { ...readers, registry: { registry: { households: houses }, pins: {} } } }));
+  assert.deepEqual(Object.keys(h.outboxes), ["wright", ...ODD, "quiet"], "every declared member keeps its key, spelled as declared");
+  assert.deepEqual(Object.keys(h.quests), ["wright", ...ODD, "quiet"]);
+  for (const odd of ODD) {
+    assert.equal(h.outboxes[odd], null, `${odd}: the legacy /mail door refuses this spelling`);
+    assert.equal(h.quests[odd], null, `${odd}: the legacy /quests door refuses this spelling`);
+  }
+  assert.deepEqual(calls.mailList, ["wright", "quiet"], "no outbox read for a refused spelling");
+  assert.deepEqual(calls.questBoard.filter(([, opts]) => opts === undefined).map(([m]) => m), ["wright", "quiet"], "no canonical board read for a refused spelling");
+  assert.deepEqual(json(h.outboxes.wright), json(await legacyOutbox("wright")), "an accepted spelling is the canonical read, unchanged");
+  assert.deepEqual(h.outboxes.quiet, []);
+});
+
+test("8 · ONE GRAMMAR: the companions' check and the two routes share one expression", async () => {
+  const { isDoorHandle, MAIL_DOOR, QUESTS_DOOR } = await import("../src/door-handle.mjs");
+  for (const ok of ["wright", "r-harbor", "a1-2"]) assert.ok(isDoorHandle(ok) && MAIL_DOOR.exec(`/mail/${ok}`)?.[1] === ok && QUESTS_DOOR.exec(`/quests/${ok}`)?.[1] === ok, ok);
+  for (const no of ["Zed", "a_b", "a.b", "", "a b", "a/b"]) assert.ok(!isDoorHandle(no) && !MAIL_DOOR.test(`/mail/${no}`) && !QUESTS_DOOR.test(`/quests/${no}`), String(no));
+  assert.ok(!isDoorHandle(null) && !isDoorHandle(7), "a non-string is not a handle");
+  const src = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
+  assert.ok(src.includes("MAIL_DOOR.exec(path)") && src.includes("QUESTS_DOOR.exec(path)"), "server.mjs routes through the shared patterns");
+  assert.ok(!src.includes("/^\\/mail\\/([a-z0-9-]+)$/") && !src.includes("/^\\/quests\\/([a-z0-9-]+)$/"), "no copied route expression left");
+});
