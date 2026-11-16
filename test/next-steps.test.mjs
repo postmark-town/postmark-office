@@ -287,17 +287,40 @@ test("the block never throws — an unreadable handle costs the doorstep nothing
   } finally { town.meta.push(registryRow); await IX.reseed(); }
 });
 
-test("the town tool is imported once per process — one office, one checkout", async () => {
-  // questTools caches the imported module: the office serves exactly one town
-  // clone for its life, and re-resolving per request would be a filesystem hit
-  // on every doorstep. Worth pinning, because it also means the "checkout too
-  // old to carry the fold" degradation is decided at the FIRST import of the
-  // process and cannot be exercised after one has succeeded — the null path in
-  // nextStepsFor is a boot-time guarantee, not a per-call one.
+test("the town tool is evaluated once per process, and its pin is checked on every call", async () => {
+  // POS-994 (Wright, 2026-11-16): questTools no longer keeps a cache of its own.
+  // It loads the office's PINNED copy (src/town-tool.mjs § importTownTool), whose
+  // URL never changes within a process, so node's ESM loader evaluates the module
+  // once and hands back the same namespace on every later import. What runs on
+  // every call is only the pin check: the clone's copy hashed against the pin
+  // (cached on the file's size and mtime). So a clone that changes after the
+  // first load stops the next call, by name, rather than answering from a module
+  // the office no longer vouches for. (Until POS-994 a second call answered from a
+  // module cached across ANY clone, a bogus path included.)
+  const { importTownTool, TownPinMismatch } = await import("../src/town-tool.mjs");
+  const { copyTownModule } = await import("./helpers/pinned-town.mjs");
+  const { appendFileSync } = await import("node:fs");
+
+  // ONCE PER PROCESS: the same namespace object, call after call.
+  const first = await importTownTool(TOWN, "quest-progress.mjs");
   const a = await ixFor().questBoard("wright");
-  const b = await ixFor(join(TOWN, "no-such-checkout")).questBoard("wright");
-  assert.deepEqual(a.quests.map((q) => q.id), b.quests.map((q) => q.id),
-    "the second call answers from the cached module, not from the bogus path");
+  assert.ok(Array.isArray(a.quests), "the office's own path answers through the pinned module");
+  assert.equal(await importTownTool(TOWN, "quest-progress.mjs"), first, "evaluated once: the loader hands back the same module, not a second evaluation");
+
+  // A CLONE THAT CHANGES AFTER THE FIRST LOAD stops the next call by name.
+  const clone = mkdtempSync(join(tmpdir(), "next-steps-pin-"));
+  try {
+    copyTownModule(TOWN, clone, "quest-progress.mjs");
+    const ok = await ixFor(clone).questBoard("wright");
+    assert.deepEqual(ok.quests.map((q) => q.id), a.quests.map((q) => q.id), "an equal clone answers as the office's own");
+    appendFileSync(join(clone, "tools", "quest-progress.mjs"), "\n// a town change the office has not reviewed\n");
+    await assert.rejects(ixFor(clone).questBoard("wright"),
+      (e) => e instanceof TownPinMismatch && e.file === "tools/quest-progress.mjs",
+      "the changed clone stops the step, naming the file, with no answer from the earlier load");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+
+  // and a path with no town at all is no town, never the earlier load's answer
+  await assert.rejects(ixFor(join(TOWN, "no-such-checkout")).questBoard("wright"), TownPinMismatch);
 });
 
 // Guards the import wiring itself: the town module must be reachable from the
