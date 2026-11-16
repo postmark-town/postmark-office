@@ -79,7 +79,12 @@ const fileDb = (name) => {
 async function credentialFor(token, spec = SPEC) {
   const db = fileDb(`cred-${sha(token).slice(0, 8)}-${Math.random().toString(36).slice(2)}.db`);
   await importStaticKeys(db, spec);
-  return staticLookup(db, token);
+  const cred = await staticLookup(db, token);
+  // a refusal driven by a null key would pass for the wrong reason: the credential must exist, name its household, and hold exactly what was written
+  assert.ok(cred, `the import minted ${token}`);
+  assert.equal(cred.household, "founder-hearth");
+  assert.equal(cred.handles.size, token === SCOPED ? 1 : 0);
+  return cred;
 }
 
 // ── § 1 the parse ────────────────────────────────────────────────────────────
