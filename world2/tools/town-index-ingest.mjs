@@ -57,7 +57,7 @@ import {
 } from "../../src/town-index.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
 import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
-import { stampLinesOn, welcomeLinesVia } from "../../src/stamp-lines.mjs";
+import { stampLinesOn, welcomeLinesVia, questPayLinesVia } from "../../src/stamp-lines.mjs";
 import { CROSSING_SEAL_SUBJECT } from "../../src/crossings.mjs";
 
 export const HEAD_KEY = "town-index";                     // projection_heads.repo
@@ -270,6 +270,24 @@ async function questWelcomeLines(client, log) {
   }
 }
 
+/**
+ * The store's signed quest payments (POS-976), for the quests the town pays once per household: they settle those
+ * rows. Read EVERY ingest beside the welcome rows, in a savepoint for the same reason: a failed read must leave the
+ * rows unknown, never abort the ingest. Null on any failure.
+ */
+async function questPayLines(client, log) {
+  await client.query("SAVEPOINT quest_pay_lines");
+  try {
+    const lines = await questPayLinesVia(client);
+    await client.query("RELEASE SAVEPOINT quest_pay_lines");
+    return lines;
+  } catch (e) {
+    await client.query("ROLLBACK TO SAVEPOINT quest_pay_lines");
+    log.warn(`  quests: the store's quest payments could not be read (${e?.message ?? e}); the paid-once quest rows stay unknown`);
+    return null;
+  }
+}
+
 // ── the seed ─────────────────────────────────────────────────────────────────
 
 /** The whole derivation, every table replaced, the seed snapshot. The one history walk. */
@@ -282,7 +300,8 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
   await mintInputs(client, townRepo, tally, { whole: true });
   const base = await questKeyBase(client, townRepo);
   const welcomeLines = await questWelcomeLines(client, log);
-  const { tables } = await deriveTownIndex(townRepo, { log, base, welcomeLines });
+  const payLines = await questPayLines(client, log);
+  const { tables } = await deriveTownIndex(townRepo, { log, base, welcomeLines, questPayLines: payLines });
   ms.derive = Date.now() - t0; t0 = Date.now();
   for (const name of Object.keys(TOWN_TABLES)) {
     const r = await client.query(`DELETE FROM ${tableOf(name)}`);
@@ -678,7 +697,8 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   lap("mint inputs");
   const base = await questKeyBase(client, townRepo);
   const welcomeLines = await questWelcomeLines(client, log);
-  const q = await questRows(townRepo, town, { log, base, welcomeLines });
+  const payLines = await questPayLines(client, log);
+  const q = await questRows(townRepo, town, { log, base, welcomeLines, questPayLines: payLines });
   if (q) {
     await diffTable(client, "quest_progress", q.progress, tally);
     if (q.standing) await diffTable(client, "quest_standing", q.standing, tally);
