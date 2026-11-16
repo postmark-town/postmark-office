@@ -21,11 +21,13 @@
 //   · REFUSE, NEVER DEGRADE: no pen key, no signing, no half-writes — same
 //     gate as the registry lines (#2040).
 
+import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ideasTank } from "./world-classes.mjs";
 import { signedRegistryLines } from "./ledger-pen.mjs";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 
 export const FIRST_IDEA_WINDOW_END = "2026-09-30";
 
@@ -41,7 +43,7 @@ export function planFirstIdeaSweep(clone, { date, ideas = null, windowEnd = FIRS
   const tank = ideas ?? ideasTank().ideas;
   if (!tank.length) return { mints: [], skipped: [] };
 
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]); // POS-994: the pinned copy, checked against the clone
   // The whole town-law half of the plan runs INSIDE the clone's own engine —
   // candidates in, lawful first-per-household lines out. Everything quoted
   // from stamp-mint: classifyEntry (already-paid), householdKeys + registry
@@ -100,6 +102,6 @@ export function writeFirstIdeaSweep(clone, plan) {
   if (!existsSync(ledgerAbs)) return [];
   const signed = signedRegistryLines(clone, plan.mints.map((m) => m.line));
   const prior = readFileSync(ledgerAbs, "utf8");
-  writeFileSync(ledgerAbs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+  writeFileSync(ledgerAbs, endWithNewline(prior) + signed.join("\n") + "\n");
   return [ledgerRel];
 }

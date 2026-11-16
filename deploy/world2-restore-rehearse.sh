@@ -5,12 +5,15 @@
 # store against the live one, and drops the scratch. Prints a receipt: commands,
 # duration, and the row counts that matched.
 #
-#   world2-restore-rehearse.sh [--from-remote] [--keep]
+#   world2-restore-rehearse.sh [--from-remote | --from-s3] [--keep]
 #
-#     --from-remote   clone the off-box repo into a temp dir and restore from
-#                     THAT, rather than from the box-local dump. This is the
+#     --from-s3       copy the newest night down from the S3 bucket (the one
+#                     off-box route since STAR-118) and restore from THAT,
+#                     rather than from the box-local dump. This is the
 #                     rehearsal that actually proves the off-box copy; the
 #                     local one only proves pg_dump ran.
+#     --from-remote   the same from the GitHub backup repo, which holds the
+#                     nights up to the git ship's retirement (STAR-118).
 #     --keep          leave the scratch database in place for poking at.
 #
 # ── WHAT "MATCHING" MEANS HERE, AND WHERE IT CANNOT ─────────────────────────
@@ -44,9 +47,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/world2-lib.sh"
 
 SCRATCH="${W2_SCRATCH_DB:-world2_restore_test}"
-FROM_REMOTE=false; KEEP=false
+FROM_REMOTE=false; FROM_S3=false; KEEP=false
 for a in "$@"; do
-  case "$a" in --from-remote) FROM_REMOTE=true ;; --keep) KEEP=true ;; esac
+  case "$a" in --from-remote) FROM_REMOTE=true ;; --from-s3) FROM_S3=true ;; --keep) KEEP=true ;; esac
 done
 
 DB="$(w2_db)"
@@ -89,6 +92,25 @@ if [ "$FROM_REMOTE" = true ]; then
     DUMP="$TMPCLONE/dumps/$NEWEST"
   fi
   say "   remote tip: $(git -C "$TMPCLONE" rev-parse HEAD)"
+elif [ "$FROM_S3" = true ]; then
+  # The S3 copy (STAR-118): the newest night's prefix by its stamped name, copied down whole, its dump checked against
+  # the sum of the whole before pg_restore reads a byte. The instance's role reads the bucket; it holds no key.
+  [ -n "${W2_S3_BUCKET:-}" ] || { echo "--from-s3 needs W2_S3_BUCKET" >&2; exit 2; }
+  command -v aws >/dev/null 2>&1 || { echo "--from-s3 needs the aws CLI" >&2; exit 2; }
+  TMPCLONE="$(mktemp -d /tmp/w2-restore-XXXXXX)"
+  # The newest night is a plain string sort, which is time order only because world2-backup.sh's $STAMP is
+  # fixed-width UTC (%Y%m%dT%H%M%SZ). So only prefixes of exactly that shape count: a stray prefix (a letter
+  # sorts after every digit) can never be taken for the newest night (Wright's check, STAR-118, 11-05).
+  NIGHT="$(aws s3 ls "s3://$W2_S3_BUCKET/world2/" 2>/dev/null | awk '$1 == "PRE" { sub("/$", "", $2); print $2 }' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tail -n1)"
+  [ -n "$NIGHT" ] || { echo "no night under s3://$W2_S3_BUCKET/world2/ — the S3 copy could not be found, which IS the finding" >&2; exit 1; }
+  say "== copy the S3 night s3://$W2_S3_BUCKET/world2/$NIGHT/"
+  aws s3 cp --recursive --only-show-errors --no-progress "s3://$W2_S3_BUCKET/world2/$NIGHT/" "$TMPCLONE/s3/" || {
+    echo "the S3 copy could not be retrieved, which IS the finding" >&2; exit 1; }
+  NEWEST="$(ls -1 "$TMPCLONE/s3" 2>/dev/null | grep -E '^world2-.*\.dump$' | sort | tail -n1)"
+  [ -n "$NEWEST" ] && [ -f "$TMPCLONE/s3/$NEWEST.sha256" ] || { echo "the S3 night $NIGHT has no dump with its sum" >&2; exit 1; }
+  ( cd "$TMPCLONE/s3" && sha256sum -c --quiet "$NEWEST.sha256" ) || {
+    echo "the S3 $NEWEST does not match its sum — the S3 copy is not whole, which IS the finding" >&2; exit 1; }
+  DUMP="$TMPCLONE/s3/$NEWEST"
 else
   DUMP="$(ls -1t "$WORLD2_LAB"/private-dumps/world2-*.dump 2>/dev/null | head -n1)"
 fi
@@ -130,7 +152,14 @@ say "   restored in $((r1 - r0))s"
 say "== row counts, restored vs live ($DB)"
 TABLES=$(psql_owner --dbname "$SCRATCH" -tAc \
   "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-bad=0; rows_total=0; drift_lines=""
+# THE TRANSIENT TABLES are the exception to the rule above, the ones whose rows the office deletes by design:
+# 031_office_paperwork.sql says it ("none of this is the record"). A sign-in round trip is swept at 10 min, a code
+# is spent on exchange or swept at 120 s, a token goes on rotation or the sweep, a key claim when it's spent. A
+# row in the dump that's gone from live is the sweep working, so these may shrink. Every other table keeps the
+# strict rule, and office_role_audit, the append-only one that matters, is not on this list. (STAR-118, 11-12:
+# oauth_pending 2 restored vs 1 live, a pending sign-in completed or expired between the 08:10 dump and the count.)
+TRANSIENT="oauth_pending oauth_codes oauth_tokens oauth_key_claims"
+bad=0; rows_total=0; drift_lines=""; RS_AUDIT=""; RS_ROLES=""
 printf '   %-26s %10s %10s  %s\n' table restored live verdict
 for t in $TABLES; do
   a=$(psql_owner --dbname "$SCRATCH" -tAc "SELECT count(*) FROM \"$t\"" 2>/dev/null)
@@ -139,16 +168,18 @@ for t in $TABLES; do
   rows_total=$((rows_total + a))
   if [ "$a" -eq "$b" ]; then v="match"
   elif [ "$a" -lt "$b" ]; then v="live +$((b - a)) (town moved since the dump — expected)"
+  elif [[ " $TRANSIENT " == *" $t "* ]]; then v="live -$((a - b)) (swept or spent since the dump — a transient table, expected)"
   else v="RESTORED HAS MORE (+$((a - b))) — HISTORY DISAGREES"; bad=$((bad + 1)); fi
   printf '   %-26s %10s %10s  %s\n' "$t" "$a" "$b" "$v"
   [ "$a" -ne "$b" ] && drift_lines="$drift_lines$t:$a/$b "
+  case "$t" in office_role_audit) RS_AUDIT="$a $b" ;; office_roles) RS_ROLES="$a $b" ;; esac
 done
 say "   $rows_total rows restored across $(echo "$TABLES" | wc -w) tables"
 
 
 # ── roles.db, restored and counted ──────────────────────────────────────────
 # POS-185. The dump above is the world store; this is the office's registry of
-# WHO PAID, which rides the same commit (world2-backup.sh § 1b) because a grant
+# WHO PAID, which rides the same night (world2-backup.sh § 1b) because a grant
 # exists nowhere else — no repo holds it and no fold recomputes it.
 #
 # "Restoring" it is a file copy, not a pg_restore: it is a whole SQLite database
@@ -163,12 +194,21 @@ say "   $rows_total rows restored across $(echo "$TABLES" | wc -w) tables"
 # and means the two disagree about history, which is the finding.
 say "== roles.db, shipped copy vs live registry"
 ROLES_LIVE="${W2_ROLES_DB:-$WORLD2_OFFICE/roles.db}"
-if [ "$FROM_REMOTE" = true ]; then ROLES_DIR="$TMPCLONE/roles"; else ROLES_DIR="$WORLD2_LAB/private-dumps"; fi
-ROLES_COPY="$(ls -1t "$ROLES_DIR"/roles-*.db 2>/dev/null | head -n1)"
-if [ -z "${ROLES_COPY:-}" ]; then
+if [ "$FROM_REMOTE" = true ]; then ROLES_DIR="$TMPCLONE/roles"; elif [ "$FROM_S3" = true ]; then ROLES_DIR="$TMPCLONE/s3"; else ROLES_DIR="$WORLD2_LAB/private-dumps"; fi
+# the newest night by its stamped name, not its mtime: in a fresh clone every file has one mtime, and the pick was
+# arbitrary (STAR-118, 11-04: 11-01's copy on one run, 11-02's on the next)
+ROLES_COPY="$(ls -1 "$ROLES_DIR"/roles-*.db 2>/dev/null | sort | tail -n1)"
+if [ -z "${ROLES_COPY:-}" ] && [ -n "${RS_AUDIT:-}" ]; then
+  # IN THE STORE (POS-271; the backup reports the roles in-store since 2026-11-11): the registry is office_roles and
+  # office_role_audit, restored with the dump and already compared in the table above under the strict rule, so a
+  # restored audit with more rows than live has already counted as a finding there. This names them as the roles
+  # check and carries the audit count into the receipt; it adds no second count of the same finding.
+  RA_COPY="${RS_AUDIT% *}"; RA_LIVE="${RS_AUDIT#* }"
+  say "   in the store: office_role_audit $RA_COPY restored / $RA_LIVE live, office_roles ${RS_ROLES% *} / ${RS_ROLES#* } (compared in the table above; no roles-*.db is shipped since the move)"
+elif [ -z "${ROLES_COPY:-}" ]; then
   # Absent is legal and is NOT a pass: it is reported in the operator's words so
   # a reader cannot mistake "nothing to check" for "checked and fine".
-  say "   NOT-RUN: no roles-*.db in $ROLES_DIR — either no role has ever been granted on this box (OFFICE_ROLE_GATES is unset on every office today) or the lane has not shipped one yet"
+  say "   NOT-RUN: no roles-*.db in $ROLES_DIR and no office_role_audit in the restore — either no role has ever been granted on this box (OFFICE_ROLE_GATES is unset on every office today) or the lane has not shipped one yet"
 else
   # One node, both files, read-only on each. A missing live registry counts as
   # zero rather than as an error: the copy having rows the live side lost is the
@@ -197,7 +237,7 @@ NODE
     elif [ "$RA_COPY" -lt "$RA_LIVE" ]; then v="live +$((RA_LIVE - RA_COPY)) (grants since the copy — expected)"
     else v="COPY HAS MORE (+$((RA_COPY - RA_LIVE))) — THE REGISTRY LOST ROWS IT ONCE HAD"; bad=$((bad + 1)); fi
     printf '   %-26s %10s %10s  %s\n' role_audit "$RA_COPY" "${RA_LIVE}" "$v"
-    say "   copy under test: $(basename "$ROLES_COPY") (from $( [ "$FROM_REMOTE" = true ] && echo off-box || echo on-box ))"
+    say "   copy under test: $(basename "$ROLES_COPY") (from $( [ "$FROM_REMOTE" = true ] && echo off-box || { [ "$FROM_S3" = true ] && echo s3 || echo on-box; } ))"
     drift_lines="$drift_lines$( [ "$RA_COPY" -ne "${RA_LIVE:-0}" ] && echo "role_audit:$RA_COPY/$RA_LIVE " )"
   fi
 fi
@@ -213,7 +253,18 @@ if [ -d "$LAWDIR/.git" ] && [ -d "$TOWNDIR/.git" ]; then
   LSHA=$(psql_owner --dbname "$SCRATCH" -tAc "SELECT sha FROM projection_heads WHERE repo='world-law'")
   TSHA=$(psql_owner --dbname "$SCRATCH" -tAc "SELECT sha FROM projection_heads WHERE repo='town'")
   say "   restored heads: world-law $LSHA / town $TSHA"
-  if git -C "$LAWDIR" checkout -q "$LSHA" 2>/dev/null && git -C "$TOWNDIR" checkout -q "$TSHA" 2>/dev/null; then
+  # A copy at each pinned sha in the rehearsal's own temp dir, never the ingest clones themselves (STAR-118, 11-04):
+  # those clones are shallow at the timers' newest fetch, so a restored head behind them was missing ("NOT-RUN: the
+  # shallow checkouts do not contain the pinned shas"), and checking them out in place moved the ingest timers' own
+  # trees (as root, when this runs under sudo). Each copy is one depth-1 fetch of that sha from the clone's own remote
+  # (public HTTPS repos, no credential).
+  at_sha() { # <ingest clone> <sha> <dest>
+    local url; url=$(git -C "$1" remote get-url origin) || return 1
+    git init -q "$3" && git -C "$3" fetch -q --depth 1 "$url" "$2" 2>/dev/null && git -C "$3" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  }
+  FTMP="$(mktemp -d /tmp/w2-falsifier-XXXXXX)"
+  if [ -n "$LSHA" ] && [ -n "$TSHA" ] && at_sha "$LAWDIR" "$LSHA" "$FTMP/law" && at_sha "$TOWNDIR" "$TSHA" "$FTMP/town"; then
+    LAWDIR="$FTMP/law"; TOWNDIR="$FTMP/town"
     # falsifier-projection-equality.mjs:195 is `new pg.Client()` with no
     # argument, so it takes PG* and ignores any URL handed to it. Passing
     # WORLD2_PG_URL here made it connect as the OS user instead — "password
@@ -225,10 +276,10 @@ if [ -d "$LAWDIR/.git" ] && [ -d "$TOWNDIR/.git" ]; then
       PGHOST="$PGH" PGPORT="$PGP" PGUSER=world2_owner PGPASSWORD="$OWNER_PW" PGDATABASE="$SCRATCH" \
       node world2/tools/falsifier-projection-equality.mjs --law-repo "$LAWDIR" --town-repo "$TOWNDIR")
     FRC=$?
-    git -C "$LAWDIR" checkout -q - 2>/dev/null; git -C "$TOWNDIR" checkout -q - 2>/dev/null
   else
-    say "   NOT-RUN: the shallow checkouts do not contain the pinned shas"
+    say "   NOT-RUN: the pinned shas could not be fetched from the ingest clones' remotes"
   fi
+  rm -rf "$FTMP"
 else
   say "   NOT-RUN: no ingest checkouts on this box"
 fi
@@ -242,7 +293,7 @@ t1=$(date +%s)
 say "== rehearsal finished in $((t1 - t0))s · $( [ "$bad" -eq 0 ] && echo PASS || echo "FAIL ($bad finding(s))" )"
 w2_state restore-rehearsal.json "$(printf '"status":"%s","source":"%s","dump":"%s","seconds":%d,"restore_seconds":%d,"rows_restored":%d,"tables":%d,"roles_audit_copy":%s,"roles_audit_live":%s,"falsifier_exit":%d,"drift":"%s"' \
   "$([ "$bad" -eq 0 ] && echo pass || echo fail)" \
-  "$([ "$FROM_REMOTE" = true ] && echo off-box || echo on-box)" \
+  "$([ "$FROM_REMOTE" = true ] && echo off-box || { [ "$FROM_S3" = true ] && echo s3 || echo on-box; })" \
   "$(basename "$DUMP")" "$((t1 - t0))" "$((r1 - r0))" "$rows_total" "$(echo "$TABLES" | wc -w)" \
   "${RA_COPY:-null}" "${RA_LIVE:-null}" "$FRC" "$drift_lines")"
 [ "$bad" -eq 0 ] || exit 1

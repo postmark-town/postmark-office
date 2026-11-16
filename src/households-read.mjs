@@ -22,15 +22,14 @@
 //   503 { error, defect, hint }    the office could not read the store; nothing is guessed in its place
 //   422 { … }                      a malformed ?h=
 //
-// `registry` is the PUBLIC face of the object the drain renders
-// tools/households.json from (`registryFromRows`): the same houses, keys and key
-// order, with each house's private `human` KEY removed (POS-394; Darko
-// 2026-10-05, Wright 2026-10-12; src/registry-public.mjs). `pins` is the object
-// the drain renders tools/github-ids.json from (`pinsFromRows`), unchanged. So
-// this answer equals the drain's objects EXCEPT that a house carrying a `human`
-// in the store does not carry it here, and a reader comparing a printout house
-// with this answer field for field will see that one difference. The store, the
-// fold and the drain still hold the name; only this public read leaves it out.
+// `registry` and `pins` are the PUBLIC face of the objects the drain renders
+// tools/households.json and tools/github-ids.json from (`registryFromRows`,
+// `pinsFromRows`), cut by the same named list the printout is cut by
+// (src/registry-public.mjs; POS-394, then POS-726): the same houses and pins in
+// the same order, each carrying only the keys named public, at every level. A
+// house's private `human` is not among them, and neither is any key nobody has
+// named. So this answer is what the drain would print from the same rows; the
+// store and the fold still hold what neither shows.
 //
 // `?h=a,b` (comma-separated resident handles, at most 50): `pins` keeps only
 // those handles' pins, and `registry.households` keeps only the houses those
@@ -42,7 +41,7 @@
 import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse } from "./household-deriver.mjs";
-import { publicRegistry } from "./registry-public.mjs";
+import { publicRegistry, publicPins } from "./registry-public.mjs";
 
 const HANDLE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 export const MAX_HANDLES = 50;
@@ -91,5 +90,6 @@ export async function householdsRead(query = {}, { rows: given } = {}) {
   // show the public face of whatever is left.
   if (asked.handles) ({ registry, pins } = narrowTo(registry, pins, asked.handles));
   registry = publicRegistry(registry);
+  pins = publicPins(pins);
   return { status: 200, body: { read: "households", registry, pins, ...(asked.handles ? { handles: asked.handles } : {}), from: "the registry store" } };
 }

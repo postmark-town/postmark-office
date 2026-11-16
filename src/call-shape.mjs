@@ -34,11 +34,11 @@
 
 import { APEX_TOOL, DISPATCHABLE as WORLD_ACTS, FIND_READ, FIND_READ_FIELDS, WORLD_READ_FIELDS } from "./world-apex.mjs";
 import { BLOCK_READS } from "./world-read-v2.mjs";
-import { APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_TOOL } from "./household-apex.mjs";
+import { APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_TOOL } from "./household-apex.mjs";
 import { TOWN_TOOL } from "./town-apex.mjs";
 import { READ_SHAPES } from "./world-read-shape.mjs";
 import { RESIDENT_WORDS } from "./town-stance.mjs";
-import { POST_CLASSES } from "./town-posts.mjs";
+import { READ_CLASSES } from "./town-posts.mjs";
 import { BUG_STAGES, BUG_SIDE_EXITS } from "./bugs.mjs";
 import { IDEA_STAGES } from "./ideas.mjs";
 import { isHttpStatus } from "./fault-words.mjs";
@@ -81,7 +81,7 @@ function knownNames() {
     fields: declaredFields(),
     names: {
       world: { do: set(WORLD_ACTS), read: set(WORLD_ACTS, Object.keys(BLOCK_READS), FIND_READ) },
-      household: { do: set(HOUSEHOLD_DISPATCHABLE), read: set(HOUSEHOLD_READ_ENUM) },
+      household: { do: set(HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED), read: set(HOUSEHOLD_READ_ENUM) },
       town: { do: set(town.do?.enum ?? []), read: set(town.read?.enum ?? []) },
     },
     // field -> [the fixed set, the tools it is read at (null: every tool)]
@@ -93,7 +93,7 @@ function knownNames() {
       stance: [set(RESIDENT_WORDS), null],
       // `class` and `to` are fixed sets at the town door only: elsewhere `to` is a
       // recipient's handle and `class` a mark's class id, and neither is ever written.
-      class: [set(Object.keys(POST_CLASSES)), "town"],
+      class: [set(Object.keys(READ_CLASSES)), "town"],   // POS-983: the ballot is read and acted on at the town door too
       to: [set(BUG_STAGES, BUG_SIDE_EXITS, IDEA_STAGES), "town"],
     },
   };

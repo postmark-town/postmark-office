@@ -40,6 +40,7 @@
 // leaves the store renamed; running the same command again RESUMES (it finds
 // the new key with the old one in `formerly`) and lands the files.
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -92,10 +93,13 @@ export function ledgerRegistry(text) {
 }
 
 // A frontmatter `household:` line, rewritten only where it said the old name or key.
-function withHouseLine(text, { oldValues, name }) {
+export function withHouseLine(text, { oldValues, name }) {
   const fm = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(text);
   if (!fm) return null;
-  const m = /^household:[ \t]*(.*?)[ \t]*$/m.exec(fm[2]);
+  // The value is the rest of the line, trimmed at the use below (POS-877). The old lazy
+  // `(.*?)[ \t]*$` retried the trailing-blank match at every character of a run of blanks:
+  // quadratic. m[0] is the same whole line either way, and only m[1].trim() is read.
+  const m = /^household:[ \t]*(.*)$/m.exec(fm[2]);
   if (!m || !oldValues.includes(m[1].trim())) return null;
   const body = fm[2].replace(m[0], `household: ${name}`);
   return text.replace(fm[0], fm[1] + body + fm[3]);
@@ -199,7 +203,7 @@ export async function rekeyHousehold({ from, to, name, clone, env = process.env,
   if (signed.length) {
     const ledgerAbs = join(clone, LEDGER);
     const prior = readFileSync(ledgerAbs, "utf8");
-    writeFileSync(ledgerAbs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+    writeFileSync(ledgerAbs, endWithNewline(prior) + signed.join("\n") + "\n");
     paths.push(ledgerAbs);
   }
 

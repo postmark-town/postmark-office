@@ -498,12 +498,21 @@ function readUnit(name) {
 // A non-instance service there is a timer's body mid-run, or an enabled service
 // the file listing already found, so it adds nothing but a flake. The template
 // line itself is never a unit: `systemctl show` on it answers for no process.
+// ⚑ A SOCKET'S INSTANCES ARE ITS BODY (POS-988). An Accept=yes socket starts one
+// `<name>@<n>-<pid>-<uid>.service` per connection (postmark-town-seal.socket, the
+// ferry's sandboxed seal), named for the connection, so no row could name one,
+// and each lives for one seal. Like a timer's body, an instance whose template
+// has an installed `<name>.socket` is not in scope: the socket's caller answers
+// for it (the ferry's row: a seal that refuses fails the crossing). The socket
+// itself is not roll-called either, for the same reason.
 export function parseDiscovery(unitFilesText, liveUnitsText = "") {
   const found = new Set();
+  const sockets = new Set();
   for (const line of String(unitFilesText).split("\n")) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 2) continue;
     const [name, state] = parts;
+    if (name.endsWith(".socket")) { sockets.add(name.slice(0, -".socket".length)); continue; }
     if (/@\.(service|timer)$/.test(name)) continue;
     if (name.endsWith(".timer")) found.add(name);
     else if (name.endsWith(".service") && state === "enabled") found.add(name);
@@ -511,7 +520,7 @@ export function parseDiscovery(unitFilesText, liveUnitsText = "") {
   for (const line of String(liveUnitsText).split("\n")) {
     // A failed unit's line can lead with a "●"; the name is the first postmark token.
     const name = line.trim().split(/\s+/).find((t) => t.startsWith("postmark"));
-    if (name && /@[^.@]+\.(service|timer)$/.test(name)) found.add(name);
+    if (name && /@[^.@]+\.(service|timer)$/.test(name) && !sockets.has(name.slice(0, name.indexOf("@")))) found.add(name);
   }
   return [...found].sort();
 }

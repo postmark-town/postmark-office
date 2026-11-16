@@ -16,13 +16,16 @@
 //
 // Env: TOWN_CLONE, STAMP_KEY, TOWN_PUSH, BOT_NAME/BOT_EMAIL, TOWN_TZ.
 // argv[2]: JSON { handle, date, via, expect? } — expect is { household, nth },
-// the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM).
+// the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM),
+// and under a nonce `handle`, the payer of the purchase its key names (§ THE RETRY KEY).
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { quoteAt } from "./parcel-room.mjs";
 
@@ -43,12 +46,18 @@ async function main() {
     return;
   }
   const keyPem = readFileSync(KEY_PATH, "utf8");
-  const { appendSigned } = await import(pathToFileURL(join(CLONE, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copy of the mint, checked against the clone before anything is written.
+  let appendSigned;
+  try { ({ appendSigned } = await importTownTool(CLONE, "stamp-mint.mjs")); }
+  catch (e) {
+    if (!isPinStop(e)) throw e;
+    console.log(JSON.stringify(err(503, "town-pin-mismatch", pinStopHint(e))));
+    return;
+  }
 
   // WHOLE OR NOTHING (POS-296): a purchase the pen cannot land leaves no line and no commit.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     // ONE CALL, ONE ROOM (the 10-26 review's F1): `expect` is the room the
     // door's call saw. Already bought, by this click or the one before it, is
     // that purchase's receipt, and nothing is written (parcel-room.mjs § quoteAt).

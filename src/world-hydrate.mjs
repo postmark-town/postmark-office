@@ -1020,12 +1020,19 @@ for (const m of marks) {
 // honest v0 is one node per `##` heading, and a `describes` edge only where the
 // heading text literally names a registered mechanic. Nothing is inferred from
 // prose.
+//
+// `\s+` takes the whole run of whitespace, and the lookahead after it forbids the text from
+// starting on more (POS-877), so the run and the text never share a space. The old
+// `^##\s+(.*)$` let both take the same whitespace, so a line `.` can't finish (a lone CR,
+// U+2028 or U+2029) tried every split of it: quadratic, about 185 ms at 16k characters. The
+// answers are the same, and the text is trimmed after.
+const ENGINE_HEADING_RE = /^##\s+(?!\s)(.*)$/;
 const enginePath = join(TREE, "WORLD", "ENGINE.md");
 let doctrineNodes = 0, doctrineEdges = 0;
 if (existsSync(enginePath)) {
   const lines = readFileSync(enginePath, "utf8").split(/\r?\n/);
   lines.forEach((line, i) => {
-    const h = /^##\s+(.*)$/.exec(line);
+    const h = ENGINE_HEADING_RE.exec(line);
     if (!h) return;
     const heading = h[1].trim();
     const slug = heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
@@ -1073,6 +1080,10 @@ for (const m of marks) {
 // Parsed field-wise rather than by one regex, so a line carrying a field the
 // header never documented still lands (under payload.extra) instead of being
 // thrown away as unparseable.
+//
+// One field of a ledger line. Same shape as ENGINE_HEADING_RE above and fixed the same way
+// (POS-877): the lookahead keeps the value from starting on a space `\s+` could have taken.
+const WALK_LEDGER_FIELD_RE = /^(from|toward|at|within|to|pace)\s+(?!\s)(.*)$/;
 const ledgerPath = join(TREE, "WORLD", "walk-ledger.md");
 const badLedgerLines = [];
 let departures = 0;
@@ -1088,7 +1099,7 @@ if (existsSync(ledgerPath)) {
     const [iso, handle, ...rest] = parts;
     const f = {}; const extra = [];
     for (const seg of rest) {
-      const kv = /^(from|toward|at|within|to|pace)\s+(.*)$/.exec(seg);
+      const kv = WALK_LEDGER_FIELD_RE.exec(seg);
       if (kv) f[kv[1]] = kv[2].trim(); else if (seg) extra.push(seg);
     }
     const from = pair(f.from), toward = pair(f.toward), crossing = Number(f.at);

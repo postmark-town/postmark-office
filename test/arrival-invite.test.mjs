@@ -23,6 +23,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town modules
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -166,7 +173,8 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(dir);
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-07-25 · rules: stamps-v3 · meeps: ember-lamp · friendship: 5:5,10:10 · sig: invented\n");
   const lawOf = await meepLawAtOffice(dir);
   assert.equal(lawOf("ember-lamp"), true, "the law line names the meep");
@@ -182,7 +190,8 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   mkdirSync(join(bare, "WHITE_PAGES"), { recursive: true });
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: no WHITE_PAGES\/stamp-ledger\.md/);
   assert.equal((await meepLawAtOffice(bare))("ember-lamp"), false, "the fund page's lenient read is unchanged");
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(bare, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, bare, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(bare);
   writeFileSync(join(bare, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-07-01 · MINT → wick · 5 · for: welcome · sig: invented\n");
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: the ledger holds no law line/);
 });
@@ -190,16 +199,19 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
 // ── I4 the record ───────────────────────────────────────────────────────────
 
 test("I4 · invited_by is the tail column; absent renders no key, present renders in template order, and folds back", () => {
-  // the last column it joined; 091's human_profile (POS-721) came after it
-  assert.deepEqual(HOUSEHOLD_KEYS.slice(-2), ["invited_by", "human_profile"]);
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-4), ["invited_by", "likeness_state", "hearth", "human_profile"], "the tail before POS-726 slice B's likeness_state (092), then POS-962's hearth (093), then POS-721's human_profile (098)");
   const rows = rowsFromRegistry(REGISTRY(), PINS());
   assert.ok(rows.households.every((r) => r.invited_by === null), "no key folds to NULL");
   assert.equal(renderRegistry(rows).households.includes("invited_by"), false, "an uninvited registry prints exactly as before");
   // jsonb hands keys back sorted by (length, bytes); the render puts them back.
   rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   const printed = JSON.parse(renderRegistry(rows).households).households["quill-hall"];
-  assert.deepEqual(Object.keys(printed.invited_by), [...INVITED_BY_KEYS]);
-  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at"]);
+  assert.deepEqual(Object.keys(printed.invited_by), ["by", "named", "at"], "a credit named at joining prints exactly as before POS-947");
+  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at", "backfill"]);
+  // a credit named after joining (POS-947) carries backfill, last, in template order whatever jsonb hands back
+  rows.households[1].invited_by = { backfill: true, at: "2026-12-01T15:00:00.000Z", by: "lantern-row", named: "wick" };
+  assert.deepEqual(Object.keys(JSON.parse(renderRegistry(rows).households).households["quill-hall"].invited_by), ["by", "named", "at", "backfill"]);
+  rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   assert.equal(Object.keys(printed).at(-1), "invited_by");
   assert.equal(rowsFromRegistry(JSON.parse(renderRegistry(rows).households), PINS()).households[1].invited_by.by, "lantern-row",
     "the printed credit folds back: the round trip holds");
@@ -322,7 +334,8 @@ function townClone({ law = true } = {}) {
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });
   if (law) {
-    copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+    copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(dir);
     writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), LAW_KEYS.publicKey.export({ type: "spki", format: "pem" }));
     mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), sealedLedger([
@@ -349,7 +362,7 @@ function declareExec(args, key, { at = clone } = {}) {
   const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({ args, key })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: at, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(at, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, `declare-exec answers rather than trips: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split("\n").at(-1));
@@ -420,7 +433,7 @@ test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-816/d): ?invite=wright lands the
     key: { ghId: 5164, ghLogin: "guest-gh", handles: [] } })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(clone, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim().split("\n").at(-1));

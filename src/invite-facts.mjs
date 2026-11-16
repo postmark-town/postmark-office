@@ -22,7 +22,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { ledgerFacts } from "./invite-pay.mjs";
 import { meepLawOf } from "./fund-holder.mjs";
 
@@ -31,7 +30,8 @@ const missing = (e) => e?.code === "42P01"; // undefined_table: a migration that
 
 /** The store's half of the plan's inputs. */
 export async function inviteStoreFacts(q) {
-  const houses = await q(`SELECT slug, name, residents, formerly, to_jsonb(households) -> 'invited_by' AS invited_by FROM households`, []);
+  // `since`: the join day a late-named invitation's 30 days run from (POS-947)
+  const houses = await q(`SELECT slug, name, residents, formerly, since, to_jsonb(households) -> 'invited_by' AS invited_by FROM households`, []);
   if (houses === null) return null;
   const rows = houses.filter((r) => r.invited_by != null && typeof r.invited_by === "object");
   const firsts = rows.map((r) => (r.residents ?? [])[0]).filter(Boolean);
@@ -58,7 +58,7 @@ export async function inviteStoreFacts(q) {
       holds.set(h.household, { state: h.state, moves: Array.isArray(h.moves) ? h.moves : JSON.parse(h.moves ?? "[]") });
   } catch (e) { if (!missing(e)) throw e; holds = null; }
   return {
-    rows: rows.map((r) => ({ slug: r.slug, name: r.name, residents: r.residents ?? [], invited_by: r.invited_by })),
+    rows: rows.map((r) => ({ slug: r.slug, name: r.name, residents: r.residents ?? [], since: r.since ?? null, invited_by: r.invited_by })),
     houses: houses.map((h) => ({ slug: h.slug, residents: h.residents ?? [], formerly: h.formerly ?? [] })),
     facts: { letters, homes, ashore },
     holds,
@@ -71,9 +71,10 @@ export async function inviteStoreFacts(q) {
  * plan cannot see what is already paid, and nothing may be paid twice.
  */
 export async function townInviteLedger(town, registryHouseholds, { on = new Date() } = {}) {
-  const tool = join(town, "tools", "stamp-mint.mjs");
-  if (!existsSync(tool)) throw new Error(`invite: no tools/stamp-mint.mjs in ${town} — the town clone is named wrong`);
-  const engine = await import(pathToFileURL(tool).href);
+  if (!existsSync(join(town, "tools", "stamp-mint.mjs"))) throw new Error(`invite: no tools/stamp-mint.mjs in ${town} — the town clone is named wrong`);
+  // POS-994: the office's pinned copy, checked against the clone; a mismatch throws TownPinMismatch, by name.
+  const { importTownTool } = await import("./town-tool.mjs");
+  const engine = await importTownTool(town, "stamp-mint.mjs");
   if (typeof engine.inviteInvitedLine !== "function" || typeof engine.houseCanonOf !== "function")
     throw new Error("invite: this town's stamp-mint.mjs has no invite grammar (invite:<invited>/<inviter>/…), so the plan cannot see what is already paid — the town must carry --invite-mint first (POS-816's town half)");
   const ledgerFile = join(town, "WHITE_PAGES", "stamp-ledger.md");

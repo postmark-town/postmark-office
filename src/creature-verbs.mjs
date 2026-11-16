@@ -42,7 +42,7 @@ import { ENDED, capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } fro
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
 import { DODGE_ACTION, PERSUADE_ACTION, isSetPiece, openHurls, persuadedThisWindow, pieceOf } from "./set-pieces.mjs";
-import { windowAt } from "./encounter.mjs";
+import { nerveSpentSaid, windowAt } from "./encounter.mjs";
 import { isoOf, nameOf, ringOf, theOf } from "./creature-bits.mjs";
 
 /** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
@@ -432,11 +432,15 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
   // THE REPLY IS THE REACTION (call 7): that creature alone, within AIMED_WAIT_MS
   const act = { actor, verb, actId: trigger.actId, atIso: trigger.atIso, point: here, approaching: verb === "approach",
     ...(offered ? { offered } : {}), ...(words ? { words } : {}) };
-  const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: AIMED_JEV_MS, deadline: d.clock() + AIMED_WAIT_MS });
+  const owed = new Set(); // WLD-153: the turns (this creature's, an approach's others) whose cost or press is not on the record when this reply goes out
+  const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: AIMED_JEV_MS, deadline: d.clock() + AIMED_WAIT_MS, owed });
   // an approach is a walk: every other creature whose ring holds where you set out answers it as one
   let others = [];
-  if (othersRows?.length) others = (await d.others(othersRows, id)) ?? [];
+  if (othersRows?.length) others = (await d.others(othersRows, id, owed)) ?? [];
+  // WLD-153: what this act cost you, said first, from the cost rows the creature's turn wrote (a charge with no reaction included)
+  const said = nerveSpentSaid(living, actor, trigger.actId, d.now(), owed);
   return {
+    ...(said ? { nerve_said: said } : {}),
     did: verb, creature: id, kind: c.kind, ...extra,
     ...(answer ? { reaction: answer } : { reaction: null, note: `${theOf(law, c)} did not answer in time; if it answers, its line stands in happening_here` }),
     ...(others.length ? { creatures: others } : {}),
@@ -467,7 +471,7 @@ async function liveDeps(given) {
       return journal.appendActFlipped(null, { crossing: crossings.currentCrossing(), at, witnesses, household: branches.resolvedWorldHousehold(k), ...entry }, guard ? { guard } : {});
     },
     answer: (a, deps) => hook.answerWithin(a, deps),
-    others: (rows, except) => hook.creaturesAnswer(rows, {}, { except }).then((r) => r?.creatures ?? []),
+    others: (rows, except, owed) => hook.creaturesAnswer(rows, {}, { except, ...(owed ? { owed } : {}) }).then((r) => r?.creatures ?? []),
     // a persuade's household, as an encounter's ring reads it (creatures.mjs § householdsNow)
     householdOf: async (h) => { const lk = await (await import("./creatures.mjs")).householdsNow().catch(() => null); return lk?.(h)?.key ?? `solo:${h}`; },
   };

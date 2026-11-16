@@ -22,7 +22,7 @@
 // own (tools/stamp-mint.mjs, ballot, epoch-close, the ferry), exactly the pair
 // the box runs. `--town` defaults to this tree's `town-clone/`.
 //
-//   1. THE SANDBOX. A temp directory holding a `git clone --local` of the town
+//   1. THE SANDBOX. A temp directory holding a local `git clone` of the town
 //      checkout with its remotes REMOVED (nothing can push), SPARSE: the whole
 //      town less the letters dated before the synthetic clock's first day, which
 //      no step writes (POS-652, test/helpers/clone-sparse.mjs § standinPatterns;
@@ -76,13 +76,14 @@
 // Node 22+. Runs anywhere the office suite runs (the embedded-postgres
 // devDependency). Prints no secrets; holds none.
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync, verify as edVerify } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { applySparse, standinClone, standinPatterns } from "../test/helpers/clone-sparse.mjs";
+import { standinClone } from "../test/helpers/clone-sparse.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -166,7 +167,7 @@ export function resignLedger(text, keyPem, engine) {
  */
 export function chainCheck(engine, prevText, nextText, pubPem) {
   const problems = [];
-  const prev = prevText.replace(/\s*$/, "\n");
+  const prev = endWithNewline(prevText);
   if (!nextText.startsWith(prev.trimEnd())) problems.push("append-only: the ledger's earlier bytes changed");
   const before = engine.parseStampLedger(prevText).length;
   const entries = engine.parseStampLedger(nextText);
@@ -394,10 +395,9 @@ export async function openSandbox({ townSource, log = () => {} } = {}) {
   // ones are left out, and `git add` takes everything the script writes
   sb.before = clockStart((rel) => git(source, "show", `${sourceSha}:${rel}`));
   log(`cloning the town at ${sourceSha.slice(0, 9)} (${source}), less the letters dated before ${sb.before}`);
-  // LF as the box has it: a Windows machine's autocrlf must not rewrite the ledger's bytes
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, sb.town]);
+  // LF as the box has it: standinClone keeps a Windows machine's autocrlf from rewriting the ledger's bytes
+  standinClone("town", source, sb.town, { before: sb.before });
   for (const r of git(sb.town, "remote").split("\n").filter(Boolean)) git(sb.town, "remote", "remove", r);
-  applySparse(sb.town, standinPatterns("town", source, { before: sb.before }), "standin-town");
   git(sb.town, "checkout", "-q", "-B", "sandbox", sourceSha);
   git(sb.town, "config", "user.name", BOT.BOT_NAME);
   git(sb.town, "config", "user.email", BOT.BOT_EMAIL);
@@ -585,7 +585,36 @@ export function fullVerify(sb) {
  * Stops at the first red step: what follows a red step would be judged against
  * a state the script did not intend.
  */
+// ── WHERE IT NEVER RUNS (POS-994, Wright 2026-11-16 08:5x EST) ───────────────
+// This sandbox is exempt from the office's pin law (test/town-tool.test.mjs §
+// the source law) BY NAME, for one reason: its whole job is to run the --town
+// checkout's OWN engines (stamp-mint, ballot, epoch-close, the ferry), often a
+// town PR's, against this office tree, which is exactly the code the office
+// otherwise refuses to run unpinned. That is safe only where no real mint key
+// can be reached. So it refuses to start where one is present: the box's key
+// path, or the path the office environment names for the mint (STAMP_KEY).
+/** The places a real stamp key would be on a machine that mints. */
+export const stampKeyPaths = (env = process.env) => [
+  "/srv/postmark-office/stamp-key.pem",      // prod's mint key
+  "/srv/postmark-office-dev/stamp-key.pem",  // dev's own mint key (POS-354)
+  env.STAMP_KEY,                             // the office env's mint key
+  env.WITNESS_KEY,                           // the witness's key (Truey's review of #1065: "a key or the store")
+].filter(Boolean);
+
+/**
+ * Null where none of `paths` exists and no store credential is named; else the
+ * sentence the sandbox refuses with. The store's credentials (WORLD2_PG_URL) are
+ * refused like a key (Truey's re-read of #1065, finding 6: "a key or the store").
+ */
+export function stampKeyRefusal(paths = stampKeyPaths(), { storeUrl = process.env.WORLD2_PG_URL } = {}) {
+  if (storeUrl) return `stamp-sandbox: refused — the store's credentials are present (WORLD2_PG_URL). The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where the store can be reached; it opens its own store.`;
+  const hit = paths.find((p) => existsSync(p));
+  return hit ? `stamp-sandbox: refused — a stamp key is present at ${hit}. The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where a mint key can be reached; run it on a machine without one.` : null;
+}
+
 export async function runSandbox({ townSource, keep = false, log = () => {} } = {}) {
+  const refused = stampKeyRefusal();
+  if (refused) throw new Error(refused);
   const t0 = Date.now();
   const report = { green: false, office_head: null, town_source: null, town_sha: null, steps: [], verifies: 0 };
   try { report.office_head = git(OFFICE, "rev-parse", "HEAD"); } catch { /* an exported tree */ }
@@ -848,6 +877,8 @@ const USAGE = "usage: node tools/stamp-sandbox.mjs [--town <town checkout>] [--k
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
+  const refused = stampKeyRefusal();
+  if (refused) { console.error(refused); return 3; }
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
   const known = new Set(["--town", "--keep", "--json", "--report"]);
   for (let i = 0; i < argv.length; i++) {

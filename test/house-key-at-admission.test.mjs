@@ -19,6 +19,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -121,7 +122,7 @@ const withEnv = async (over, fn) => {
   try { return await fn(); }
   finally { for (const [k, v] of Object.entries(prev)) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
 };
-const pen = (town) => ({ STAMP_KEY: town.keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools"), TOWN_PUSH: null });
+const pen = (town) => ({ STAMP_KEY: town.keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(town.dir, TOWN)), TOWN_PUSH: null });
 
 const ledgerOf = (dir) => readFileSync(join(dir, "WHITE_PAGES/stamp-ledger.md"), "utf8");
 const appendedOn = (dir, date) => ledgerOf(dir).split("\n")

@@ -58,8 +58,10 @@
 // recorded yet is minted under whatever key the ledger says when the pass
 // runs, so those two sentences are left out of the comparison.
 
+import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 import { join } from "node:path";
 import { DRAIN_KEY_PATH, signedRegistryLines } from "./ledger-pen.mjs";
 
@@ -71,7 +73,7 @@ export const registryLine = (date, handle, householdSlug) =>
 
 /** handle -> current mint key, from the clone's own `currentHouseholds`. */
 export function currentKeysOf(clone) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]); // POS-994: the pinned copy, checked against the clone
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { pathToFileURL } = await import('node:url');",
@@ -121,7 +123,7 @@ export function houseKeyLines(joins, { date, keys }) {
  * join over it would fix nothing. One sentence per defect, the town's.
  */
 export function householdKeySplits(clone, lines, registry) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "household-keys.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { readFileSync } = await import('node:fs');",
@@ -161,7 +163,7 @@ export function ledgerTail(text) {
  * the lines would add.
  */
 export function replayHolds(clone, { signed, handles, date }) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "stamp-verify.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir, date] = process.argv.slice(1);",
     "const fs = (await import('node:fs')).default;",
@@ -195,11 +197,12 @@ export function replayHolds(clone, { signed, handles, date }) {
     "syncBuiltinESMExports();",
     "const { verifyStampLedger } = await import(pathToFileURL(engineDir + '/stamp-verify.mjs'));",
     "const owed = (p) => /mints owed|settlement owed/.test(p);",
-    "const withLines = (verifyStampLedger(clone).problems ?? []).filter((p) => !owed(p));",
+    "const pubkeyPem = fs.readFileSync(engineDir + '/stamp-pubkey.pem', 'utf8'); // POS-994: the PINNED key, the trust root",
+    "const withLines = (verifyStampLedger(clone, { pubkeyPem }).problems ?? []).filter((p) => !owed(p));",
     "let fresh = [];",
     "if (withLines.length) {",
     "  overlay = false;",
-    "  const standing = new Set(verifyStampLedger(clone).problems ?? []);",
+    "  const standing = new Set(verifyStampLedger(clone, { pubkeyPem }).problems ?? []);",
     "  fresh = withLines.filter((p) => !standing.has(p));",
     "}",
     "process.stdout.write(JSON.stringify({ holds: fresh.length === 0, checked: 'verified', active: [...active].sort(), fresh }));",
@@ -288,7 +291,7 @@ export function appendHouseKey(clone, signed) {
   if (!signed?.length) return null;
   const abs = join(clone, LEDGER_REL);
   const prior = readFileSync(abs, "utf8");
-  writeFileSync(abs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+  writeFileSync(abs, endWithNewline(prior) + signed.join("\n") + "\n");
   return abs;
 }
 

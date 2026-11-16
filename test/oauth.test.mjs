@@ -224,13 +224,102 @@ test("full dance: register → GitHub → consent → code → token → /town 2
   });
   assert.equal(ref.status, 200);
   const grant2 = await ref.json();
+  const me2 = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant2.access_token}` } });
+  assert.equal(me2.status, 200, "the new pair works");
   const replay = await fetch(`${BASE}/oauth/token`, {
     method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: grant.refresh_token }),
   });
   assert.equal(replay.status, 400, "rotated refresh token must be dead");
-  const town2 = await fetch(`${BASE}/town`, { headers: { authorization: `Bearer ${grant2.access_token}` } });
-  assert.equal(town2.status, 200);
+  // POS-485: and presenting it again ended its whole sign-in, no grace (the next test is the full falsifier)
+  assert.equal((await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${grant2.access_token}` } })).status, 401);
+});
+
+// ── POS-485 · a reused refresh token ends its whole sign-in (the file's road: the store's is oauth-store-outage R6–R11) ──
+
+const tokenAt = (body) => fetch(`${BASE}/oauth/token`, {
+  method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) });
+async function signInGrant() {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const clientId = await registerClient();
+  const verifier = randomBytes(32).toString("base64url");
+  const { code } = await danceToCode(clientId, verifier);
+  const tok = await tokenAt({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: REDIRECT, code_verifier: verifier });
+  assert.equal(tok.status, 200);
+  return tok.json();
+}
+const rotateGrant = async (refreshToken) => {
+  const r = await tokenAt({ grant_type: "refresh_token", refresh_token: refreshToken });
+  assert.equal(r.status, 200, `rotation: ${r.status}`);
+  return r.json();
+};
+const meStatus = async (key) => (await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${key}` } })).status;
+// A pair issued before the switch, written into the office's own oauth.db as issueTokens wrote it then: no family.
+function legacyPair() {
+  const db = new DatabaseSync(join(tmp, "oauth.db"));
+  try {
+    const t = Math.floor(Date.now() / 1000), pair = { access_token: randomBytes(32).toString("base64url"), refresh_token: randomBytes(32).toString("base64url") };
+    const ins = db.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created) VALUES (?, ?, 999, 'keeminlee', ?, ?, ?)");
+    ins.run(s256(pair.access_token), "access", redirectClientId, t + 3600, t);
+    ins.run(s256(pair.refresh_token), "refresh", redirectClientId, t + 7200, t);
+    return pair;
+  } finally { db.close(); }
+}
+
+test("POS-485 · THE FALSIFIER: a replayed refresh token ends every key of its sign-in at the door; another sign-in of the same account and client, a pre-switch access key and the household and resident keys still work", async () => {
+  const g1 = await signInGrant(), g2 = await rotateGrant(g1.refresh_token), g3 = await rotateGrant(g2.refresh_token);
+  const other = await signInGrant();                       // the same account, the same registered client: another sign-in
+  const legacy = legacyPair();
+  const humanKey = (await (await fetch(`${BASE}/keys`, { method: "POST", headers: { authorization: `Bearer ${other.access_token}` } })).json()).key;
+  const { mintHouseholdKey } = await import("../src/oauth.mjs");
+  const odb = new DatabaseSync(join(tmp, "oauth.db"));
+  const residentKey = await mintHouseholdKey(odb, 999, "keeminlee", { heldBy: "resident", claimedHandle: "wright", cosignedBy: { id: 999, login: "keeminlee" } });
+  odb.close();
+  for (const k of [g1.access_token, g2.access_token, g3.access_token, other.access_token, legacy.access_token, humanKey, residentKey])
+    assert.equal(await meStatus(k), 200, "before: every key opens the door");
+
+  const replay = await tokenAt({ grant_type: "refresh_token", refresh_token: g1.refresh_token });
+  assert.equal(replay.status, 400);
+  const said = await replay.json();
+  assert.equal(said.error, "invalid_grant");
+  assert.match(said.error_description, /already used once, so the sign-in it belongs to has ended/);
+  for (const g of [g1, g2, g3]) assert.equal(await meStatus(g.access_token), 401, "every access key of that sign-in, the older 30-day ones included, fails at once");
+  assert.equal((await tokenAt({ grant_type: "refresh_token", refresh_token: g3.refresh_token })).status, 400, "and its live refresh token");
+
+  assert.equal(await meStatus(other.access_token), 200, "another sign-in of the same account and client still works");
+  assert.equal(await meStatus(legacy.access_token), 200, "a pre-switch access key is outside the rule (POS-485/b)");
+  assert.equal(await meStatus(humanKey), 200, "the household key is untouched");
+  assert.equal(await meStatus(residentKey), 200, "and the resident's own key");
+  assert.equal((await tokenAt({ grant_type: "refresh_token", refresh_token: other.refresh_token })).status, 200, "the other sign-in still refreshes");
+});
+
+test("POS-485 · a pre-switch refresh links what it issues from its first rotation; a replay of it ends that, never the pre-switch access key beside it", async () => {
+  await registerClient();
+  const legacy = legacyPair();
+  const n1 = await rotateGrant(legacy.refresh_token), n2 = await rotateGrant(n1.refresh_token);
+  assert.equal(await meStatus(n2.access_token), 200);
+  const replay = await tokenAt({ grant_type: "refresh_token", refresh_token: legacy.refresh_token });
+  assert.equal(replay.status, 400);
+  assert.match((await replay.json()).error_description, /the sign-in it belongs to has ended/);
+  for (const g of [n1, n2]) assert.equal(await meStatus(g.access_token), 401);
+  assert.equal(await meStatus(legacy.access_token), 200, "the pre-switch access key keeps its own expiry");
+});
+
+test("POS-485 · the file's sweep keeps a retired token's evidence while its sign-in can still authenticate, and removes it after", async () => {
+  const { openOauthDb, sweep } = await import("../src/oauth.mjs");
+  const db = openOauthDb(join(tmp, "sweep-parity.db"));
+  try {
+    const t = Math.floor(Date.now() / 1000);
+    const ins = db.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created, family) VALUES (?, ?, 999, 'k', 'c', ?, ?, ?)");
+    const spent = db.prepare("INSERT INTO tokens (token_hash, kind, family, created) VALUES (?, 'spent', ?, ?)");
+    ins.run("live-access", "access", t + 600, t, "fam-live");
+    ins.run("dead-access", "access", t - 5, t, "fam-dead");
+    spent.run("live-spent", "fam-live", t);
+    spent.run("dead-spent", "fam-dead", t);
+    await sweep(db);
+    const left = db.prepare("SELECT token_hash FROM tokens ORDER BY token_hash").all().map((r) => r.token_hash);
+    assert.deepEqual(left, ["live-access", "live-spent"]);
+  } finally { db.close(); }
 });
 
 test("PKCE mismatch → invalid_grant, and the code is burned", async () => {
@@ -472,6 +561,72 @@ test("key desk: a PINNED static key CAN mint, and that is the right answer", asy
 test("key desk: anonymous mint is a 401 at the write tier", async () => {
   const r = await fetch(`${BASE}/keys`, { method: "POST" });
   assert.equal(r.status, 401);
+});
+
+// POS-910 part 2, the desk's wording. Wright (AUTH 2026-11-05T15:16:06Z, quoting the ask): "the key desk says plainly at
+// mint time that the new key replaces the current one, and every copy must be updated. A falsifier: a test that the mint
+// page or response names the replacement." The note was already saying "Minting again replaces it." — about a FUTURE
+// mint, never about the key just handed over — so this reads the three clauses of the requirement one by one, on the
+// real POST /keys answer (a real office, a mock GitHub), for BOTH messages the desk has (a household key, a visitor pass).
+// Each clause is its own boolean in a map the assertion compares whole, so a red names the clause that is missing, and
+// the clauses the desk already kept (shown once, a password, what a visitor pass becomes) ride the same map: reworded,
+// not replaced. The Site's key card prints `note` verbatim (KeysCard.astro, `notes.push(data.note)`), so the response
+// IS the mint page's warning. Wording only: the status, the field names and the rotation itself are asserted unchanged.
+const REPLACEMENT_CLAUSES = {
+  // the NEW key (the one just minted) is the subject, not "minting again" (a future act)
+  newKeyReplacesTheOld: /\b(?:this|the) new key (?:now )?replaces\b/i,
+  // the old key is said to stop working, so a stale copy is expected to fail
+  oldKeyStops: /\bold (?:key|copies|copy)\b[^.]*\b(?:stops? working|no longer works?|is dead|dies|stopped working|is revoked)\b/i,
+  // and the human is told to update every stored or running copy
+  updateEveryCopy: /\bupdate\b[^.]*\bevery\b[^.]*\bcop(?:y|ies)\b|\bevery\b[^.]*\bcop(?:y|ies)\b[^.]*\bupdate\b/i,
+  // kept from before, unchanged in meaning
+  shownOnce: /\bshown once\b/i,
+  likeAPassword: /\blike a password\b/i,
+};
+const verdictOf = (note, clauses) => Object.fromEntries(Object.entries(clauses).map(([k, re]) => [k, re.test(String(note))]));
+const MINT_BODY_KEYS = ["household", "key", "note", "visitor"];
+
+async function mintTwice(identity) {
+  const access = await accessTokenFor(identity);
+  const mintOnce = async () => {
+    const r = await fetch(`${BASE}/keys`, { method: "POST", headers: { authorization: `Bearer ${access}` } });
+    return { status: r.status, body: await r.json() };
+  };
+  const first = await mintOnce();
+  const second = await mintOnce();
+  return { first, second };
+}
+
+test("POS-910 · key desk: a household key's note says the new key replaces the old one and every copy must be updated", async () => {
+  const { first, second } = await mintTwice({ id: 999, login: "keeminlee" });
+  for (const m of [first, second]) {
+    assert.equal(m.status, 201, "the mint answers 201, as before");
+    assert.deepEqual(Object.keys(m.body).sort(), MINT_BODY_KEYS, "the answer's fields are unchanged: the warning rides the existing `note`");
+    assert.equal(m.body.visitor, false);
+    assert.match(m.body.key, /^pmk_/);
+  }
+  const clauses = { ...REPLACEMENT_CLAUSES, actsAsResidents: /\bacts as your residents\b/i };
+  assert.deepEqual(verdictOf(second.body.note, clauses), Object.fromEntries(Object.keys(clauses).map((k) => [k, true])),
+    `every clause of "the new key replaces the current one, and every copy must be updated" must be said at mint time; note was: ${second.body.note}`);
+  // the promise the note makes is true: the first key is dead after the second mint, the second works
+  const dead = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${first.body.key}` } });
+  assert.equal(dead.status, 401, "the note says the old key stops working, and it does");
+  assert.equal((await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${second.body.key}` } })).status, 200);
+});
+
+test("POS-910 · key desk: a visitor pass's note says the same, and keeps what the pass becomes", async () => {
+  const { first, second } = await mintTwice({ id: 910910, login: "syn-wording-visitor" });
+  for (const m of [first, second]) {
+    assert.equal(m.status, 201);
+    assert.deepEqual(Object.keys(m.body).sort(), MINT_BODY_KEYS);
+    assert.equal(m.body.visitor, true);
+    assert.match(m.body.key, /^pmk_/);
+  }
+  const clauses = { ...REPLACEMENT_CLAUSES, aVisitorPass: /\bvisitor pass\b/i, becomesTheHouseKey: /\bjoin PR merges\b[^.]*\bfull house key\b/i };
+  assert.deepEqual(verdictOf(second.body.note, clauses), Object.fromEntries(Object.keys(clauses).map((k) => [k, true])),
+    `every clause must be said at mint time for a visitor pass too; note was: ${second.body.note}`);
+  const dead = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${first.body.key}` } });
+  assert.equal(dead.status, 401, "the visitor pass rotates too: the old one is dead");
 });
 
 // ── the manual finish (#2764 friction 3, under #2754 box 2) ──────────────────

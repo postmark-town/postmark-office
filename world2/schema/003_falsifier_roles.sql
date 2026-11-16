@@ -137,6 +137,16 @@ lawful AS (
     -- kept inline, with their reasons); no DELETE, because a hold is kept.
     ('office_api',   'invite_holds',     'INSERT'),
     ('office_api',   'invite_holds',     'UPDATE'),
+    -- 088_letter_notes.sql (POS-730), a household's private note on a letter it
+    -- received. Narrowed by its row policies to the acting household's own rows.
+    -- INSERT and UPDATE set or change a note; DELETE is what `clear` does, because
+    -- the condition's bytes are private and a cleared note is not kept.
+    ('office_api',   'letter_notes',     'INSERT'),
+    ('office_api',   'letter_notes',     'UPDATE'),
+    ('office_api',   'letter_notes',     'DELETE'),
+    -- 096_parcel_room_nonces.sql (POS-939), a room purchase's retry key, kept
+    -- before any stamp burns. INSERT only: a key names one purchase for good.
+    ('office_api',   'parcel_room_nonces', 'INSERT'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.
@@ -274,6 +284,13 @@ lawful AS (
     ('law_ingester', 'town_rooms',                 'DELETE'),
     ('law_ingester', 'town_mail_lines',            'INSERT'),
     ('law_ingester', 'town_mail_lines',            'DELETE'),
+    -- 097_town_discovery.sql (POS-497): discovery's pieces and letter edges,
+    -- derived by the same ingest from town_letters and town_homes; replaced,
+    -- never edited.
+    ('law_ingester', 'town_discovery_chunks',      'INSERT'),
+    ('law_ingester', 'town_discovery_chunks',      'DELETE'),
+    ('law_ingester', 'town_letter_edges',          'INSERT'),
+    ('law_ingester', 'town_letter_edges',          'DELETE'),
     ('law_ingester', 'projection_heads', 'INSERT'),
     ('law_ingester', 'projection_heads', 'UPDATE'),
     ('law_ingester', 'projection_heads', 'DELETE'),

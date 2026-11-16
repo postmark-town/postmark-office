@@ -77,6 +77,9 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+// POS-994: the town engine at the checkout's commit, through the loader (town-tool.mjs §
+// importTownToolAtHead): its own inside the office's reviewed history, else the pinned copy or a stop by name.
+import { importTownToolAtHead } from "../../src/town-tool.mjs";
 
 import { assertSha } from "./law-ingest.mjs";   // the same --sha guard, not a twin of it
 import { deriveRoll, writeRoll } from "./roll-ingest.mjs";
@@ -85,7 +88,6 @@ import { liveHouseOfVia } from "../../src/household-deriver.mjs";
 
 export const TOWN_REPO_KEY = "town";            // projection_heads.repo for this pen
 
-const toolUrl = (repo, file) => pathToFileURL(join(resolve(repo), "tools", file)).href;
 
 /**
  * Derive every `stamp_projection` row for one town checkout.
@@ -109,7 +111,7 @@ export async function deriveStamps({ townRepo }) {
   const ledgerPath = join(repo, "WHITE_PAGES", "stamp-ledger.md");
   if (!existsSync(ledgerPath)) throw new Error(`no WHITE_PAGES/stamp-ledger.md under ${repo} — is this a town checkout?`);
 
-  const mint = await import(toolUrl(repo, "stamp-mint.mjs"));
+  const mint = await importTownToolAtHead(resolve(repo), "stamp-mint.mjs");
   const entries = mint.parseStampLedger(readFileSync(ledgerPath, "utf8"));
   const balances = mint.foldBalances(entries);
   const households = mint.currentHouseholds(repo);

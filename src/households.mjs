@@ -61,7 +61,7 @@
 // a per-process fold would answer with the town from before the ceremony in
 // every other process for as long as it lived.
 
-import { loadRegistryRows } from "./registry-store.mjs";
+import { loadRegistryRows, registryRowsVia } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { isResidentHandle } from "./residency.mjs"; // one definition of what a handle is
 import { resolveHouse, keyOfSlug } from "./household-deriver.mjs";
@@ -136,6 +136,16 @@ export async function householdLookup(env = process.env) {
   try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
   if (rows === null) return null;
   return householdLookupOf(registryFromRows(rows), pinsFromRows(rows));
+}
+
+/**
+ * The block for one handle, from the store the caller is ALREADY HOLDING (a client inside a transaction): the same registry, pins and lookup as `householdOf`, read on
+ * that client (registry-store.mjs § registryRowsVia) instead of on the module's acts pool. A reader inside the pen's transaction must use this and not `householdOf`:
+ * waiting on a second pool while its own connection sits idle in a transaction is how the server's idle-transaction timeout ended one (POS-963).
+ */
+export async function householdOfVia(q, handle) {
+  const rows = await registryRowsVia(q);
+  return householdLookupOf(registryFromRows(rows), pinsFromRows(rows))(handle);
 }
 
 /** The block for one handle, from the store; null when the store could not be asked. */

@@ -144,8 +144,18 @@ export const LANDED = {
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
   // 087 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
   "087_invite_holds.sql":       { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
-  // 091 (POS-721, small): the household's human's town name, short line and pronouns, on its row.
-  "091_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
+  "088_letter_notes.sql":        { probe: rel("letter_notes") },
+  "092_household_likeness_state.sql": { probe: col("households", "likeness_state") },
+  // 093 (POS-962): the Hearth a household chose, on its row.
+  "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
+  // 094 (POS-485): the sign-in a token pair came from, and its index (the file's last statement).
+  "094_oauth_signin_family.sql": { probe: `${col("oauth_tokens", "family")} AND ${rel("oauth_tokens_family")}` },
+  // 096 (POS-939): a room purchase's retry key, private, office_api's only.
+  "096_parcel_room_nonces.sql": { probe: `${rel("parcel_room_nonces")} AND has_table_privilege('office_api', 'parcel_room_nonces', 'INSERT') AND NOT has_table_privilege('snapshot_reader', 'parcel_room_nonces', 'SELECT')` },
+  // 097 (POS-497; was 088 until the train took it for letter_notes): discovery's two derived tables, their walk indexes, and the registry rows written last.
+  "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
+  // 098 (POS-721, small; was 091 until 092–097 landed first): the household's human's town name, short line and pronouns, on its row.
+  "098_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

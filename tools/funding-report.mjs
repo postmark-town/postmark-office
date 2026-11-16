@@ -48,6 +48,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 
 import { foldFunding, readPots, parseLedgerText, TREASURY_POT } from "../src/funding.mjs";
 import { readWalletRegistry } from "../src/wallet-registry.mjs";
@@ -430,8 +431,8 @@ async function main() {
   const fold = foldFunding(entries);
   const { pots, invalid: potsInvalid } = readPots(clone);
 
-  const mint = join(clone, "tools", "stamp-mint.mjs");
-  const engine = existsSync(mint) ? await import(pathToFileURL(mint)) : null;
+  // POS-994: the office's pinned copy, checked against the clone; a pin stop throws by name, never "no engine".
+  const engine = existsSync(join(clone, "tools", "stamp-mint.mjs")) ? await importTownTool(clone, "stamp-mint.mjs") : null;
   // POS-346: the payer registry is the store's, as the watchers read it. Handed
   // to the card queue too: without it every account-referenced session read
   // "no-registry" here while the watcher credited it. Unreadable, the report

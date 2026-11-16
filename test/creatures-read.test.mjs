@@ -253,7 +253,8 @@ test("to_you: a creature's answer to you rides your own happened, the arrival na
   const whole = toYou({ creatureEffects: got, sinceCrossing: 270, nowCrossing: 272 });
   assert.equal(whole.complete, true);
   assert.equal(whole.count, 2);
-  assert.match(whole.note, /so does every hold on a thing of yours or by your own hand, and every creature's answer to you$/);
+  // the creature clause is whole and last of the sentence it was; POS-731 appends one qualification after it (a withdrawn mark's latest-state limit), never into it
+  assert.match(whole.note, /so does every hold on a thing of yours or by your own hand, and every creature's answer to you; a withdrawn mark of yours leaving canon rides here as the mark's latest state/);
   assert.doesNotMatch(toYou({ sinceCrossing: 270, nowCrossing: 272 }).note, /creature/, "no creatures read, the sentence it always was");
 });
 

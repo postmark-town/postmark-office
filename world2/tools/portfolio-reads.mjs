@@ -52,7 +52,7 @@
 
 /** The published rows one household's residents authored, standing in canon. */
 export const PORTFOLIO_MARKS_SQL = `
-  SELECT slug, kind, owner, household, body, geometry, data
+  SELECT slug, kind, owner, household, body, geometry, data, locked_window
     FROM marks WHERE status = 'standing' AND owner = ANY($1) ORDER BY slug`;
 
 /**

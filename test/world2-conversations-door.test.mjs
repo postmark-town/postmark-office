@@ -108,3 +108,32 @@ test("an act no era explains still stops the read: only an unplaceable say is an
   assert.match(r.body.hint, /What failed is in the office's log, not in this answer/);
   assert.match(lines.join("\n"), /match no known era/, "the log says which");
 });
+
+// ── POS-951: the stored ?before= page carries voices_before and the feed's teaching, with honest source coverage ─────────────────────────────────────
+// A closed room of nine lines (the settlement after it published), read from the record with ?voices=3: a thread cut at the cap says where the rest begins (`voices_earlier`),
+// ?voices_before pages it back with no line skipped or repeated, and the notes say the page is read from the record, not the office's memory.
+test("POS-951: the stored page pages a closed room's voices back (voices_before), whole, and says it is the record", async () => {
+  const day = Date.parse("2026-09-01T00:00:00Z");
+  const room = Array.from({ length: 9 }, (_, i) => say(100 + i, `g${i}`, "the-town/the-quay", i, `line ${i}`)).map((a, i) => ({ ...a, at: new Date(day + 3600_000 + (i < 4 ? Math.floor(i / 2) : i - 1) * 60000) }));   // lines 0,1 tie; lines 2,3 tie
+  const edges = [day, day + 6 * 3600_000];
+  const ask = (query) => world2Serve("/world2/conversations", new URLSearchParams(`at=2026-09-01T09:00:00Z&voices=3&closed=50${query}`), { p: poolOf(room), settlements: () => edges, hearingWindow: () => ({ since: edges[1] }) });
+  const first = await ask("&before=2026-09-01T09:00:00Z");
+  assert.equal(first.code, 200, JSON.stringify(first.body).slice(0, 300));
+  assert.equal(first.body.earlier.source, "record");
+  assert.match(first.body.place_note, /WANDERS as a room moves/);
+  assert.match(first.body.voices_note, /a \?before= page of closed threads is read from the record and takes the same \?voices_before=/);
+  const thread = (r) => r.body.closed.find((c) => c.voice_count === 9);
+  let t = thread(first);
+  assert.ok(t, "the nine-line room is on the page");
+  assert.ok(t.voices_earlier, "cut at three, it says there is more");
+  assert.match(t.voices_earlier.note, /this page is read from the record$/, "record coverage, not memory");
+  const seen = t.voices.map((v) => v.said);
+  for (let hop = 0; t.voices_earlier && hop < 20; hop++) {
+    t = thread(await ask(`&before=2026-09-01T09:00:00Z&voices_before=${t.voices_earlier.before_ms}`));
+    seen.unshift(...t.voices.map((v) => v.said));
+  }
+  assert.deepEqual(seen, room.map((a) => a.payload.text), "every line once, oldest first: nothing skipped at a page boundary (the ties kept whole), nothing repeated");
+  // an unreadable cursor is no cursor, and the page before it is untouched
+  const junk = await ask("&before=2026-09-01T09:00:00Z&voices_before=nonsense");
+  assert.deepEqual(thread(junk).voices.map((v) => v.said), thread(first).voices.map((v) => v.said));
+});

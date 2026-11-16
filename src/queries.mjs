@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
 import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns, profile first
-import { householdOf, giverLookup } from "./households.mjs";
+import { householdOf, householdOfVia, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { dialNumber, ideasTank } from "./world-classes.mjs"; // the doorstep's own dials, read off the record — never held here; the tank is the first-idea fact (firstIdeaStanding)
 import { freshnessFor, freshFor, addressTextIn, composeResidentCard, composeWindow } from "./paper-fresh.mjs"; // the freshness ladder
@@ -1331,6 +1331,10 @@ export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "o
  *  `serves` pointer names the read that walks the rest. */
 export const DOORSTEP_STANCES = 5;
 
+/** How many stake rows the morning page shows (POS-902). A preview: `count` and `at_risk` are the whole report's, and the segment's
+ *  `serves`/`args` name the read that returns every row. */
+export const DOORSTEP_STAKES = 10;
+
 // ⚠ THE LAW WAS RE-STRUNG 2026-08-31 (ruled by Wright in-lane under the founder's parity ruling; founder informed with an override window, no override), and the previous sentence
 // is kept here so the change is visible rather than silent. It read:
 //
@@ -1712,9 +1716,11 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
  */
 export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null } = {}) {
   try {
-    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+    // POS-994: the town's code is checked first, so a pin stop is said the same
+    // whether or not the store answers (the office path and the store path agree)
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
+    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
     const { paperGapRows, worldSitedFor } = await import("./household-apex.mjs");
     // ONE world read, shared by the paper gaps and the onboarding row — the
     // block is not free, and two reads could in principle disagree.
@@ -1836,7 +1842,16 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
         ? "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) + the office's household-apex paper gaps — one derivation, two surfaces"
         : "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) — the same derivation the public doorstep bundle publishes",
     };
-  } catch { return null; }
+  } catch (e) {
+    // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
+    // One case is a true absence, not a stop: a town with no tools/quest-progress.mjs
+    // at all has no quests to step through (as an older checkout without
+    // composeNextSteps, above). A changed file, a missing piece of its closure, or
+    // pins that hold no quest-progress while the town does (TownToolUnpinned), is a stop.
+    const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
+    if (isPinStop(e) && !(e.code === "TOWN_PIN_MISMATCH" && e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    return null;
+  }
 }
 
 /** /stamps's page around its balances. Called by the store's stampsRoster (town-index-store.mjs). */
@@ -1895,9 +1910,17 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // than one opaque number, because a read nobody can check is not a read.
 
 /** Whose funding rows a handle's stamps read: the handle, and its household's slug when that differs.
- *  The slug is the store's registry's (POS-342); a store that cannot be asked leaves the handle alone. */
-export async function stampParties(handle) {
+ *  The slug is the store's registry's (POS-342); a store that cannot be asked leaves the handle alone. With `q`, a client the caller holds inside a transaction, the
+ *  registry is read on that client (POS-963). */
+export async function stampParties(handle, q = null) {
   const parties = [handle];
+  if (q) {
+    // A reader INSIDE the pen's transaction (the store's stampsDetail) asks the registry of the client it holds: its own snapshot, no second connection, nothing awaited
+    // that is not its own statement (POS-963). A failure here is the held transaction's own, and it is not swallowed: a failed statement leaves that transaction aborted.
+    const hh = await householdOfVia(q, handle);
+    if (hh?.slug && hh.slug !== handle) parties.push(hh.slug);
+    return parties;
+  }
   try { const hh = await householdOf(handle); if (hh?.slug && hh.slug !== handle) parties.push(hh.slug); } catch { /* garnish only */ }
   return parties;
 }
@@ -2129,12 +2152,12 @@ export function potBoardOf(rows, extraInvalid = []) {
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
 // since the last ingest, we serve a clean zero board (the daily reset) until the
 // next ingest recomputes. Async: the tool import is awaited (then cached).
-let _questTools = null;
+// POS-994: the office's pinned copy, checked against the clone on EVERY call
+// (the blob check is cached on the file's size and mtime, and node caches the
+// import), so a town change after the first load still stops the board by name.
 async function questTools(clone) {
-  if (_questTools) return _questTools;
-  const { pathToFileURL } = await import("node:url");
-  _questTools = await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")));
-  return _questTools;
+  const { importTownTool } = await import("./town-tool.mjs");
+  return importTownTool(clone, "quest-progress.mjs");
 }
 /**
  * THE FACTS THE OFFICE CAN SETTLE for the board's uncounted rows.
@@ -2427,6 +2450,24 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
     if (worldSited == null) return { note: STANDING_NOTES.world_elsewhere };
     return { progress: worldSited ? 1 : 0, complete: worldSited, since: null };
   }
+  // ── A QUEST THE TOWN PAYS ONCE PER HOUSEHOLD (POS-976) ───────────────────────
+  //
+  // `read-v2-feedback` (and any row `tools/stamp-mint.mjs` § QUEST_PAY names) is a
+  // hand-reviewed quest: no fold on this board can COUNT it, so its row read
+  // `complete: null`, "this surface did not look", even after the town signed its
+  // payment. The payment IS the fact: a signed `quest:<id>/<household-key>` mint by the
+  // town, which the registry's own derivation sentence names as the row's completion.
+  // The ingest folds the household's qualifying receipts into the standing row
+  // (`paid_quests`: quest id -> the paid day; src/quest-standing.mjs § questPaidFrom),
+  // and this joins them: a paid row is counted and complete, dated by the payment.
+  //
+  // ONLY EVER A YES. No receipt is "not known to be paid", not "unpaid" (a house may
+  // have written in and be waiting for a hand to read it), so an absent key leaves the
+  // row exactly as it was, unknown: `complete: null`, `progress: null`. The earned-once
+  // completion does not depend on the daily snapshot, so it survives a new day.
+  const paidOn = standing?.paid_quests;
+  if (paidOn && typeof paidOn === "object" && Object.hasOwn(paidOn, q.id) && typeof paidOn[q.id] === "string")
+    return { progress: 1, complete: true, since: paidOn[q.id] };
   return null;
 }
 
@@ -2530,6 +2571,21 @@ export function townQuestBoardOf({ registry, boardForHandle, today }, pots, potI
 // resident page reads), the board reads the world itself.
 
 /**
+ * `{ invite: { month, paid } }` for a handle from the index's `quest_invites` meta value
+ * (town-index.mjs § invitesOf), or `{}` when the index holds none or it is bent: then
+ * the town leaves the monthly row uncounted. A handle the value does not list is a
+ * counted zero for the value's month.
+ */
+export function inviteEntry(value, handle) {
+  try {
+    const v = JSON.parse(value ?? "null");
+    if (typeof v?.month !== "string" || !/^\d{4}-\d{2}$/.test(v.month) || !v.paid || typeof v.paid !== "object") return {};
+    const n = Object.hasOwn(v.paid, handle) ? v.paid[handle] : 0;
+    return Number.isInteger(n) && n >= 0 ? { invite: { month: v.month, paid: n } } : {};
+  } catch { return {}; }
+}
+
+/**
  * A resident's quest board (or the town's, with no handle) from its index
  * reads: `src` answers progressRow, standing, pots and potIds, sync or async.
  * Called by the store's questBoardOfRows (town-index-store.mjs), whose `src`
@@ -2564,6 +2620,11 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
     send: row.send, receive: row.receive,
     sentTo: names(row.sent_to), heardFrom: names(row.heard_from),
     household: { key: "", size: row.house_size, send: row.house_send, receive: row.house_receive },
+    // BRING A NEIGHBOUR (POS-961): the household's inviter-side payouts in the town month, folded by the town's own
+    // tool at ingest and carried in meta.quest_invites; the town's boardForHandle counts the monthly row when this
+    // entry names the town month (and leaves it uncounted, never a zero, when it does not). Only a FRESH index
+    // speaks: a stale hydrate stays unmeasured, as the daily bars do. A value that does not parse is no value.
+    ...inviteEntry(meta.quest_invites, handle),
   } : null;
   // ONE world-store read for the first-idea row: `boardForHandle` wants the
   // boolean and the standing join wants the date beside it.
@@ -2760,7 +2821,45 @@ export const PSA_SLUG = "public-service-announcements";
 // than one entry ("## 2026-08-17 (night) — one door for the world's acts").
 // Tolerant of CRLF because the town is written on two platforms, and of both
 // the em dash and a plain hyphen because a heading is prose and prose drifts.
-const PSA_HEADING = /^##\s+(\d{4}-\d{2}-\d{2})\s*(?:\(([^)]*)\))?\s*[—-]\s*(.+?)\s*$/;
+// THE GRAMMAR, as a regex: /^##\s+(\d{4}-\d{2}-\d{2})\s*(?:\(([^)]*)\))?\s*[—-]\s*(.+?)\s*$/. It is read by hand below (psaHeading) because that regex is QUADRATIC on a line a
+// blank run cannot finish: `\s*` and `(.+?)\s*$` can eat the same blanks, so on failure (a lone CR, U+2028 or U+2029 survives the line split and `.` cannot cross it) the engine
+// tries every split (148 ms at 16k characters, 652 ms at 32k; office #943). The hand read gives the same captures on every line, which test/pos-923-linear-reads.test.mjs
+// holds against the regex itself over every short string of its alphabet.
+const LINE_END = /[\n\r\u2028\u2029]/;   // what `.` cannot match
+const BLANK = /\s/;
+export function psaHeading(line) {
+  const s = String(line);
+  if (!s.startsWith("##")) return null;
+  let i = 2;
+  while (i < s.length && BLANK.test(s[i])) i += 1;
+  if (i === 2) return null;                                              // ## then at least one blank
+  const date = s.slice(i, i + 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  i += 10;
+  while (i < s.length && BLANK.test(s[i])) i += 1;
+  let qualifier;
+  if (s[i] === "(") {                                                    // the optional qualifier: up to the first ")"
+    const close = s.indexOf(")", i + 1);
+    if (close < 0) return null;
+    qualifier = s.slice(i + 1, close);
+    i = close + 1;
+    while (i < s.length && BLANK.test(s[i])) i += 1;
+  }
+  if (s[i] !== "—" && s[i] !== "-") return null;
+  i += 1;
+  // the title: the rest, trimmed both ends; one character at least, and no line end inside it
+  let from = i, to = s.length;
+  while (from < to && BLANK.test(s[from])) from += 1;
+  if (from === to) {
+    // only blanks remain: the regex leaves the LAST character that `.` can match as the title, so a heading never has an empty one
+    let k = to - 1;
+    while (k >= i && LINE_END.test(s[k])) k -= 1;
+    return k >= i ? [s, date, qualifier, s[k]] : null;
+  }
+  while (to > from && BLANK.test(s[to - 1])) to -= 1;
+  const title = s.slice(from, to);
+  return LINE_END.test(title) ? null : [s, date, qualifier, title];
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -2785,7 +2884,7 @@ export function parsePsaEntries(body) {
   const entries = [];
   let open = null;
   for (const line of lines) {
-    const m = PSA_HEADING.exec(line);
+    const m = psaHeading(line);
     if (m) {
       if (open) entries.push(open);
       open = { date: m[1], qualifier: m[2] ?? null, title: m[3], lines: [] };

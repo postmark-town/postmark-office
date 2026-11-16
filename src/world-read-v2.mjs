@@ -304,13 +304,13 @@ export function fullCards(entries = []) {
 export const EVENT_NEAR_M = 150;
 
 /**
- * The events on NOW (doors open or underway) that are here: the place is a mark
+ * The events on NOW (doors open or underway), not cancelled (POS-909: a cancelled one is not happening), that are here: the place is a mark
  * on your spine or in your view, or its point is within EVENT_NEAR_M of you.
  * `calendar` is events-store.mjs § calendarAtOffice's answer.
  */
 export function eventsHere(calendar, { at, ids = new Set() } = {}) {
-  return (calendar?.now ?? []).filter((e) => (e.place?.mark && ids.has(e.place.mark))
-    || (at && Number.isFinite(e.place?.x) && Math.hypot(e.place.x - at.x, e.place.y - at.y) <= EVENT_NEAR_M));
+  return (calendar?.now ?? []).filter((e) => e.cancelled !== true && ((e.place?.mark && ids.has(e.place.mark))
+    || (at && Number.isFinite(e.place?.x) && Math.hypot(e.place.x - at.x, e.place.y - at.y) <= EVENT_NEAR_M)));
 }
 
 /** G6: how many sounds the glance carries, and how much of each; the whole is read: "say". */

@@ -365,9 +365,12 @@ test("the mandated sentences are imported, never hand-typed, on every money surf
   // only the caption. It is now `WHAT_THIS_BUYS` in funding.mjs, imported at
   // both sites, and under the same discipline here. A probe that guards one
   // mandated sentence on a surface that carries two is a probe with a hole.
+  // (POS-1001, 2026-11-11: the disclosure's probe reads ANY string literal now.
+  // Until then it read the sentence's old opening, `what_this_buys: "this buys `,
+  // which a hand-typed copy of today's sentence would have walked past.)
   const HAND_TYPED = [
     [/caption: "a record of contribution, not a promise of profit"/g, "HOLO_CAPTION"],
-    [/what_this_buys: "this buys /g, "WHAT_THIS_BUYS"],
+    [/what_this_buys: ["'`]/g, "WHAT_THIS_BUYS"],
   ];
   for (const f of ["../src/fund.mjs", "../src/household-stamps.mjs"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");

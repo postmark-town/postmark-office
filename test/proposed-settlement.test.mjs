@@ -191,6 +191,11 @@ const listing = (root) => {
 };
 
 // ── 1. forecast correctness ─────────────────────────────────────────────────
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("FALSIFIER 1 — `proposed` equals what the settlement's own code produces on that book", async () => {
   writeBook(PENDING_BOOK);
   const answer = await worldStakeRead({ mark: PEAK });

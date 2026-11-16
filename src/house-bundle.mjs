@@ -27,6 +27,10 @@
 // read once for the house; behind WORLD_POSITIONS that roll is the kept
 // projection, position-projection.mjs).
 //
+// AND TWO PUBLIC COMPANIONS PER DECLARED MEMBER (POS-1070; POS-1061, Darko 2026-11-15 17:25 EST): `outboxes[<handle>]` and `quests[<handle>]`, what the Hearth's readHouse()
+// asked `GET /mail/<h>?box=outbox` and `GET /quests/<h>` for, so one office read returns all of a house's resident data (house-companions.mjs). Always anonymous, even
+// on the house's own key, and keyed by every DECLARED member, not only those ashore.
+//
 // THE OWNERSHIP GATE IS THE DOORSTEP'S, CALLED, NOT COPIED: each resident is
 // finished by `doorstep-bundle.mjs § ownerGate`, so `own = key.handles.has(h)`
 // decides the owner-only blocks here exactly as it does on the morning page.
@@ -51,7 +55,9 @@ import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { houseCompanions } from "./house-companions.mjs"; // POS-1070: each declared member's public outbox and quest board
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
 export const HOUSE_ONCE = Object.freeze(["clocks", "psa", "town", "bulletin", "town_pulse"]);
@@ -101,7 +107,9 @@ export async function registryFor(clone, readers = {}) {
   let rows;
   try { rows = await loadRegistryRows(); } catch { return null; }
   if (!rows) return null;
-  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), from: "the registry store" };
+  // `ords`: the order the town recorded households (`households.ord`), which the registry's rendering does not carry
+  // (POS-947/b: "joined before" is this order, never `since`)
+  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), ords: new Map(rows.households.map((r) => [r.slug, r.ord])), from: "the registry store" };
 }
 
 /**
@@ -125,7 +133,7 @@ export async function houseMembers({ household, key, clone, readers = {} }) {
     if (!slug) return { refused: [422, "which household?", "pass household: <slug> — or call with a key that holds a declared house"] };
   }
   const rec = houses[slug] ?? {};
-  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from };
+  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from, registry: reg.registry, ords: reg.ords ?? null };
 }
 
 // ── THE READERS, EACH ASKED ONCE FOR THE HOUSE ───────────────────────────────
@@ -262,7 +270,7 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
     ashore,
     ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
-    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep.",
+    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep. `outboxes[<handle>]` and `quests[<handle>]` are each declared member's PUBLIC outbox (the bare array GET /mail/<handle>?box=outbox answers) and quest board (GET /quests/<handle>), the same for every caller, the house's own key included; null is a read that could not be made, [] an outbox read and found empty.",
   };
 
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
@@ -306,6 +314,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
   // resident here, never one per resident (last-active.mjs).
   const lastActiveUnavailable = await stampRows(Object.values(residents), { find: (handles) => ix.lastActiveFor(handles) });
+  // THE PUBLIC COMPANIONS, for every DECLARED member (not only those ashore), the legacy public doors' own reads and never keyed (house-companions.mjs)
+  const { outboxes, quests } = await houseCompanions(house.members, { ix });
 
   return {
     ...out,
@@ -320,6 +330,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     last_active: `per resident, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
     ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
     residents,
+    outboxes,
+    quests,
   };
 }
 
@@ -485,7 +497,7 @@ export async function housePage({ household = null, limit = null, offset = null 
       at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
-      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident',
+      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident. ' + SNAPSHOT_LIMIT,
     },
     stands: { from: "the walkers roll (GET /world/walkers), read once for the page", at: stands.at ?? null,
       null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
@@ -571,7 +583,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
-    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
+    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
 
   // ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's, in the doorstep's

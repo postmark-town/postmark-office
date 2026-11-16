@@ -11,7 +11,7 @@
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test test/home-act-crash.test.mjs
 
-import "./helpers/drain-pen.mjs";
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -42,6 +42,7 @@ function townClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
   return dir;

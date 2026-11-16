@@ -96,13 +96,17 @@ test("the copier is the LANE'S OWN text, and it is a VACUUM INTO from a read-onl
   assert.match(src, /readOnly:\s*true/, "the copier opens roles.db writable — a backup lane must not hold a pen over who paid");
   assert.match(src, /require\("node:sqlite"\)/, "the copier left node:sqlite — the box has no sqlite3 CLI dependency and must not gain one");
 
-  // THE NEGATIVE, by grep over the whole lane: no cp/rsync/install of the LIVE
-  // roles.db anywhere. `cp "$ROLES_COPY"` — the already-consistent VACUUM INTO
-  // output going into the repo — is legal and is the only one this lane may make.
+  // THE NEGATIVE, by grep over the whole lane: no cp/rsync/install of roles
+  // anywhere. Since STAR-118 the already-consistent VACUUM INTO output goes
+  // straight to S3 from where it was written, so the lane makes no cp at all.
   const cpLines = LANE.split("\n").filter((l) => /^\s*(cp|rsync|install)\b/.test(l) && /roles/i.test(l));
-  assert.deepEqual(cpLines.map((l) => l.trim()), ['cp "$ROLES_COPY" "$REPO/roles/"'],
-    "a cp-shaped copy of the LIVE roles.db appeared in the lane — only the VACUUM INTO output may be cp'd");
+  assert.deepEqual(cpLines.map((l) => l.trim()), [],
+    "a cp-shaped copy of roles.db appeared in the lane — the VACUUM INTO output ships as it was written");
   assert.ok(!/\bcp\b[^\n]*ROLES_SRC/.test(LANE), "the lane cp's the live roles.db");
+  const ship = LANE.split("\n").find((l) => /w2_ship_s3 "\$W2_S3_BUCKET"/.test(l));
+  assert.ok(ship, "§ 4 has no S3 ship: the off-box route moved and this test measures nothing");
+  assert.match(ship, /"\$\{ROLES_COPY:-\}"/, "the S3 ship does not carry the VACUUM INTO copy");
+  assert.ok(!/\$ROLES_SRC/.test(ship), "the S3 ship carries the LIVE roles.db rather than its VACUUM INTO copy");
 });
 
 test("a fixture roles.db survives the copy row for row, and the counts are the ones the lane reports", () => {
@@ -177,7 +181,7 @@ test("the receipt and LATEST.json carry the bytes and the audit count, under the
 // wrong verdict. So the block is EXTRACTED FROM THE SHIPPED SCRIPT and executed
 // against fixtures, with the surrounding script stubbed down to what it touches
 // (`say`, `bad`, `drift_lines`, the two paths).
-function runRehearsalBlock(rolesDir, liveDb) {
+function runRehearsalBlock(rolesDir, liveDb, { inStore = "", inStoreRoles = "" } = {}) {
   const start = 'say "== roles.db, shipped copy vs live registry"';
   const from = REHEARSE.indexOf(start);
   assert.ok(from > 0, "the rehearsal no longer has a roles comparison block — this test is now measuring nothing");
@@ -189,10 +193,13 @@ function runRehearsalBlock(rolesDir, liveDb) {
   writeFileSync(harness, [
     "set -uo pipefail",
     "say() { printf '%s\\n' \"$*\"; }",
-    "bad=0; drift_lines=''; FROM_REMOTE=false; TMPCLONE=''",
+    "bad=0; drift_lines=''; FROM_REMOTE=false; FROM_S3=false; TMPCLONE=''",
+    // what the table loop leaves behind: "<restored> <live>" for the two in-store tables, or empty when the
+    // restore had no such table (an old dump)
+    `RS_AUDIT='${inStore}'; RS_ROLES='${inStoreRoles}'`,
     `W2_ROLES_DB="${liveDb}"; WORLD2_LAB="${rolesDir}"; WORLD2_OFFICE="${liveDb}"`,
     block,
-    'echo "BAD=$bad"',
+    'echo "BAD=$bad"', 'echo "RA=${RA_COPY:-}/${RA_LIVE:-}"',
   ].join("\n"));
   const out = execFileSync("bash", [harness], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   return { out, bad: Number(out.match(/BAD=(\d+)/)[1]) };
@@ -239,4 +246,15 @@ test("the restore rehearsal COMPARES the roles copy — and only the impossible 
   r = runRehearsalBlock(dir, join(dir, "nonesuch.db"));
   assert.match(r.out, /live registry absent — nothing to compare against/);
   assert.equal(r.bad, 0, "a missing live registry reddened — that is the restore case, not a fault");
+
+  // E · IN THE STORE (STAR-118, 11-12): no roles-*.db shipped because the roles ride the dump, and the table
+  // loop already counted office_roles and office_role_audit. Named as the roles check, carried into the receipt,
+  // never NOT-RUN, and never a second count of a finding the loop already made.
+  r = runRehearsalBlock(empty, live, { inStore: "2 2", inStoreRoles: "2 2" });
+  assert.match(r.out, /in the store: office_role_audit 2 restored \/ 2 live, office_roles 2 \/ 2/);
+  assert.doesNotMatch(r.out, /NOT-RUN/, "in-store roles were reported as not-run — the 11-12 rehearsal's stale line");
+  assert.match(r.out, /RA=2\/2/, "the audit counts did not reach the receipt");
+  assert.equal(r.bad, 0);
+  r = runRehearsalBlock(empty, live, { inStore: "5 3", inStoreRoles: "2 2" });
+  assert.equal(r.bad, 0, "the in-store block counted the audit finding again — the table loop already counts it once");
 });

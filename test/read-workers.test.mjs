@@ -227,7 +227,8 @@ test("the MCP dispatch rule: orient, open-your-eyes and the apex's reads go to w
   assert.equal(mcpWorkerTakes(call("world", { do: "say", args: { text: "hi" } })), false, "an act");
   assert.equal(mcpWorkerTakes(call("world", { read: "say" })), false, "a listen marks the listener present, in the main thread's RAM");
   assert.equal(mcpWorkerTakes(call("world", { read: " say " })), false);
-  assert.equal(mcpWorkerTakes(call("household", {})), false, "the standing read carries the bouncer's budget");
+  assert.equal(mcpWorkerTakes(call("household", { do: "send", args: { to: "limen", body: "hi" } })), false, "a household act");
+  assert.equal(mcpWorkerTakes(call("household", { read: "letter", id: "x" })), false, "opening a letter is a write (POS-1064: the standing read now goes to a worker, with the bouncer's budget handed over)");
   assert.equal(mcpWorkerTakes(call("world_say", { text: "hi" })), false);
   assert.equal(mcpWorkerTakes([{ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }]), false);
   assert.equal(mcpWorkerTakes([{ jsonrpc: "2.0", method: "tools/call", params: { name: "world_orient" } }]), false, "a notification has no answer to hand back");
@@ -394,9 +395,10 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
     const ob = await orient.text();
     const sp = JSON.parse(JSON.parse(ob.slice(ob.indexOf("{"))).result.content[0].text).standpoint;
     assert.ok(Number.isFinite(sp?.x) && Number.isFinite(sp?.y), `no standpoint in orient: ${ob.slice(0, 300)}`);
+    // CORE-97: the new says come past the hour of grace, or they would carry the old room across the edge
     const line = (at, text) => JSON.stringify({ at: new Date(at).toISOString(), handle: "rei", text, x: sp.x, y: sp.y, place: null, aboard: false });
     const lines = [line(settledAt - 60_000, "said before the settlement")];
-    for (let i = 1; i <= 25; i++) lines.push(line(settledAt + i * 16_000, `since ${String(i).padStart(2, "0")}`));
+    for (let i = 1; i <= 25; i++) lines.push(line(settledAt + 61 * 60_000 + i * 16_000, `since ${String(i).padStart(2, "0")}`));
     writeFileSync(voicesLog, `${lines.join("\n")}\n`);
 
     const get = (qs) => fetch(`${base}/world/apex${qs}`, { headers: auth });

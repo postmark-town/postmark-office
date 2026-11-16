@@ -214,6 +214,10 @@
      "required": "boolean",
      "type": "string"
     },
+    "resend": {
+     "description": "string",
+     "type": "string"
+    },
     "stake_candidate": {
      "description": "string",
      "type": "string"
@@ -256,6 +260,10 @@
     "from": {
      "description": "string",
      "required": "boolean",
+     "type": "string"
+    },
+    "preview": {
+     "description": "string",
      "type": "string"
     },
     "stamps": {
@@ -576,6 +584,31 @@
     },
     "preview": {
      "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "null",
+   "fields": {
+    "letter": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "on": {
+     "description": "string",
+     "type": "string"
+    },
+    "state": {
+     "description": "string",
+     "enum": [
+      "string"
+     ],
+     "required": "boolean",
      "type": "string"
     }
    },

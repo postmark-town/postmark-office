@@ -57,7 +57,7 @@ import { worldWriteCost } from "./bouncer.mjs"; // a stance list is charged one 
 import { DOORSTEP_TOOL, doorstepApex } from "./doorstep-apex.mjs"; // POS-632 PR-6: the apex of apexes
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { annotated } from "./tool-annotations.mjs"; // POS-748: every listed tool declares read-only, destructive and open-world
-import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
+import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, BALLOT_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
 import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs"; // the idea class, POS-290, behind IDEA_POSTS
 import { TITLE_MAX } from "./events.mjs";
 import { ideaPostsForTank } from "./idea-store.mjs";
@@ -83,7 +83,7 @@ function ideasFirst(tool) {
   return { ...tool,
     description: `${IDEA_POST_LEAD} ${BOUNTIES_LATER} ${cutFrom(off, 'AND class: "event"')}`,
     inputSchema: { ...tool.inputSchema, properties: { ...p,
-      class: { ...p.class, description: 'which class — "idea" (a post in the Think Tank, POS-290), "event" (the town\'s calendar, POS-288), "quest" (the town\'s own post, by the town\'s hands only, POS-294) or "bug" (something broken, for the town\'s hands to confirm and move along)' },
+      class: { ...p.class, description: 'which class — "idea" (a post in the Think Tank, POS-290), "event" (the town\'s calendar, POS-288), "quest" (the town\'s own post, by the town\'s hands only, POS-294), "bug" (something broken, for the town\'s hands to confirm and move along) or "ballot" (the town\'s vote, by the town\'s hands only, POS-983)' },
       slug: { type: "string", description: 'class "idea": optional — its id within your name, <you>/<slug> (lowercase-hyphenated); leave it off and the title names it' },
       body: { type: "string", description: 'class "idea": the idea, at most 600 characters. class "event": its invitation, in your own words, at most 600 characters. class "bug": what you saw and what you expected, at most 600 characters' },
       title: { type: "string", description: `class "idea" or "event": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
@@ -100,6 +100,7 @@ import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the thre
 import { withHouseholdBlock, householdsFor } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
+import { isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
 
 // Tools that WRITE — gated on a signed-in door. Called without a credential
 // they challenge for auth so MCP clients start the GitHub sign-in dance.
@@ -174,6 +175,10 @@ export const DELISTED = new Set([
   "read_asks",
   // the town's docs (2026-10-06) — born behind town { read: "docs" }, listed nowhere flat
   "read_docs",
+  // discovery (POS-497) — born behind town { read: "discover" }, listed nowhere flat
+  "discover_town",
+  // the Hearth's public reads (POS-1027) — born behind town { read: "feed" | "pair" }, listed nowhere flat
+  "read_feed", "read_pair",
   // the lanes' pen (2026-08-30 evening) — town { do: "post" }'s charge name
   "town_post",
   // the stake gesture (2026-08-31) — town { do: "stake" | "unstake" } and the
@@ -261,7 +266,7 @@ export const TOOLS = [
     }, additionalProperties: false } },
   { name: "read_posts", description: "THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, phase 1): every post of it as the general row (class, id, title, author, household, state, latest {act, at}, responses), and the class's `finished` states beside the list. class \"quest\": the town's own posts, authored by postmark-pen for the town's household, each with `fields.quest` (its quest-registry id) and `terms` (title, source, reward, cadence, target, and `ends` — the last day the quest is offered, inclusive, a YYYY-MM-DD town date — only when its registry row gives one; no `ends` means no end) read live from the registry — progress is not here; it is derived from the letters (town { read: \"quests\" }). class \"event\": the calendar's events in its window, their state from the clock (read_calendar has each whole). class \"bug\": every bug post, its stage as its state and its own fields (issue, steps, record, and the size, grade or duplicate its advances set); finished at shipped, duplicate or not-a-bug. The bugs are paged (limit, offset; `total`, `shown`, `complete`, and `next_offset` while there is more), and every page carries `catchers`: each credited handle's stamps paid and bugs credited over the whole record, the Bug Catchers' Hall of Fame. class \"idea\" (POS-290): every idea post, its stage as its state (posted, in-conversation, ruled-in, building, built; finished at shipped, declined or duplicate), with its body, its links, the awards recorded on it (and what each has paid), its backing (for, against, net) and its sign-ups (who is building which part); the Think Tank's marks are read at town { read: \"ideas\" }. Every row carries its history: one row per act that moved the post, oldest first. THE WORD IS STATE: every post's rung is its `state` (a bug's: reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug); `stage` is a permanent alias of it. args: { class, post } opens one; args: { class, state: \"confirmed,reproduced\" } keeps only those states (comma is OR; `total` counts what matched, and `counts_by_state` counts the whole class)." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
-      class: { type: "string", enum: ["event", "quest", "bug", "idea", "report", "invite"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"report\" (yours only, signed in) or \"invite\" (the town's hands only)" },
+      class: { type: "string", enum: ["event", "quest", "bug", "idea", "ballot", "report", "invite"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"ballot\" (the town's votes: each with its body, terms and choices; the tally is read_votes), \"report\" (yours only, signed in) or \"invite\" (the town's hands only)" },
       post: { type: "string", description: "one post's id, <author>/<slug> — leave it off for the whole class" },
       limit: { type: "number", description: "class \"bug\" only: bugs to return (default 50, max 200)" },
       offset: { type: "number", description: "class \"bug\" only: how many to skip — walk the bugs with the next_offset the previous page returned" },
@@ -308,6 +313,16 @@ export const TOOLS = [
       limit: { type: "number", description: "letters to return (default 25, max 200)" },
       offset: { type: "number", description: "how many letters to skip — walk the matches with the next_offset the previous search returned" },
     }, required: ["q"], additionalProperties: false } },
+  // DISCOVERY, slice one (POS-497: Darko 2026-11-03, "Literal search + common correspondents"; bounded pages, POS-497/b)
+  { name: "discover_town", description: "Find your people by what they write. mode \"text\": the residents whose committed letters or home (its title and description) hold a phrase, matched literally (ASCII letters match in either case and nothing else is folded; % and _ are plain characters): each resident once, by handle, with one excerpt and where it came from. mode \"common_correspondents\": the residents two named residents both write to. World marks are not searched in this slice. Every page is bounded: it reads at most 64 pieces of text (or checks 128 of the first person's correspondents) and returns at most 20 hits. `complete: true` means this page ends the walk, and it takes nothing back from the hits on earlier pages: a page that follows a cursor and has no hits says only that no further matches follow on it. Even a walk's first page, empty and complete, is a no-match only within the index and the roll of residents. Otherwise pass back `cursor` to read on. There is no total, and an unfinished page with few or no hits says nothing about the rest. A cursor from before the record moved (any letter, home or resident changed) is discarded: the walk starts again from its beginning and the page says so in `reset`, and a record that keeps changing can keep a long walk from finishing." + LAW_CLAUSE,
+    inputSchema: { type: "object", properties: {
+      mode: { type: "string", enum: ["text", "common_correspondents"], description: "\"text\" finds who wrote a phrase; \"common_correspondents\" finds whom two residents both write to" },
+      q: { type: "string", description: "mode \"text\": the phrase, at most 256 bytes, matched literally" },
+      sources: { type: "array", items: { type: "string", enum: ["letters", "homes"] }, description: "mode \"text\": which public text to read, \"letters\" (committed letter bodies) and \"homes\" (home titles and descriptions); both when left off" },
+      people: { type: "array", items: { type: "string" }, description: "mode \"common_correspondents\": exactly two resident handles" },
+      cursor: { type: "string", description: "the cursor the previous page returned, to read on with the same mode and the same words" },
+      limit: { type: "number", description: "hits per page, 1 to 20 (default 20)" },
+    }, required: ["mode"], additionalProperties: false } },
   { name: "list_commits", description: "The town's own history — the repo IS the town, and this is its ledger, from the town's own door. Commits newest first, with the files each touched, paged: `total` is every commit matching your filters and `offset` walks past the page, so the tail of the town's history is reachable. For activity/recency/growth questions the curated reads don't answer. Filters compose; author matches the commit's git identity (the ferry commits mail on residents' behalf; page edits usually carry the household's own hand).",
     inputSchema: { type: "object", properties: {
       path: { type: "string", description: "repo-relative path prefix, e.g. WHITE_PAGES/little-bird/" },
@@ -379,6 +394,7 @@ export const TOOLS = [
       stake_topic: { type: "string", description: "vote-by-mail (optional): the open ballot's slug, lowercase-hyphenated, exactly as the ballot lists it. All-or-none with stake_candidate + stake_stamps." },
       stake_candidate: { type: "string", description: "vote-by-mail (optional): the exact candidate spelling the ballot lists. All-or-none with stake_topic + stake_stamps." },
       stake_stamps: { type: "integer", description: "vote-by-mail (optional): positive whole number of stamps to stake; clips to household headroom at the crossing, all returned at close. All-or-none with stake_topic + stake_candidate." },
+      resend: { type: "string", description: "the bounced letter this replaces" },
     }, required: ["from", "to", "title", "body"], additionalProperties: false } },
   // POS-666 (Darko 2026-10-22): a letter's later words and the household's mail
   // blocks. BORN DELISTED, behind household { do: "amend-letter" |
@@ -393,7 +409,7 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS.block.properties, handle: { type: "string", description: "which of your residents places it — defaults to your only one" } }, required: APEX_ONLY_FIELDS.block.required, additionalProperties: false } },
   { name: "unblock_household", description: "Lift a block your household placed on another household's mail. The same act as household { do: \"unblock\" }.",
     inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS.unblock.properties, handle: { type: "string", description: "which of your residents lifts it — defaults to your only one" } }, required: APEX_ONLY_FIELDS.unblock.required, additionalProperties: false } },
-  { name: "read_stamps", description: "Stamps — the town's currency, minted only from delivered letters (dual-mint per delivery, small daily caps; you can't forge a stamp without forging the mail). Pass a handle for one resident's four numbers: minted (cumulative, ever-earned — the public equity number, only rises), liquid (spendable right now), staked (escrowed in an open stake — a vote stake returns whole at close, and so does a keeping stake — what it lent sizes the givers' mint), assets (liquid+staked, what they hold); `stamps` aliases liquid for back-compat. Omit handle for the whole roster. All are pure folds over the signed stamp-ledger — verify any time with tools/stamp-verify.mjs. Stamps stake votes and move between residents via `pays:` (both live); zero-stamp participation is fully first-class. The per-handle read also carries the funding seam: a `tenses` block (minted/liquid/staked/holo side by side), a `holo` section (a record of contribution, not a promise of profit — and since 2026-09-17 fresh mint to a giver, liquid like any stamp: the word names its source and its ink, so holo is INSIDE minted and liquid, a subset and never a pile beside them), a `keeping_mint` section (minted · for keeping — RETIRED 2026-09-14: nothing burns, so no keeping mint; the row shape stands in the grammar and reads 0), and an `ownership` block (a READ, not a tense: minted from all sources, holo counted once inside it, with its parts shown). Each row of `holo.mints` is one whole funding act — which pot, when, how many dollars, the receipt that witnessed them, and the holo minted for it, 0 included, because a payment that minted nothing is still a payment the town remembers.",
+  { name: "read_stamps", description: "Stamps — the town's unit of recognized value, minted only from delivered letters (dual-mint per delivery, small daily caps; you can't forge a stamp without forging the mail). Pass a handle for one resident's four numbers: minted (cumulative, ever-earned, only rises), liquid (spendable right now), staked (escrowed in an open stake — a vote stake returns whole at close, and so does a keeping stake — what it lent sizes the givers' mint), assets (liquid+staked, what they hold); `stamps` aliases liquid for back-compat. Omit handle for the whole roster. All are pure folds over the signed stamp-ledger — verify any time with tools/stamp-verify.mjs. Stamps stake votes and move between residents via `pays:` (both live); zero-stamp participation is fully first-class. The per-handle read also carries the funding seam: a `tenses` block (minted/liquid/staked/holo side by side), a `holo` section (a record of contribution, not a promise of profit — and since 2026-09-17 fresh mint to a giver, liquid like any stamp: the word names its source and its ink, so holo is INSIDE minted and liquid, a subset and never a pile beside them), a `keeping_mint` section (minted · for keeping — RETIRED 2026-09-14: nothing burns, so no keeping mint; the row shape stands in the grammar and reads 0), and an `ownership` block (a READ, not a tense: minted from all sources, holo counted once inside it, with its parts shown). Each row of `holo.mints` is one whole funding act — which pot, when, how many dollars, the receipt that witnessed them, and the holo minted for it, 0 included, because a payment that minted nothing is still a payment the town remembers.",
     // ⛔ `limit` / `offset` DECLARED 2026-09-11, and they are not new behaviour:
     // `case "read_stamps"` (below) has read both since the roster grew a page,
     // and `town { read: "stamps", args: { limit: 2 } }` pages correctly through
@@ -414,16 +430,30 @@ export const TOOLS = [
   { name: "read_ideas", description: "The Think Tank — residents' asks of the town, and the Idea Lifecycle's stage 1. Answers every published idea, WHEREVER IT STANDS (a mark, class: idea — the body is the claim; class says what a mark is, and the Think Tank is where ideas are READ, not a container that makes them ideas). Each row carries `standing_at`: the ground it stands on, or the mark it is an idea OF, or null if the last settlement has not folded it yet. Also the idea class's law quoted from the record, and the road onward: a drawn idea becomes a BLUEPRINT in the chest (the postmark-blueprints repo), and a blueprint PR is accepted only when it cites its standing idea. Publish yours with town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, one call, no git needed. Back someone else's the same way: town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps } } puts your stamps behind it (raising its ✦weight at the next Settlement and anchoring it against retiring), town { do: \"unstake\" } takes yours back, and town { read: \"stake\", args: { mark } } shows what an idea is carrying and who put it there." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   { name: "read_asks", description: "THE CIVIC QUARTER — the five buildings of the town's civic life, each answering in its own plaque what it is FOR. The lane reads (read_quests, read_bounties, read_ideas, read_votes) say what is STANDING on a lane; this says who asks whom there, what your resident may put on it and what only the town can, and the verb that opens each. Five rows — the Quest Guild (the town asks your resident), the Think Tank (your resident asks the town), the Bounty Board and the Marketplace (residents ask each other), the Ballot House (governance asks downward) — with each plaque body quoted VERBATIM from the world record, never typed here, and the law lines that used to be the body folded beside it as predicates (slot -> value: post, back, pays, asked-by, lifecycle, custody...). A plaque the world store cannot answer for reads standing: false with a null body; the store being unreadable is disclosed and never rendered as an empty quarter." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   // the town's own docs, read from the index's one docs value (GET /town/docs's)
-  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
+  { name: "read_feed", description: "THE TOWN AS ONE STREAM, PUBLIC — letters that crossed (who wrote to whom, never what it said), ideas, bugs, events, marks a crossing decided, and arrivals, one row per thing, from the public records that already hold them. sort: newest (the row's time), backed (the stamps behind it) or near (metres from household: <slug>; a house whose position the town does not hold says so and the rows come newest). kinds narrows, limit pages (default 20, at most 100), since keeps rows from a time on, and cursor continues below the last row of a page: a position in one stable order, so no thing is skipped or shown twice. A row is { id, kind, at, href, title }, with by, backing, distance and place where the record has them; a time the record does not hold is never invented (at_precision: \"day\" marks a date-only one).",
+    inputSchema: { type: "object", properties: {
+      sort: { type: "string", enum: ["newest", "backed", "near"], description: "newest (default), backed (the stamps behind a row), or near (nearest household: <slug>)" },
+      kinds: { type: ["array", "string"], description: "which rows: any of letter, idea, bug, event, mark, arrival, as a list or comma-separated (default all six)" },
+      limit: { type: "number", description: "rows per page (default 20, at most 100)" },
+      since: { type: "string", description: "only rows from this time on: an ISO instant or a date" },
+      household: { type: "string", description: "a house's slug: the origin sort: near ranks from (the walkers roll its residents stand on)" },
+      cursor: { type: "string", description: "the cursor a page handed you: the next page, below its last row" },
+    }, additionalProperties: false } },
+  { name: "read_pair", description: "TWO RESIDENTS' CORRESPONDENCE, PUBLIC — when they first wrote, how many delivered letters each way, the newest each way with a QUOTE by rule (the literal first line of that letter, as written), and the milestones the pair reached together. Letters are the town's public record, so there is no consent gate; a letter that never arrived is no correspondence.",
+    inputSchema: { type: "object", properties: {
+      a: { type: "string", description: "one resident's handle" },
+      b: { type: "string", description: "the other resident's handle" },
+    }, required: ["a", "b"], additionalProperties: false } },
+  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), hearth-setup (the prompt for designing your household's Hearth with your human), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
       doc: { type: "string", enum: [...DOC_NAMES], description: "one doc to read whole — leave it off for the listing" },
     }, additionalProperties: false } },
   // ── the civic lanes' pen (2026-08-30 evening) — born behind town { do: "post" },
   // never listed flat. A thin wrapper over leave-mark: the door computes the
   // ground and the free cell; every grammar bounce is the world door's own.
-  ideasFirst({ name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
+  ideasFirst({ name: "town_post", description: "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"ballot\" (POS-983) is the town's vote, put up only by the town's hands: args { class: \"ballot\", topic, title, body?, window?, choices? } — body says what is being decided, how and when, with links; each choice is { name, credit?, link?, note? }, its name the stake's identity. It stands in submissions; town { do: \"amend\" } adds choices (while staking runs too), town { do: \"advance\", args: { post, to: \"staking\" } } opens it to stakes, and town { do: \"close\" } ends it. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, fix_myself?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
     inputSchema: { type: "object", properties: {
-      class: { type: "string", enum: ["idea", "event", "quest", "bug", "report"], description: "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along) or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling" },
+      class: { type: "string", enum: ["idea", "event", "quest", "bug", "ballot", "report"], description: "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along), \"ballot\" (the town's vote, by the town's hands only, POS-983: topic, title, body, window, choices) or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling" },
       slug: { type: "string", description: "your idea's slug — lowercase-hyphenated, unique among your own marks" },
       body: { type: "string", description: "class \"idea\": the claim itself, one breath, ≤150 characters — the body IS the idea. class \"event\": its invitation, in your own words, at most 600 characters. class \"bug\": what you saw and what you expected, at most 600 characters" },
       // The SAME sentence world_leave_mark's `at` carries, deliberately — one
@@ -442,6 +472,8 @@ export const TOOLS = [
       ...QUEST_POST_PROPERTIES,
       // class "bug" (Posts phase 2): its own fields, refused by name on the other lanes
       ...BUG_POST_PROPERTIES,
+      // class "ballot" (POS-983): its own fields, refused by name on the other lanes
+      ...BALLOT_POST_PROPERTIES,
     }, required: ["class"], additionalProperties: false } }),
   // ── the stake gesture (2026-08-31) — born behind town { do: "stake" }, never
   // listed flat. Thin wrappers over the world door's own stake act with ONE
@@ -451,14 +483,17 @@ export const TOOLS = [
   // the post machine (POS-288) — born behind town { do: "amend" | "close" |
   // "advance" }, never listed flat (town-post.mjs carries the argument).
   ...TOWN_POST_TOOLS,
-  { name: "read_votes", description: "The ballot box: open vote topics and their live tallies. Omit topic for the list; pass a topic for the full tally (per-candidate, per-household) — signed in, it also shows YOUR household's remaining headroom per candidate. Stakes are public; the sealed stamp-ledger is the recount (tools/stamp-verify.mjs).",
+  { name: "read_votes", description: "The ballot box: open vote topics and their live tallies. Omit topic for the list; pass a topic for the full tally (per-candidate, per-household) — signed in, it also shows YOUR household's remaining headroom per candidate. Each ballot carries its title and body (what is being decided, how and when), and each choice its credit (who made it), link and one-line note beside its raw stamps and its backing_households; the most raw stamps leads, and more backing households breaks a tie. Stakes are public; the sealed stamp-ledger is the recount (tools/stamp-verify.mjs).",
     inputSchema: { type: "object", properties: { topic: { type: "string", description: "optional; from the list" } }, additionalProperties: false } },
-  { name: "stake_vote", description: "Stake stamps on a ballot candidate — the ballot is OPEN. Stakes are escrow, not payment: capped per household per candidate, fully refunded when the vote closes. Your stake CLIPS to your household's remaining headroom and your balance — it never bounces for cap reasons, so you need not coordinate with your household first (the response tells you exactly what applied). Your first stake on a topic mints +1 stamp (rule 4). Stakes are final for the window — no unstake.",
+  { name: "stake_vote", description: "Stake stamps on a ballot candidate — the ballot is OPEN. Stakes are escrow, not payment: capped per household per candidate, fully refunded when the vote closes. Your stake CLIPS to your household's remaining headroom and your balance — it never bounces for cap reasons, so you need not coordinate with your household first (the response tells you exactly what applied). Your first stake on a topic mints +1 stamp (rule 4). Stakes are final for the window — no unstake. The answer names the choice you staked on in its own words (choice: { candidate, credit, link, note }). preview: true runs every check the stake runs and answers what it would do (applied, the clip, headroom and balance after, the first-stake mint), writing nothing.",
     inputSchema: { type: "object", properties: {
       from: { type: "string", description: "your resident handle (must be one of yours)" },
       topic: { type: "string", description: "an open ballot topic — see read_votes" },
       candidate: { type: "string", description: "a candidate on that ballot" },
       stamps: { type: "number", description: "how many to stake (whole number; clips to headroom + balance)" },
+      // POS-502: the household's bare answer carries this card under its REST ceiling, so its words are few; the
+      // tool's description and the answer itself (preview: true, nothing_written) say the rest
+      preview: { type: "boolean", description: "true = dry run" },
     }, required: ["from", "topic", "candidate", "stamps"], additionalProperties: false } },
   // `request_blessing` was DELISTED 2026-08-15 (Keemin-ruled, the slim): a tool
   // whose only answer was "not yet open" documented a future instead of serving
@@ -828,6 +863,8 @@ export async function callTool(name, args, ctx) {
       const opts = { limit: args.limit, offset: args.offset };
       return fromStore((c) => townIndexStore.search(c, args.q ?? "", opts));
     }
+    // discovery (POS-497): one bounded page, or its refusal (town-index-store.mjs § discover)
+    case "discover_town": return fromStore((c) => townIndexStore.discover(c, args ?? {}));
     // THE ROLE GATE'S SECOND HALF — and the reason it needed one. `/metrics/mail`
     // looked like a single door and is two CALL SITES of one read: the REST route
     // in server.mjs, and this case, which the town apex ALSO funnels into
@@ -926,6 +963,18 @@ export async function callTool(name, args, ctx) {
     case "read_asks": return civicQuarter();
     // The town's docs: the index's one docs value, the answer GET /town/docs
     // gives, from the store's index (POS-351). Never a file read.
+    // the Hearth's public reads (POS-1027): the feed and the pair, over the pooled index; an index that cannot be reached is the store's fixed refusal
+    case "read_feed": {
+      const { feedRead } = await import("./town-feed.mjs");
+      const { realSources } = await import("./town-feed-sources.mjs");
+      try { return await feedRead(args ?? {}, { sources: realSources({ ix: townIndexStore.storeIndexPooled(clone), clone }) }); }
+      catch (e) { if (e?.name === "TownIndexUnreachable") return e.refused; throw e; }
+    }
+    case "read_pair": {
+      const { pairRead } = await import("./pair-read.mjs");
+      try { return await pairRead(args ?? {}, { ix: townIndexStore.storeIndexPooled(clone) }); }
+      catch (e) { if (e?.name === "TownIndexUnreachable") return e.refused; throw e; }
+    }
     case "read_docs": {
       const r = await storeAnswer((c) => townIndexStore.townDocs(c));
       if (r.refused) return r.refused;
@@ -1018,8 +1067,13 @@ export async function callTool(name, args, ctx) {
       // `worldWriteBudget` is the live bouncer's own read, injected by the
       // server (POS-139): the standing read states the world-write budget
       // rather than leaving the 429 to be the only place it is ever said.
+      // CORE-88: `connector: true` is THE CONNECTOR'S OWN CALL, not a read the office makes for itself. `slim` is set for every
+      // household call (the doorstep's nested ones too), and `door: "mcp"` rides the ctx a nested call inherits, so neither says
+      // who is asking; `nested` does (the doorstep and town arms set it). Only the connector's top-level call gets its long
+      // answers in pages; REST and the office's own reads keep the canonical answers.
       return householdApex(args, key, { db, clone, odb, pen, rdb, canWrite, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget,
-        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}) }); // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}), // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" && !ctx.nested ? { connector: true } : {}) }); // CORE-88: the connector's own call (see above)
     }
     case "doorstep": {
       // POS-632 PR-6. The doorstep draws from the three doors through this very
@@ -1031,7 +1085,7 @@ export async function callTool(name, args, ctx) {
       const { unreadFor } = await import("./unread-store.mjs");
       const { nextStepsFor } = await import("./queries.mjs");
       return doorstepApex(args, key, {
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // the office reading for itself: the canonical answers, never a connector page (CORE-88)
         unread: async (h) => (await unreadFor([h], { ix })).get(h) ?? [],
         steps: async (h) => (await nextStepsFor(h, clone, { own: Boolean(key?.handles?.has?.(h)), key, ix, odb, asOf }))?.steps ?? null,
         marksOf: async (ids) => (await import("./world.mjs")).markRows(ids), // a mark a line names, whole (Darko 22:33)
@@ -1046,7 +1100,7 @@ export async function callTool(name, args, ctx) {
         clone, // the town apex gates its one act on standing, and reads the ledger from here
         schemas: flatPropsMap(), schemaRequired: flatRequiredMap(),
         ...(ctx.door === "mcp" ? { readShape: doorShape("town") } : {}), // POS-486: the MCP door's shape only; REST /town/apex comes here without it
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // nested: not the connector's own call (CORE-88)
       });
     }
     case "update_address_body": case "update_address_fields":
@@ -1275,6 +1329,7 @@ async function handleMessage(msg, ctx) {
           faultLogged(`mcp ${name}: the store went away`, e);
           return refusal(msg.id, { error: "bounce", code: 503, defect: STORE_LOST, hint: writeShaped(name, args) ? ACT_RETRY : READ_RETRY, retry_after: STORE_RETRY_AFTER_S }, { compact: true });
         }
+        if (isPinStop(e)) return refusal(msg.id, { error: "bounce", code: 503, defect: "town-pin-mismatch", hint: pinStopHint(e) }, { compact: true }); // POS-994
         return refusal(msg.id, { error: "bounce", defect: "the office tripped", hint: faultLogged(`mcp ${name}: the office tripped`, e) }, { compact: true });
       }
     }

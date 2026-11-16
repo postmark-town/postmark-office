@@ -590,7 +590,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // block_household and unblock_household — household { do: "amend-letter" |
   // "withdraw-letter" | "block" | "unblock" }. Born delisted behind the
   // household apex. The counts moved in the same commit.
-  assert.equal(names.length, 64);
+  // 64 -> 66 (POS-1027, 2026-11-13): read_feed and read_pair — town { read: "feed" | "pair" }.
+  // 66 -> 67 (POS-497, 2026-11-03, merged onto the train): discover_town — town { read: "discover" }, discovery's first slice.
+  // Both born delisted behind the town apex. The counts moved in the same commits.
+  assert.equal(names.length, 67);
+  assert.ok(names.includes("discover_town"), "the discovery read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("world_describe"), "the describe act has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_docs"), "the docs read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_posts"), "the posts read has a flat definition, delisted only while the apex serves it");
