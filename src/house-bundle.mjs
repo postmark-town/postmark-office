@@ -46,7 +46,7 @@
 
 
 import { DOORSTEP_STANCES } from "./queries.mjs";
-import { ownerGate } from "./doorstep-bundle.mjs";
+import { ownerGate, holdsBlock } from "./doorstep-bundle.mjs"; // POS-1084: holdsBlock is the doorstep's own `holds` producer
 import { unreadFor } from "./unread-store.mjs";
 import { hotMailBlock } from "./town-mail.mjs";
 import { nextCrossingForDoorstep, currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "./crossings.mjs";
@@ -214,6 +214,24 @@ async function stakesOf(handles, { nowMs, readers = {} }) {
   return stakesFor(handles, { now: new Date(nowMs) });
 }
 
+/**
+ * ONE RESIDENT'S WAITING-STANCE COUNT (POS-1084), the doorstep's `stances.stances_awaiting` and its ground: the one resident's own scope asked of the
+ * same reader the doorstep asks (`stancesForHandles([handle])`), the count taken whole (it is the length of the resident's candidates, not of a page). The
+ * rows stay in `household { read: "stances", handle }`. A read that could not be made says `unavailable` and carries no count, never 0.
+ */
+export async function stanceCountOf(handle, { readers = {} } = {}) {
+  const base = { serves: "household.stances", args: { handle } };
+  try {
+    const { stancesForHandles } = readers.stances ? { stancesForHandles: readers.stances } : await import("./world-stance.mjs");
+    const whole = await stancesForHandles([handle], { limit: DOORSTEP_STANCES });
+    if (whole?.unavailable || !Number.isFinite(whole?.stances_awaiting))
+      return { ...base, unavailable: whole?.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" };
+    return { ...base, stances_awaiting: whole.stances_awaiting, ...(whole.stances_awaiting_ground !== undefined ? { stances_awaiting_ground: whole.stances_awaiting_ground } : {}) };
+  } catch (e) {
+    return { ...base, unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the house's stance counts")})` };
+  }
+}
+
 /** The REST skin's inbox bound: the house read has no connector abridgement. */
 export const DOORSTEP_INBOX = 20;
 
@@ -273,7 +291,7 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
     as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
     ashore,
     ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
-    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep. `outboxes[<handle>]` and `quests[<handle>]` are each declared member's PUBLIC outbox (the bare array GET /mail/<handle>?box=outbox answers) and quest board (GET /quests/<handle>), the same for every caller, the house's own key included; null is a read that could not be made, [] an outbox read and found empty.",
+    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep. `outboxes[<handle>]` and `quests[<handle>]` are each declared member's PUBLIC outbox (the bare array GET /mail/<handle>?box=outbox answers) and quest board (GET /quests/<handle>), the same for every caller, the house's own key included; null is a read that could not be made, [] an outbox read and found empty. `residents[<handle>].stances` is that resident's OWN waiting-stance count, the doorstep's `stances.stances_awaiting` (and `stances_awaiting_ground`): the count of the read household { read: \"stances\", handle } answers for that one resident, never the house-wide `stances` block's count and never derived from a page of candidates; `unavailable` (and no count) when the consent inbox could not be read. `residents[<handle>].holds` is the doorstep's own `holds` block (what the resident holds, public, outside the owner gate): absent when the chests/candy feature is off here or the resident holds nothing, as on the doorstep; `unavailable` when it is on and could not be read.",
   };
 
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
@@ -312,6 +330,10 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
     const d = { handle: h, ...(await ix.residentSegments(h, fresh, standing)) };
     await ownerGate(d, h, { clone, key, odb, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
+    // POS-1084: the two per-resident facts the doorstep carries and the house's own blocks cannot give (a house scope's count is not each resident's), public, outside the gate
+    d.stances = await stanceCountOf(h, { readers });
+    const heldBlock = await holdsBlock(h, { readers });
+    if (heldBlock) d.holds = heldBlock;
     residents[h] = d;
   }
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
