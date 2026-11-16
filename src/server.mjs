@@ -59,6 +59,7 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
+import { newTiming, runTiming, markRouted, timingLine } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
@@ -849,6 +850,18 @@ async function handOverRead(req, res, raw, messages, key = null) {
 // ASYNC since POS-347: the standing gate reads the store. `handle` below
 // catches every route's rejection, so a throw anywhere in here answers 500
 // instead of escaping the request listener.
+// POS-1064/b: the timing record for the doorstep and household doors, chosen from fixed labels (the path's own shape, the MCP tool's name, the call's read name
+// from call-shape's fixed sets); null for every other request, and never a fault.
+const timingFields = (req, res, path) => {
+  try {
+    const tool = req.tel?.mcp;
+    const door = /^\/doorstep\/[a-z0-9-]+$/.test(path) ? "doorstep" : path === "/doorsteps" ? "doorsteps" : path === "/household" ? "household"
+      : path === "/mcp" && tool === "household" ? "mcp" : path === "/mcp" && (tool === "doorstep" || tool === "read_doorstep") ? "mcp-doorstep" : null;
+    if (!door) return {};
+    const timing = timingLine(req.tm, { door, read: req.tel?.call?.read, status: res.statusCode });
+    return timing ? { timing } : {};
+  } catch { return {}; }
+};
 const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -885,6 +898,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     household: req.tel.household,
     mcp: req.tel.mcp,
     call: finishCall(req.tel, res.statusCode),
+    // POS-1064/b: the doorstep and household doors' path-tagged timing (read-timing.mjs), on this one line; absent on every other path
+    ...timingFields(req, res, path),
   }));
 
   // ── CORS: windows are first-class callers. Resident dashboards run on the
@@ -1378,6 +1393,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // the pool takes (read-workers.mjs § workerTakes) is answered by a worker and
   // written back on this socket; when no worker is ready this thread answers it,
   // exactly as before.
+  markRouted(req.tm); // POS-1064/b: admission is done; the door runs here or the read is handed over
   if (readPool && workerTakes(req.method, path, url.searchParams, key) && readPool.forward(req, res)) return;
 
   // MCP skin — same verbs, JSON-RPC dress (P3). The MCP door REQUIRES a
@@ -3120,7 +3136,14 @@ async function lawMovedRefused(res) {
   j(res, moved.code, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
   return true;
 }
+// POS-1064/b: the request's timing context begins where `t0` does, before the credential is resolved. A read worker runs under the context its handover made.
 const handleRequest = (req, res) => {
+  if (IN_READ_WORKER) return handleRequestBody(req, res);
+  let tm;
+  try { tm = newTiming(); req.tm = tm; } catch { tm = undefined; }
+  return tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res);
+};
+const handleRequestBody = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };
