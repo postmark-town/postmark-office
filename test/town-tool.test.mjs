@@ -170,7 +170,8 @@ function walk(dir) {
 
 test("no office file reaches a pinned town module except through the loader", () => {
   const names = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
-  const reach = new RegExp(`join\\([^()]*"tools",\\s*"(${names})"\\)`, "g");
+  // One nested call may sit inside the join: `join(resolve(town), "tools", …)` (witness-settlement's shape).
+  const reach = new RegExp(`join\\((?:[^()]|\\([^()]*\\))*"tools",\\s*"(${names})"\\)`, "g");
   const scanned = ["src", "tools", "world2", "deploy"].flatMap((d) => walk(join(ROOT, d)))
     .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`) && !p.includes(`${sep}node_modules${sep}`));
   const found = [];

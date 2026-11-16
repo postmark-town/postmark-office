@@ -34,7 +34,8 @@ set -eu
 # The keep units read /etc/postmark-world2-dev.env for the law pen, and systemd
 # hands every key in it to this script: four PG_*_PASSWORD values, the store
 # owner's included. The tick runs town-repo code (tools/stamp-verify.mjs,
-# tools/stamp-mint.mjs, tools/household-keys.mjs) that has no business holding
+# tools/stamp-mint.mjs, tools/household-keys.mjs; since POS-994 the office's
+# pinned copies of them, through src/town-tool.mjs) that has no business holding
 # any of them. So the law pen's is kept in a shell variable, never exported, and
 # all four leave the environment here, before the first child; the world step
 # alone is handed the one it needs (§ the world hydration).
@@ -370,7 +371,9 @@ keep_settle_unlanded() {
       cp "$LEDGER" "$HOLD/ledger.arrived" || { keep_step mint refused prep-failed; exit 1; }
       git rev-parse HEAD > "$HOLD/head.arrived" || { keep_step mint refused prep-failed; exit 1; }
     else
-      node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || { keep_step mint refused mint-failed; exit 1; }
+      # POS-994: the office's pinned copy of the town's mint, checked against the
+      # clone (exit 3 and its words on stderr when they differ: nothing runs).
+      node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem || { keep_step mint refused mint-failed; exit 1; }
     fi
     keep_step mint ok
     if node /srv/postmark-office/deploy/welcome-pass.mjs \
@@ -413,7 +416,7 @@ keep_settle_unlanded() {
       echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     fi
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
-      node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || { keep_step verify refused verify-red; exit 1; }
+      node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" -- --registry "$REGISTRY_FILE" || { keep_step verify refused verify-red; exit 1; }
       keep_step verify ok
     else
       keep_step verify ok no-change
@@ -540,7 +543,10 @@ fi
 # JSON (the tool absent or crashed) still writes a line, `checked: false`, so
 # "did not run" never reads like "found nothing".
 HK_LOG="${HOUSEHOLD_KEYS_LOG:-/srv/postmark-harbor/household-keys.jsonl}"
-hk_out="$(node "$SNAP/town/tools/household-keys.mjs" --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
+# The predicate is the office's pinned copy (POS-994), checked against the
+# snapshot's copy: a mismatch runs nothing, says so on stderr ([town-tool] …),
+# and leaves no JSON, so the line below is `checked: false` with those words.
+hk_out="$(node /srv/postmark-office/src/town-tool.mjs run household-keys.mjs --clone "$SNAP/town" -- --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
 if node -e '
   const text = process.argv[1] ?? "";
   let j = null;
@@ -563,7 +569,10 @@ if node -e '
   try { j = JSON.parse(String(process.argv[1] ?? "").trim().split("\n").pop()); } catch {}
   process.exit(j && Array.isArray(j.split_households) ? 0 : 3);
 ' "$hk_out"; then keep_step hhkeys ok
-else keep_step hhkeys refused unchecked
+else case "$hk_out" in
+  *"[town-tool]"*) keep_step hhkeys refused town-pin-mismatch ;;
+  *) keep_step hhkeys refused unchecked ;;
+  esac
 fi
 
 # ── the world hydration (moved from the retired rehydrate, POS-268 5b) ───────

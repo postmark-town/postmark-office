@@ -25,6 +25,7 @@ import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
+import { importTownTool, isPinStop } from "./town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { quoteAt } from "./parcel-room.mjs";
 
@@ -45,7 +46,14 @@ async function main() {
     return;
   }
   const keyPem = readFileSync(KEY_PATH, "utf8");
-  const { appendSigned } = await import(pathToFileURL(join(CLONE, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copy of the mint, checked against the clone before anything is written.
+  let appendSigned;
+  try { ({ appendSigned } = await importTownTool(CLONE, "stamp-mint.mjs")); }
+  catch (e) {
+    if (!isPinStop(e)) throw e;
+    console.log(JSON.stringify(err(503, "town-pin-mismatch", e.message)));
+    return;
+  }
 
   // WHOLE OR NOTHING (POS-296): a purchase the pen cannot land leaves no line and no commit.
   const result = await penTransaction(CLONE, async () => {

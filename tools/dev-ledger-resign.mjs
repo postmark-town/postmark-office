@@ -47,6 +47,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
 
 import { resignTown } from "./stamp-sandbox.mjs";
 
@@ -155,7 +156,7 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath
   const prodKey = prodKeyRefusal(pub, { town, notKey: notKeyPath ? { path: notKeyPath } : notKeyPem ? { pem: notKeyPem } : null });
   if (prodKey) return { status: "refused", why: prodKey };
   if (git(town, ["status", "--porcelain", "--", LEDGER_REL, "tools"])) return { status: "refused", why: `the clone has uncommitted changes under ${LEDGER_REL} or tools/: re-signing over them would mix them into the dev key's commit` };
-  const engine = await import(pathToFileURL(join(town, "tools", "stamp-mint.mjs")).href);
+  const engine = await importTownTool(town, "stamp-mint.mjs"); // POS-994: the office's pinned copy
   const installed = existsSync(join(town, PUBKEY_REL)) ? readFileSync(join(town, PUBKEY_REL), "utf8") : null;
   if (installed && installed.replace(/\r\n/g, "\n") === pub && !unsignedUnder(town, pub, engine).bad.length) return { status: "already" };
 
@@ -166,7 +167,7 @@ export async function resignDevTown({ town, keyPem, notKeyPem = null, notKeyPath
     return { status: "refused", why: `after the re-sign, ${left.bad.length} line(s) still do not verify under the key (first: line ${left.bad[0]}); the clone is put back` };
   }
   if (verify) {
-    const r = spawnSync(process.execPath, [join(town, "tools", "stamp-verify.mjs")], { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const r = spawnSync(process.execPath, townToolArgv(town, "stamp-verify.mjs"), { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     if (r.status !== 0) {
       git(town, ["checkout", "HEAD", "--", LEDGER_REL, "tools"]);
       return { status: "refused", why: `the town's verifier is red on the re-signed ledger (exit ${r.status}): ${`${r.stdout}${r.stderr}`.trim().split("\n").slice(-3).join(" | ")}; the clone is put back` };

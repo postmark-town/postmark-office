@@ -36,6 +36,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { importTownTool, isPinStop } from "./town-tool.mjs"; // POS-994: the live clone's engine is the office's pinned copy
 
 /**
  * A key → the house's canonical `hh:<slug>`, by the registry: a slug the house
@@ -98,6 +99,16 @@ export function houseFactsOf({ registry, burns = [] }) {
   return facts;
 }
 
+/**
+ * The town's engine NOW, for the live clone: the office's pinned copy, checked
+ * against the clone (POS-994), or null when the clone has no engine at all. A
+ * town change the office has not pinned throws TownPinMismatch, by name.
+ */
+async function townEngineNow(clone) {
+  if (!existsSync(join(clone, "tools", "stamp-mint.mjs"))) return null;
+  return importTownTool(clone, "stamp-mint.mjs");
+}
+
 /** The town's engine at a checkout, or null when it has none. */
 async function townEngineAt(townRepo) {
   const p = join(townRepo, "tools", "stamp-mint.mjs");
@@ -131,7 +142,8 @@ export async function houseFactsNow({ env = process.env, townClone = null } = {}
   const { actsQuery } = await import("./world2-acts.mjs");
   const rows = await loadRegistryRows(env);
   if (rows === null) return null;
-  const engine = townClone ? await townEngineAt(townClone).catch(() => null) : null;
+  // A clone without an engine is "nothing to say"; a pin stop is not absence (POS-994).
+  const engine = townClone ? await townEngineNow(townClone).catch((e) => { if (isPinStop(e)) throw e; return null; }) : null;
   if (!engine) return null;
   const lines = await actsQuery("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% → BURN · % · for: parcel:%' ORDER BY seq", [], env);
   if (lines === null) return null;
@@ -317,7 +329,9 @@ export function parcelRoomBought({ registry, entries, engine, household, nth }) 
  * as anyone else is refused before anything is written.
  */
 export async function quoteAt(clone, handle, date, { expect = null } = {}) {
-  const engine = await townEngineAt(clone);
+  let engine;
+  try { engine = await townEngineNow(clone); }
+  catch (e) { if (isPinStop(e)) return refuse(503, "town-pin-mismatch", e.message); throw e; }
   if (!engine) return refuse(503, "not-yet-open", "the office has no town clone to read the ledger from");
   const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");

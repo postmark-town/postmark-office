@@ -110,6 +110,7 @@ import { existsSync, realpathSync, mkdtempSync, writeFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy, checked against the clone
 import { loadRegistryRows } from "../src/registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
 import { keyBaseVia, keyBaseJson, takesKeyBase } from "../src/mint-inputs.mjs";
@@ -195,6 +196,10 @@ export function townDate(now = new Date()) {
 
 /**
  * The town's own tool, named by absolute path and handed `--repo` explicitly.
+ * Since POS-994 the path is the office's pinned copy (src/town-tool.mjs §
+ * townToolArgv), checked against `--town`'s copy; the clone is still named
+ * with --repo, now for one more reason: the pinned copy's own default repo is
+ * the pins folder, not any town.
  *
  * Both halves are deliberate. The path is resolved from `--town` rather than the
  * cwd so this cannot silently run some OTHER clone's copy of the mint when the
@@ -203,7 +208,7 @@ export function townDate(now = new Date()) {
  * that signs against a clone it was not pointed at is the worst failure this
  * file could have, and it would leave a perfectly valid receipt.
  */
-export const mintArgv = (town, args) => [join(town, "tools", "stamp-mint.mjs"), ...args, "--repo", town];
+export const mintArgv = (town, args) => townToolArgv(town, "stamp-mint.mjs", [...args, "--repo", town]);
 
 const run = (town, args) =>
   spawnSync(process.execPath, mintArgv(town, args), {
@@ -228,7 +233,7 @@ export async function storeRegistry(rows = undefined) {
  */
 export async function storeKeyBase(town, { env = process.env, base = undefined } = {}) {
   if (!stampLinesOn(env)) return null;
-  const engine = await import(pathToFileURL(join(town, "tools", "stamp-mint.mjs")).href);
+  const engine = await importTownTool(town, "stamp-mint.mjs"); // POS-994: the pinned copy
   if (!takesKeyBase(engine, town)) throw new Error("STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540)");
   if (base !== undefined) return base;
   const { officeRead } = await import("../src/world2-pen.mjs");

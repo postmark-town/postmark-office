@@ -50,6 +50,10 @@ import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
+import { pinnedPath, pinnedTown, pinTown } from "./helpers/pinned-town.mjs";
+// POS-994: the argv builders check the town against the office's pins, so the
+// pure argv tests name a town that holds exactly the pinned files (removed at exit).
+const PT = pinnedTown();
 
 Object.assign(process.env, RECORD_ON);
 const { postAtTown, advanceAtTown } = await import("../src/events-store.mjs");
@@ -296,8 +300,15 @@ test("5 · the pass refuses a town whose stamp-mint has no stage grammar, before
   const repo = tempDir("bug-stage-old-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   writeFileSync(join(repo, "tools", "stamp-mint.mjs"), "export const classifyEntry = () => ({ kind: 'unknown' });\n");
+  // POS-994: an old town's mint is not the office's pinned copy, so on the box
+  // the pin stops it first. This test is about the plan's own grammar check, so
+  // the old mint gets pins of its own and is what runs.
+  const pinsBefore = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = await pinTown(repo);
   const errs = [];
-  const code = await main(["--town", repo], { facts: { acts: [], houses: new Map() }, log: () => {}, err: (s) => errs.push(s) });
+  let code;
+  try { code = await main(["--town", repo], { facts: { acts: [], houses: new Map() }, log: () => {}, err: (s) => errs.push(s) }); }
+  finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; rmSync(`${repo}-pins`, { recursive: true, force: true }); }
   assert.equal(code, 1);
   assert.match(errs.join("\n"), /has no stage grammar/);
   rmSync(repo, { recursive: true, force: true });
@@ -356,9 +367,9 @@ test("8 · #3757: the pass plans the correction from the real wrong mint, prints
   assert.match(text, new RegExp(`^RECREDIT OWED\\n {2}${KINO_POST.replace("/", "\\/")}\\/briefed · wright → kinofire · hh:house-of-many-doors · 10 · owed · by wright · burns ${WRONG_SIG} · act 21600 on 2026-10-15$`, "m"));
   const [r] = parseRecreditPlan(text, { recorded: true }).owed;
   assert.deepEqual(r, { post: KINO_POST, stage: "briefed", from: "wright", to: "kinofire", household: "hh:house-of-many-doors", n: 10, hand: "wright", sig: WRONG_SIG, act: 21600, date: "2026-10-15" });
-  assert.deepEqual(stageRecreditArgv("/town", r, { date: "2026-10-15", keyPath: "/k.pem" }), [join("/town", "tools", "stamp-mint.mjs"),
+  assert.deepEqual(stageRecreditArgv(PT, r, { date: "2026-10-15", keyPath: "/k.pem" }), [pinnedPath("stamp-mint.mjs"),
     "--stage-recredit", "kinofire", "--post", KINO_POST, "--stage", "briefed", "--by", "wright", "--amount", "10", "--from", "wright",
-    "--date", "2026-10-15", "--key", "/k.pem", "--repo", "/town"]);
+    "--date", "2026-10-15", "--key", "/k.pem", "--repo", PT]);
 });
 
 test("8 · #3757's two lines, as the town's own builder writes them from the planned row",
@@ -573,9 +584,9 @@ test("10 · a skipped diagnosed: one row owed, 5 to its credit, nothing to burn;
   assert.match(text, /^ {2}carol\/the-bell-rings-twice\/diagnosed · \(skipped\) → ada · hh:the-harbor · 5 · owed · by wright · burns nothing · act 2 on 2026-11-06$/m);
   const [r] = parseRecreditPlan(text, { recorded: true }).owed;
   assert.equal(r.skipped, true);
-  assert.deepEqual(stageRecreditArgv("/town", r, { date: "2026-11-07", keyPath: "/k.pem" }), [join("/town", "tools", "stamp-mint.mjs"),
+  assert.deepEqual(stageRecreditArgv(PT, r, { date: "2026-11-07", keyPath: "/k.pem" }), [pinnedPath("stamp-mint.mjs"),
     "--stage-recredit", "ada", "--post", SKIP_POST, "--stage", "diagnosed", "--by", "wright", "--amount", "5", "--skipped",
-    "--date", "2026-11-07", "--key", "/k.pem", "--repo", "/town"], "no --from: there is no wrong mint");
+    "--date", "2026-11-07", "--key", "/k.pem", "--repo", PT], "no --from: there is no wrong mint");
   // briefed pays by its grade
   const b = skipPlan([skipAct(1, "briefed"), skippedRc(2, { to: "briefed", grade: "light", paid: 10 })]);
   assert.deepEqual([b[0].n, b[0].why], [10, "owed"]);

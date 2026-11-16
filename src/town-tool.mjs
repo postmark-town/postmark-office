@@ -128,6 +128,9 @@ export function townTool(clone, name, { root = pinRoot() } = {}) {
   return join(root, rel);
 }
 
+/** Did the pin stop this (a mismatch, or a module the office never pinned)? A caller answers it by name, never as "the town has no such module". */
+export const isPinStop = (e) => e?.code === "TOWN_PIN_MISMATCH" || e?.code === "TOWN_TOOL_UNPINNED";
+
 /** `import()` of the pinned module, checked as townTool checks it. */
 export async function importTownTool(clone, name, opts) {
   return import(pathToFileURL(townTool(clone, name, opts)).href);

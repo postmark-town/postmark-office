@@ -103,6 +103,9 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { MODULES as PINNED_MODULES } from "./town-pins.mjs";
+const PINNED_TOWN = new Set(PINNED_MODULES.map((m) => `tools/${m}`));
 
 import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
 import { SOCKET as SEAL_SOCKET } from "./town-seal-sandbox.mjs";
@@ -388,7 +391,13 @@ export function treeTables(officeRoot = OFFICE) {
 // of its switch, not because the rehearsal exercises the town's own mint.
 
 const officeJob = (ctx, rel, args, opts) => ctx.locked([process.execPath, join(ctx.t.officeRoot, rel), ...args], opts);
-const townJob = (ctx, rel, args) => ctx.locked([process.execPath, join(ctx.t.townClone, rel), ...args], { cwd: ctx.t.townClone });
+// POS-994: the town modules the box runs as the office's pinned copies run that
+// way here too (checked against the clone, handed it by --repo); the ferry,
+// which the box runs in its own keyless sandbox, is still the clone's own.
+const townArgv = (clone, rel, args) => PINNED_TOWN.has(rel)
+  ? townToolArgv(clone, rel.slice("tools/".length), args)
+  : [join(clone, rel), ...args];
+const townJob = (ctx, rel, args) => ctx.locked([process.execPath, ...townArgv(ctx.t.townClone, rel, args)], { cwd: ctx.t.townClone });
 
 export const CROSSING = [
   { phase: "ferry", name: "drain", box: "tools/town-drain-run.mjs",
@@ -706,7 +715,7 @@ export function plan() {
         // THE HOUSE MINTS AS ONE (10-03). The mint's record is still the town's
         // ledger (the store mint is POS-341); the store's projection must agree
         // with it, and the ledger must hold one welcome for the house.
-        const engine = await importFrom(join(ctx.t.townClone, "tools", "stamp-mint.mjs"));
+        const engine = await importTownTool(ctx.t.townClone, "stamp-mint.mjs"); // POS-994: the office's pinned copy
         const entries = engine.parseStampLedger(readFileSync(join(ctx.t.townClone, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
         const welcomes = entries.map((e) => engine.classifyEntry(e.canonical)).filter((c) => c?.kind === "welcome" && [ctx.who.a, ctx.who.b].includes(c.handle));
         if (welcomes.length !== 1) p.push(`the ledger holds ${welcomes.length} welcome bundles for the rehearsal house, not 1: the house minted as ${welcomes.length ? welcomes.map((w) => w.household).join(" and ") : "nothing"}`);

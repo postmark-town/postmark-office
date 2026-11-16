@@ -2141,12 +2141,12 @@ export function potBoardOf(rows, extraInvalid = []) {
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
 // since the last ingest, we serve a clean zero board (the daily reset) until the
 // next ingest recomputes. Async: the tool import is awaited (then cached).
-let _questTools = null;
+// POS-994: the office's pinned copy, checked against the clone on EVERY call
+// (the blob check is cached on the file's size and mtime, and node caches the
+// import), so a town change after the first load still stops the board by name.
 async function questTools(clone) {
-  if (_questTools) return _questTools;
-  const { pathToFileURL } = await import("node:url");
-  _questTools = await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")));
-  return _questTools;
+  const { importTownTool } = await import("./town-tool.mjs");
+  return importTownTool(clone, "quest-progress.mjs");
 }
 /**
  * THE FACTS THE OFFICE CAN SETTLE for the board's uncounted rows.

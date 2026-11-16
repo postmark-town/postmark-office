@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { settlementDecided } from "../world2/tools/witness-settlement.mjs";
+import { collect, manifest } from "../tools/town-pins.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "world2", "tools", "witness-settlement.mjs");
@@ -120,6 +121,16 @@ process.exit(Number(process.env["STUB_" + verb.toUpperCase() + "_EXIT"] || 0));
 `);
   return town;
 }
+// POS-994: the tool runs the office's PINNED copy of the witness chain, checked
+// against the town. The stub town gets pins of its own stub (beside it, never
+// inside it), named in TOWN_PINS_DIR, so what runs is still the stub.
+function pinsOf(town) {
+  const root = `${town}-pins`;
+  const files = collect((p) => readFileSync(join(town, p)), ["witness-chain.mjs"]);
+  for (const [p, { bytes }] of files) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), bytes); }
+  writeFileSync(join(root, "PINS.json"), JSON.stringify(manifest(files, { townCommit: "e".repeat(40), readAt: "2026-11-16T00:00:00Z" })));
+  return root;
+}
 function runTool(town, { attempt = "1", rec = receipt(), env = {} } = {}) {
   const d = dir("run");
   const receiptPath = join(d, "settlement-auto.json");
@@ -127,7 +138,7 @@ function runTool(town, { attempt = "1", rec = receipt(), env = {} } = {}) {
   const calls = join(d, "calls.jsonl");
   const r = spawnSync(process.execPath, [TOOL, "--receipt", receiptPath, "--attempt", attempt, "--event", "2026-11-06T18:00:01Z", "--town", town, "--lock", join(d, "town.lock")], {
     encoding: "utf8",
-    env: { ...process.env, WITNESS_KEY: join(d, "key.pem"), WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls, ...env },
+    env: { ...process.env, TOWN_PINS_DIR: pinsOf(town), WITNESS_KEY: join(d, "key.pem"), WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls, ...env },
   });
   const seen = existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
   return { ...r, seen, lock: join(d, "town.lock") };
@@ -162,7 +173,7 @@ test("--open: the run is opened before it acts, held by the crossing's own shell
   const d = dir("open");
   const calls = join(d, "calls.jsonl");
   const r = spawnSync(process.execPath, [TOOL, "--open", "--attempt", "1", "--event", "2026-11-06T18:00:01Z", "--town", town, "--pid", "4242"], {
-    encoding: "utf8", env: { ...process.env, WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
+    encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinsOf(town), WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
   });
   assert.equal(r.status, 0, r.stderr);
   const [call] = readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l));

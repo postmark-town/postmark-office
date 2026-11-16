@@ -160,6 +160,17 @@ WorkingDirectory=/srv/postmark-office
 # (the owed queue, under /srv/postmark-office so the sandbox lets it write) come
 # from /etc/postmark-office.env; unset, the step says the witness is not
 # configured and owes nothing. `wstage` names the step a refusal stopped at.
+#
+# THE TOWN'S CODE HERE IS THE OFFICE'S PINNED COPY (POS-994; Darko 2026-11-15
+# 18:03 EST: "a mismatch stops that part by name"). witness-chain, stamp-verify,
+# stamp-mint and quest-progress run through src/town-tool.mjs run, which hashes
+# the clone's copy and its closure against src/town-pins/PINS.json and runs the
+# office's pinned copy, handed the clone by --repo. A mismatch runs nothing,
+# says which file on stderr ([town-tool] ...) and exits 3: in the chain that is
+# a refused step at its wstage (undo puts the clone back, the witness owes the
+# crossing); in the witness itself it is the same "owed" the witness already
+# says when it cannot publish, so the crossing's exit is unchanged.
+# tools/ferry.mjs is not pinned here: it runs in its own keyless sandbox (#1048).
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=start; wreport=/tmp/witness-ferry-report.json; : > "$wreport"; wattempt="ferry-$INVOCATION_ID"; \
   [ -n "$INVOCATION_ID" ] || wattempt="ferry-$(date -u -Iseconds)"; \
@@ -170,13 +181,13 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
         echo "[witness] the town clone has no tools/witness-chain.mjs yet: no record" >&2; return 1; fi; }; \
   witness() { \
       witness_ready 2>/dev/null || return 0; \
-      /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
+      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
           --attempt "$wattempt" --exit "$1" --stage "$wstage" --ferry-report "$wreport" \
         || { echo "[witness] the outcome of this crossing could not be composed: it is owed as incomplete" >&2; \
-             /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-incomplete --owed "$WITNESS_OWED" --kind mail-crossing \
+             /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-incomplete --owed "$WITNESS_OWED" --kind mail-crossing \
                  --attempt "$wattempt" --why "owe-mail failed after stage $wstage, exit $1" \
                || echo "[witness] not even that: the open entry stands, and the next publisher records it" >&2; }; \
-      /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
+      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
         || echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
       git -C "$TOWN_CLONE" reset --hard -q HEAD; \
@@ -185,10 +196,10 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
     witness "$rc"; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
   if witness_ready; then \
-    /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
+    /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
       || echo "[witness] this crossing could not be opened: its outcome is still owed when it decides" >&2; fi; \
   owed_ok=0; \
-  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else node tools/stamp-verify.mjs; fi; }; \
+  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else /usr/bin/node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" --; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
   git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
   wstage=drain && /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
@@ -202,7 +213,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
       echo "[ferry] the town-index ingest failed: the store mint is skipped this crossing, and the keep tick pays what is owed" >&2; \
     fi; \
   else \
-    node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem; \
+    /usr/bin/node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem; \
   fi && \
   wstage=verify && verify && \
   { git diff --quiet -- WHITE_PAGES/stamp-ledger.md || { \
@@ -216,7 +227,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=quests && if [ "$STAMP_LINES" = store ]; then \
     node /srv/postmark-office/world2/tools/quest-snapshot-run.mjs --clone "$TOWN_CLONE"; \
   else \
-    node tools/quest-progress.mjs --snapshot; \
+    /usr/bin/node /srv/postmark-office/src/town-tool.mjs run quest-progress.mjs --clone "$TOWN_CLONE" -- --snapshot; \
   fi && \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \

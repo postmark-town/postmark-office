@@ -45,6 +45,10 @@ import { copyTownTools } from "./helpers/town-tools.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { pinnedPath, pinnedTown } from "./helpers/pinned-town.mjs";
+// POS-994: the argv builders check the town against the office's pins, so the
+// pure argv tests name a town that holds exactly the pinned files (removed at exit).
+const PT = pinnedTown();
 
 const { planAwards, renderPlan, parseAwardPlan, planDiffers, townEngine, storeFacts, awardMintArgv, lockedArgv, planDigest, scheduled, main } =
   await import("../tools/post-award-plan.mjs");
@@ -456,10 +460,10 @@ test("a ledger line that already pays the (post, label) is already paid, and say
 
 test("the verb is the town's --award-mint, handed the act's own hand, amount and label; on linux the apply runs under the town's exclusive flock", () => {
   const r = { post: "errant/x", label: "the-hook", handle: "ada", n: 7, hand: "keemin" };
-  const argv = awardMintArgv("/town", r, { date: DATE, keyPath: "/k.pem" });
+  const argv = awardMintArgv(PT, r, { date: DATE, keyPath: "/k.pem" });
   assert.deepEqual(argv.slice(1), ["--award-mint", "ada", "--post", "errant/x", "--label", "the-hook", "--amount", "7", "--by", "keemin",
-    "--date", DATE, "--key", "/k.pem", "--repo", "/town"]);
-  assert.match(argv[0].replace(/\\/g, "/"), /\/town\/tools\/stamp-mint\.mjs$/);
+    "--date", DATE, "--key", "/k.pem", "--repo", PT]);
+  assert.equal(argv[0], pinnedPath("stamp-mint.mjs"), "the office's pinned copy (POS-994), checked against the town");
   const [file, args] = lockedArgv("/srv/postmark-office/tools/post-award-plan.mjs", ["--town", "/t", "--apply"], "/srv/postmark-office/town.lock");
   assert.equal(file, "/usr/bin/flock");
   assert.deepEqual(args, ["-w", "300", "/srv/postmark-office/town.lock", process.execPath, "/srv/postmark-office/tools/post-award-plan.mjs", "--town", "/t", "--apply"],

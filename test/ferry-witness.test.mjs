@@ -28,6 +28,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
+import { MODULES, collect, manifest } from "../tools/town-pins.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-ferry-witness-"));
@@ -177,7 +178,16 @@ function fixture({ ledger = ["row 1"], witnessTool = true, realWitness = false }
   g("-C", seed, "push", "-q", origin, "main");
   g("clone", "-q", "-c", "core.autocrlf=false", origin, town);
   write(office, OFFICE_FILES);
-  return { root, origin, town, office, key };
+  // POS-994: the unit runs the town's modules through the office's loader, as
+  // the office's pinned copies. The fake office carries the real loader and pins
+  // of THIS fixture's town files, so the shell's control flow runs as on the
+  // box: the stubs, checked equal and run from the pins.
+  write(office, { "src/town-tool.mjs": readFileSync(join(OFFICE, "src", "town-tool.mjs"), "utf8") });
+  const present = MODULES.filter((m) => tools[`tools/${m}`] !== undefined);
+  const pinned = collect((p) => Buffer.from(tools[p]), present);
+  for (const [p, { bytes }] of pinned) write(join(office, "src", "town-pins"), { [p]: bytes });
+  write(join(office, "src", "town-pins"), { "PINS.json": JSON.stringify(manifest(pinned, { townCommit: "f".repeat(40), readAt: "2026-11-16T00:00:00Z" })) });
+  return { root, origin, town, office, key, tools };
 }
 
 /** The ferry's ExecStart payload, joined the way systemd joins it. */
@@ -195,7 +205,7 @@ function runFerry(fx, extra = {}) {
   const script = ferryPayload().replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
   const res = spawnSync(SH, ["-c", script], {
     cwd: fx.office, encoding: "utf8", timeout: 120000,
-    env: { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", TOWN_SEAL_SOCKET: fx.sealSocket, ...extra },
+    env: { ...process.env, ...GIT_ENV, TOWN_PINS_DIR: "", TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", TOWN_SEAL_SOCKET: fx.sealSocket, ...extra },
   });
   const calls = existsSync(join(fx.root, "calls.txt")) ? readFileSync(join(fx.root, "calls.txt"), "utf8").trim().split("\n") : [];
   return { ...res, calls, witness: calls.filter((c) => c.startsWith("witness ")) };

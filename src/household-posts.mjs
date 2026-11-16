@@ -54,7 +54,7 @@
 
 import { resolve, dirname, join } from "node:path";
 import { existsSync, statSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { officeRead } from "./world2-pen.mjs";
 import { ideasTank } from "./world-classes.mjs";
@@ -240,8 +240,10 @@ async function backingOf(townClone) {
   try { const st = statSync(ledger); stamp = `${st.mtimeMs}:${st.size}`; } catch { /* the engine reads an absent ledger as empty */ }
   const key = `${townClone}|${stamp}`;
   if (backingCache?.key === key) return backingCache.value;
-  const stake = await import(pathToFileURL(join(townClone, "tools", "world-stake.mjs")));
-  const { classifyEntry } = await import(pathToFileURL(join(townClone, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copies, checked against the clone.
+  const { importTownTool } = await import("./town-tool.mjs");
+  const stake = await importTownTool(townClone, "world-stake.mjs");
+  const { classifyEntry } = await importTownTool(townClone, "stamp-mint.mjs");
   const state = stake.worldStakeState(townClone);
   // who holds what on each mark, and the newest stake or unstake on it
   const holders = new Map();

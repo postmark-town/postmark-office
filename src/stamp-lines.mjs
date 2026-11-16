@@ -39,7 +39,7 @@ import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 import { NOT_LANDED, penCommit } from "./write.mjs";
 
@@ -50,9 +50,9 @@ const isLedger = (clone, p) => /(^|[\\/])WHITE_PAGES[\\/]stamp-ledger\.md$/.test
 /** Is the store write on? Only the exact value `store` turns it on. */
 export const stampLinesOn = (env = process.env) => env.STAMP_LINES === "store";
 
-/** The town's engine, from the clone (the one grammar, the one seal). */
+/** The town's engine: the office's pinned copy, checked against the clone (POS-994; the one grammar, the one seal). */
 export async function engineOf(clone) {
-  return import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+  return importTownTool(clone, "stamp-mint.mjs");
 }
 
 /** The town's public key, from the clone. */

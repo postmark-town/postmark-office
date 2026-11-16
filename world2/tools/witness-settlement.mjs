@@ -34,6 +34,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isPinStop, townToolArgv } from "../../src/town-tool.mjs"; // POS-994: the witness chain is the office's pinned copy
 
 import { isDecision } from "../../deploy/settlement-history.mjs";
 
@@ -140,10 +141,19 @@ function main(argv) {
   const key = process.env.WITNESS_KEY ?? "";
   const owed = process.env.WITNESS_OWED ?? "";
   if (!key || !owed) { log("not configured (WITNESS_KEY, WITNESS_OWED): this settlement owes no record"); return 0; }
-  const cli = join(resolve(town), "tools", "witness-chain.mjs");
-  if (!existsSync(cli)) { log(`the town clone has no tools/witness-chain.mjs yet: no record (${town})`); return 0; }
+  if (!existsSync(join(resolve(town), "tools", "witness-chain.mjs"))) { log(`the town clone has no tools/witness-chain.mjs yet: no record (${town})`); return 0; }
+  // POS-994: the witness chain is the office's pinned copy, checked against the
+  // town clone at every call. A mismatch runs nothing and is said by name; the
+  // record is then owed, exactly as when it cannot publish (exit 3, the
+  // shell door's number for a pin stop).
+  const cliArgv = (args) => {
+    try { return townToolArgv(resolve(town), "witness-chain.mjs", args); }
+    catch (e) { if (isPinStop(e)) { log(e.message); return null; } throw e; }
+  };
   const town_ = (args, input = null) => {
-    const r = spawnSync(process.execPath, [cli, ...args], { input, encoding: "utf8" });
+    const argv = cliArgv(args);
+    if (!argv) return 3;
+    const r = spawnSync(process.execPath, argv, { input, encoding: "utf8" });
     process.stderr.write(r.stderr ?? "");
     return r.status;
   };
@@ -151,7 +161,8 @@ function main(argv) {
   // in time leaves the record owed; the next crossing or settlement pays it.
   const publishNow = () => {
     const lock = opt("--lock") ?? join(process.env.OFFICE_ROOT ?? "/srv/postmark-office", "town.lock");
-    const publishArgs = [cli, "publish", "--repo", resolve(town), "--owed", owed, "--key", key];
+    const publishArgs = cliArgv(["publish", "--repo", resolve(town), "--owed", owed, "--key", key]);
+    if (!publishArgs) { log("the record is owed, not published (the pin stopped it); the next crossing or settlement pays it"); return 0; }
     const hasFlock = spawnSync("flock", ["--version"], { stdio: "ignore" }).status === 0;
     const pub = hasFlock
       ? spawnSync("flock", ["-w", "120", lock, process.execPath, ...publishArgs], { encoding: "utf8" })
