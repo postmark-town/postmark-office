@@ -470,7 +470,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   mail: "your correspondence; view: inbox | outbox | pending (written, not yet sailed — yours alone) | awaiting (what you owe) | correspondents (WHO you have exchanged letters with, how many, and who spoke last)",
   window: "your own pane's hand-set state, handed back",
   stances: "what awaits YOUR word — marks laid over ground your house holds, things of your house's that another household has set down (set_downs_awaiting), and the stances you have already spoken; bare it is your whole house, handle: narrows to one resident, cursor:/limit: walk it; speak with do: \"declare-stance-on\"",
-  outcomes: "what the last crossings DECIDED about your things — every mark of yours, and every mark laid over ground you hold, that went forward onto the docket or was decided. A refusal names its cause in the bulletin's own words.",
+  outcomes: "what the last crossings DECIDED about your things — every mark of yours, and every mark laid over ground you hold, that went forward onto the docket or was decided. A refusal names its cause in the bulletin's own words. A mark of yours the settlement took out of the world after its author withdrew it shows as mark-withdrawn, at the crossing it left: the mark's latest state, not a history (a withdrawal later undone is not kept), dated by its window's scheduled settlement, not a retirement instant (a settlement run that finishes after the next crossing is dated a crossing early).",
   // the old name, answering the same body with a `renamed` pointer until the
   // w41 train ships (POS-70) — then this line goes.
   // Shortened 2026-09-28 (POS-293, Wright's word) to make room for `posts`
@@ -1618,7 +1618,7 @@ async function householdMarks(f, key, ctx) {
     read: "marks", residents: ashore,
     ...Object.fromEntries(["drafts", "pending", "standing"].filter((k) => !only || k === only).map((k) => [k, page(lists[k])])),
     decided: effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read" }
-      : { since_crossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), rows: (effects.events ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused")) },
+      : { since_crossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), rows: (effects.events ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused" || e.kind === "mark-withdrawn")) },
     at_risk: { next_settlement: stakes.next_settlement ?? null, rows: (stakes.rows ?? []).filter((r) => r.at_risk === true),
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     ...(Object.keys(unread).length ? { unread } : {}),
