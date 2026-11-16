@@ -98,6 +98,14 @@ WorkingDirectory=/srv/postmark-office
 # a mail-less crossing diffs clean and commits nothing. Same mint discipline:
 # only a green verify commits; a seal failure exits loud but sits AFTER the
 # mint block, so mail + stamps are never held hostage by it.
+# THE SEAL RUNS WITH NONE OF THIS UNIT'S RIGHTS (POS-988, 2026-11-10). seal.mjs
+# and verify.mjs are town code from PROJECTS/, and they need no environment, no
+# credential and no network, so they no longer run here as meepo with the office
+# env, the stamp key and the push credential in reach. tools/town-seal-sandbox.mjs
+# sends their four inputs to postmark-town-seal.socket and writes back the two
+# outputs only when the sandboxed seal and verify both exit 0; anything else
+# exits 1 here. The stage, the undo, the witness record and this shell's commit
+# are unchanged. The sandbox is deploy/postmark-town-seal@.service.
 # THE TOWN-LOG DRAIN RIDES FIRST (POS-44 wave 4, the ferry bridge). Flag-on,
 # a join, a paper edit and a sent letter are ROWS in the office's town log, and
 # this is the step that turns them into the record. Three things pin it to this
@@ -138,20 +146,55 @@ WorkingDirectory=/srv/postmark-office
 # TOWN_PUSH=1 must be in /etc/postmark-office.env for the pen's commits to reach
 # origin (the office service already needs it); the explicit push below is the
 # belt, and is a no-op when the drain committed nothing.
+#
+# THE WITNESS RECORD RIDES THE EXIT TRAP (POS-907; town WITNESS.md). Every
+# crossing, delivered, quiet or refused, is a record in the town's one witness
+# chain: `witness` runs on EVERY exit, after `undo` has put a refused clone
+# back, so it reads only committed work. It owes the crossing's outcome (the
+# town's tools/witness-chain.mjs owe-mail: the stage it reached, its exit, and
+# what tools/ferry.mjs --report says it did) and then publishes, still inside
+# this flock, so the settlement's publisher and this one never write the clone
+# at once. Darko 2026-11-06, "Keep running": a record that cannot publish stays
+# OWED and the crossing's own exit is unchanged; nothing waits on the witness.
+# WITNESS_KEY (the witness's own key, never stamp-key.pem) and WITNESS_OWED
+# (the owed queue, under /srv/postmark-office so the sandbox lets it write) come
+# from /etc/postmark-office.env; unset, the step says the witness is not
+# configured and owes nothing. `wstage` names the step a refusal stopped at.
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
+  wstage=start; wreport=/tmp/witness-ferry-report.json; : > "$wreport"; wattempt="ferry-$INVOCATION_ID"; \
+  [ -n "$INVOCATION_ID" ] || wattempt="ferry-$(date -u -Iseconds)"; \
+  witness_ready() { \
+      if [ -z "$WITNESS_KEY" ] || [ -z "$WITNESS_OWED" ]; then \
+        echo "[witness] not configured (WITNESS_KEY, WITNESS_OWED): this crossing owes no record" >&2; return 1; fi; \
+      if [ ! -f "$TOWN_CLONE/tools/witness-chain.mjs" ]; then \
+        echo "[witness] the town clone has no tools/witness-chain.mjs yet: no record" >&2; return 1; fi; }; \
+  witness() { \
+      witness_ready 2>/dev/null || return 0; \
+      /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
+          --attempt "$wattempt" --exit "$1" --stage "$wstage" --ferry-report "$wreport" \
+        || { echo "[witness] the outcome of this crossing could not be composed: it is owed as incomplete" >&2; \
+             /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-incomplete --owed "$WITNESS_OWED" --kind mail-crossing \
+                 --attempt "$wattempt" --why "owe-mail failed after stage $wstage, exit $1" \
+               || echo "[witness] not even that: the open entry stands, and the next publisher records it" >&2; }; \
+      /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
+        || echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
       git -C "$TOWN_CLONE" reset --hard -q HEAD; \
       git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES; \
-      echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; }; \
+      echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; \
+    witness "$rc"; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
+  if witness_ready; then \
+    /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
+      || echo "[witness] this crossing could not be opened: its outcome is still owed when it decides" >&2; fi; \
   owed_ok=0; \
   verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else node tools/stamp-verify.mjs; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
   git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
-  /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
+  wstage=drain && /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
   git -C "$TOWN_CLONE" push -q && \
-  cd "$TOWN_CLONE" && node tools/ferry.mjs && \
-  if [ "$STAMP_LINES" = store ]; then \
+  wstage=ferry && cd "$TOWN_CLONE" && node tools/ferry.mjs --report "$wreport" && \
+  wstage=mint && if [ "$STAMP_LINES" = store ]; then \
     if /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh; then \
       node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem --clone "$TOWN_CLONE"; \
     else \
@@ -161,16 +204,16 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   else \
     node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem; \
   fi && \
-  verify && \
+  wstage=verify && verify && \
   { git diff --quiet -- WHITE_PAGES/stamp-ledger.md || { \
       git add WHITE_PAGES/stamp-ledger.md && \
       git commit -qm "mint: crossing pass" && git push -q; }; } && \
-  /usr/bin/node /srv/postmark-office/tools/ballot-pass-run.mjs --key /srv/postmark-office/stamp-key.pem && \
+  wstage=ballot && /usr/bin/node /srv/postmark-office/tools/ballot-pass-run.mjs --key /srv/postmark-office/stamp-key.pem && \
   verify && \
   { git add -A -- WHITE_PAGES && { git diff --quiet --cached || { \
       git commit -qm "ballot: crossing pass" && git push -q; }; }; } && \
   { [ "$STAMP_LINES" != store ] || node /srv/postmark-office/world2/tools/stamp-lines.mjs --sync --clone "$TOWN_CLONE"; } && \
-  if [ "$STAMP_LINES" = store ]; then \
+  wstage=quests && if [ "$STAMP_LINES" = store ]; then \
     node /srv/postmark-office/world2/tools/quest-snapshot-run.mjs --clone "$TOWN_CLONE"; \
   else \
     node tools/quest-progress.mjs --snapshot; \
@@ -178,11 +221,11 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \
       git commit -qm "quests: crossing leaderboard" && git push -q; }; } && \
-  node PROJECTS/the-town-seal/seal.mjs && \
-  node PROJECTS/the-town-seal/verify.mjs && \
+  wstage=seal && /usr/bin/node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$TOWN_CLONE" && \
   { git diff --quiet -- PROJECTS/the-town-seal || { \
       git add PROJECTS/the-town-seal/seal.json PROJECTS/the-town-seal/the-town-seal.html && \
-      git commit -qm "seal: re-seal at the crossing" && git push -q; }; }'
+      git commit -qm "seal: re-seal at the crossing" && git push -q; }; } && \
+  wstage=done'
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/srv/postmark-office

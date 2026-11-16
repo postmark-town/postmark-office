@@ -1,5 +1,5 @@
 // town-discovery-ingest.test.mjs — discovery's tables ride the town-index
-// ingest (POS-497, 088_town_discovery.sql): written with the rows they come
+// ingest (POS-497, 097_town_discovery.sql): written with the rows they come
 // from, in one transaction, equal to the whole derivation after every move, and
 // the generation moving exactly when a piece, an edge or the roll does.
 //
@@ -33,7 +33,7 @@ import * as store from "../src/town-index-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
-const SCHEMA_088 = join(ROOT, "world2", "schema", "088_town_discovery.sql");
+const SCHEMA_097 = join(ROOT, "world2", "schema", "097_town_discovery.sql");
 const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSync(join(CLONE, "WHITE_PAGES", "stamp-ledger.md"));
 
 const tmp = mkdtempSync(join(tmpdir(), "town-discovery-ingest-"));
@@ -347,18 +347,18 @@ test("a giant body rides one delta: its pieces are written in the ingest's own t
   console.log(`# measured: the same giant letter rewritten (${Buffer.byteLength(edited)} bytes): discovery ${out2.ms.discovery} ms of a ${total2} ms delta; removed ${out2.discovery.removed} rows, added ${out2.discovery.added}`);
 });
 
-// ── without 088, then with it ────────────────────────────────────────────────
+// ── without 097, then with it ────────────────────────────────────────────────
 
-test("without 088 the ingest skips discovery and says so and the door says not installed; applying 088 fills both tables whole at the next ingest; applying it twice is a no-op; dropping them is the rollback", async (tt) => {
+test("without 097 the ingest skips discovery and says so and the door says not installed; applying 097 fills both tables whole at the next ingest; applying it twice is a no-op; dropping them is the rollback", async (tt) => {
   if (skip) return tt.skip(skip);
-  const landed = async () => (await owner.query(`SELECT (${LANDED["088_town_discovery.sql"].probe}) AS landed`)).rows[0].landed;
+  const landed = async () => (await owner.query(`SELECT (${LANDED["097_town_discovery.sql"].probe}) AS landed`)).rows[0].landed;
   const rollback = async () => {
     await owner.query("BEGIN");
     await owner.query("DROP TABLE town_discovery_chunks, town_letter_edges");
     await owner.query("DELETE FROM registry WHERE object IN ('town_discovery_chunks', 'town_letter_edges')");
     await owner.query("COMMIT");
   };
-  const apply = async () => owner.query(readFileSync(SCHEMA_088, "utf8"));
+  const apply = async () => owner.query(readFileSync(SCHEMA_097, "utf8"));
   await rollback();
   try {
     assert.equal(await landed(), false);
@@ -373,20 +373,20 @@ test("without 088 the ingest skips discovery and says so and the door says not i
     assert.deepEqual(delta.discovery, { mode: "absent" });
 
     await apply();
-    assert.equal(await landed(), true, "088's own probe says it landed");
+    assert.equal(await landed(), true, "097's own probe says it landed");
     assert.equal((await store.discover(api, { mode: "text", q: "absent" })).defect, "discovery's index has not been built yet");
     t.put("WHITE_PAGES/bex/inbox/y.md", letter("y", "bex", "ada", "a second word"));
     const filled = await ingest(w, { townRepo: t.dir, sha: t.commit("bex -> ada") });
     assert.equal(filled.discovery.mode, "whole", "no epoch yet: the first ingest fills both tables whole from the stored rows");
     assert.equal(filled.discovery.letters, 2);
-    await assertEqualToDerivation(t, "filled after 088");
+    await assertEqualToDerivation(t, "filled after 097");
     assert.deepEqual(await who("absent"), ["ada"]);
 
     await apply();
     t.put("TOWN_BULLETIN/welcome.md", "---\ntitle: welcome\n---\n\nAgain.\n");
     const again = await ingest(w, { townRepo: t.dir, sha: t.commit("bulletin again") });
-    assert.equal(again.discovery.mode, "delta", "088 applied twice changes nothing");
-    await assertEqualToDerivation(t, "088 twice");
+    assert.equal(again.discovery.mode, "delta", "097 applied twice changes nothing");
+    await assertEqualToDerivation(t, "097 twice");
 
     await rollback();
     t.put("TOWN_BULLETIN/welcome.md", "---\ntitle: welcome\n---\n\nRolled back.\n");

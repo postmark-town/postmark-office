@@ -1510,6 +1510,9 @@ async function creatureTurn(creature, act, distance_m, deps) {
     if (isSetPiece(kind) && !fight) return null;
     const ft = enc && fight ? fightTurn(creature, kind, fight, act, enc, deps) : null;
     if (ft?.cost) enc.cost = ft.cost;
+    // WLD-153: this turn holds a write that can move the actor's nerve for this act (its cost, a press). It is outstanding until its
+    // rows are folded, or the turn ends any other way; an answer that goes out meanwhile says so (encounter.mjs § nerveSpentSaid)
+    if (enc && (enc.cost.length || ft?.early.length)) deps.owed?.add(creature.id);
     // WHAT IT COULD REPEAT (POS-672 D5): only a kind whose law reads heard.any is
     // asked, and the ear is bounded like the read; none heard is none to repeat
     const readsHeard = kind.reactions.some((r) => /\bheard\.any\b/.test(String(r.src ?? "")));
@@ -1590,6 +1593,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     rows.push(...fought.rows);
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+    deps.owed?.delete(creature.id); // WLD-153: its rows are on the record
     if (enc) fleeTheSpent(written.rows, enc, deps, now, creature);
     // THE FIGHT MOVES ON when this act brought its set piece to an end (never fatal to the act's answer)
     const moved = fight ? await advanceFight(creature, kind, fight, { living, now, roster: enc?.roster ?? [], write: deps.writeOnce ?? null })
@@ -1603,7 +1607,12 @@ async function creatureTurn(creature, act, distance_m, deps) {
       // the fragment rides this reply alone: it is the actor's, and never on the record (POS-712)
       ...(telling?.told ? { fragment: telling.told } : {}), ...(telling?.answered ? { answered: true } : {}),
       // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
-      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
+      // WLD-164: a press that took ANOTHER resident to 0 says so beside who paid, and says only what is true when the answer goes out:
+      // their nerve is gone (the record), and the office puts them outside a dungeon they stand in (fleeTheSpent above, never awaited
+      // on this path and written only inside a dungeon: outside one, or if it fails, nothing is written). It never says they fled or
+      // stay out, which is the exit's own record, in their happened. The actor's own nerve is nerve_said's, never said twice
+      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}),
+        ...(l.on !== act.actor && nerveOf(living, l.on, now) === 0 ? { nerve_gone: "their nerve is gone: if they stand inside a dungeon the office puts them outside it, and their happened says when that is recorded" } : {}) })) } : {}),
       // a creature that tempts: what it whispered, and to whom; what your answer counted for (temptation.mjs)
       ...(tempted.tempt ? { tempts: { to: tempted.tempt.to, says: tempted.tempt.says, until: tempted.tempt.until } } : {}),
       ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
@@ -1621,6 +1630,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);
     return null;
+  } finally {
+    deps.owed?.delete(creature?.id); // WLD-153: a turn that ended, written or not, holds nothing outstanding
   }
 }
 
@@ -1968,6 +1979,7 @@ async function chargeOnly(creature, act, enc, deps, answered = []) {
   if (!rows.length) return;
   const written = await (deps.writeCost ?? writeCost)(rows);
   deps.living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+  deps.owed?.delete(creature.id); // WLD-153: its cost is on the record
   fleeTheSpent(written.rows, enc, deps, deps.now, creature);
 }
 

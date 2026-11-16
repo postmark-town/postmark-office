@@ -70,8 +70,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { snapshotFoldArgs } from "./world-snapshot.mjs";
-import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { firstClaimedBySlug, snapshotFoldArgs, withClaimedAt } from "./world-snapshot.mjs";
+import { TOWN_CLONES, leaseEntry, ownedRoot, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
+import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
@@ -142,11 +143,23 @@ const TOWN_PATHS = ["/tools/", "/ECONOMY-DIALS.json", "/WHITE_PAGES/stamp-ledger
 const TOWN_ROOT = join(tmpdir(), "postmark-settlement-town");
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, "-c", "core.autocrlf=false", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-export function townAtSha(townClone, sha, root = TOWN_ROOT) {
+const townShaOk = (sha) => {
   if (!/^[0-9a-f]{40}$/.test(String(sha ?? ""))) throw new Error(`the snapshot names no town sha to read the ledger at (${sha ?? "none"})`);
-  const dir = join(root, sha);
-  if (existsSync(join(dir, ".git"))) return dir;
-  mkdirSync(root, { recursive: true });
+};
+
+// THE CACHE PRUNES ITSELF (POS-989). One clone per settlement sha grew by about 0.35 G a settlement and nothing removed one
+// (7.3 G by 2026-11-10); a clone is disposable, its name is its key, so a stale unused one is removed whole and rebuilt on the
+// next ask (cache-lifecycle.mjs: seven days since last use, never one under a live lease). `townAtSha` is the UNSCOPED form: it
+// returns the path and refreshes the clone's use stamp, and a caller that reads across awaits uses `openTownAtSha` /
+// `withTownAtSha`, which hold a lease on the clone until the reads are done.
+export function townAtSha(townClone, sha, root = TOWN_ROOT) {
+  townShaOk(sha);
+  // THE PRUNABLE AREA IS A VERSIONED SUBFOLDER OF THE EXISTING ROOT (`<root>/lease-v1/<sha>`, POS-989 lead review of d995401f):
+  // an older helper reads `<root>/<sha>` with no lease, so those clones are never read, copied or pruned by this code.
+  const owned = ownedRoot(root);
+  const dir = join(owned, sha);
+  if (existsSync(join(dir, ".git"))) { touchUsed(owned, sha); return dir; }
+  mkdirSync(owned, { recursive: true });
   const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
   try {
     execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "clone", "-q", "--shared", "--no-checkout", townClone, tmp], { stdio: ["ignore", "pipe", "pipe"] });
@@ -156,7 +169,26 @@ export function townAtSha(townClone, sha, root = TOWN_ROOT) {
   } finally {
     if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   }
+  touchUsed(owned, sha);
+  void pruneSoon(owned, TOWN_CLONES);   // a new clone is the growth event: prune the stale ones, in the background
   return dir;
+}
+
+/** The town at a sha, LEASED: `{ dir, release }`. The lease is taken before the first read and kept until `release()`, so a pruner in any process leaves it. */
+export function openTownAtSha(townClone, sha, root = TOWN_ROOT) {
+  townShaOk(sha);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const dir = townAtSha(townClone, sha, root);
+    const release = leaseEntry(ownedRoot(root), sha, TOWN_CLONES);
+    if (release) return { dir, release };   // null: it was removed or claimed between the two steps; ask again, which rebuilds it
+  }
+  throw new Error(`the town at ${sha} could not be held: it kept being removed while it was asked for`);
+}
+
+/** Run `fn(dir)` with the town at `sha` leased for the whole call, awaited reads included. */
+export async function withTownAtSha(townClone, sha, fn, root = TOWN_ROOT) {
+  const { dir, release } = openTownAtSha(townClone, sha, root);
+  try { return await fn(dir); } finally { release(); }
 }
 
 /**
@@ -182,8 +214,11 @@ export async function settlementFoldInputs(p, header, { worldRepo, townRepo }) {
   // none) folds from the store's escrow at town_sha and the printed roster at
   // law_sha, as `--verify` does without --town-repo. Which one a World came
   // from is read off its header (`register_digest`), never guessed.
-  const town = townRepo && header.register_digest ? townAtSha(townRepo, header.town_sha) : null;
-  const { args, stakesSource, householdsSource } = await snapshotFoldArgs(p, header, { townRepo: town, filing: filingAt(worldRepo, header.law_sha) });
+  // The clone is LEASED for the reads (they are awaited): a pruner in any process leaves it until they are done (POS-989).
+  const foldArgs = (town) => snapshotFoldArgs(p, header, { townRepo: town, filing: filingAt(worldRepo, header.law_sha) });
+  const { args, stakesSource, householdsSource } = townRepo && header.register_digest
+    ? await withTownAtSha(townRepo, header.town_sha, foldArgs)
+    : await foldArgs(null);
   const inputs = {
     fold: engine.fold, args, stakesSource, householdsSource,
     // world#146: an engine that knows the town's words exports them. An older
@@ -649,8 +684,13 @@ export async function vetoesNow(p, { worldRepo } = {}) {
  *
  * An opposed mark is not served, so it is never labelled. Law marks (kind
  * `class`) are the law, not cleared marks, and carry nothing.
+ *
+ * `isThing` and `elder` are the same two readers the stance inbox hands
+ * `awaitingOf` (postmark#4450): a thing is not ground, and seniority is the
+ * first-laid date. Handed in so this stays pure; a caller that passes neither
+ * reads as before.
  */
-export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps }) {
+export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps, isThing = null, elder = undefined }) {
   const { awaitingOf, clearedAtCutover, townSeatOf } = await import("./town-stance.mjs");
   const townSeat = townSeatOf({ cutover, versions });
   const ground = marks.filter((m) => m?.kind !== "class");
@@ -658,7 +698,7 @@ export async function labelMarks(marks, { townWords, cutover = null, versions = 
     if (!m?.id || m.kind === "class") return m;
     if (clearedAtCutover(m, { cutover, versions })) return m;
     const neutral = townWords?.get?.(m.id) === "neutral";
-    const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat }).map((a) => a.who);
+    const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat, isThing, elder }).map((a) => a.who);
     if (!neutral && !who.length) return m;
     return { ...m, ...(neutral ? { town_stance: "neutral" } : {}), ...(who.length ? { awaiting: who } : {}) };
   });
@@ -925,6 +965,25 @@ async function overlapsAt(worldRepo, sha) {
   return GEOMETRY.get(sha);
 }
 
+// THE ENGINE'S PER-CELL SENIORITY AT THE SAME LAW (POS-571): world consent.mjs §
+// firstCoverOrder, read at the sha `overlapsAt` reads, so the label weighs who
+// came first on the shared cells as that settlement's own fold did. Null when the
+// law predates it (or it cannot be read): that fold read the whole-mark order,
+// and so does the label.
+const FIRST_COVER = new Map();
+async function firstCoverAt(worldRepo, sha) {
+  if (!FIRST_COVER.has(sha)) {
+    let order = null;
+    try {
+      const { materializeAtRef } = await import("./world-branches.mjs");
+      const c = await import(pathToFileURL(join(materializeAtRef(worldRepo, sha, "tools"), "tools", "consent.mjs")).href);
+      order = typeof c.firstCoverOrder === "function" ? c.firstCoverOrder : null;
+    } catch { order = null; }
+    FIRST_COVER.set(sha, order);
+  }
+  return FIRST_COVER.get(sha);
+}
+
 /**
  * The served marks, labelled (§ labelMarks): `{ marks }`, or `{ unread }` when
  * the cutover, the versions or the words could not be read — a label nobody
@@ -963,9 +1022,31 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
       : await readVersions(ids, { query: ask });
     if (read.unreachable) return { unread: read.unreachable };
     const hh = world.households ?? {};
+    // THE SAME TWO READERS AS THE STANCE INBOX (postmark#4450; Wright on
+    // office#924: the label and the inbox read one function, so both change
+    // together). Seniority is the first-laid date, read the one way the fold
+    // reads it (world-snapshot.mjs § firstClaimedBySlug: the origin claim). A
+    // thing is not ground, its class read off this World's own class nodes
+    // (extendsFromMarks, as the positioned set above reads them).
+    // And on the shared cells (POS-571): copies of the served marks, decorated with
+    // the first-laid facts the fold reads (world-snapshot.mjs § withClaimedAt: the
+    // first claim and, where its geometry changed, the footprints), asked through
+    // the one combinator the inbox and the door use (town-stance.mjs §
+    // elderByFirstCover). The copies stay here; the labelled marks are the served ones.
+    const { elderByFirstLaid, elderByFirstCover } = await import("./town-stance.mjs");
+    const { isThingMark } = await import("./held.mjs");
+    const decorated = await withClaimedAt(p, (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => ({ ...m })));
+    const recordById = new Map(decorated.map((m) => [String(m.id), m]));
+    const elder = elderByFirstCover({
+      firstCoverOrder: await firstCoverAt(worldRepo, header.law_sha),
+      recordOf: (m) => recordById.get(String(m?.id)) ?? m,
+      wholeMark: elderByFirstLaid(await firstClaimedBySlug(p, ids)),
+    });
+    const thingOpts = { classOf: markClassOf, extendsOf: extendsFromMarks(world.marks ?? []) };
     const marks = await labelMarks(world.marks ?? [], {
       townWords: words.townWords, cutover, versions: read.versions, words: words.words,
       householdOf: (h) => hh[h] ?? h, overlaps: await overlapsAt(worldRepo, header.law_sha),
+      isThing: (m) => isThingMark(m, thingOpts), elder,
     });
     LABELLED.set(key, marks);
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);

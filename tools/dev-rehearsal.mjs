@@ -105,6 +105,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
+import { SOCKET as SEAL_SOCKET } from "./town-seal-sandbox.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -422,10 +423,13 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "world2/tools/quest-snapshot-run.mjs", ["--clone", ctx.t.townClone]), commit: "quests: crossing leaderboard" },
   { phase: "ferry", name: "quests", box: "town:tools/quest-progress.mjs", when: "git",
     run: (ctx) => townJob(ctx, "tools/quest-progress.mjs", ["--snapshot"]), commit: "quests: crossing leaderboard" },
-  { phase: "ferry", name: "seal", box: "town:PROJECTS/the-town-seal/seal.mjs",
-    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/seal.mjs", []) },
-  { phase: "ferry", name: "seal-verify", box: "town:PROJECTS/the-town-seal/verify.mjs",
-    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/verify.mjs", []), commit: "seal: re-seal at the crossing" },
+  // POS-988: the seal and its verify run in postmark-town-seal@.service, reached through its socket, as on the box.
+  // The socket installs only after the release that carries it is live (DEPLOY.md § The seal runs in its own
+  // sandbox), so a pre-tag rehearsal on a box without it skips this one job and says so in its notes.
+  { phase: "ferry", name: "seal", box: "tools/town-seal-sandbox.mjs",
+    skipIf: () => existsSync(process.env.TOWN_SEAL_SOCKET || SEAL_SOCKET) ? null
+      : `${process.env.TOWN_SEAL_SOCKET || SEAL_SOCKET} is not here: postmark-town-seal.socket installs after the release that carries it is live (POS-988), so the seal is not rehearsed on this box yet`,
+    run: (ctx) => officeJob(ctx, "tools/town-seal-sandbox.mjs", ["--clone", ctx.t.townClone]), commit: "seal: re-seal at the crossing" },
   // the keep tick under its lock: the store's registry for the town's tools (deploy/registry-file.mjs, never
   // the printouts), the binds, the two store-to-file drains, then the mint block
   { phase: "keep", name: "registry-file", box: "deploy/registry-file.mjs",
@@ -505,7 +509,7 @@ export function plan() {
           const head = git(ctx.t.townClone, "rev-parse", "HEAD");
           if (!h) p.push("the store has no town-index head: seed it from the dev town clone first (town-index-ingest.mjs --seed)");
           else if (gitQuiet(ctx.t.townClone, "merge-base", "--is-ancestor", h.sha, head).status !== 0)
-            p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed, as law_ingester)`);
+            p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed --reseed, as law_ingester)`);
         }
         // THE GROUND (POS-595), last: a store that lags or an office misread is named first
         if (!p.length) {
@@ -668,6 +672,8 @@ export function plan() {
         for (const job of CROSSING) {
           if (job.when && job.when !== (ctx.storeMint ? "store" : "git")) continue;
           if (job.onlyIf && !job.onlyIf(ctx)) continue;
+          const skipped = job.skipIf?.(ctx);
+          if (skipped) { steps.push([job.name, { code: 0, out: "", skipped }, job]); continue; }
           const r = await job.run(ctx);
           steps.push([job.name, r, job]);
           if (r.code !== 0 && !job.nonFatal) break; // the unit's `&&`: the first refusal stops the chain
@@ -681,6 +687,7 @@ export function plan() {
       async check(ctx, steps, rec) {
         const p = [];
         for (const [name, r, job] of steps) {
+          if (r.skipped) { rec.notes.push(`${name} SKIPPED: ${r.skipped}`); continue; }
           if (r.code === 0) continue;
           if (job.nonFatal) rec.notes.push(`${name} exited ${r.code} (the box runs it non-fatal): ${tail(r.out, 6)}`);
           else p.push(`${name} exited ${r.code}: ${tail(r.out)}`);
@@ -1108,6 +1115,12 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
 //     and lamps in dev's copy of the town.
 //     The two parcels stand GROUND.parcelGapM apart, so they never meet; the lamp
 //     and the planted copy stand on the first parcel, the rehearsal's own ground.
+//   · FREE IN CANON TOO (POS-928). The world's parcels, read from the clone the
+//     settlement's bare copy is made of. A store can hold fewer than canon (the
+//     suite's stand-in seeds none), and then the clearing locks a parcel the
+//     sweep sets aside for overlapping one ("parcels never overlap", MARKS.md):
+//     a quiet crossing with no file for the mark. Parcels only: a new parcel over
+//     a resident's other marks crosses.
 //   · THE RUN ID picks where the walk over the places starts, so two runs on dev
 //     do not reach for the same spot.
 //   · NOTHING FITS: the preflight goes red, naming the box and how many places
@@ -1220,8 +1233,24 @@ export function groundTakenIn(s, OVERLAP, boxOf) {
   };
 }
 
-/** The preflight's ground for `ctx`: the safe box from the target's world, then free ground from its store. */
-async function rehearsalGround(ctx) {
+/**
+ * Canon's answer for one place (POS-928): null when free, else the parcel it touches. `parcels` is `[{ id, at, extent }]`,
+ * the parcels the world holds. Edges count, as the clearing's OVERLAP counts them; the sweep's test (an area above zero) is looser, so this is safe.
+ */
+export function groundTakenInCanon(parcels) {
+  const held = parcels.map((p) => ({ id: p.id, ...edgesOf(p) }));
+  return (footprints) => {
+    for (const f of footprints) {
+      const e = edgesOf(f);
+      const hit = held.find((p) => p.minX <= e.maxX && e.minX <= p.maxX && p.minY <= e.maxY && e.minY <= p.maxY);
+      if (hit) return `the canon parcel "${hit.id}"`;
+    }
+    return null;
+  };
+}
+
+/** The preflight's ground for `ctx`: the safe box from the target's world, then ground free in its canon and its store. */
+export async function rehearsalGround(ctx) {
   const t = ctx.t;
   const refuse = (msg) => { throw Object.assign(new Error(msg), { refusal: true }); };
   if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) refuse(`no world clone at ${t.worldClone}: the rehearsal cannot read the Mists to find its ground`);
@@ -1240,8 +1269,19 @@ async function rehearsalGround(ctx) {
   // the parcel dial, as the door reads it (src/world.mjs § parcelDial: the clone's marks-fold at the blessed ref)
   let parcelM = 25;
   try { parcelM = Number((await importFrom(join(materializeAtRef(t.worldClone, blessedRef(t.worldClone), "tools"), "tools", "marks-fold.mjs"))).PARCEL_EXTENT_M) || 25; } catch { /* the door's own fallback */ }
-  const g = await findGround({ run: ctx.run, safe, parcelM, taken: groundTakenIn(ctx.s, OVERLAP, boxOf) });
-  return { ...g, line: `ground: the parcels at (${g.parcelAt.x}, ${g.parcelAt.y}) and (${g.parcelAt2.x}, ${g.parcelAt2.y}), ${g.where}, place ${g.tried} of ${g.of} asked (${parcelM} m parcels, world ${ref})` };
+  // the parcels the settlement's sweep will hold a new parcel against, from the clone its bare copy is made of; fail closed, as above
+  let canon;
+  try {
+    const { loadMarks } = await importFrom(join(t.worldClone, "tools", "marks-fold.mjs"));
+    canon = loadMarks(join(t.worldClone, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at)
+      .map((m) => ({ id: m.id, at: m.at, extent: { w: m.extent?.w || parcelM, h: m.extent?.h || parcelM } }));
+  } catch (e) { refuse(`the rehearsal cannot read the parcels of the world at ${t.worldClone}, so it cannot find ground the settlement will take: ${thrown(e)}`); }
+  // loadMarks answers [] for a missing WORLD/marks and drops a record it cannot parse: no parcels is a read that failed, never a world with none
+  if (!canon.length) refuse(`the world at ${t.worldClone} reads no parcels (is WORLD/marks there?), so the rehearsal cannot find ground the settlement will take`);
+  const inCanon = groundTakenInCanon(canon);
+  const inStore = groundTakenIn(ctx.s, OVERLAP, boxOf);
+  const g = await findGround({ run: ctx.run, safe, parcelM, taken: async (f) => inCanon(f) ?? inStore(f) });
+  return { ...g, line: `ground: the parcels at (${g.parcelAt.x}, ${g.parcelAt.y}) and (${g.parcelAt2.x}, ${g.parcelAt2.y}), ${g.where}, place ${g.tried} of ${g.of} asked (${parcelM} m parcels, world ${ref}, clear of its ${canon.length} parcels)` };
 }
 
 // ── the run ──────────────────────────────────────────────────────────────────

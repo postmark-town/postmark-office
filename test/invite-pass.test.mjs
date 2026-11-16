@@ -174,3 +174,44 @@ test(`END TO END: an invitation from the founders' household pays both sides thr
     assert.equal(inviteLines(repo).length, 4);
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });
+
+// ── named after joining (POS-947) ───────────────────────────────────────────
+//
+// Darko 2026-11-07 23:05 EST, "open to any amount of time for the backfill"; 11-08 09:02 EST, "The town's judge too":
+// the office plans and the town's judge decides the same three terms, so the pass pays a late-named invitation
+// through the real verb and the town's verifier reads it green. The Keep joined 09-01 without naming anyone, sent
+// its first letter 09-10, and named Castle (cleo) on 11-01: its old activation counts from its join day, and the
+// inviter's 10 waits a week from the naming.
+const NAMED_AT = "2026-11-01T15:00:00.000Z";
+const LATE_HOUSES = Object.freeze({ ...HOUSEHOLDS, keep: { ...HOUSEHOLDS.keep, since: "2026-09-01", invited_by: { by: "castle", named: "cleo", at: NAMED_AT, backfill: true } } });
+const LATE_REGISTRY = Object.freeze({ households: LATE_HOUSES, pins: PINS });
+const LATE_STORE = () => ({ ...STORE(), rows: [{ slug: "keep", name: "The Keep", residents: ["dora"], since: "2026-09-01", invited_by: LATE_HOUSES.keep.invited_by }],
+  facts: { letters: new Map([["keep", "2026-09-10T12:00:00.000Z"]]), homes: new Map(), ashore: new Map() } });
+
+test(`END TO END: a late-named invitation pays both sides through the town's own verb, its 10 a week after the naming, and the verifier reads it green ${E2E ? "(skipped: " + E2E + ")" : ""}`, { skip: E2E }, async () => {
+  // in the naming's week: the 5 more alone; the 10 waits, though the activation is two months old
+  {
+    const { repo, keyFile } = invitedTown(undefined, { households: LATE_HOUSES });
+    try {
+      const q = quiet();
+      await main(["--town", repo, "--key", keyFile], { store: LATE_STORE(), registry: LATE_REGISTRY, now: new Date("2026-11-08T17:00:00.000Z"), env: {}, ...q });
+      assert.deepEqual(inviteLines(repo).map((l) => / · (\d+) · /.exec(l)[1]), ["5"], `in the naming's week the 10 waits: ${q.out.join("\n")}`);
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+  }
+  const { repo, keyFile, pub } = invitedTown(undefined, { households: LATE_HOUSES });
+  try {
+    const q = quiet();
+    const r = await main(["--town", repo, "--key", keyFile], { store: LATE_STORE(), registry: LATE_REGISTRY, now: new Date("2026-11-09T00:00:00.000Z"), env: {}, ...q });
+    assert.equal(r, 0, `every owed line was written, none refused: ${q.out.join("\n")}`);
+    assert.deepEqual(inviteLines(repo).map((l) => /^- (\S+) · MINT → (\S+) · (\d+) · for: (invite:\S+) · by: the-town · sig: /.exec(l)?.slice(1)), [
+      ["2026-11-08", "dora", "5", "invite:hh:keep/hh:castle/invited"],
+      ["2026-11-08", "cleo", "10", "invite:hh:keep/hh:castle/inviter/2026-09-10"],
+    ], q.out.join("\n"));
+    const v = await verify(repo, pub);
+    assert.equal(v.ok, true, v.problems.join("\n"));
+    // never twice
+    const again = quiet();
+    assert.equal(await main(["--town", repo, "--key", keyFile], { store: LATE_STORE(), registry: LATE_REGISTRY, spawn: noSpawn, now: new Date("2026-11-09T00:00:00.000Z"), env: {}, ...again }), 0, again.out.join("\n"));
+    assert.equal(inviteLines(repo).length, 2);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});

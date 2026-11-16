@@ -36,7 +36,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -938,6 +938,16 @@ test("FALSIFIER (h2): a running INSTANCE of a template is discovered, and the te
   // POS-522, never names an instance, so no row could be asked for one.
   assert.deepEqual(parseDiscovery(unitFiles), ["postmark-ferry.timer", "postmark-office.service"]);
 
+  // POS-988: an Accept=yes socket's per-connection instances are its body, out of
+  // scope once its .socket is installed; the same instance with no socket is in.
+  const seal = "postmark-town-seal@3-81234-0.service   loaded active running Postmark town seal";
+  const failedSeal = "● postmark-town-seal@4-81240-0.service loaded failed failed Postmark town seal";
+  const withSocket = unitFiles + "\npostmark-town-seal.socket  enabled enabled\npostmark-town-seal@.service static -";
+  assert.deepEqual(parseDiscovery(withSocket, [live, seal, failedSeal].join("\n")), parseDiscovery(unitFiles, live),
+    "a socket's instances, running or failed, add no unit to roll-call");
+  assert.deepEqual(parseDiscovery(unitFiles, seal), ["postmark-ferry.timer", "postmark-office.service", "postmark-town-seal@3-81234-0.service"],
+    "the FLIP: with no socket installed, a live template instance is in scope as before");
+
   // And through the judgment: a worker the box runs that no row names alarms.
   const m = manifest();
   const s = mutate(healthy(m), (x) => {
@@ -981,6 +991,19 @@ function unfiledRows(m, files) {
   const names = new Set(files.map((f) => f.file));
   return [...new Set(m.units.filter((r) => !r.box_only && r.stage !== "retired" && !names.has(r.unit.replace(/@[^.@]+\./, "@."))).map((r) => r.unit))];
 }
+
+test("POS-988: every socket in deploy/ is Accept=yes over a template in deploy/, so discovery may leave its instances to it", () => {
+  const sockets = readdirSync(DEPLOY_DIR).filter((f) => /^postmark-.*\.socket$/.test(f));
+  assert.ok(sockets.includes("postmark-town-seal.socket"), `read ${sockets.join(", ") || "no"} sockets from deploy/`);
+  for (const f of sockets) {
+    const text = readFileSync(join(DEPLOY_DIR, f), "utf8");
+    assert.match(text, /^Accept=yes$/m, `${f}: a socket without Accept=yes starts one named service, which a row must name`);
+    const template = f.replace(/\.socket$/, "@.service");
+    assert.ok(existsSync(join(DEPLOY_DIR, template)), `${f}: its instances' template ${template} is not in deploy/`);
+    assert.match(readFileSync(join(DEPLOY_DIR, template), "utf8"), /^CollectMode=inactive-or-failed$/m,
+      `${template}: a refused instance must not linger as a failed unit`);
+  }
+});
 
 test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
   // ALARM-unmanifested catches this on the box, the morning after an install.

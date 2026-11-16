@@ -27,6 +27,7 @@
 // inside `officeRead`'s READ ONLY transaction and a test runs it on its own.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { publicActSql } from "./hearth-public.mjs"; // POS-1027: which acts a public read may name
 // The row SHAPES (pages, cards, entries) are queries.mjs's own exported
 // functions; only the SQL is written here. A reader that restated a shape
 // would be the private copy that drifts.
@@ -43,6 +44,7 @@ import { isResidentHandle } from "./residency.mjs"; // the door's admission gram
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { errorSaid } from "./fault-words.mjs"; // an error's text for the LOG only (the quest board's fault line, POS-965)
 import { discoveryAsk, readCursor, textBoundOf, discoveryPage, discoveryTablesIn, generationOf, DISCOVERY_LIMITS, PAST_EVERY_KEY,
   NOT_INSTALLED, NOT_BUILT, noResident, resetNote } from "./town-discovery.mjs"; // POS-497: discovery's bounds, cursor and words
 
@@ -160,7 +162,12 @@ export async function regionOne(q, slug) {
 
 /** The bulletin's listing: every posting's listing line, by slug, bytewise. */
 export async function bulletinList(q) {
-  return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows.map(bulletinListing);
+  return (await bulletinRows(q)).map(bulletinListing);
+}
+
+/** The bulletin's rows as the store holds them: the SQL half of bulletinList (POS-1064: the doorstep loads rows under the connection and lists them after). */
+async function bulletinRows(q) {
+  return (await q.query(`SELECT slug, json FROM town_bulletin ORDER BY slug COLLATE "C"`)).rows;
 }
 
 /** The bulletin's teaser page (read_bulletin's paged answer, and the doorstep's teaser). */
@@ -193,15 +200,21 @@ export async function stampsRoster(q, { limit, offset } = {}) {
 
 /** One handle's stamps detail: its balance row, with the funding and keeping rows of its parties. */
 export async function stampsDetail(q, handle) {
+  const r = await stampsDetailRows(q, handle);
+  return stampsDetailOf(r.row, { holoRows: r.holoRows, keepingRows: r.keepingRows });
+}
+
+/** The SQL half of stampsDetail: the balance row and the funding rows of the handle's parties (the doorstep composes them after the connection is back). */
+async function stampsDetailRows(q, handle) {
   const row = (await q.query("SELECT balance, mint_count, staked FROM town_stamps WHERE handle = $1", [handle])).rows[0];
-  const parties = await stampParties(handle);
+  const parties = await stampParties(handle, q);   // the registry through the held client, never a second pool while this transaction is open (POS-963)
   const holoRows = (await q.query(
     `SELECT h.party, h.pot, h.holo, h.epoch, h.date, h.receipt, r.usd AS usd
        FROM town_funding_holo h LEFT JOIN town_pot_receipts r ON r.receipt = h.receipt
       WHERE h.party = ANY($1::text[]) ORDER BY h.date COLLATE "C", h.seq, r.seq`, [parties])).rows;
   const keepingRows = (await q.query(
     `SELECT pot, n, epoch, date FROM town_funding_keeping_mint WHERE party = ANY($1::text[]) ORDER BY date COLLATE "C", seq`, [parties])).rows;
-  return stampsDetailOf(row, { holoRows, keepingRows });
+  return { row, holoRows, keepingRows };
 }
 
 /** The pot board's rows: each pot with its roll, receipts, escrow and stakers, by id (bytewise where sqlite compared text), and the funding ledger's invalid lines. */
@@ -249,9 +262,9 @@ export async function standingFor(q, handle) {
   try { return row?.json ? JSON.parse(row.json) : null; } catch { return null; }
 }
 
-/** The index meta a quest board reads (quest_registry, quest_day), from the store's own town_meta. */
+/** The index meta a quest board reads (quest_registry, quest_day, and POS-961's quest_invites), from the store's own town_meta. */
 async function questMeta(q) {
-  const rows = (await q.query("SELECT key, value FROM town_meta WHERE key IN ('quest_registry', 'quest_day')")).rows;
+  const rows = (await q.query("SELECT key, value FROM town_meta WHERE key IN ('quest_registry', 'quest_day', 'quest_invites')")).rows;
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
@@ -373,7 +386,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     // the doorstep's and the house's reads (group 3)
     asOf: via((c) => townIndexAsOf(c)),
     copy: via((c) => indexCopy(c)),
-    doorstep: via((c, handle, asOf, opts) => doorstep(c, handle, asOf, opts)),
+    // the page's rows under the connection, its composition after it is back (POS-1064; storeAnswer § then)
+    doorstep: via((c, handle, _asOf, opts) => doorstepRows(c, handle, opts), (rows, handle, _asOf, opts) => (rows ? doorstepFromRows(rows, handle, opts) : null)),
     residentSegments: via((c, handle, fresh, standing) => residentSegments(c, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
@@ -381,6 +395,14 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     // the household read v2's deep reads (POS-633 part 2): the house's acts, its letters, its ledger lines
     houseActs: via((c, household, opts) => houseActs(c, household, opts)),
     lettersAround: via((c, handles, sinceDay, opts) => lettersAround(c, handles, sinceDay, opts)),
+    // the Hearth's public reads (POS-1027): a pair's letters, bodies by id, the town's newest deliveries, a resident's day, an actor's acts, the roster
+    letterBounceState: via((c, id) => letterBounceState(c, id)),
+    lettersBetween: via((c, a, b) => lettersBetween(c, a, b)),
+    letterBodies: via((c, ids) => letterBodies(c, ids)),
+    lettersDeliveredFeed: via((c, opts) => lettersDeliveredFeed(c, opts)),
+    lettersOfDay: via((c, handle, day) => lettersOfDay(c, handle, day)),
+    actsOfActor: via((c, actor, opts) => actsOfActor(c, actor, opts)),
+    roster: via((c) => roster(c)),
     stampLinesSince: via((c, sinceIso, opts) => stampLinesSince(c, sinceIso, opts)),
     // the household glance's mail window (POS-633): letters in, and the house's letters out
     mailWindow: via((c, handles, house, sinceDay) => mailWindow(c, handles, house, sinceDay)),
@@ -424,7 +446,12 @@ export async function mailList(q, handle, box = "inbox", opts = {}) {
 }
 
 /** One box's page: { total, limit, offset, letters }. */
-export async function mailPage(q, handle, box, { since, until, limit, offset } = {}) {
+export async function mailPage(q, handle, box, opts = {}) {
+  return mailPageOf(await mailPageRows(q, handle, box, opts));
+}
+
+/** The SQL half of mailPage: the box's total and its page of rows, unexcerpted. */
+async function mailPageRows(q, handle, box, { since, until, limit, offset } = {}) {
   const where = [`${box === "outbox" ? "from_h" : "to_h"} = $1`];
   if (box !== "outbox") where.push("(box = 'inbox' OR box IS NULL)");
   const params = [handle];
@@ -436,8 +463,9 @@ export async function mailPage(q, handle, box, { since, until, limit, offset } =
   const total = await count(q, `SELECT COUNT(*) AS n FROM town_letters ${clause}`, params);
   const rows = (await q.query(`SELECT ${LETTER_COLS} FROM town_letters ${clause} ORDER BY ${NEWEST} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, n, start])).rows;
-  return { total, limit: n, offset: start, letters: rows.map(excerpt) };
+  return { total, n, start, rows };
 }
+const mailPageOf = ({ total, n, start, rows }) => ({ total, limit: n, offset: start, letters: rows.map(excerpt) });
 
 /** How many letters sit in a resident's outbox. */
 export async function outboxSettled(q, handle) {
@@ -468,12 +496,20 @@ export async function officeHandles(q) {
 // by the readers that want it, residentList for one), never a card.
 let _roster = { asOf: undefined, entries: null };
 export async function roster(q) {
+  return rosterOf(await rosterRows(q));
+}
+
+/** The SQL half of roster: the kept entries when the store's head has not moved, else the cards' rows (POS-1064: parsed after the connection is back). */
+async function rosterRows(q) {
   const asOf = await townIndexAsOf(q);
-  if (_roster.entries && _roster.asOf === asOf) return _roster.entries;
-  const rows = (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows;
-  const entries = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
-  _roster = { asOf, entries };
-  return entries;
+  if (_roster.entries && _roster.asOf === asOf) return { asOf, entries: _roster.entries };
+  return { asOf, rows: (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows };
+}
+function rosterOf({ asOf, entries, rows }) {
+  if (entries) return entries;
+  const built = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
+  _roster = { asOf, entries: built };
+  return built;
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
@@ -587,8 +623,11 @@ export async function townSummary(q) {
 
 /** A resident's stored card, parsed, or null. */
 async function card(q, handle) {
-  const row = (await q.query("SELECT json FROM town_residents WHERE handle = $1", [handle])).rows[0];
+  const row = await cardRow(q, handle);
   return row ? JSON.parse(row.json) : null;
+}
+async function cardRow(q, handle) {
+  return (await q.query("SELECT json FROM town_residents WHERE handle = $1", [handle])).rows[0];
 }
 
 /** The freshness context for a row the STORE answered: dated by the store's head (home's rule). */
@@ -608,15 +647,21 @@ export async function resident(q, handle, fresh = null) {
 
 /** A resident's window read (queries.mjs § windowReadOf), or null. */
 export async function windowRead(q, handle, fresh = null) {
-  const d = await card(q, handle);
+  return windowOfRow(await cardRow(q, handle), handle, fresh, await townIndexAsOf(q));
+}
+/** The window from the resident's stored card row (the card is parsed here, after the SQL: POS-1064). The freshness is dated by the store's head `asOf`, as storeFresh dates it. */
+function windowOfRow(row, handle, fresh, asOf) {
+  const d = row ? JSON.parse(row.json) : null;
   if (!d) return null;
-  return windowReadOf(d.window_state ?? null, handle, await storeFresh(q, handle, fresh));
+  return windowReadOf(d.window_state ?? null, handle, freshnessFor(handle, { ...fresh, asOf }));
 }
 
 /** The public-service-announcements fold over the PSA posting (queries.mjs § psaFoldOf). */
 export async function psaFold(q, opts = {}) {
-  const row = (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0];
-  return psaFoldOf(row?.json ?? null, opts);
+  return psaFoldOf(await psaRow(q), opts);
+}
+async function psaRow(q) {
+  return (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0]?.json ?? null;
 }
 
 // ── the household read v2's deep reads (POS-633 part 2) ──────────────────────
@@ -632,7 +677,7 @@ export const MULTI_DAYS = 14;
  * cursor's high-water mark) when one is given, else since `sinceIso`. Also
  * answers the store's act high-water mark, for the next cursor.
  */
-export async function houseActs(q, household, { afterId = null, sinceIso = null, beforeId = null, limit = DEEP_ROWS, actors = null } = {}) {
+export async function houseActs(q, household, { afterId = null, sinceIso = null, beforeId = null, limit = DEEP_ROWS, actors = null, verbs = null } = {}) {
   const n = Math.min(Math.max(Number(limit) || DEEP_ROWS, 1), DEEP_ROWS);
   const hw = (await q.query("SELECT max(id)::text AS hw FROM acts")).rows[0]?.hw ?? null;
   const id = (v) => (v != null && /^\d+$/.test(String(v)) ? String(v) : null);
@@ -652,10 +697,13 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   if (sinceIso && !after) add("at >= $?::timestamptz", sinceIso);
   if (before) add("id < $?::bigint", before);
   if (who) add("actor = ANY($?::text[])", who);
+  // POS-1027: a PUBLIC read names the verbs that are public record (hearth-public.mjs § PUBLIC_HOUSE_VERBS); an owner's read names none and sees every act of the house
+  if (Array.isArray(verbs)) { add("action = ANY($?::text[])", verbs.map(String)); where.push(publicActSql()); }   // and a verb is not proof: a draft's withdrawal, a draft's leave/amend (hearth-public.mjs)
   // 079's columns, when the store has them (POS-633 part 3): the recorded hand, for and route
   const { actsHaveProvenance } = await import("./act-provenance.mjs");
   const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
-  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
+  const facts = Array.isArray(verbs) ? ", class, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward" : "";   // kept for the public projection's second filter; happenedRow never shows them
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}${facts}
       FROM acts WHERE ${where.join(" AND ")} ORDER BY acts.id DESC LIMIT ${n + 1}`, params)).rows;
   const kept = rows.slice(0, n);
   // past the cut, the read goes on below the last id it kept (review of #678, item 4)
@@ -706,6 +754,93 @@ export async function lettersAround(q, handles, sinceDay, { multi = false, multi
   const many = (await q.query(`SELECT ${cols} FROM town_letters
      WHERE date >= $1 AND delivered_at IS NOT NULL AND strpos(json, '"toList"') > 0`, [multiSinceDay > sinceDay ? multiSinceDay : sinceDay])).rows;
   return [...byIndex, ...many.filter((r) => !seen.has(r.id))];
+}
+
+// ── the Hearth's public reads (POS-1027) ─────────────────────────────────────
+
+/** A letter's recipients from a row: the toList when its json holds one, else the column's own recipient (a "x, y" column is split). */
+export function recipientsOf(row) {
+  if (row.multi) { try { const l = JSON.parse(row.multi); if (Array.isArray(l?.toList) && l.toList.length) return l.toList.map(String).filter(Boolean); } catch { /* the column's own recipient */ } }
+  return String(row.to_h ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Every DELIVERED letter between two residents, either way, as the public letter index holds them (a letter that never arrived is no correspondence). A letter has
+ * one sender, so `from_h` alone finds both directions (the (from_h, date) index); a letter to several is read from its toList, which no index reaches but this
+ * read does not need one for. Rows carry no body: letterBodies reads the one or two a caller wants.
+ */
+export async function lettersBetween(q, a, b) {
+  const rows = (await q.query(`SELECT id, from_h, to_h, date, delivered_at, thread,
+      CASE WHEN strpos(json, '"toList"') > 0 THEN json ELSE NULL END AS multi
+    FROM town_letters WHERE from_h = ANY($1::text[]) AND delivered_at IS NOT NULL`, [[a, b]])).rows;
+  return rows.filter((r) => (r.from_h === a && recipientsOf(r).includes(b)) || (r.from_h === b && recipientsOf(r).includes(a)));
+}
+
+/** The whole parsed letters for some ids, as a Map id → { body, ... } (the json column; there is no body column and no file read). */
+export async function letterBodies(q, ids) {
+  const list = [...new Set((ids ?? []).map(String))];
+  if (!list.length) return new Map();
+  const rows = (await q.query("SELECT id, json FROM town_letters WHERE id = ANY($1::text[])", [list])).rows;
+  const out = new Map();
+  for (const r of rows) { try { out.set(r.id, JSON.parse(r.json)); } catch { /* an unreadable json has no body here */ } }
+  return out;
+}
+
+/**
+ * The newest delivered letters town-wide, newest first, for the feed: at most `limit` rows, and only those delivered at or after `sinceIso` when one is given.
+ * The order is the public letter index's own (NEWEST: delivered_at as text, a bare date as that day's midnight, ties on id).
+ */
+export async function lettersDeliveredFeed(q, { sinceIso = null, beforeIso = null, resume = null, limit = 200 } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 200, 1), 1000);
+  const params = [];
+  let where = "delivered_at IS NOT NULL";
+  if (sinceIso) { params.push(sinceIso); where += ` AND delivered_at COLLATE "C" >= $${params.length}`; }
+  if (resume?.at) {
+    // the feed's cursor, as a POSITION in its order (time newest first, then id ascending): older letters, and at that very instant only those after the cursor's id
+    // (none when the instant is wholly served), so a run of equal times longer than the page is read on from the exact letter, never from the instant
+    params.push(resume.at);
+    const t = `$${params.length}`;
+    if (resume.exclusive) where += ` AND delivered_at COLLATE "C" < ${t}`;
+    else if (resume.afterId != null) { params.push(resume.afterId); where += ` AND (delivered_at COLLATE "C" < ${t} OR (delivered_at COLLATE "C" = ${t} AND id COLLATE "C" > $${params.length}))`; }
+    else where += ` AND delivered_at COLLATE "C" <= ${t}`;
+  } else if (beforeIso) { params.push(beforeIso); where += ` AND delivered_at COLLATE "C" <= $${params.length}`; }   // inclusive: a page boundary never skips a letter delivered at the very instant
+  const rows = (await q.query(`SELECT id, from_h, to_h, date, delivered_at, thread FROM town_letters WHERE ${where} ORDER BY ${NEWEST} LIMIT ${n + 1}`, params)).rows;
+  return { rows: rows.slice(0, n), cut: rows.length > n };
+}
+
+/**
+ * One resident's letters written on `day` (the letter's own date), delivered or not, and the delivered ones that arrived in the 14 days before and were delivered on it.
+ * Both ride the (from_h, date) and (to_h, date) indexes.
+ */
+export async function lettersOfDay(q, handle, day) {
+  const cols = "id, from_h, to_h, date, delivered_at, CASE WHEN strpos(json, '\"toList\"') > 0 THEN json ELSE NULL END AS multi";
+  const sent = (await q.query(`SELECT ${cols} FROM town_letters WHERE from_h = $1 AND date = $2`, [handle, day])).rows;
+  const before = new Date(Date.parse(`${day}T00:00:00Z`) - 14 * 86_400_000).toISOString().slice(0, 10);
+  // the column holds the letter's FIRST recipient (town-index.mjs § letterRows: `l.to`); the rest of a letter to several ride only in its json toList, which no index
+  // reaches, so that half is a scan of the same 15-day window (as lettersAround's multi scan), kept to the letters that really name this resident
+  const first = (await q.query(`SELECT ${cols} FROM town_letters WHERE to_h = $1 AND date >= $2 AND date <= $3 AND delivered_at IS NOT NULL`, [handle, before, day])).rows;
+  const several = (await q.query(`SELECT ${cols} FROM town_letters WHERE date >= $1 AND date <= $2 AND delivered_at IS NOT NULL AND strpos(json, '"toList"') > 0`, [before, day])).rows
+    .filter((r) => recipientsOf(r).includes(handle));
+  const seen = new Set(first.map((r) => r.id));
+  const got = [...first, ...several.filter((r) => !seen.has(r.id))].filter((r) => String(r.delivered_at).startsWith(day));
+  return { sent, received: got };
+}
+
+/**
+ * One actor's acts inside [fromIso, toIso), the public verbs only (`verbs`), oldest first. The window becomes an id window first (actsIdSince, point lookups on the
+ * primary key), then an index range on (actor, id); `at` filters the few that were filed a little out of order. `cut` says more than `limit` rows stand.
+ */
+export async function actsOfActor(q, actor, { fromIso, toIso, verbs, limit = 500 } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+  const lo = await actsIdSince(q, fromIso);
+  if (lo == null) return { rows: [], cut: false };
+  const hiRaw = await actsIdSince(q, toIso);
+  const params = [actor, lo, fromIso, toIso, verbs.map(String)];
+  let hiSql = "";
+  if (hiRaw != null) { params.push(String(BigInt(hiRaw) + 50n)); hiSql = " AND id < $6::bigint"; }   // the few acts filed late sit a little past the bound; `at` decides
+  const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward FROM acts
+      WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) AND ${publicActSql()} ORDER BY acts.id LIMIT ${n + 1}`, params)).rows;
+  return { rows: rows.slice(0, n), cut: rows.length > n };
 }
 
 /**
@@ -787,32 +922,33 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
-  // `nowMs` is injected only so the PSA window is testable against a fixed day —
-  // the doorstep is a page generated fresh each morning, so its default clock is
-  // the wall clock, exactly as "the last week" reads.
-  // `fresh` rides through to the window segment for one reason and it is a hard
-  // one: the bundle falsifier dispatches every segment's `serves` pointer through
-  // the real apex and deep-equals the answer. A window composed at
-  // `household read: "window"` and not composed here would fail that test — which
-  // is the falsifier doing exactly its job, and the reason to thread the context
-  // rather than to compose at the doors.
-  // `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see
-  // queries.mjs's bounds note above DOORSTEP_INBOX_SLIM, and its slimAwaiting,
-  // slimPsa and slimStamps helpers.
-  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
+  const rows = await doorstepRows(q, handle, opts);
+  return rows ? doorstepFromRows(rows, handle, opts) : null;
+}
+
+/**
+ * THE DOORSTEP, LOADED (POS-1064). The SQL half of `doorstep`: every row the page needs, read in the one READ ONLY snapshot the caller holds, in the order
+ * the page was always read, and NOTHING composed: no card parsed, no law folded, no page built. `storeIndexPooled` hands the connection back after this
+ * and runs `doorstepFromRows` (the composition) after it, so the page's JavaScript no longer runs with a transaction open on the pen (measured on an idle
+ * office: ~25 ms of 98-120 ms held was JavaScript between the core's statements, and under load that is a connection idle in its transaction while the
+ * thread is busy). Null when the store holds no such resident.
+ */
+export async function doorstepRows(q, handle, opts = {}) {
+  const { conversationsOffset = 0, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
   const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
   const one = (sql, params = []) => count(q, sql, params);
-  const parts = {
-    arrivals: (await roster(q)).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
-    awaiting: await mailAwaiting(q, handle, { offset, standing }),
-    mail: await mailList(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
-    stamps: await stampsDetail(q, handle),
-    bulletin: await bulletinTeaser(q, { limit: DOORSTEP_SIZES.bulletin }),
-    pulse: await metricsMail(q, { days: DOORSTEP_SIZES.pulseDays }),
-    window: await windowRead(q, handle, fresh),
-    psa: await psaFold(q, { now: nowMs }),
+  return {
+    asOf,
+    arrivals: await rosterRows(q),
+    awaiting: await mailAwaitingRows(q, handle, { offset, standing }),
+    mail: await mailPageRows(q, handle, "inbox", { limit: slim ? DOORSTEP_SIZES.inboxSlim : DOORSTEP_SIZES.inbox }),
+    stamps: await stampsDetailRows(q, handle),
+    bulletin: await bulletinRows(q),
+    pulse: await metricsMailRows(q),
+    window: await cardRow(q, handle),
+    psa: await psaRow(q),
     pendingOutbox: await outboxSettled(q, handle),
     counts: {
       received: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND to_h = $1", [handle]),
@@ -823,6 +959,31 @@ export async function doorstep(q, handle, _asOf, opts = {}) {
       deliveries: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
       lastDelivery: (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE kind = 'delivery'`)).rows[0]?.d ?? null,
     },
+  };
+}
+
+/**
+ * THE DOORSTEP, COMPOSED (POS-1064): the page from `doorstepRows`' rows, with no store and no connection. The bundle's `as_of` is the STORE's head,
+ * whatever the caller passes: the segments came from this index. `nowMs` is injected only so the PSA window is testable against a fixed day; `fresh`
+ * rides through to the window segment (the bundle falsifier dispatches every segment's `serves` pointer through the real apex and deep-equals the
+ * answer); `slim` is the CONNECTOR SKIN's bound (queries.mjs's bounds note above DOORSTEP_INBOX_SLIM).
+ */
+export function doorstepFromRows(rows, handle, opts = {}) {
+  const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false } = opts;
+  const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
+  const { asOf } = rows;
+  const parts = {
+    arrivals: rosterOf(rows.arrivals).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
+    awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset, standing: opts.standing ?? null }),
+    mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
+    stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
+    bulletin: bulletinTeaserOf(rows.bulletin.map(bulletinListing), { limit: DOORSTEP_SIZES.bulletin }),
+    pulse: metricsMailFrom(rows.pulse, { days: DOORSTEP_SIZES.pulseDays }),
+    window: windowOfRow(rows.window, handle, fresh, asOf),
+    psa: psaFoldOf(rows.psa, { now: nowMs }),
+    pendingOutbox: rows.pendingOutbox,
+    counts: rows.counts,
+    town: rows.town,
   };
   return doorstepOf(parts, handle, asOf, opts);
 }
@@ -901,12 +1062,62 @@ async function threadRoot(q, id) {
  * WRITTEN REPLY IS A QUEUED REPLY, POS-375).
  */
 export async function mailAwaiting(q, handle, opts = {}) {
+  const rows = await mailAwaitingRows(q, handle, opts);
+  const out = mailAwaitingFrom(rows, handle, opts);
+  return opts.resends?.size ? withResends(q, out, handle, opts.resends) : out;
+}
+/**
+ * The SQL half of mailAwaiting: the law's row, the standing letters' roots and the ledger's newest day. The standing roots are read when the row exists
+ * (a bent law is learned only when the row is parsed, after the connection is back; its roots are then dropped, as they always were).
+ */
+async function mailAwaitingRows(q, handle, opts = {}) {
   const row = (await q.query("SELECT json FROM town_mail_state WHERE handle = $1", [handle])).rows[0];
+  const standing = row ? await standingRoots(q, opts.standing) : [];
+  return { row, standing, newest: await ledgerNewest(q) };
+}
+function mailAwaitingFrom({ row, standing, newest }, handle, opts = {}) {
   // a bent law (json that does not parse) is no law: null
   let law = null;
   try { law = row ? JSON.parse(row.json) : null; } catch { law = null; }
-  const standing = law ? await standingRoots(q, opts.standing) : [];
-  return mailAwaitingOf(law, await ledgerNewest(q), handle, { ...opts, standing });
+  const { resends: _resends, ...rest } = opts;
+  return mailAwaitingOf(law, newest, handle, { ...rest, standing: law ? standing : [] });
+}
+
+/**
+ * POS-1027: the awaiting view's bounce report says which bounces were RESENT. `resends` is Map<original letter id, { letter_id, seq, written_at }> (letter-resend.mjs §
+ * resendsBy, the sender's own replacements in the town log); a bounce row is matched to its letter by the outbox file name (the town's own bounce join), and
+ * carries `resent_as`. A top-level `resent` lists them all. Nothing is written: the original letter, its row and its ledger line are untouched.
+ */
+async function withResends(q, view, handle, resends) {
+  const ids = [...resends.keys()];
+  const rows = (await q.query("SELECT id, path FROM town_letters WHERE from_h = $1 AND id = ANY($2::text[])", [handle, ids])).rows;
+  const byBase = new Map(rows.map((r) => [String(r.path ?? "").split("/").pop(), r.id]));
+  const info = (id) => ({ bounced: id, ...resends.get(id) });
+  const decorate = (b) => { const id = byBase.get(String(b?.path ?? "").split("/").pop()); return id && resends.has(id) ? { ...b, resent_as: { letter_id: resends.get(id).letter_id, seq: resends.get(id).seq, written_at: resends.get(id).written_at } } : b; };
+  return {
+    ...view,
+    ...(Array.isArray(view?.unplaced_bounces) ? { unplaced_bounces: view.unplaced_bounces.map(decorate) } : {}),
+    resent: ids.filter((id) => rows.some((r) => r.id === id)).map(info),
+  };
+}
+
+/**
+ * POS-1027: one letter's standing as its sender needs it to resend it (letter-resend.mjs): whose it is, whether it was ever delivered, and whether the ledger holds a
+ * BOUNCE line for that sender's file (the same file-name join the town's mail law uses). Null when no such letter. Reads only; nothing is written.
+ */
+export async function letterBounceState(q, id) {
+  const row = (await q.query("SELECT id, from_h, to_h, box, path, delivered_at FROM town_letters WHERE id = $1", [id])).rows[0];
+  if (!row) return null;
+  const base = String(row.path ?? "").split("/").pop();
+  let bounced = false;
+  if (base) {
+    for (const r of (await q.query("SELECT json FROM town_ledger WHERE kind = 'bounce'")).rows) {
+      let l; try { l = JSON.parse(r.json); } catch { continue; }
+      if (l?.from === row.from_h && String(l?.path ?? "").split("/").pop() === base) { bounced = true; break; }
+    }
+  }
+  const delivered = Boolean(row.delivered_at) || row.box !== "outbox";
+  return { id: row.id, from: row.from_h, to: row.to_h, box: row.box, delivered, bounced };
 }
 
 /** The sender's standing letters (hotMailBlock's `standing`), each with the conversation root its thread chain ends at. */
@@ -935,8 +1146,16 @@ async function standingRoots(q, standing) {
   return out;
 }
 
-// sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character
-const like = (col, param) => likeAscii(col, param, "");
+// sqlite's LIKE with no ESCAPE clause: ASCII case folded, no escape character.
+//
+// THE FOLD IS `lower(x COLLATE "C")`, NOT `translate(x, 'A-Z', 'a-z')` (POS-1072). Both fold exactly the ASCII letters A-Z and nothing else: under the
+// explicit C collation `lower` is Postgres's byte-wise ASCII lower-case (every other byte, so every multi-byte character, is left alone), and the two folds
+// agree on every code point from U+0001 to U+10FFFF (checked exhaustively on PG 18, and re-checked by test/pos-1072-search.test.mjs on the suite's own Postgres).
+// They do not cost the same: `translate` on a 53 MB `json` column took 66 s for the fold alone (the LIKE over the raw text, 1.4 s), and search ran it four
+// times per call, 16-23 s each in production, inside pen transactions. `lower(... COLLATE "C")` does the same fold in 0.7 s. Not `ilike`/`lower(x)`: those fold
+// by the database's locale (1,407 more code points on a C.UTF-8 database), which is not sqlite's LIKE. The pattern is cast to text (an untyped parameter
+// cannot carry a COLLATE), and ESCAPE '' keeps the pattern's `\` an ordinary character, as it always was here.
+const like = (col, param) => `lower(${col} COLLATE "C") LIKE lower(${param}::text COLLATE "C") ESCAPE ''`;
 
 /** Search over letters and residents (page shape: queries.mjs § searchPage). */
 export async function search(q, term, { limit, offset } = {}) {
@@ -1088,9 +1307,12 @@ export async function discover(q, args = {}) {
 
 /** The mail pulse from the ledger, letters and threads (queries.mjs § metricsMailOf). */
 export async function metricsMail(q, opts = {}) {
+  return metricsMailFrom(await metricsMailRows(q), opts);
+}
+/** The SQL half of metricsMail (the pulse's rows, unfolded: POS-1064). */
+async function metricsMailRows(q) {
   const newest = await ledgerNewest(q);
-  const dayCounts = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind")).rows
-    .map((r) => ({ date: r.date, kind: r.kind, n: Number(r.n) }));
+  const dayCountRows = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind")).rows;
   const totals = {
     deliveries: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
     bounces: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'bounce'"),
@@ -1099,6 +1321,10 @@ export async function metricsMail(q, opts = {}) {
     residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
   };
   const threadJsons = newest ? (await q.query("SELECT json FROM town_threads")).rows.map((t) => t.json) : [];
+  return { newest, dayCountRows, totals, threadJsons };
+}
+function metricsMailFrom({ newest, dayCountRows, totals, threadJsons }, opts) {
+  const dayCounts = dayCountRows.map((r) => ({ date: r.date, kind: r.kind, n: Number(r.n) }));
   return metricsMailOf({ newest, dayCounts, totals, threadJsons: () => threadJsons }, opts);
 }
 
@@ -1166,10 +1392,32 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
   // it "the store cannot be reached" would name the wrong thing.
   let own = null, r;
   try { r = await readTownIndex(async (c) => { try { return await fn(c); } catch (e) { own = e; throw e; } }, { env, statementTimeoutMs }); }
-  catch (e) { if (own && e === own) throw e; return { refused: UNREACHABLE }; }
+  catch (e) {
+    if (own && e === own) throw e;
+    // The refusal's words stay fixed; the error that caused it rides beside it, non-enumerable (a door that wants it for its log
+    // reads `.cause`; every comparison of the refusal sees the same two fields as before). POS-965.
+    return Object.defineProperty({ refused: UNREACHABLE }, "cause", { value: e, enumerable: false });
+  }
   // THE REST OF THE ANSWER, AFTER THE CONNECTION IS BACK (POS-370). `then` is
   // whatever the read needs that is not the index (the quest board's quest tools
   // and its world read): it runs here, holding nothing, and its errors are the
   // reader's own, never the store's absence.
   return then ? { ...r, out: await then(r.out) } : r;
+}
+
+/**
+ * The office log's one line for a quest board that answered 503 (POS-965). Until this the route answered "quest board
+ * unavailable" and said nothing anywhere, so only nginx saw it and nothing said WHY. `phase` is where it failed:
+ *   "store"   the index read could not get or keep a connection (the pool, the store: the 503 "town index cannot be reached");
+ *   "read"    a query of the board's own transaction failed (a dead connection, a bent table);
+ *   "compose" the board's composition after the connection was back (the quest tools, the household registry, the world read).
+ * The line carries the handle (a public path segment), the phase, the error's name, code and message (cut), the thread that ran the read and
+ * that thread's own event-loop lag for its last minute (src/loop-lag.mjs). No row, no key, no human's details.
+ */
+export function boardFaultLine({ handle, phase, error, thread = null, lag = null }) {
+  const name = String(error?.name ?? "Error");
+  const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
+  const why = errorSaid(error).replace(/\s+/g, " ").slice(0, 200); // the log's own reader of an error (fault-words.mjs), never an answer's words
+  const where = thread == null ? "" : `; thread t${thread}, ${lag ? `its event loop's last minute: max ${lag.max_ms} ms late, ${lag.blocked_ms} ms blocked` : "no event-loop minute recorded yet"}`;
+  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why}${where}`;
 }

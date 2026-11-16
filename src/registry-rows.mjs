@@ -13,11 +13,15 @@
 // `renderRegistry` is the PRIVATE unfold: every column the store holds,
 // `human` included. It is the round trip below, and it stays exact.
 // `renderPublicRegistry` is what the drain PRINTS into the town repo, which
-// is public: the same bytes with each house's private `human` KEY left out
-// (src/registry-public.mjs; Darko 2026-10-05, Wright 2026-10-12). The store,
-// the fold and the private render keep the name; only the printout drops it.
-// So the town's files equal the PUBLIC render, and the private law below is
-// proved against the fold, not against today's printout.
+// is public: the registry and the pins cut to the keys named public at every
+// level (src/registry-public.mjs; Darko 2026-10-05 and Wright 2026-10-12 for
+// `human`, POS-726's named list for the rest). On well-formed rows that is the
+// private bytes with each house's `human` key left out, and any house picture
+// whose resident no longer lives there (which `homePictureIn` below already
+// reads as none). The store, the fold and
+// the private render keep everything; only the printout is cut. So the town's
+// files equal the PUBLIC render, and the private law below is proved against
+// the fold, not against today's printout.
 //
 // ── THE LAW THIS FILE EXISTS TO SATISFY ─────────────────────────────────────
 //
@@ -79,18 +83,21 @@
 // crossing); POS-158 removed it, so there is no second spelling to keep in step.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
-import { publicRegistry } from "./registry-public.mjs";
+import { publicRegistry, publicPins } from "./registry-public.mjs";
+import { STATE_KEYS as LIKENESS_STATE_KEYS } from "./household-likeness-state.mjs";
 
 // The two key templates, stated once. Every renderer below walks these in
 // order and skips what the row does not carry; every reader above checks its
 // input against them. They are the file's grammar, and they are the only place
-// that grammar is written down.
+// that grammar is written down. Grammar is not publication: a key added here
+// reaches the PRIVATE render, and the public printout and GET /households
+// carry it only once src/registry-public.mjs names it (POS-726).
 //
-// THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
+// THE TAIL OF THIS TEMPLATE IS SIX COLUMNS, and they are appended in the order
 // their migrations landed so that no standing key ever moves: `formerly`
 // (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
-// migration 021) after that, then `home_images`, `likeness` and `invited_by`
-// (each described beside NESTED_KEYS below). The first two usually render
+// migration 021) after that, then `home_images`, `likeness`, `invited_by` and
+// `likeness_state` (each described beside NESTED_KEYS below). The first two usually render
 // nothing: 0/118 live rows carried either — measured on the town's own files,
 // twice, a day apart, when they landed.
 //
@@ -103,8 +110,12 @@ import { publicRegistry } from "./registry-public.mjs";
 // exactly as a NULL `name` does — see the two narrow predicates below.
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by",
+  "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth",
 ]);
+// `likeness_official` (POS-726 slice B) is the one key a PRINTED file may carry that is no column of its own: the public official-use
+// projection of `likeness_state.official` (src/registry-public.mjs § publicHouse prints it, and only while the answer is yes). It is folded
+// back into `likeness_state` when a file is read, so the drain's law — renderPublicRegistry(rowsFromRegistry(the files)) === the files — holds.
+const FILE_ONLY_KEYS = Object.freeze(["likeness_official"]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
 ]);
@@ -138,8 +149,8 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. Four columns carry them (NESTED_KEYS below):
-// `accounts`, `home_images`, `likeness` and `invited_by`. `residents` and
+// objects are ordered by. Five columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness`, `invited_by` and `likeness_state`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
 // column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
@@ -160,9 +171,17 @@ export const LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "word
 // `invited_by` (migration 085, POS-576) is the fourth: one object with a FIXED
 // shape (the declaration builds it, src/arrival-invite.mjs), the inviting house
 // first. NULL when nobody invited, and a NULL renders as no key at all, so
-// nothing moves on the first crossing after the column lands.
-export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
-const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS });
+// nothing moves on the first crossing after the column lands. A house that names
+// its inviter after joining (POS-947) also carries `backfill: true`, its `at` then
+// being when it named them; a house invited at joining carries no such key, so its
+// printed bytes are unchanged.
+export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
+//
+// `likeness_state` (migration 092, POS-726 slice B) is the fifth: the household's likeness request and its READ-ONLY official pointer,
+// beside its answer (src/household-likeness-state.mjs). One object with a FIXED top level (request, official, history), NULL
+// until a household asks, and a NULL renders as no key at all, so nothing moves on the first crossing after the column lands. It is the
+// PRIVATE column: the public print carries only its official-use projection, `likeness_official` (src/registry-public.mjs).
+const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS, likeness_state: LIKENESS_STATE_KEYS });
 
 // A pin's column names are the file's key names except one: `id` is a reserved
 // enough word in SQL company that the column is `gh_id`, and this is the single
@@ -224,9 +243,9 @@ const rendersAsAbsent = (key, v) =>
  * is running the seed and can add the column. Here the value came out of a
  * `jsonb` column that accepts any shape, on a drain that may be running at
  * 05:45 at a crossing — so an unrecognised account key renders in a stable
- * place and shows up as a diff a person reads, instead of vanishing from the
- * town's file. It will be in the wrong PLACE, and `--check` will say so; it
- * will not be missing.
+ * place in the PRIVATE render rather than vanishing from it. The town's file is
+ * the PUBLIC render, which carries only the nested keys src/registry-public.mjs
+ * names (POS-726), so there an unnamed key is left out on purpose.
  */
 const orderNested = (v, template) => {
   if (Array.isArray(v)) return v.map((x) => orderNested(x, template));
@@ -266,7 +285,7 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
   const households = [];
   let ord = 0;
   for (const [slug, rec] of Object.entries(houses)) {
-    const unknown = Object.keys(rec ?? {}).filter((k) => !HOUSEHOLD_KEYS.includes(k));
+    const unknown = Object.keys(rec ?? {}).filter((k) => !HOUSEHOLD_KEYS.includes(k) && !FILE_ONLY_KEYS.includes(k));
     if (unknown.length)
       throw new Error(`household "${slug}" carries ${unknown.map((k) => `\`${k}\``).join(", ")}, which registry-rows.mjs has no column for — add the column AND its place in HOUSEHOLD_KEYS in the same commit, or the drain will render a file that drops it`);
     households.push({
@@ -293,6 +312,11 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       likeness: rec?.likeness ?? null,
       // And `invited_by` (085): no key folds to NULL, "nobody invited".
       invited_by: rec?.invited_by ?? null,
+      // And `likeness_state` (092): no key folds to NULL, "nothing asked". A printed file carries only the public pointer
+      // (`likeness_official`); read back, it is the state's `official` and nothing else, the history and the request being private.
+      likeness_state: rec?.likeness_state ?? (isAbsent(rec?.likeness_official) ? null : { official: rec.likeness_official }),
+      // And `hearth` (093, POS-962): no key folds to NULL, "the household chose nothing": the default Hearth.
+      hearth: rec?.hearth ?? null,
     });
   }
 
@@ -399,24 +423,25 @@ export function pinsFromRows(rows) {
  * the round-trip falsifier proves against the real files.
  */
 export function renderRegistry(rows) {
-  return renderOf(registryFromRows(rows), rows);
+  return renderOf(registryFromRows(rows), pinsFromRows(rows));
 }
 
 /**
- * The rows -> the two files as the town repo PRINTS them (POS-394): the
- * private render with each house's `human` key left out, every other byte the
- * same (pins exactly). What `registry-drain.mjs` checks against and writes.
+ * The rows -> the two files as the town repo PRINTS them (POS-394, POS-726):
+ * the registry and the pins each cut to the keys named public
+ * (src/registry-public.mjs), through the same two serializers. What
+ * `registry-drain.mjs` checks against and writes.
  */
 export function renderPublicRegistry(rows) {
-  return renderOf(publicRegistry(registryFromRows(rows)), rows);
+  return renderOf(publicRegistry(registryFromRows(rows)), publicPins(pinsFromRows(rows)));
 }
 
 // THE ONE PLACE THE TWO SERIALIZERS ARE CALLED (test/registry-no-file-writer
 // holds it): both renders go through here, so the bytes are made in one spot.
-function renderOf(registry, rows) {
+function renderOf(registry, pins) {
   return {
     households: serializeRegistry(registry),
-    pins: serializePins(pinsFromRows(rows)),
+    pins: serializePins(pins),
   };
 }
 

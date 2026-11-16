@@ -55,7 +55,12 @@ export const STATUSES = Object.freeze(["ok", "refused", "skip", "notrun"]);
 export const SOURCES = Object.freeze(["scheduled", "by-hand"]);
 export const SIGNALS = Object.freeze(["TERM", "INT", "HUP"]);
 // A fixed vocabulary: a receipt never carries tool output, keys or bodies.
-export const REASON_RE = /^(?:exit:\d{1,3}|ledger-red|prep-failed|mint-failed|verify-red|commit-failed|push-failed|sync-failed|rolled-back|rollback-failed|not-needed|no-change|switch-off|unchecked|write-failed|prereq:[a-z_]{1,16}|signal:(?:TERM|INT|HUP))$/;
+// POS-1030, the mint commit whose push answered no (office-keep.sh § the tick's
+// own unlanded commit): landed-unacked (the town's main holds it after all),
+// unmade (it did not land and was unmade to its parent), unconfirmed (that
+// could not be read, so it is kept), moved (another writer's commit sits on it,
+// so it is kept), gone (a hand reset it away). They ride push, rollback and pull.
+export const REASON_RE = /^(?:exit:\d{1,3}|ledger-red|prep-failed|mint-failed|verify-red|commit-failed|push-failed|sync-failed|rolled-back|rollback-failed|not-needed|no-change|switch-off|unchecked|write-failed|landed-unacked|unmade|unconfirmed|moved|gone|prereq:[a-z_]{1,16}|signal:(?:TERM|INT|HUP))$/;
 const RUN_RE = /^[A-Za-z0-9._:-]{1,80}$/;
 
 // RETENTION: the last 96 scheduled receipts (a day of quarter-hour ticks; a

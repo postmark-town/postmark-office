@@ -111,6 +111,111 @@ export function firstClaimInstant(date, submittedAt) {
 /** Does a record carry a `date`? PURE. */
 export const isDated = (date) => date != null && date !== "";
 
+// ── A MARK'S FOOTPRINTS (POS-571) ────────────────────────────────────────────
+//
+// Seniority is per cell: "whoever first covered a cell is that cell's
+// incumbent", and "an expansion is a newcomer on its new cells" (world LOGOS
+// conflict-matrix § Roles from seniority, RULED 2026-10-04). The world engine
+// reads a record's `footprints` for that (world tools/claim-instant.mjs §
+// footprintsOf; WORLD/marks/SCHEMA.md § First-laid facts): every footprint the
+// mark has stood on, each with the instant it took effect, in WORLD numbers.
+//
+// The store keeps no history on the `marks` row; every version is its own
+// LOCKED claim, and every amend points at the mark's id (`supersedes`). So the
+// chain is the origin claim (`claims.id = marks.id`) and the locked claims that
+// supersede it. Only locked claims: a draft, a pending or a refused claim never
+// stood, so it never covered a cell. The origin is dated by the one first-claim
+// rule (`firstClaimInstant`, so it agrees with `claimed_at`); each later
+// footprint by its claim's `decided_at`, when it took effect, never when it was
+// put forward. A claim with no geometry (a hand-off into hands) covers nothing,
+// and one that repeats the footprint before it adds nothing.
+//
+// A history is printed only when it says something `claimed_at` cannot (the
+// geometry changed at least once) and only when it is whole: the origin is in the
+// chain, every claim is dated, and the last footprint IS the current shape,
+// compared in world numbers (the row's `geometry`, never a file's own offset).
+// Anything less is no history, and the world dates every cell by `claimed_at`,
+// as before. Never a guessed one.
+
+const CLAIM_CHAIN_SQL = "(SELECT json_agg(json_build_object('id', c.id, 'geometry', c.geometry, 'decided_at', c.decided_at) "
+  + "ORDER BY c.decided_at, c.id) FROM claims c WHERE c.slug = marks.slug AND c.status = 'locked' "
+  + "AND (c.id = marks.id OR c.supersedes = marks.id)) AS claim_chain";
+
+/** Each slug's mark id and its chain (`claim_chain`), the store fold's read of the same chain the write-down renders. */
+export const FOOTPRINT_CHAIN_SQL = `SELECT slug, id, ${CLAIM_CHAIN_SQL} FROM marks WHERE slug = ANY($1)`;
+
+const shapeOf = (g) => {
+  if (!g?.at || !g?.extent) return null;
+  const at = { x: Number(g.at.x), y: Number(g.at.y) }, extent = { w: Number(g.extent.w), h: Number(g.extent.h) };
+  if (![at.x, at.y, extent.w, extent.h].every(Number.isFinite)) return null;
+  return { at, extent, ...(Array.isArray(g.points) ? { points: g.points.map((p) => (Array.isArray(p) ? [p[0], p[1]] : [p.x, p.y])) } : {}) };
+};
+const sameShape = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const instantOf = (v) => {
+  if (v == null || v === "") return null;
+  const d = v instanceof Date ? v : new Date(String(v));
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+};
+
+/**
+ * The mark's footprints, oldest first, as the world reads them
+ * (`[{ since, at, extent, points? }]`), or null when there is nothing whole to
+ * say (above). `chain` is the locked claims of the mark (`{ id, geometry,
+ * decided_at }`, as CLAIM_CHAIN_SQL reads them); `originId` the mark's id;
+ * `originSince` its first-claim instant; `current` its shape now, in world
+ * numbers (`{ at, extent, points? }`). PURE.
+ */
+export function footprintsFromChain({ chain, originId, originSince, current }) {
+  const out = chainFootprints({ chain, originId, originSince });
+  const now = shapeOf(current);
+  if (!out || out.length < 2 || !now) return null;
+  return sameShape(now, shapeOfFootprint(out[out.length - 1])) ? out : null;
+}
+
+/**
+ * THE SAME HISTORY, AS A READER OF A SERVED MOMENT NEEDS IT (POS-571 P3, round 3
+ * of the review of office#1019; Bevel 2026-11-13 17:35Z). A reader's mark is the
+ * shape some settlement served (the door's canon, the label's served World, the
+ * store's fold of a sealed snapshot), and the claims can run ahead of it: an amend
+ * locked after that crossing ends the chain at a newer shape, which the
+ * write-down's rule above reads as "not whole" and drops, though every footprint
+ * up to the served one stood and crossed. So a reader takes the chain's proven
+ * prefix, from the origin through the last footprint that IS the served shape.
+ * Footprints after it are later than any the served shape needed, so no cell it
+ * covers is dated otherwise; one that never reaches the served shape is no
+ * history at all, never a guessed one. Two footprints at least, as above. PURE.
+ */
+export function footprintsThroughShape({ chain, originId, originSince, current }) {
+  const out = chainFootprints({ chain, originId, originSince });
+  const now = shapeOf(current);
+  if (!out || !now) return null;
+  let through = -1;
+  for (let i = out.length - 1; i >= 0; i--) if (sameShape(now, shapeOfFootprint(out[i]))) { through = i; break; }
+  return through >= 1 ? out.slice(0, through + 1) : null;
+}
+
+const shapeOfFootprint = (f) => ({ at: f.at, extent: f.extent, ...(f.points ? { points: f.points } : {}) });
+
+/** The whole chain as footprints, oldest first, or null when it is not whole (origin present, every claim dated). PURE. */
+function chainFootprints({ chain, originId, originSince }) {
+  if (!Array.isArray(chain) || !chain.length || originId == null || originSince == null || originSince === "") return null;
+  if (!Number.isFinite(Date.parse(String(originSince)))) return null;
+  const origin = chain.find((c) => String(c?.id) === String(originId));
+  if (!origin) return null;
+  const later = chain.filter((c) => c !== origin);
+  if (later.some((c) => instantOf(c?.decided_at) == null)) return null;
+  later.sort((a, b) => Date.parse(instantOf(a.decided_at)) - Date.parse(instantOf(b.decided_at)));
+  const out = [];
+  for (const [since, g] of [[String(originSince), origin.geometry], ...later.map((c) => [instantOf(c.decided_at), c.geometry])]) {
+    const shape = shapeOf(g);
+    if (!shape) continue;
+    const last = out[out.length - 1];
+    if (last && sameShape(shape, shapeOfFootprint(last))) continue;
+    out.push({ since, ...shape });
+  }
+  return out;
+}
+
 export function recordFromRow(row) {
   if (!row) throw new Error("recordFromRow: no row");
   const d = row.data ?? {};
@@ -138,8 +243,17 @@ export function recordFromRow(row) {
   // (world-snapshot.mjs § firstClaimedBySlug) while the tree's reads it undated,
   // which sorts first and is never the one over a limit. World main held no
   // undated parcel on 2026-10-09 (117 of 117 carry a date).
+  //
+  // EVERY MARK CARRIES IT NOW, not only a parcel (POS-571): a mark's age is its
+  // first-laid date wherever the law asks who came first (Darko, 2026-10-07: "an
+  // amend does not make an elder mark young"), and an amended elder that is not a
+  // parcel lost its age here. Same rule, same bytes for a mark never amended. And
+  // its footprints ride beside it when its geometry has changed (§ A MARK'S
+  // FOOTPRINTS), read off the row's world `geometry`, never the file's own offset.
   const first = firstClaimInstant(row.first_claimed, row.first_claim_submitted_at);
-  if (row.kind === "parcel" && first && isDated(d.date) && first !== String(d.date)) rec.claimed_at = first;
+  if (first && isDated(d.date) && first !== String(d.date)) rec.claimed_at = first;
+  const footprints = footprintsFromChain({ chain: row.claim_chain, originId: row.id, originSince: first, current: g });
+  if (footprints) rec.footprints = footprints;
   if (g && g.at && g.extent) {
     const at = d._fileAt ?? g.at;
     rec.at = { x: at.x, y: at.y };
@@ -200,7 +314,8 @@ export function renderedMark(row) {
 
 const MARK_COLUMNS = "id, slug, kind, owner, household, body, geometry, status, locked_window, retired_window, data, "
   + "(SELECT c.data->>'date' FROM claims c WHERE c.id = marks.id) AS first_claimed, "
-  + "(SELECT c.submitted_at FROM claims c WHERE c.id = marks.id) AS first_claim_submitted_at";
+  + "(SELECT c.submitted_at FROM claims c WHERE c.id = marks.id) AS first_claim_submitted_at, "
+  + CLAIM_CHAIN_SQL;
 
 /**
  * The `mark.md` bytes for one slug, read from the store.

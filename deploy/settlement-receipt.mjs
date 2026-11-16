@@ -35,7 +35,8 @@
 // shell function where every value may legitimately be empty and quoting empty
 // positional arguments in POSIX sh is how you get an off-by-one receipt.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 // The one writer of what a crossing's `surveyed` counts are counts of. The
 // quiet-pass echo in settlement-auto.sh takes its wording from the same file.
@@ -126,6 +127,75 @@ const STATE_LOG_MODE = env("SETTLEMENT_STATE_LOG_MODE") || null;
 // Read once, from both places the fold's sentence reaches this side — the
 // quarantined rows' `detail` and a fold refusal's `cause`. See `refused` below.
 const refused = refusedMarks(sweep, refusal);
+
+// ── WHY A MARK WENT: THE RECORDED STAKE WITHDRAWAL (POS-937/a) ───────────────
+//
+// S156 was held forty minutes because the receipt hid the one fact the keeper
+// needed about three unpublished candles: a stake of theirs had been withdrawn,
+// found by hand at ledger lines 31700–31702. Wright, 2026-11-07 15:53:23Z: for
+// each mark the receipt reports as returned or unpublished, read the town's
+// WHITE_PAGES/stamp-ledger.md for that mark's NEWEST `for: unstake` line and name
+// its date, its line number and who withdrew; with none, say "no stake withdrawal
+// on the ledger". No judgment: this reports what the ledger records, and nothing
+// is inferred (not the owner for the withdrawer, not a reason from a missing line).
+//
+// WHICH LEDGER. Not `$TOWN`'s working tree: settlement-auto.sh documents that this
+// long-lived clone is only fetched, so its files are whatever some other hand last
+// left (measured 2026-09-09, `5fa468e9` against an `origin/main` of `4c234d47`).
+// The crossing's own checkout of its `$TOWN_SHA` is `$WORK/town`; the caller hands
+// it here as SETTLEMENT_TOWN_SNAPSHOT. That checkout is private to the crossing, so
+// there is no lock to take. It is read ONCE (about 6.9 MB), for every mark.
+//
+// AN UNREAD LEDGER IS NOT AN EMPTY ONE. No snapshot, an unreadable file or an
+// oversized one says so on each mark (`found: null`); only a ledger that was read
+// and holds no matching line says "no stake withdrawal on the ledger".
+const WITHDRAWAL_LEDGER = "WHITE_PAGES/stamp-ledger.md";
+const LEDGER_MAX_BYTES = 64 * 1024 * 1024;
+// stamp-mint.mjs § WORLD_UNSTAKE_RE, plus the line's own trailing signature
+const UNSTAKE_LINE = /^- (\d{4}-\d{2}-\d{2}) · stake:world-mark\/([a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*) → (\S+) · [1-9]\d* · for: unstake(?: · sig: \S+)?$/;
+const markIdOf = (x) => (typeof x === "string" ? x : x?.id ?? x?.slug ?? null);
+
+const stakeWithdrawals = (() => {
+  const listed = new Map(); // mark → the receipt lists it as … (unpublished, retired, returned)
+  const note = (mark, as) => { if (mark) listed.set(mark, [...(listed.get(mark) ?? []).filter((a) => a !== as), as]); };
+  for (const u of sweep?.unpublished ?? []) note(markIdOf(u), "unpublished");
+  for (const r of retire?.retired ?? []) note(markIdOf(r), "retired");
+  for (const r of retire?.drafts?.returned ?? []) note(markIdOf(r), "returned");
+  if (!listed.size) return [];
+
+  const ledger = (() => {
+    const dir = env("SETTLEMENT_TOWN_SNAPSHOT");
+    if (!dir) return { why: "this crossing has no town snapshot to read the ledger from" };
+    const path = join(dir, WITHDRAWAL_LEDGER);
+    let text;
+    try {
+      const size = statSync(path).size;
+      if (size > LEDGER_MAX_BYTES) return { why: `${WITHDRAWAL_LEDGER} is ${size} bytes, over the ${LEDGER_MAX_BYTES}-byte bound` };
+      text = readFileSync(path, "utf8");
+    } catch (e) { return { why: `${WITHDRAWAL_LEDGER} could not be read in the town snapshot (${e?.code ?? "error"})` }; }
+    // append-only: the newest line for a mark is its last, and the line number is the file's own physical 1-based line
+    const found = new Map();
+    let n = 0;
+    for (const line of text.split("\n")) {
+      n += 1;
+      const m = UNSTAKE_LINE.exec(line.endsWith("\r") ? line.slice(0, -1) : line);
+      if (m && listed.has(m[2])) found.set(m[2], { date: m[1], line: n, by: m[3] });
+    }
+    return { found };
+  })();
+
+  return [...listed].map(([mark, as]) => {
+    const hit = ledger.found?.get(mark) ?? null;
+    return {
+      mark, listed_as: as,
+      found: ledger.found ? hit !== null : null,
+      date: hit?.date ?? null, line: hit?.line ?? null, by: hit?.by ?? null,
+      said: !ledger.found ? `could not read the stake ledger: ${ledger.why}`
+        : hit ? `stake withdrawn ${hit.date} by ${hit.by} (stamp-ledger.md line ${hit.line})`
+        : "no stake withdrawal on the ledger",
+    };
+  });
+})();
 
 const channels = {};
 let unnamed = null;
@@ -531,6 +601,11 @@ const receipt = {
             } } : {}),
           })
     : { ran: false, reason: "the retire step did not run for this crossing" },
+
+  // POS-937/a: why each unpublished or returned mark went, from the ledger's own recorded unstake (above). Present only when the
+  // receipt names such a mark, as `refused` is: an ordinary night with none returns or unpublishes nothing, and its receipt (and
+  // every consumer's key list, settlement-receipt-refused.test.mjs) stays exactly as it was.
+  ...(stakeWithdrawals.length ? { stake_withdrawals: stakeWithdrawals } : {}),
 
   channels: sweep ? channels : null,
   ...(unnamed ? { channels_unnamed: unnamed } : {}),

@@ -320,6 +320,12 @@ function normalize(commands, root) {
     .replace(/[A-Za-z]:[\\/][^\s]*[Tt]emp[\\/][^\s]*/g, "<tmp>")
     .replace(/\b[0-9a-f]{40}\b/g, "<sha>")
     .replace(/\b[0-9a-f]{7,12}\b/g, "<sha>")
+    // The witness record's run-specific arguments (POS-907): the shell's own pid
+    // and the crossing's event time differ on every run. Once the witness reached
+    // the open train, both runs issue these lines, and an unmasked pid or second
+    // made the train's read as "missing" from the rollback (the 11-09 train red).
+    .replace(/--pid \d+/g, "--pid <pid>")
+    .replace(/--event \S+/g, "--event <event>")
     // Path separators last, and on both sequences equally: on Windows the
     // wrappers log `<root>\sweep` where the script's own literals read
     // `<root>/sweep`, so a pattern written either way matches only on one
@@ -415,6 +421,15 @@ test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost s
   const minus = (a, b) => { const c = [...b]; return a.filter((x) => { const i = c.indexOf(x); if (i === -1) return true; c.splice(i, 1); return false; }); };
   let missing = minus(trainCmds, branchCmds);
   let added = minus(branchCmds, trainCmds);
+  // THE OPEN TRAIN AHEAD OF MAIN (2026-11-09): train/2026-w47 carries POS-907's witness record (#950), which main
+  // gets only when that train ships. Until then a MAIN checkout runs the crossing without it, and that is a
+  // feature not yet shipped, not a rollback dropping behaviour. Only these two named lines are let through;
+  // when w47 ships, main carries them and the train's own copy of this test replaces this block.
+  const TRAIN_AHEAD = [
+    /^node witness-settlement\.mjs --open --attempt \S* --event \S+ --town town --pid \S+$/,
+    /^node witness-settlement\.mjs --receipt settlement-auto\.json --attempt \S* --event \S+ --town town --sweep sweep --lock town\.lock$/,
+  ];
+  missing = missing.filter((c) => !TRAIN_AHEAD.some((re) => re.test(c)));
   for (const [was, now] of SUBSTITUTIONS) {
     const iWas = missing.findIndex((c) => was.test(c));
     const iNow = added.findIndex((c) => now.test(c));
@@ -432,11 +447,22 @@ test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost s
     /^node crossing-receipt\.mjs --receipt <root>\/harbor\/settlement-auto\.json --attempt .*$/,
   ];
 
-  const explained = [...GHOST_SWEEP, ...REGISTRY_REFRESH, ...CROSSING_RECEIPT];
+  // POS-907 (2026-11-06): every decided crossing owes its record to the town's
+  // witness chain, right after the receipt's store record (record_receipt).
+  // Bookkeeping beside the crossing that never fails one, declared here by name.
+  // The attempt is opened before it acts (Rivet's FIX, 2026-11-06), so a run that
+  // dies before its decision is still owed.
+  const WITNESS_RECORD = [
+    /^node witness-settlement\.mjs --open --attempt \S* --event \S+ --town town --pid \S+$/,
+    /^node witness-settlement\.mjs --receipt settlement-auto\.json --attempt \S* --event \S+ --town town --sweep sweep --lock town\.lock$/,
+  ];
+
+  const explained = [...GHOST_SWEEP, ...REGISTRY_REFRESH, ...CROSSING_RECEIPT, ...WITNESS_RECORD];
   const unexplained = added.filter((c) => !explained.some((re) => re.test(c)));
   assert.deepEqual(unexplained, [],
     "every command the rollback adds must belong to the ghost sweep (repair 1), the registry refresh "
-    + `(2026-09-09) or the crossing receipt's record (POS-352). An addition this test cannot name is a change to the crossing nobody declared: ${JSON.stringify(unexplained)}`);
+    + "(2026-09-09), the crossing receipt's record (POS-352) or the witness record (POS-907). "
+    + `An addition this test cannot name is a change to the crossing nobody declared: ${JSON.stringify(unexplained)}`);
   // Presence is asserted on the crossing itself, never inferred from `added`.
   // Once a repair reaches the open train it correctly vanishes from the delta, but
   // the git-source path must still run it and the store-source path must not.

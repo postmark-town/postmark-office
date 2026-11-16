@@ -228,8 +228,8 @@ test("consume { kind } draws pot luck over the counted and the named alike: with
 // ── THE RECORD THE READERS SHARE ────────────────────────────────────────────
 
 test("the store's reader: a make is a hold row (held), a consume ends it (detach); the frozen faces are unchanged", () => {
-  // WLD-138 B (Wright 2026-11-04T16:00:21Z): `put-back`, the one restoration face, is the last one in
-  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume", "set-down", "put-back"]);
+  // WLD-138 B (Wright 2026-11-04T16:00:21Z): `put-back`, the one restoration face; POS-992 (Wright 2026-11-11 14:47Z): `withdraw`, its maker's end of a thing made in hand
+  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume", "set-down", "put-back", "withdraw"]);
   const at = "2026-10-23T05:00:00.000Z";
   const m = attachmentRowOf({ id: 7, at, actor: LB, action: "make", payload: { thing: `${LB}/t`, holder: `${LB}/bag`, policy: "cascade", made: { id: `${LB}/t` } } });
   assert.deepEqual([m.era, m.row.entity, m.row.target, m.row.policy], ["live", `${LB}/bag`, `${LB}/t`, "cascade"]);
@@ -323,7 +323,9 @@ test("part 2 · the made record lets a set-down thing go: from its set-down act 
   ];
   assert.deepEqual([...foldMade(rows).keys()], [`${LB}/b`]);
   assert.deepEqual([...foldMade(rows.slice(2), foldMade(rows.slice(0, 2))).keys()], [`${LB}/b`], "a set-down in the window lets go of a make in the base");
-  assert.deepEqual(ATTACHMENT_ACTIONS.slice(-2), [SET_DOWN_FACE, "put-back"], "the set-down, and its one restoration (WLD-138 B)");
+  assert.deepEqual(ATTACHMENT_ACTIONS.slice(-3), [SET_DOWN_FACE, "put-back", "withdraw"], "the set-down, its one restoration (WLD-138 B), and its maker's withdrawal (POS-992)");
+  // a withdrawal, unlike a set-down, does not let the name go: the make stays in the made record for good (POS-992)
+  assert.deepEqual([...foldMade([...rows.slice(1, 2), { seq: 4, action: "withdraw", object: `${LB}/b`, payload: { thing: `${LB}/b`, policy: "detach" } }]).keys()], [`${LB}/b`]);
   const at = "2026-10-23T06:00:00.000Z";
   const row = attachmentRowOf({ id: 9, at, actor: LB, action: SET_DOWN_FACE, payload: { thing: `${LB}/a`, holder: null, policy: "detach" } });
   assert.deepEqual([row.row.entity, row.row.policy], [LB, "detach"], "the holding ends, with no place on the hold row");

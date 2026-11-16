@@ -27,6 +27,17 @@ const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const RESIDENT_ROW_FIELDS = ["progress", "complete", "counted", "household"];
 
+/**
+ * A registry row whose count the STORE'S progress row cannot know, so the board keeps it UNCOUNTED (progress null, never a zero it cannot know). Two shapes, both named:
+ *   · an uncounted milestone (`milestone` + `needs-review`): the daily fold has no way to count it;
+ *   · THE MONTHLY ROW, Bring a neighbour (`monthly` + `automatic`, POS-816/g; the pinned town added it after the first record): the town counts it only when the progress entry
+ *     it folded carries this town month's `invite` field (tools/quest-progress.mjs § the monthly row), and the store's progress row (town_quest_progress: send, receive,
+ *     sent_to, heard_from, house_*) holds no such field, so the store answers it uncounted. Named by id, not by shape: another monthly row is a new fact and throws.
+ */
+const isUncountedByStore = (row) =>
+  (row.cadence === "milestone" && row.validation === "needs-review")
+  || (row.id === "bring-a-neighbour" && row.cadence === "monthly" && row.validation === "automatic");
+
 /** The registry fields a board row repeats, in the board's own key order, then `door` and (when the registry row has one) `awaits`. */
 function registryFieldsOf(row) {
   const out = { id: row.id, title: row.title, cadence: row.cadence, validation: row.validation, target: row.target ?? null, reward: row.reward, source: row.source, door: null };
@@ -41,7 +52,7 @@ function registryFieldsOf(row) {
  * answer; every other field is spelled out.
  */
 function buildBoardRow(row, legacyRows, { resident }) {
-  if (!(row.cadence === "milestone" && row.validation === "needs-review"))
+  if (!isUncountedByStore(row))
     throw new Error(`pos896-fixtures: no independent expectation for registry quest "${row.id}" (cadence ${row.cadence}, validation ${row.validation}); extend the builder with its shape`);
   const out = { ...registryFieldsOf(row) };
   // The TOWN's board (no resident named) carries neither the four resident fields nor `measured`: the registry fields, `door`, and
@@ -57,7 +68,7 @@ function buildBoardRow(row, legacyRows, { resident }) {
 
 /** `{ id, title, done, of, left, reward }` for an uncounted milestone, as the estate's quest headroom lists it. */
 function buildHeadroomRow(row) {
-  if (!(row.cadence === "milestone" && row.validation === "needs-review"))
+  if (!isUncountedByStore(row))
     throw new Error(`pos896-fixtures: no independent headroom expectation for registry quest "${row.id}"`);
   return { id: row.id, title: row.title, done: null, of: row.target ?? null, left: null, reward: row.reward };
 }
@@ -158,6 +169,27 @@ export function overlayCard(expectedText, { handle, fields }) {
       out.address = { ...out.address, data: { ...out.address.data } };
       for (const [k, v] of Object.entries(fields)) { assert.ok(k in out.address.data, `pos896-fixtures: the record's card for ${handle} has no "${k}"`); out.address.data[k] = v; }
     }
+    return out;
+  };
+  return JSON.stringify(walk(root));
+}
+
+/**
+ * The card's `homeImages`, spelled from the PRISTINE town's own files (never from what the store or `read_resident` answers): the image files directly under
+ * WHITE_PAGES/<handle>/HOME/ (png, jpg, jpeg, webp, gif, any case; a subfolder's files are not the card's), as repo-relative paths, sorted bytewise. A town past the
+ * recorded one can hold more of them (wright-at-la-cave.jpg arrived after the S158 seed), and the recorded answer cannot know it. `names` is the directory's listing.
+ */
+export const homeImagesOf = (handle, names) => names.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).map((f) => `WHITE_PAGES/${handle}/HOME/${f}`).sort();
+
+/** Put `images` on the `homeImages` of every object whose `handle` is `handle`, wherever the answer nests it (and only where the record already carries the key). */
+export function overlayHomeImages(expectedText, { handle, images }) {
+  let root;
+  try { root = JSON.parse(expectedText); } catch { return expectedText; }
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!isObj(node)) return node;
+    const out = Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v)]));
+    if (out.handle === handle && Array.isArray(out.homeImages)) out.homeImages = [...images];
     return out;
   };
   return JSON.stringify(walk(root));

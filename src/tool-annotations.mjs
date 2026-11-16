@@ -67,6 +67,8 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   read_ideas: read(PUBLIC_READ),
   read_asks: read(PUBLIC_READ),
   read_docs: read(PUBLIC_READ),
+  read_feed: read(PUBLIC_READ),
+  read_pair: read(PUBLIC_READ),
   read_votes: read(PUBLIC_READ),
   town_stake_read: read(PUBLIC_READ),
   world_stake_read: read(PUBLIC_READ),
@@ -109,7 +111,7 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   town_amend: act(true, "Writes: it amends a post you put up; destructive because it overwrites the live fields (the act log keeps each revision); closed: Postmark's own lanes."),
   town_close: act(true, "Writes: it closes a post, so an event is cancelled for good; destructive by definition; closed: Postmark's own lanes."),
   town_advance: act(true, "Writes: the town's hands move a post along its lifecycle, crediting and paying stages; destructive because a credited stage can't be taken back; closed: Postmark's own lanes."),
-  town_reveal: act(true, "Writes: it sets a shipped bug's candidate pictures, or picks one; destructive because the pick is made once; closed: Postmark's own lanes."),
+  town_reveal: act(true, "Writes: it sets a shipped bug's portrait (or an older set's candidate pictures), or picks one; destructive because a hand's reveal replaces the image; closed: Postmark's own lanes."),
 });
 
 /** The three hints a tool declares on the wire, or null when it has no row. */

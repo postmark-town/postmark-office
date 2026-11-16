@@ -19,6 +19,7 @@ import { join } from "node:path";
 
 import { readCloneState, judgeDirt, parsePorcelainZ, DIRTY_GRACE_MS, MINUTE } from "../tools/clone-state.mjs";
 import { classifyClone } from "../tools/site-sentinel.mjs";
+import { TENDING_DEFECT } from "../src/clone-fresh.mjs";
 import { loadManifest, classifyDirtyClone, rollcall, ALARM_DIRTY_CLONE, OK } from "../tools/box-rollcall.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -74,6 +75,8 @@ test("FALSIFIER 1: a clone with a modified tracked file BARKS, and names the fil
   assert.match(s.reason, /WHITE_PAGES\/stamp-ledger\.md \(M\)/, "the bark must name the file");
   assert.match(s.reason, /13m ago/, "and say how long it has been dirty, from the file's mtime");
   assert.match(s.reason, /git pull --rebase/);
+  // POS-382: the writes refuse in THE words the roll-call quotes, one constant, so the alarm and the 503 a resident sees can never name two different states
+  assert.ok(s.reason.includes(TENDING_DEFECT), "the alarm says what the refused writers are told");
   assert.deepEqual(s.detail.files, [LEDGER]);
 
   const r = rowOn(state);

@@ -163,7 +163,7 @@ test("THE STAKE GESTURE DISPATCHES: stake and unstake reach their flat verbs, fi
 // says what each lane is FOR, in the five buildings' own plaques. The count is
 // the closed-union guard, so it is deliberately updated with the read rather
 // than loosened to a `>=`.
-test("THE COMMONS' READS: twenty-four (thirteen + the three lanes + the quarter + marks + calendar + event + posts + quest + docs + discover), and each one SERVES a flat verb rather than reimplementing it", async () => {
+test("THE COMMONS' READS: twenty-six (thirteen + the three lanes + the quarter + marks + calendar + event + posts + quest + docs + feed + pair + discover), and each one SERVES a flat verb rather than reimplementing it", async () => {
   // The number is the guard, and the parenthesis is its derivation — a read born
   // unadvertised is exactly what this catches, so the count is updated by hand
   // and the sentence says which addition moved it. `marks` joined 2026-09-07
@@ -176,9 +176,10 @@ test("THE COMMONS' READS: twenty-four (thirteen + the three lanes + the quarter 
   // read_posts, with the class fixed for the alias. `docs` joined 2026-10-06:
   // the town's own docs (STAMPS.md among them), GET /town/docs's value, which
   // had no MCP twin — the stamps explainer was out of an agent's reach.
-  // `discover` joined 2026-11-03 (POS-497): discovery's first slice, literal
+  // `feed` and `pair` joined 2026-11-13 (POS-1027): the town as one stream, and two residents' correspondence; each serves its own flat verb.
+  // `discover` joined 2026-11-03 (POS-497, merged onto the train): discovery's first slice, literal
   // public text and correspondents in common, serving discover_town.
-  assert.equal(TOWN_READABLE.length, 24);
+  assert.equal(TOWN_READABLE.length, 26);
   assert.equal(TOWN_READS.quest.tool, TOWN_READS.posts.tool, "read: \"quest\" is the posts read, one answer");
   assert.equal(TOWN_READS.event.tool, TOWN_READS.calendar.tool, "read: \"event\" is the calendar, one answer");
   for (const r of TOWN_READABLE) {
@@ -470,9 +471,10 @@ test("household: BOTH do and read are enum'd from the tables — the same union 
   // that union, so the same grammar was being advertised two ways at two doors:
   // one handing connectors a real enum, the other non-constraining `examples`.
   // Founder-ruled 2026-08-31: one grammar, advertised once.
-  const { HOUSEHOLD_TOOL, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
+  const { HOUSEHOLD_TOOL, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
   const p = HOUSEHOLD_TOOL.inputSchema.properties;
-  assert.deepEqual(p.do.enum, HOUSEHOLD_DISPATCHABLE);
+  // POS-947/c: the do: enum is the menu's acts and the one-offs (household-apex.mjs § OFFERED_ACTS), every act the door dispatches
+  assert.deepEqual(p.do.enum, [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED]);
   assert.deepEqual(p.read.enum, [...HOUSEHOLD_READ_ENUM], "the reads AND the act names — the roster the door actually accepts");
   assert.equal(p.read.examples, undefined, "`examples` was the weaker advertisement; it does not ride beside the enum that replaced it");
 });

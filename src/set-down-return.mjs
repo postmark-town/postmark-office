@@ -43,7 +43,7 @@
 // would reopen the stake/withdraw race, and must answer for it.
 // A claim held for review is not stranded but waiting, and is not withdrawn.
 
-import { MAKE_FACE, SET_DOWN_FACE, PUT_BACK_FACE } from "./named-making.mjs";
+import { MAKE_FACE, SET_DOWN_FACE, PUT_BACK_FACE, WITHDRAW_FACE } from "./named-making.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => Object.assign(new Error(defect), { code, defect, hint, ...extra });
 const LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext($1))";
@@ -76,7 +76,9 @@ const REMOVED_DRAFT_SQL = `SELECT 1 FROM claims WHERE status = 'draft' AND slug 
 const RETRACTED_PENDING_SQL = `SELECT 1 FROM claims WHERE window_id = $1 AND status = 'pending' AND geometry->>'slug' = $2 AND claimant = $3 LIMIT 1`;
 
 const obj = (v) => (typeof v === "string" ? JSON.parse(v) : (v ?? {}));
-const HOLD_ROW_FACES = ["give", "drop", "take", MAKE_FACE, "consume", SET_DOWN_FACE, PUT_BACK_FACE];
+// WITHDRAW_FACE (POS-992): a thing its maker withdrew is ended for good. Its withdraw is its newest hold row, never a
+// set-down of a draft, so no put-back follows it: a put-back never revives a withdrawn thing, as it never revives an eaten one.
+const HOLD_ROW_FACES = ["give", "drop", "take", MAKE_FACE, "consume", SET_DOWN_FACE, PUT_BACK_FACE, WITHDRAW_FACE];
 
 /**
  * What the record says of `mark` as a set-down holder of `by`'s, read on `client`

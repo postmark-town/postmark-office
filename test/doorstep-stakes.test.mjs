@@ -146,11 +146,35 @@ test("an office with no docket store configured says so, through the doorstep's 
 test("a quiet page says so, and an empty one points at the portfolio", async () => {
   const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
   assert.equal(quiet.at_risk, 0);
-  assert.match(quiet.note, /nothing of yours is at risk at the next settlement/);
+  assert.match(quiet.note, /^nothing of yours is at risk as of the town head named above\. /);
   const empty = await stakesFor(["nobody"], readers());
   assert.equal(empty.count, 0);
   assert.match(empty.note, /no published mark of yours stands on world main/);
   assert.match(empty.read_the_rest, /world \{ read: "leave-mark" \}/, "the portfolio's own grammar");
+});
+
+// WLD-51 (Wright, 2026-11-03 19:25 EST): the warning states the frame it was read in. The words are spelled here, not
+// imported, so a changed sentence or a surface that stops saying it reds on this assertion. SWEEP_RULE is the verbatim
+// ruling and does not carry it; the existing optional prose does, and no field is added.
+const FRAME = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+const KNOWN_KEYS = new Set(["next_settlement", "clock", "rule", "unavailable", "registry_unavailable", "escrow_at_town_sha", "escrow_ingested_at",
+  "catches_up_at", "later_stakes", "count", "at_risk", "note", "read_the_rest", "rows"]);
+
+test("WLD-51 · the at-risk segment states its frame in existing prose, with the at-risk row, the quiet note and the unmeasured read alike", async () => {
+  const risky = await stakesFor(["berthillon"], readers());
+  assert.equal(risky.at_risk, 1, "the warning is live on this page");
+  assert.ok(risky.later_stakes.endsWith(`shows it now. ${FRAME}`), `later_stakes: ${risky.later_stakes}`);
+  assert.ok(risky.later_stakes.startsWith("a stake or unstake made after escrow_ingested_at shows here at catches_up_at"), "and keeps its own words");
+  assert.equal(risky.rule, SWEEP_RULE, "the sweep's rule is the ruling verbatim and does not carry the frame");
+  assert.ok(!risky.rule.includes("last settlement"));
+  const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
+  assert.equal(quiet.at_risk, 0);
+  assert.ok(quiet.note.endsWith(`as of the town head named above. ${FRAME}`), `the "nothing at risk" note: ${quiet.note}`);
+  const blind = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(blind.at_risk, null);
+  assert.ok(blind.later_stakes.endsWith(FRAME));
+  for (const seg of [risky, quiet, blind]) for (const k of Object.keys(seg)) assert.ok(KNOWN_KEYS.has(k), `no new field: ${k}`);
+  assert.deepEqual(risky.rows[0].act, stakeEnvelope("berthillon/the-orchard-bench"), "the row's act is untouched by prose");
 });
 
 test("scope is the stances/rulings grammar: a named handle is one resident, bare is the whole house the key holds", async () => {
@@ -213,7 +237,7 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
   assert.equal(DOORSTEP_SEGMENTS.at(8), "stakes");
   assert.ok(HOUSEHOLD_READABLE.includes("stakes"), "the door accepts it");
   assert.ok(HOUSEHOLD_READ_ENUM.includes("stakes"), "and the tool schema advertises it");
-  assert.deepEqual(HOUSEHOLD_READ_FIELDS.stakes, {}, "it takes no field but the standpoint handle");
+  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.stakes), ["limit"], "it takes a preview size (POS-902) and no other field but the standpoint handle");
   assert.match(HOUSEHOLD_READS.stakes, /Not the pot stake/, "the gloss keeps it apart from do: \"stake\" and read: \"stamps\"");
   assert.equal(REGISTRY_PATH, "WORLD/settlement-publications.json", "the sweep's own file");
 });
@@ -229,7 +253,7 @@ test("the finished doorstep carries the segment, always — serves, args, and th
       const d = await doorstepBundle("wright", { ...ctx, slim });
       assert.ok(d.segments.includes("stakes"));
       assert.equal(d.stakes.serves, "household.stakes");
-      assert.deepEqual(d.stakes.args, { handle: "wright" });
+      assert.deepEqual(d.stakes.args, { handle: "wright", limit: 10 }, "the pointer names the preview it is (POS-902); the read at these args is this segment");
       assert.ok(Array.isArray(d.stakes.rows));
       assert.ok(typeof d.stakes.next_settlement?.at === "string");
       assert.ok("at_risk" in d.stakes);
@@ -241,9 +265,13 @@ test("the finished doorstep carries the segment, always — serves, args, and th
         assert.equal(d.stakes.read_the_rest, undefined);
         assert.match(d.stakes.teach_at, /household \{ read: "stakes" \}/);
         assert.match(d.stakes.abridged, /drops `rule` and `read_the_rest`/);
+        // WLD-51: this skin strips `later_stakes`, so the frame rides the cut's own words, which stay on the page
+        assert.equal(d.stakes.later_stakes, undefined);
+        assert.ok(d.stakes.abridged.endsWith(`answers it whole. ${FRAME}`), `the slim skin's abridged states the frame: ${d.stakes.abridged}`);
       } else {
         assert.match(d.stakes.rule, /a commons mark with no stamps behind it leaves the world/, "REST answers the read whole — the bundle law");
         assert.equal(d.stakes.teach_at, undefined);
+        assert.ok(d.stakes.later_stakes.endsWith(FRAME), `the full skin's later_stakes states the frame: ${d.stakes.later_stakes}`); // WLD-51
       }
     }
   } finally { await restore(); await ix.stop(); }
@@ -359,4 +387,274 @@ test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 20
   for (const row of seg.rows) assert.equal(row.body, `${row.mark}: ${body}`, `${row.mark} carries its body, whole`);
   const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
   assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
+});
+
+// ── WLD-51 · A THING IN HANDS IS NOT AT RISK (POS-688's held veto, handed in) ──
+//
+// The sweep asks the verdict whether a mark is printed as held (`held_by`):
+// a thing in someone's hands is published but unplaced, never a candidate while
+// held (world unpublish-verdict.mjs, `held`). Until WLD-51 this page asked the
+// same function without that input, so a held thing at ✦0 read "at risk", with
+// a stake act, while the sweep kept it: postmark#3757's class, the warning and
+// the sweep disagreeing. Invented handles; the verdict is the pinned world's.
+//
+// THE FLIP: drop `held: heldBy(m) != null` from stakesRowsFrom's rule call, and
+// the first test below reds on the held row.
+
+const MARK_KIND = await import(pathToFileURL(join(WORLD_CLONE, "tools", "mark-kind.mjs")).href);
+const TINKER = "tinker-of-nowhere";
+const heldReaders = (marks, over = {}) => readers({
+  world: async () => ({ state: { marks }, ref: "origin/main" }),
+  registry: async () => Object.fromEntries(marks.map((m) => [m.id, { household: TINKER, path: `WORLD/marks/${m.id}/mark.md`, class: "commons" }])),
+  pathAt: async () => () => true,
+  escrow: async () => ({ townSha: HEAD, byMark: new Map(), reason: null }),
+  ...over,
+});
+const thing = (slug, extra = {}) => ({ id: `${TINKER}/${slug}`, kind: "sited", by: TINKER, household: TINKER, tier: "market", ...extra });
+
+test("WLD-51 · THE FALSIFIER: a held thing on a commons row at ✦0 is not at risk and asks no stake; the same thing set down is", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, placed]));
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by[held.id].at_risk, false, "in someone's hands: the sweep keeps it, so the page does not warn");
+  assert.equal(by[held.id].act, undefined, "and no stake is asked for");
+  assert.equal(by[held.id].class, "commons", "the row still reads as the registry holds it");
+  assert.equal(by[placed.id].at_risk, true, "THE CONTROL: unheld, commons, ✦0, path on main — swept, and warned");
+  assert.equal(by[placed.id].act, stakeEnvelope(placed.id), "with the ordinary stake act");
+  assert.equal(seg.at_risk, 1);
+  // the page's answer IS the sweep's: the same function, asked with the held state the sweep reads
+  for (const m of [held, placed])
+    assert.equal(VERDICT.unpublishVerdict({ class: "commons", path: `WORLD/marks/${m.id}/mark.md` },
+      { escrow: 0, pathOnMain: true, standing: "market", held: MARK_KIND.isHeld(m) }).unpublish, by[m.id].at_risk, m.id);
+});
+
+test("WLD-51 · the held fact is the world's own reading of `held_by`: every printed shape reaches the verdict as the sweep reads it", () => {
+  const shapes = [
+    ["a-named-holder", { held_by: "some-other-house" }],
+    ["a-padded-holder", { held_by: "  some-other-house  " }],
+    ["a-holder-thing", { held_by: "some-other-house/a-chest" }],
+    ["a-blank-holder", { held_by: "   " }],
+    ["an-empty-holder", { held_by: "" }],
+    ["a-null-holder", { held_by: null }],
+    ["a-number-holder", { held_by: 7 }],
+    ["no-holder-at-all", {}],
+  ].map(([slug, extra]) => thing(slug, extra));
+  const asked = new Map();
+  const spy = (entry, args) => { asked.set(entry.path, args.held); return { unpublish: args.held ? false : true }; };
+  const reg = Object.fromEntries(shapes.map((m) => [m.id, { household: TINKER, path: m.id, class: "commons" }]));
+  const rows = stakesRowsFrom({ handles: [TINKER], marks: shapes, registry: reg, byMark: new Map(), rule: spy, pathOnMain: () => true });
+  assert.equal(asked.size, shapes.length, "the rule was asked of every row");
+  for (const m of shapes) {
+    assert.equal(asked.get(m.id), MARK_KIND.isHeld(m), `${m.id}: the page hands in what the sweep's isHeld reads`);
+    assert.equal(rows.find((r) => r.mark === m.id).at_risk, !MARK_KIND.isHeld(m), m.id);
+  }
+  assert.deepEqual(shapes.filter((m) => MARK_KIND.isHeld(m)).map((m) => m.id.split("/")[1]), ["a-named-holder", "a-padded-holder", "a-holder-thing"],
+    "held is a printed holder; a blank, empty, null or non-string field is a placed thing, as the sweep reads it");
+});
+
+test("WLD-51 · held changes nothing that was unknown, backed or never a candidate", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  // the projection refused: unknown, never safe, held or not
+  const refused = await stakesFor([TINKER], heldReaders([held], { escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(refused.rows[0].at_risk, null, "escrow unread is unjudged, held or not");
+  assert.equal(refused.at_risk, null);
+  // no rule in the engine: unjudged
+  const noRule = await stakesFor([TINKER], heldReaders([held], { rule: async () => null }));
+  assert.equal(noRule.rows[0].at_risk, null, "no rule, no judgment");
+  // backed: kept either way
+  const backed = await stakesFor([TINKER], heldReaders([held, thing("a-tin-kettle")], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[held.id, 2], [`${TINKER}/a-tin-kettle`, 2]]), reason: null }) }));
+  for (const r of backed.rows) assert.equal(r.at_risk, false, `${r.mark}: ✦2 behind it`);
+  // walks home, or no registry row: never at risk, held or not
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.rows[0].at_risk, false, "a mark that walks home is never swept");
+  const founding = stakesRowsFrom({ handles: [TINKER], marks: [held], registry: {}, byMark: new Map(), rule: VERDICT.unpublishVerdict, pathOnMain: () => true });
+  assert.equal(founding[0].at_risk, false, "no registry row: founding estate");
+});
+
+// ── WLD-51 · the quiet note tells the truth about a commons row with no stamps behind it (Wright 2026-11-04T17:06:41.928Z) ──
+//
+// The quiet note used to say "every commons mark you hold has stamps behind it". A held commons row at ✦0 exists (the sweep
+// keeps it, so the page does not warn) and has NO stamps; the sentence was false on exactly that page. The approved fix is the
+// one existing note sentence, neutral: "nothing of yours is at risk as of the town head named above." and the frame, unchanged.
+// These run the real exported `stakesFor` over the world's own rule and `isHeld` (heldBy → stakesRowsFrom → the note); the
+// sentence is spelled here, not imported. Counted commons ROWS remain on the page; their STAMPS are zero.
+const SAFE_NOTE = `nothing of yours is at risk as of the town head named above. ${FRAME}`;
+const OLD_CLAIMS = [/every commons mark you hold/, /has stamps behind it/, /at the next settlement —/];
+const commonsAtZero = (seg) => seg.rows.filter((r) => r.class === "commons" && r.escrow === 0 && r.at_risk === false);
+
+test("WLD-51 · A HELD COMMONS ROW AT ✦0 (own maker): the page has a commons row with no stamps, nothing is at risk, and the note does not claim stamps", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const seg = await stakesFor([TINKER], heldReaders([held]));
+  assert.equal(seg.count, 1, "the commons row is on the page");
+  assert.equal(commonsAtZero(seg).length, 1, "a commons row, escrow 0, at_risk false: stamps zero is the case the old sentence denied");
+  assert.equal(seg.rows[0].id ?? seg.rows[0].mark, held.id);
+  assert.equal(seg.at_risk, 0);
+  assert.equal(seg.note, SAFE_NOTE, "the approved neutral sentence and the exact frame");
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re, "the old false cause is gone");
+  assert.equal(seg.note.slice(-FRAME.length), FRAME);
+  assert.equal(FRAME.length, 113, "the frame is the 113 characters");
+});
+
+test("WLD-51 · MIXED: a held commons row at ✦0 beside a backed one (✦2): the page is quiet, one row has no stamps, and the note stays true", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const backed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, backed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[backed.id, 2]]), reason: null }) }));
+  assert.equal(seg.count, 2);
+  assert.equal(seg.at_risk, 0);
+  assert.deepEqual(commonsAtZero(seg).map((r) => r.mark), [held.id], "exactly the held row is a commons row with no stamps");
+  assert.equal(seg.rows.find((r) => r.mark === backed.id).escrow, 2);
+  assert.equal(seg.note, SAFE_NOTE);
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re);
+});
+
+test("WLD-51 · THE CONTROLS the note must not touch: an unheld ✦0 commons row warns and carries no quiet note; backed-only, a home row, founding estate and an empty page keep their reads", async () => {
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const risky = await stakesFor([TINKER], heldReaders([placed]));
+  assert.equal(risky.at_risk, 1, "unheld, commons, ✦0, path on main: still at risk");
+  assert.equal(risky.rows[0].act, stakeEnvelope(placed.id));
+  assert.equal(risky.note, undefined, "and no quiet note beside a warning");
+  const backedOnly = await stakesFor([TINKER], heldReaders([placed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[placed.id, 2]]), reason: null }) }));
+  assert.equal(backedOnly.at_risk, 0);
+  assert.equal(backedOnly.note, SAFE_NOTE, "backed-only: quiet, in the same words");
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.at_risk, 0);
+  assert.equal(home.note, SAFE_NOTE, "a mark that walks home is never swept: quiet");
+  const founding = await stakesFor([TINKER], heldReaders([thing("a-founders-lamp")], { registry: async () => ({}) }));
+  assert.equal(founding.at_risk, 0, "no registry row: founding estate stays published");
+  assert.equal(founding.note, SAFE_NOTE);
+  const empty = await stakesFor(["nobody-at-all"], heldReaders([placed]));
+  assert.equal(empty.count, 0);
+  assert.match(empty.note, /^no published mark of yours stands on world main/, "an empty page keeps its own note");
+  assert.ok(!empty.note.includes(FRAME), "and carries no frame");
+});
+
+// ── POS-902 · the doorstep's stakes are the NEWEST FEW, and the whole report is one read away ───────────────────────────────
+
+import { DOORSTEP_STAKES } from "../src/queries.mjs";
+import { previewOf, newestFirst } from "../src/doorstep-stakes.mjs";
+import { EXPECTED, readers as pos902Readers } from "./fixtures/pos902-doorstep.mjs";
+
+// independent of the code under test: by the fixture's own dates, the ten newest marks are risk-02, risk-01, risk-00 (Nov 22, 21, 20), then backed-17 … backed-11 (Nov 18 … 12)
+const NEWEST_TEN = ["risk-02", "risk-01", "risk-00", ...Array.from({ length: 7 }, (_, i) => `backed-${17 - i}`)].map((s) => `${EXPECTED.prolific.handle}/${s}`);
+
+test("POS-902 · a prolific house's preview is the newest DOORSTEP_STAKES rows by the mark's own date; the counts, the at-risk number and every clock stay the whole report's", async () => {
+  const E = EXPECTED.prolific;
+  const whole = await stakesFor([E.handle], await pos902Readers());
+  const seg = await stakesFor([E.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.equal(DOORSTEP_STAKES, 10, "a small named limit");
+  assert.deepEqual(seg.rows.map((r) => r.mark), NEWEST_TEN, "newest first, by date");
+  assert.equal(seg.count, E.count, "count is the whole report's: 60 published marks");
+  assert.equal(seg.at_risk, E.atRisk, "at_risk is the whole report's: 12, not the preview's 3");
+  assert.equal(seg.rows.filter((r) => r.at_risk).length, 3);
+  assert.deepEqual([seg.total, seg.shown, seg.limit, seg.complete], [60, 10, 10, false], "it says it is a preview, and of what");
+  assert.match(seg.order, /newest published marks first, by the mark's own date \(not printed\)/);
+  assert.match(seg.order, /the whole report is at-risk first, then by mark id/, "and says what the whole report's own order is");
+  assert.match(seg.more_note, /^50 further \(9 of them at risk\) — household \{ read: "stakes" \} with no limit is every row$/, "an at-risk row left out is NAMED, never hidden");
+  assert.equal("next_offset" in seg, false, "no pager: the rest is the one bare read");
+  for (const r of seg.rows) { assert.equal("date" in r, false, "no date is printed"); assert.deepEqual(r, whole.rows.find((w) => w.mark === r.mark), "a preview row is the whole report's row, whole (body included)"); }
+  for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at", "rule", "later_stakes"])
+    assert.deepEqual(seg[k], whole[k], `${k} stays whole`);
+});
+
+test("POS-902 · THE CONTINUATION RETURNS THE OMITTED ROWS: the bare read is every row, in the report's own order, with no preview fields", async () => {
+  const E = EXPECTED.prolific;
+  const whole = await stakesFor([E.handle], await pos902Readers());
+  for (const k of ["shown", "total", "limit", "complete", "order", "more_note"]) assert.equal(k in whole, false, `the bare read is the whole report, as it always was: no ${k}, no silent preview`);
+  assert.equal(whole.rows.length, 60);
+  assert.deepEqual(whole.rows.slice(0, 12).every((r) => r.at_risk === true), true, "its own order: at-risk first");
+  const preview = await stakesFor([E.handle], await pos902Readers({ limit: 10 }));
+  const omitted = whole.rows.filter((r) => !preview.rows.some((p) => p.mark === r.mark));
+  assert.equal(omitted.length, 50, "the 50 rows the preview left out are all in the whole read");
+  assert.equal(omitted.filter((r) => r.at_risk).length, 9);
+});
+
+test("POS-902 · an ordinary house fits whole (complete, no continuation named); an empty one and an unreadable one keep their honest meaning", async () => {
+  const ord = await stakesFor([EXPECTED.ordinary.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.deepEqual([ord.count, ord.at_risk, ord.rows.length], [8, 1, 8]);
+  for (const k of ["shown", "total", "limit", "complete", "order", "more_note"]) assert.equal(k in ord, false, `nothing was cut, so there is no ${k}: the page is what it always was`);
+  assert.equal(ord.rows[0].at_risk, true, "and in the report's own order, at-risk first");
+  const none = await stakesFor([EXPECTED.empty.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.deepEqual([none.count, none.rows.length, "complete" in none], [0, 0, false]);
+  assert.match(none.note, /no published mark of yours stands on world main/, "empty stays 'none', with its own note");
+  const down = await stakesFor([EXPECTED.prolific.handle], await pos902Readers({ limit: DOORSTEP_STAKES, escrow: async () => ({ townSha: HEAD, byMark: null, reason: "the docket store is down — unknown, not zero" }) }));
+  assert.match(down.unavailable, /unknown, not zero/);
+  assert.equal(down.at_risk, null, "unavailable is not zero");
+  assert.equal(down.count, 60); assert.equal(down.rows.length, 10);
+  assert.ok(down.rows.every((r) => r.escrow === null && r.at_risk === null));
+  assert.equal(/at risk\)/.test(down.more_note), false, "an unmeasured page names no at-risk count it does not have");
+  const worldDown = await stakesFor([EXPECTED.prolific.handle], await pos902Readers({ limit: DOORSTEP_STAKES, world: async () => { throw new Error("no clone"); } }));
+  assert.match(worldDown.unavailable, /unknown here, not empty/); assert.equal(worldDown.count, 0, "an unread world is its own sentence, not a preview");
+});
+
+test("POS-902 · newestFirst / previewOf: dated marks newest first, undated or unreadable dates last, ties by mark id; no limit is the list untouched", () => {
+  const rows = [{ mark: "b" }, { mark: "a" }, { mark: "c" }, { mark: "d" }];
+  const dates = { a: "2026-01-01T00:00:00Z", b: "2026-03-01T00:00:00Z", c: "not a date", d: undefined };
+  assert.deepEqual(newestFirst(rows, (id) => dates[id]).map((r) => r.mark), ["b", "a", "c", "d"], "undated rows last, in id order");
+  assert.deepEqual(previewOf(rows), { rows, meta: {} });
+  assert.equal(previewOf(rows, { limit: 0, dateOf: (id) => dates[id] }).rows.length, 1, "a zero limit is not an empty preview");
+  assert.deepEqual(previewOf(rows, { limit: 9, dateOf: (id) => dates[id] }), { rows, meta: {} }, "a list that fits is answered whole, in its own order");
+});
+
+// ── on the finished doorstep, both skins ────────────────────────────────────────────────────────────────────────────────────
+
+test("POS-902 · the finished doorstep's stakes: the newest few on BOTH skins, the whole report's totals and clocks, and the named read returns every omitted row", async (t) => {
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const { callTool } = await import("../src/mcp.mjs");
+  const { publishedState } = await import("../src/world-branches.mjs");
+  const ix = await indexStore(fixtureTown(), { db: "stakes_902" });
+  const restore = await ix.useInProcess();
+  try {
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
+    const marks = (await publishedState(WORLD_CLONE)).state.marks.filter((m) => m.by === "wright");      // THE INDEPENDENT TOTAL, counted off the published world
+    assert.ok(marks.length > DOORSTEP_STAKES * 5, `the pinned world gives wright many published marks (${marks.length}); a fixture that fits inside the cap proves nothing`);
+    const whole = await callTool("household", { read: "stakes", args: { handle: "wright" } }, ctx);   // the named continuation, bare
+    assert.equal(whole.rows.length, marks.length, "the bare read returns every row");
+    assert.equal(whole.count, marks.length);
+    assert.equal("shown" in whole, false, "the continuation is not itself a preview");
+    const newestIds = [...marks].sort((a, b) => (Date.parse(b.date) || -Infinity) - (Date.parse(a.date) || -Infinity) || a.id.localeCompare(b.id)).slice(0, DOORSTEP_STAKES).map((m) => m.id);
+    const sizes = {};
+    for (const slim of [false, true]) {
+      const d = await doorstepBundle("wright", { ...ctx, slim });
+      const s = d.stakes, skin = slim ? "slim" : "full";
+      assert.deepEqual(s.rows.map((r) => r.mark), newestIds, `${skin}: the newest ten by the published marks' own dates, counted independently`);
+      assert.deepEqual([s.count, s.total, s.shown, s.complete], [marks.length, marks.length, DOORSTEP_STAKES, false], `${skin}: the true total`);
+      assert.equal(s.at_risk, whole.at_risk, `${skin}: at_risk is the whole report's`);
+      for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at"]) assert.deepEqual(s[k], whole[k], `${skin}: ${k} stays whole`);
+      assert.match(s.more_note, new RegExp(`^${marks.length - DOORSTEP_STAKES} further .*household \\{ read: "stakes" \\} with no limit is every row$`));
+      assert.deepEqual(s.args, { handle: "wright", limit: DOORSTEP_STAKES });
+      assert.equal(s.rows.some((r) => "date" in r), false, "no date is printed");
+      const left = whole.rows.filter((r) => !s.rows.some((p) => p.mark === r.mark));
+      assert.equal(left.length, marks.length - DOORSTEP_STAKES, `${skin}: every omitted row is in the continuation`);
+      // SAME-FIXTURE SIZES, the original instruments: indent-1 serialized UTF-8 bytes, and compact JSON characters. The base is this very page with the stakes
+      // segment as it was before the cap (every row, no preview fields); NOT compressed transfer, NOT today's production.
+      const { limit: _l, shown: _s, total: _t, complete: _c, order: _o, more_note: _m, ...bare } = s;
+      const baseSeg = { ...bare, args: { handle: "wright" }, rows: whole.rows };
+      const base = { ...d, stakes: baseSeg };
+      const m = (x) => ({ bytes: Buffer.byteLength(JSON.stringify(x, null, 1), "utf8"), chars: JSON.stringify(x).length });
+      sizes[skin] = { base: m(base), candidate: m(d), stakesBase: m(baseSeg), stakesCandidate: m(s) };
+      assert.ok(sizes[skin].candidate.bytes < sizes[skin].base.bytes, `${skin}: the capped page is smaller on the same fixture`);
+      assert.ok(sizes[skin].stakesCandidate.bytes * 5 < sizes[skin].stakesBase.bytes, `${skin}: the stakes segment shrinks to a fraction of its uncapped self`);
+    }
+    t.diagnostic(`POS-902 sizes (same fixture: wright, ${marks.length} published marks; indent-1 UTF-8 bytes / compact JSON chars) ${JSON.stringify(sizes)}`);
+  } finally { await restore(); await ix.stop(); }
+});
+
+test("POS-902 · a prolific house's doorstep, through the injected reader: the newest few with an at-risk total that is not the preview's; empty and unavailable keep their meaning", async () => {
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const ix = await indexStore(fixtureTown(), { db: "stakes_902_inv" });
+  const restore = await ix.useInProcess();
+  try {
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
+    const big = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({}, { prolific: "wright" }) });
+    assert.deepEqual([big.stakes.count, big.stakes.at_risk, big.stakes.shown, big.stakes.total, big.stakes.complete], [60, 12, 10, 60, false], "totals known from how the invented house is built");
+    assert.deepEqual(big.stakes.rows.map((r) => r.mark), NEWEST_TEN.map((id) => id.replace("prolific-one", "wright")));
+    const none = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({}, { prolific: "someone-else" }) });
+    assert.deepEqual([none.stakes.count, none.stakes.rows.length], [0, 0], "a resident with no published marks: an honest empty, with its note");
+    assert.match(none.stakes.note, /no published mark of yours/);
+    const down = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({ escrow: async () => { throw new Error("down"); } }, { prolific: "wright" }) });
+    assert.equal(down.stakes.at_risk, null, "unavailable is never zero");
+    assert.match(down.stakes.unavailable, /unknown, not zero/);
+    assert.equal(down.stakes.count, 60);
+  } finally { await restore(); await ix.stop(); }
 });

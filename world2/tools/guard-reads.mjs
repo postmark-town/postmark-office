@@ -807,8 +807,20 @@ export async function publishedMarkFrom(client) {
 // before it published, back in the hold it came from. Restoration only: its one writer is the
 // withdrawal's own transaction (src/set-down-return.mjs § putBackGuard); it carries the make's
 // own record (`made`, so the made fold re-registers it), and the holder is held again (cascade).
-export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down", "put-back"]);
+// `withdraw` (POS-992, Wright 2026-11-11 14:47Z: "each hold face names the act that happened"): a thing
+// made in hand, withdrawn by its maker from their own hands. It ends the holding as a consume does (policy
+// detach, with no place), and it is ended for good: no put-back revives it (src/set-down-return.mjs).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down", "put-back", "withdraw"]);
 export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
+/**
+ * WHICH CLASS AN ATTACHMENT ROW IS (POS-992). A face name is not unique across `acts`: `withdraw` is the
+ * hold lane's face and also the action every mark withdrawal (class `mark`) and creature ending (class
+ * `creature`) writes. So the live faces are read in class `holding` only, the class every live hold writer
+ * uses. The legacy arm is kept exactly as it was: `legacy:attachment` rows came in by the seed import
+ * (world2/tools/seed-import.mjs § LEGACY_CLASS, class `legacy`), and no class is imposed on that history. Malformed holding
+ * rows are still refused by name (attachmentRowOf, strict).
+ */
+export const ATTACHMENT_CLASS_SQL = "(action = 'legacy:attachment' OR class = 'holding')";
 
 /**
  * The ORDER clause every holder read must carry.
@@ -979,7 +991,7 @@ export function assertAttachmentOrder(rows) {
  */
 export async function pgAttachmentsFor(client, { target = null, until = null, strict = true, afterId = null } = {}) {
   const args = [ATTACHMENT_ACTIONS];
-  let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1)`;
+  let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1) AND ${ATTACHMENT_CLASS_SQL}`;
   if (target != null) {
     args.push(target);
     sql += ` AND COALESCE(payload->'payload'->>'target', payload->>'thing') = $${args.length}`;

@@ -24,6 +24,7 @@ import {
   hotLetters, hotMailBlock, logLetter, MAIL_ACT, MAIL_DOOR,
   preflightEnvelope, replayLetter, sendLetterAsRow, STANDING,
 } from "../src/town-mail.mjs";
+import { withdrawLetterAtOffice } from "../src/letter-amend.mjs";
 import {
   appendTownJournal, pendingRows, TOWN_CLASSES, townLogEnabled,
 } from "../src/town-journal.mjs";
@@ -463,6 +464,57 @@ test("two letters are two letters — a later one never supersedes an earlier on
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
+// postmark#4447: one slug per correspondent per day holds for standing letters
+// too. Before the fix the second send below was given a receipt and a row, and
+// the drain then took that row as already sent, so it was never delivered.
+test("a second standing letter with the same id is refused at the door, and the first stands untouched", async () => {
+  const o = odb();
+  const clone = mailClone();
+  try {
+    await flagOn(async () => {
+      const first = await sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nThe first one." }, fixtureKey, db, clone, o);
+      await assert.rejects(
+        () => sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nA different one." }, fixtureKey, db, clone, o),
+        (e) => e.code === 409 && e.defect === "a letter with this id already exists today" && /one slug per correspondent per day/.test(e.hint));
+      const mine = await hotLetters(o, fixtureKey, { handle: "wright" });
+      assert.equal(mine.length, 1, "the refused letter wrote no row");
+      assert.equal(mine[0].payload.id, first.letter_id);
+      assert.equal(mine[0].payload.args.body, "Limen,\n\nThe first one.", "the first letter is the one that stands");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("a withdrawn letter frees its id: the same title can be sent again that day", async () => {
+  const o = odb();
+  const clone = mailClone();
+  const lock = async (fn) => fn();
+  try {
+    await flagOn(async () => {
+      const first = await sendLetterAsRow({ ...ok, title: "hello" }, fixtureKey, db, clone, o);
+      await withdrawLetterAtOffice({ id: first.letter_id }, fixtureKey, { odb: o, lock });
+      const again = await sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nThe one I meant." }, fixtureKey, db, clone, o);
+      assert.equal(again.letter_id, first.letter_id);
+      const mine = await hotLetters(o, fixtureKey, { handle: "wright" });
+      assert.equal(mine.length, 1, "only the second letter stands");
+      assert.equal(mine[0].payload.args.body, "Limen,\n\nThe one I meant.");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("the same title from two different senders on one day is two ids, and each stands in its own sender's view", async () => {
+  const o = odb();
+  const clone = mailClone();
+  try {
+    await flagOn(async () => {
+      const a = await sendLetterAsRow({ ...ok, title: "hello" }, fixtureKey, db, clone, o);
+      const b = await sendLetterAsRow({ ...ok, from: "limen", to: "wright", title: "hello", body: "Wright,\n\nHello back." }, limenKey, db, clone, o);
+      assert.notEqual(a.letter_id, b.letter_id);
+      assert.equal((await hotLetters(o, fixtureKey, { handle: "wright" })).length, 1);
+      assert.equal((await hotLetters(o, limenKey, { handle: "limen" })).length, 1);
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
 // ── THE DRAIN: OUTBOX ONLY, THROUGH THE PEN ─────────────────────────────────
 
 test("THE DRAIN REPLAYS THROUGH THE DOOR — one implementation, second caller", async () => {
@@ -773,9 +825,10 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // (POS-666, 2026-10-22) — household { do: "amend-letter" | "withdraw-letter" |
   // "block" | "unblock" }, born delisted behind the household apex. The counts
   // moved in the same commit.
-  // 64 → 65: discover_town (POS-497, 2026-11-03) — town { read: "discover" }, born
-  // delisted behind the town apex. The counts moved in the same commit.
-  assert.equal(names.length, 65, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // 64 → 66: read_feed, read_pair (POS-1027, 2026-11-13) — town { read: "feed" | "pair" }, born
+  // delisted behind the town apex. 66 → 67: discover_town (POS-497, 2026-11-03, merged onto the train) — town { read: "discover" }, born
+  // delisted behind the town apex. The counts moved in the same commits.
+  assert.equal(names.length, 67, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",

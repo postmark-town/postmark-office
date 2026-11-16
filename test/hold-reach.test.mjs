@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 
 import {
   refuseOutOfReach, refuseGiveOfUnheld, whereThingStands, holdEffectsFrom,
-  liveHolder, PROPAGATION, nearestIds,
+  liveHolder, PROPAGATION, nearestIds, HOLD_TOOLS,
 } from "../src/world-hold.mjs";
 import { standsWithin, withinArmsLength, metresBetween, bearingWord, EARSHOT_M } from "../src/reach.mjs";
 
@@ -324,8 +324,17 @@ test("WALK #12 item 1 — a take from 536 m is REFUSED, naming the distance and 
   assert.equal(e.code, 409);
   assert.match(e.defect, /you are not standing where wright\/a-trued-spinning-top-for-little-m stands/);
   assert.match(e.defect, /54\d m|53\d m/, "the refusal names the distance the walk measured");
-  assert.match(e.hint, /a take is a threshold act/);
+  // WLD-79 (world #370): until 2026-11-06 this asserted "a take is a threshold act"; the law now says takes reach 60 m, the same as a give
+  assert.match(e.hint, /takes reach 60 m, the same as a give/);
+  assert.doesNotMatch(e.hint, /a take is a threshold act/, "the old words contradict the law");
   assert.match(e.hint, /mode: "center"/, "the refusal must hand back the walk that closes the distance");
+});
+
+test("WLD-79 — world_hold's own description says the same words as the refusal's hint: takes reach 60 m, the same as a give", () => {
+  const d = HOLD_TOOLS.find((t) => t.name === "world_hold")?.description ?? "";
+  assert.ok(d.length > 0, "the tool is found (control that the description was read)");
+  assert.match(d, /takes reach 60 m, the same as a give/);
+  assert.doesNotMatch(d, /a take is a threshold act/, "the old words contradict the law");
 });
 
 test("WALK #12 item 1, the other side — a take from INSIDE the extent stands, and says which leg admitted it", async () => {

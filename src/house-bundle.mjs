@@ -52,6 +52,7 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
 export const HOUSE_ONCE = Object.freeze(["clocks", "psa", "town", "bulletin", "town_pulse"]);
@@ -101,7 +102,9 @@ export async function registryFor(clone, readers = {}) {
   let rows;
   try { rows = await loadRegistryRows(); } catch { return null; }
   if (!rows) return null;
-  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), from: "the registry store" };
+  // `ords`: the order the town recorded households (`households.ord`), which the registry's rendering does not carry
+  // (POS-947/b: "joined before" is this order, never `since`)
+  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), ords: new Map(rows.households.map((r) => [r.slug, r.ord])), from: "the registry store" };
 }
 
 /**
@@ -125,7 +128,7 @@ export async function houseMembers({ household, key, clone, readers = {} }) {
     if (!slug) return { refused: [422, "which household?", "pass household: <slug> — or call with a key that holds a declared house"] };
   }
   const rec = houses[slug] ?? {};
-  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from };
+  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from, registry: reg.registry, ords: reg.ords ?? null };
 }
 
 // ── THE READERS, EACH ASKED ONCE FOR THE HOUSE ───────────────────────────────
@@ -485,7 +488,7 @@ export async function housePage({ household = null, limit = null, offset = null 
       at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
-      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident',
+      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident. ' + SNAPSHOT_LIMIT,
     },
     stands: { from: "the walkers roll (GET /world/walkers), read once for the page", at: stands.at ?? null,
       null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
@@ -571,7 +574,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
-    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
+    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
 
   // ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's, in the doorstep's

@@ -21,6 +21,7 @@
 //   · REFUSE, NEVER DEGRADE: no pen key, no signing, no half-writes — same
 //     gate as the registry lines (#2040).
 
+import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -100,6 +101,6 @@ export function writeFirstIdeaSweep(clone, plan) {
   if (!existsSync(ledgerAbs)) return [];
   const signed = signedRegistryLines(clone, plan.mints.map((m) => m.line));
   const prior = readFileSync(ledgerAbs, "utf8");
-  writeFileSync(ledgerAbs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+  writeFileSync(ledgerAbs, endWithNewline(prior) + signed.join("\n") + "\n");
   return [ledgerRel];
 }

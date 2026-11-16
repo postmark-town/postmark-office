@@ -165,7 +165,12 @@ function splitMarkFile(text) {
   const fields = new Map();
   const lines = [];
   for (const line of m[1].split(/\n/)) {
-    const k = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/.exec(line);
+    // `[ \t]+` takes the whole run of blanks, and the lookahead after it forbids the value from
+    // starting on one (POS-877), so the run and the value never share a blank. The old
+    // `(?:[ \t]+(.*))?$` let both take the same blanks, so a line `.` can't finish (a lone CR,
+    // U+2028 or U+2029) tried every split of them: quadratic, 533 ms at 16k characters. Same
+    // answers: a bare key, or key, blanks and a value with no line terminator in it.
+    const k = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(?![ \t])(.*))?$/.exec(line);
     if (!k || fields.has(k[1])) return null;
     const v = valueOf(k[2] ?? "");
     fields.set(k[1], v === "s:" ? undefined : v); // an empty value is no value (the world reads held_by "" as not held)

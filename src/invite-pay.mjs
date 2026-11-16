@@ -49,12 +49,19 @@ export const INVITE_CLASS = "invite";
 export const INVITE_ID_RE = /^invite:[a-z0-9][a-z0-9-]*$/;
 export const inviteId = (slug) => `invite:${slug}`;
 
-/** The hands that hold, lift and cancel (Little Bird, and Darko as her backup: POS-816, Little Bird 2026-10-30). */
-export const INVITE_HOLD_HANDS = Object.freeze(["little-bird", "keemin"]);
+/**
+ * The hands that hold, lift and cancel (Little Bird, and Darko as her backup: POS-816, Little Bird 2026-10-30).
+ * `wright` joined them for POS-947 (Jetto's dev walk, 2026-11-08 04:02Z): Darko's own household, starforge,
+ * holds no `keemin` resident, so his ruled backup could not place a hold; every other founder gate
+ * (FOUNDER_HANDLES, RECREDIT_HANDS, QUEST_HANDS) is ["wright", "keemin"]. Each is still checked by the key's
+ * credential (named-hand.mjs § holdsHand), never by a name in the request.
+ */
+export const INVITE_HOLD_HANDS = Object.freeze(["little-bird", "keemin", "wright"]);
 
 export const INVITE_WITHIN_DAYS = 30;               // the first letter or home "within 30 days" (POS-576/b), by town day, as the town's judge counts it
 export const INVITE_HOLD_MS = 7 * 864e5;            // "A week" (POS-816/a)
 export const INVITE_CAP_PER_MONTH = 10;             // "let's do 10 a month" (POS-576/c), in the month paid (POS-816/b)
+export const INVITE_BACKFILL_CAP = 10;              // late-named invitations paid per inviting house IN ALL (POS-947: "let's say 10 max for the backfill"), the town's INVITE_BACKFILL_CAP
 export const SETTLEMENT_HOURS_UTC = Object.freeze([6, 18]);
 
 /** The town's own house earns none (POS-576/e); arrival-invite.mjs § TOWN_HOUSE is the one name. */
@@ -101,6 +108,20 @@ export function settlementAtOrAfter(at) {
  * (stamp-mint.mjs § INVITE holds that floor at verify).
  */
 export const inviterDueAt = (activatedAt) => settlementAtOrAfter(new Date(new Date(activatedAt).getTime() + INVITE_HOLD_MS));
+
+/**
+ * A LATE-NAMED INVITATION (POS-947; Darko 2026-11-07 23:05 EST: "open to any amount of time for the backfill
+ * for referrals", "let's say 10 max for the backfill"; 2026-11-08 09:02 EST, "The town's judge too"). A house
+ * that joined without naming its inviter names one later, once (arrival-invite.mjs § judgeLateInvite); its
+ * record says `backfill: true` and its `at` is the naming. Its activation counts from its JOIN day (`since`),
+ * so an old first letter or home still pays; it falls due a week after whichever came later, the activation or
+ * the naming ("an old activation waits until the next tick after the naming's week", Wright); and its inviter is
+ * paid for at most INVITE_BACKFILL_CAP such invitations in all. The town's judge holds the same three terms.
+ */
+export const lateDueAt = (activatedAt, namedAt) =>
+  inviterDueAt(new Date(Math.max(new Date(activatedAt).getTime(), new Date(namedAt).getTime())));
+/** The instant a join day starts, the clock a late-named invitation's 30 days run on: null without a day. */
+export const joinDayStart = (since) => (/^\d{4}-\d{2}-\d{2}/.test(String(since ?? "")) ? townDayStart(String(since).slice(0, 10)) : null);
 
 /** Whole town days from one instant's town day to another's: the town judge's own count. */
 export const townDayGap = (from, to) => Math.round((Date.parse(`${townDay(to)}T00:00:00Z`) - Date.parse(`${townDay(from)}T00:00:00Z`)) / 864e5);
@@ -201,7 +222,7 @@ export function inviterRecipient(named, residents = [], isMeep = () => false) {
  * THE PLAN. One row per invitation, oldest invitation first, each side with
  * its status and, where something is owed now, the line the town's verb is
  * asked for. Inputs:
- *   rows    the invited households: [{ slug, name, residents, invited_by: { by, named, at } }]
+ *   rows    the invited households: [{ slug, name, residents, since, invited_by: { by, named, at, backfill? } }]
  *   houses  every household: [{ slug, residents, formerly }] (the inviter's
  *           residents, and renamed houses)
  *   facts   { letters, homes, ashore }: maps of the invited slug to its first
@@ -218,6 +239,10 @@ export function inviterRecipient(named, residents = [], isMeep = () => false) {
  * 10 this town month. Over the cap, it waits for a month with room, oldest due
  * first (Rivet's 10-29 reading of "Month paid": "enforce the cap in the payment
  * month, with deterministic oldest-eligible ordering").
+ * A LATE-NAMED INVITATION (`backfill`, POS-947) counts its 30 days from its
+ * house's join day, falls due a week after the later of its activation and its
+ * naming (lateDueAt), and is also held to its inviter's INVITE_BACKFILL_CAP paid
+ * late-named invitations in all: over it, `over-backfill-cap`, which never frees.
  * THE TOWN'S OWN HOUSE: an invitation naming it pays neither side. The
  * founders' household pays like any other (POS-816/d).
  */
@@ -228,6 +253,11 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
   const payDay = townDay(now);
   const month = payDay.slice(0, 7);
   const nowIso = iso(now);
+  // the late-named invitations' paid count per inviting house, ever (POS-947), off the ledger's inviter lines
+  const late = new Set(rows.filter((r) => r.invited_by?.backfill === true).map((r) => r.slug));
+  const paidLate = new Map();
+  for (const [invited, paid] of ledger.inviterPaid)
+    if (late.has(invited) && paid.inviter) paidLate.set(current(paid.inviter), (paidLate.get(current(paid.inviter)) ?? 0) + 1);
   const plan = rows
     .filter((r) => r.invited_by?.by && r.invited_by?.at)
     .map((r) => ({ ...r, at: iso(r.invited_by.at) }))
@@ -236,12 +266,17 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
       const inviter = current(r.invited_by.by);
       const townOwn = inviter === TOWN_HOUSE;
       const welcome = ledger.welcomes.get(r.slug) ?? null;
-      const act = activationOf({ at: r.at, letter: facts.letters?.get(r.slug) ?? null, home: facts.homes?.get(r.slug) ?? null, now });
+      const backfill = r.invited_by.backfill === true;
+      // a late-named invitation's 30 days run from its house's join day (POS-947), never from its naming
+      const joined = backfill ? joinDayStart(r.since) : null;
+      const act = backfill && !joined ? null
+        : activationOf({ at: backfill ? joined : r.at, letter: facts.letters?.get(r.slug) ?? null, home: facts.homes?.get(r.slug) ?? null, now });
       const hold = holds.get(r.slug) ?? null;
       const row = {
         invitation: inviteId(r.slug), household: r.slug, name: r.name ?? null, invited_by: inviter,
         ...(inviter !== r.invited_by.by ? { invited_by_was: r.invited_by.by } : {}),
         named: r.invited_by.named ?? null, at: r.at,
+        ...(backfill ? { backfill: true, joined: r.since ?? null, inviter_paid_backfilled: { paid: paidLate.get(inviter) ?? 0, cap: INVITE_BACKFILL_CAP } } : {}),
         // the hold's evidence, on every row whatever its state (POS-816 review, finding 3;
         // Little Bird's list: "the inviter's paid-invite count for the month")
         inviter_paid_this_month: { month, paid: ledger.paidInMonth.get(`${inviter}|${month}`) ?? 0 },
@@ -259,9 +294,10 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
             : { status: "waiting", why: "its welcome bundle is not on the ledger yet" };
       // ── the inviter side, before the cap ──
       const paidInviter = ledger.inviterPaid.get(r.slug);
-      const due = act.status === "activated" ? inviterDueAt(act.at) : null;
+      const due = act?.status === "activated" ? (backfill ? lateDueAt(act.at, r.at) : inviterDueAt(act.at)) : null;
       row.inviter_side = townOwn ? { status: "refused", why: "town" }
         : paidInviter ? { status: "paid", to: paidInviter.handle, on: paidInviter.date }
+          : !act ? { status: "waiting", why: `${r.slug} named its inviter after joining, and its record holds no join day to count the 30 days from` }
           : act.status !== "activated" ? { status: act.status }
             : hold?.state === "cancelled" ? { status: "cancelled", due }
               : hold?.state === "held" ? { status: "held", due }
@@ -271,11 +307,16 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
     });
   // ── the cap: what is due pays in due order while the inviting house has room this month ──
   const placed = new Map();
+  const placedLate = new Map();
   for (const row of plan.filter((p) => p.inviter_side.status === "due").sort((a, b) => a.inviter_side.due.localeCompare(b.inviter_side.due) || a.household.localeCompare(b.household))) {
+    // a late-named one: at most INVITE_BACKFILL_CAP paid in all, whatever month (POS-947); it never frees up
+    const paidLateNow = row.backfill ? (paidLate.get(row.invited_by) ?? 0) + (placedLate.get(row.invited_by) ?? 0) : 0;
+    if (row.backfill && paidLateNow >= INVITE_BACKFILL_CAP) { row.inviter_side = { status: "over-backfill-cap", due: row.inviter_side.due, paid_backfilled: paidLateNow, cap: INVITE_BACKFILL_CAP }; continue; }
     const k = `${row.invited_by}|${month}`;
     const before = (ledger.paidInMonth.get(k) ?? 0) + (placed.get(k) ?? 0);
     if (before >= INVITE_CAP_PER_MONTH) { row.inviter_side = { status: "over-cap", due: row.inviter_side.due, month, paid_this_month: before }; continue; }
     placed.set(k, (placed.get(k) ?? 0) + 1);
+    if (row.backfill) placedLate.set(row.invited_by, (placedLate.get(row.invited_by) ?? 0) + 1);
     const to = inviterRecipient(row.named, residentsOf.get(row.invited_by) ?? [], isMeep);
     row.inviter_side = to
       ? { status: "owed", due: row.inviter_side.due, to, amount: 10, nth_this_month: before + 1,

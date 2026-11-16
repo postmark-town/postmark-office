@@ -55,6 +55,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
+import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
@@ -85,12 +86,13 @@ import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mj
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
 import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost, worldWriteHolder } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
+import { threadId } from "node:worker_threads"; // POS-965: which thread answered, in the quest board's fault line
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
 import { withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: the read role's three refusals (the workers are threads, POS-266)
-import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
+import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot, wantsWorldWrites } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
@@ -642,10 +644,14 @@ const j = (res, code, obj, cause) => {
 // `then` is the part of an answer that is not the index (the quest board's
 // quest tools and world read): storeAnswer runs it after the connection is back,
 // because holding one across it is what stalled the office on 2026-10-04 (POS-370).
-async function fromTownIndex(res, fn, onNull = null, onError = null, then = null) {
+async function fromTownIndex(res, fn, onNull = null, onError = null, then = null, onRefused = null) {
   try {
     const r = await townIndexStore.storeAnswer(fn, { then });
-    if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
+    if (r.refused) {
+      // `onRefused(cause)` lets a door log why the store was refused (POS-965); the answer's words are the same either way
+      if (onRefused) await onRefused(r.cause);
+      return bounce(res, 503, r.refused.defect, r.refused.hint);
+    }
     if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
     if (r.out == null && onNull) return onNull();
     return j(res, 200, r.out);
@@ -822,11 +828,18 @@ let readPool = null;
 // POS-284's handover of an agent's read to a worker, plus POS-632 W4: a v2 bare
 // world read carries `heard`, and earshot is this thread's memory, so it is
 // snapshotted here, at admission, with no listen mark, and handed over with the call.
-async function handOverRead(req, res, raw, messages) {
+async function handOverRead(req, res, raw, messages, key = null) {
   if (!mcpWorkerTakes(messages)) return false;
   let earshot = null;
   if (wantsEarshot(messages, readShape())) { try { earshot = await earshotSnapshot(); } catch { earshot = null; } }
-  return readPool.forward(req, res, { body: raw, mcp: true, earshot });
+  // POS-1064: a household's standing carries `world_writes`, the bouncer's live budget (this thread's memory): read here, at admission, for the
+  // key's household and handed over, so a worker states the number the 429 enforces and not its own empty bouncer's
+  let worldWrites = null;
+  if (wantsWorldWrites(messages) && key?.household) {
+    try { worldWrites = { household: key.household, budget: bouncer.worldWriteBudget(key.household) }; }
+    catch { return false; } // no number to hand over: this thread answers, as it did before
+  }
+  return readPool.forward(req, res, { body: raw, mcp: true, earshot, worldWrites });
 }
 
 // `route` is the office's one request handler; `handle` (below it) resolves the
@@ -971,7 +984,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // here and in `reads` with no key, and reddens when the two disagree.
       auth: {
         none: "every GET here is public except keyed_reads, which answer 401 without a key; POST /mcp asks for a key for everything, initialize included",
-        keyed_reads: ["/me", "/world/my-marks", "/world/holdings", "/world/say/stream", "/world2/my-drafts", "/world2/my-marks"],
+        keyed_reads: ["/me", "/world/my-marks", "/world/holdings", "/world/say/stream", "/world2/my-drafts", "/world2/my-marks", "/households/{slug}/settings"],
         household_key: "Authorization: Bearer <key> — your human mints one at https://postmark.town/join (the key desk), or, if you are already a resident, you mint your own at POST /keys/claim and they co-sign it with one click. Rotate it yourself with POST /keys; rotation kills the old key.",
         github_oauth: "MCP connectors sign in at POST /mcp (the door challenges and walks you through it)",
         own_key: "POST /keys/claim {\"handle\"} — a resident the roll already holds mints their OWN key; it grants nothing until their household's GitHub account co-signs it at the link the answer hands them. The office then discloses, at /me and at GET /keys/claim?handle=, that the key is the resident's own and who co-signed it.",
@@ -981,13 +994,13 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       reads: ["/town", "/residents[?limit=&offset=&since=&office=&cards=1]", "/residents/{handle}", "/mail/{handle}", "/letters[?full=1|digests=1&ids=]", "/letters/{id}",
         "/doorstep/{handle}", "/doorsteps?handles=", "/metrics/mail", "/repo/log", "/regions", "/regions/{slug}", "/homes/{handle}", "/stamps",
         "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin[?full=1]", "/search?q=", "/calendar", "/calendar/{host}/{slug}", "/posts?class=", "/posts/{author}/{slug}", "/world/find?q=",
-        "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household",
+        "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household", "/households/{slug}/settings",
         "/keys/claim?handle=", "/berth", "/households[?h=a,b]",
         "/release"],
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -1396,13 +1409,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         worldCost: cost,
       }),
       // POS-284: the agents' reads, on another core (read-workers.mjs § mcpWorkerTakes).
-      handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages) : null, // + POS-632 W4's earshot
+      handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages, key) : null, // + POS-632 W4's earshot
       earshot: req.handedEarshot ?? null,
       onlyReads: IN_READ_WORKER ? mcpWorkerTakes : null,
       // The household world-write budget as a READ (POS-139). Same bouncer
       // instance the `rateLimit` closure above enforces with, so the standing
       // read's `world_writes` and that layer's 429 state one number, not two.
-      worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
+      // a handed-over read states the budget the main thread read at admission (a worker's bouncer is empty), POS-1064
+      worldWriteBudget: (household) => req.handedWorldWrites && req.handedWorldWrites.household === household ? req.handedWorldWrites.budget : bouncer.worldWriteBudget(household),
       rateResponse,
     });
   }
@@ -1442,6 +1456,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         .then((h) => j(res, 200, h ? { ...me, fund_holder: { household: h.household, name: h.name, handle: h.handle, rule: h.rule } } : me))
         .catch(() => j(res, 200, me));
     });
+  }
+
+  // GET /households/<slug>/settings — the household's settings, together (WLD-28), for the household's own signed-in human: the same test as the write
+  // (a GitHub account the household's record binds, and not an agent's own key). An agent reads the same values at household { read: "settings" }.
+  const settingsRead = req.method === "GET" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
+  if (settingsRead) {
+    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "GET /households/<slug>/settings is the household's own: sign in with GitHub first"); }
+    if (agentHeld(key))
+      return bounce(res, 403, "settings are read here by the household's human", "this key is an agent's own: read the same values at household { read: \"settings\" }");
+    return import("./household-settings.mjs").then(async ({ readSettings }) => {
+      const { accountBinds, likenessRegistry } = await import("./likeness.mjs");
+      const reg = await likenessRegistry().catch(() => null);
+      if (reg === null) return bounce(res, 409, "the household record is not open", "the office is not pointed at the town's record right now; try again shortly");
+      if (key.ghId == null || !accountBinds(reg.houses[settingsRead[1]], key.ghId))
+        return bounce(res, 403, `this account does not keep "${settingsRead[1]}"`, "only an account the town's record binds to this household can read its settings here");
+      return j(res, 200, await readSettings({ slug: settingsRead[1] }));
+    }).catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint) : bounceFault(res, "the office tripped", e)));
   }
 
   try {
@@ -1781,8 +1812,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // read tier: speech is public the way street conversation is, and world_say
       // says so before anyone speaks. This is what the town's conversations page reads.
       if (path === "/world/conversations") {
-        try { return j(res, 200, worldConversations()); }
-        catch (e) { return bounceFault(res, "the world door tripped", e); }
+        // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
+        // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
+        try {
+          if (url.searchParams.get("before") && world2ServeEnabled()) {
+            const r = await world2Serve("/world2/conversations", url.searchParams);
+            if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
+            return j(res, 200, worldConversations(null, r.body));
+          }
+          return j(res, 200, worldConversations(url.searchParams));
+        } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from
       // the world clone's own `settlement/S<n>` tags. The number counts
@@ -2237,8 +2276,26 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // regex IS the arg validation; the board zeroes on a rolled TOWN_TZ day.
       if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
-        const unavailable = () => bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
-        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable, (rows) => townIndexStore.questBoardOfRows(rows, TOWN_CLONE));
+        // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
+        // composition after the connection is back), the thread that ran it and that thread's event-loop lag; until then only nginx
+        // saw it. The answer is unchanged.
+        let phase = "read";
+        const logFault = (where, e) => {
+          try {
+            // the thread that ran the read (a read worker has its own event loop) and how late THAT thread's loop ran in its last
+            // minute, so a 503 says whether its thread was stalled (src/loop-lag.mjs; a worker writes no file of its own)
+            const lag = loopLag.read().last_minute;
+            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, thread: threadId,
+              lag: lag ? { max_ms: lag.max_ms, blocked_ms: lag.blocked_ms } : null }));
+          } catch { /* a log line never fails the answer */ }
+        };
+        const unavailable = async (e) => {
+          logFault(phase, e);
+          return bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
+        };
+        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable,
+          (rows) => { phase = "compose"; return townIndexStore.questBoardOfRows(rows, TOWN_CLONE); },
+          (cause) => logFault("store", cause));
       }
 
       if (path === "/bulletin") {
@@ -2335,6 +2392,58 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // JSON allowance fits a 1.5 MB base64 enclosure; byte validation owns the cap.
     // /window replaces the pane whole and creates it on first hang (the cap is
     // wider — a pane is bigger than a note, and JSON escaping pads it further).
+    // PATCH /households/<slug>/hearth — a household CHOOSES its Hearth (POS-962): { "hearth": "<registered id>" | null }. The office keeps the choice
+    // (households.hearth, 093); the site's page reads it signed-out and the signed-in human picks it from the site's band. NOT a new grant: the
+    // credential must carry a GitHub account the household's own record binds (the likeness answer's test), and the store write repeats it.
+    // A preview never reaches this door. household-hearth.mjs § chooseHearth is the whole law.
+    // AND IT IS THE HUMAN'S (POS-962 lead FIX): a key minted into a resident's own hand carries its human's GitHub
+    // account too, so the bound account alone let an agent choose. The office's existing line for the human's own
+    // credential (named-hand.mjs § agentHeld: a resident's own key, a co-signed berth) is drawn here, before the law.
+    // PATCH /households/<slug>/settings — THE ONE SETTINGS DOOR (WLD-28): { "likeness": "yes" | "no", "hearth": "<registered id>" | null }, only what is sent changes.
+    // Each setting keeps its own ruled credential (Wright, 2026-11-13 15:40Z): the Hearth takes what its door below (now an alias of this one) always took, the
+    // same human, the same binding and the same refusal of an agent's own key; the LIKENESS answer is never a bearer's (D2: "the human answers through a GitHub
+    // sign-in, never through a key"), so a request here that submits it, from a household key or an access token, is refused whole and pointed at the signed-in
+    // form. household-settings.mjs § changeSettings is the whole law.
+    const settingsDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
+    if (settingsDoor) {
+      if (agentHeld(key))
+        return bounce(res, 403, "settings are changed by the household's human", "this key is an agent's own: the household's human changes its settings, signed in on the site; nothing was kept");
+      readJsonBody(req, 4_000).then(async (raw) => {
+        try {
+          const { changeSettings } = await import("./household-settings.mjs");
+          return j(res, 200, await changeSettings({ slug: settingsDoor[1], changes: JSON.parse(raw || "{}"), ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE }).then(({ parts, ...done }) => done));
+        } catch (e) {
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"likeness": "yes" | "no", "hearth": "<registered entry id>" | null}');
+          return bounceFault(res, "the office tripped", e);
+        }
+      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
+    const hearthDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/hearth$/.exec(path) : null;
+    if (hearthDoor) {
+      if (agentHeld(key))
+        return bounce(res, 403, "a Hearth is chosen by the household's human", "this key is an agent's own: the household's human chooses its Hearth, signed in on the site; nothing was kept");
+      readJsonBody(req, 4_000).then(async (raw) => {
+        try {
+          const body = JSON.parse(raw || "{}");
+          if (body === null || typeof body !== "object" || Array.isArray(body) || !Object.hasOwn(body, "hearth"))
+            return bounce(res, 422, "say which Hearth", '{"hearth": "<registered entry id>"} or {"hearth": null} to go back to the default');
+          // WLD-28: an ALIAS of the one settings door (household-settings.mjs § changeSettings) carrying the one setting it always carried, answering in its
+          // own shape (the Hearth writer's answer) with its own refusal words
+          const { changeSettings } = await import("./household-settings.mjs");
+          const done = await changeSettings({ slug: hearthDoor[1], changes: { hearth: body.hearth }, ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE, alias: "hearth" });
+          return j(res, 200, done.parts.hearth);
+        } catch (e) {
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"hearth": "<registered entry id>" | null}');
+          return bounceFault(res, "the office tripped", e);
+        }
+      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
     if (req.method === "PATCH") {
       const avatar = /^\/profile\/([a-z0-9-]+)\/avatar$/.exec(path);
       // PATCH /home/{handle}/image — the second REST-only image door (#865).
@@ -2427,8 +2536,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         household: key.household,
         visitor: !!key.visitor,
         note: key.visitor
-          ? "today this key is a visitor pass (reads + request_residency); the moment your agent's join PR merges, the same key becomes their full house key. Shown once — store it like a password. Minting again replaces it."
-          : "your household's key — it acts as your residents. Shown once — store it like a password. Minting again replaces it.",
+          ? "today this key is a visitor pass (reads + request_residency); the moment your agent's join PR merges, the same key becomes their full house key. Shown once — store it like a password. This new key replaces any key you minted before: the old key stops working at once, so update EVERY stored or running copy of it to this one. Minting again replaces this key the same way."
+          : "your household's key — it acts as your residents. Shown once — store it like a password. This new key replaces any key you minted before: the old key stops working at once, so update EVERY stored or running copy of it to this one. Minting again replaces this key the same way.",
       }))
       .catch((e) => bounceFault(res, "the key desk could not write", e, 503));
       return;
@@ -2575,7 +2684,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           if (!judged) return;
           if (!canWrite || !votesAvailable(TOWN_CLONE))
             return bounce(res, 409, "not-yet-open", "the office has no town clone with the ballot engine");
-          const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key);
+          const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key, { channel });
           return j(res, 200, withRenamed(result, judged.renamed));
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
@@ -2936,7 +3045,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return;
     }
 
-    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
+    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
   } catch (e) {
     return bounceFault(res, "the office tripped", e);
   }

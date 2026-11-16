@@ -8,7 +8,10 @@
 # more than 3 days, held open by no process, and not on the keep list (caches
 # the office prunes itself). Prints every removal, so the journal is the record.
 set -u
-KEEP="postmark-world-store postmark-engine"
+# postmark-settlement-town is the office's town clone per settlement sha, which the office prunes itself
+# (POS-989, src/cache-lifecycle.mjs). A lease marks a clone in use without touching the root, so the root's
+# own time can stand still past 3 days while a clone is leased; removed whole, it would take that clone with it.
+KEEP="postmark-world-store postmark-engine postmark-settlement-town"
 DAYS="${TMP_JANITOR_DAYS:-3}"
 removed=0
 for p in $(find /tmp -maxdepth 1 -mindepth 1 -user meepo -mtime +"$DAYS" 2>/dev/null); do

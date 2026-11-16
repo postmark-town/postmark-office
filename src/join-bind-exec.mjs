@@ -12,6 +12,7 @@
 // Exit 0 with the answer or { error: { code, field, defect, hint } } (a refusal
 // is an answer); exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +40,7 @@ async function main() {
   // behind. Store rows the ceremony already wrote are outside the clone and
   // stay; the next registry drain prints them.
   answer(await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     // the handle check reads the store's residents, loaded now under the lock (POS-268)
     const { refreshStoreProbe } = await import("./town-index-store.mjs");
     if (!(await refreshStoreProbe({ letters: false, logins: false })))

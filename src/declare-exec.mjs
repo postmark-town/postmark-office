@@ -20,6 +20,7 @@
 // Exit 0 with the plan result or { error: { code, field, defect, hint } } (a
 // bounce is an answer); exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,8 +68,7 @@ async function main() {
   answer(await penTransaction(CLONE, async () => {
     // Freshen first: the registers we are about to check must be the ones the
     // town holds, not the ones this clone happened to hold last crossing.
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
     // THE INDEX, UNDER THE LOCK (POS-268): the handle check reads the store's
     // residents, loaded now; a store that cannot answer refuses the declaration

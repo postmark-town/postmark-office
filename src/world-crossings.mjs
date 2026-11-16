@@ -309,7 +309,7 @@ function thresholdAtStandpointFrame(target, plan, here, marks) {
 async function serviceFor(worldClone, worldState, deps = {}) {
   if (deps.service) return await deps.service(worldState);
   try { return await vesselServiceFrom(worldState, { repo: worldClone }); }
-  catch { return { service: null }; }
+  catch { return { service: null, unreadable: true }; }
 }
 
 /** The class mark a named class resolves to, out of the fold. The fold carries
@@ -976,13 +976,23 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   // (live-reads § DEPARTURE_ACTIONS). NEVER a second pen: a position written by
   // anything but the movement record is a position half the office cannot see.
   const nowMs = deps.nowMs ? deps.nowMs() : Date.now();
-  const { service, mod } = await serviceFor(worldClone, w, deps);
+  const svc = await serviceFor(worldClone, w, deps);
+  const { service, mod } = svc;
   const vessel = vesselIdOf(service);
   const target = (w.marks ?? []).find((m) => m.id === markId) ?? null;
   const isVehicle = Boolean(vessel) && markId === vessel && markClassOf(target) === VEHICLE_CLASS;
+  // NEVER AN EXIT TO NOWHERE (POS-943). Each read the deposit needs either answers or refuses the exit, BEFORE it
+  // is written, so an unreadable read leaves the rider aboard rather than out of the hull with no ground.
+  const noDeposit = (what) => bounce(503, `the office could not read ${what}, so it cannot say where to set you down`,
+    "nothing was written: you are still aboard. Ask again shortly; the exit sets you down at the stop you boarded through, or at your ride's destination once it has come due");
+  if (!vessel && markClassOf(target) === VEHICLE_CLASS && (svc.unreadable || (svc.errors ?? []).some((e) => e?.mark === "(engine)")))
+    throw noDeposit("the Post Office's timetable");
   let deposit = null;
   if (isVehicle && deps.acts) {
-    const state = rideStateFrom((await deps.acts(who)) ?? [], { vesselId: vessel });
+    let history;
+    try { history = (await (deps.actsStrict ?? deps.acts)(who)) ?? []; }
+    catch { throw noDeposit("how you boarded her"); }
+    const state = rideStateFrom(history, { vesselId: vessel });
     const where = depositAt({ entryStop: state.entryStop, standingRide: state.standingRide, nowMs });
     // No `via` on the enter and no standing ride means this resident boarded the
     // old way — standing on her at the quay — and owes no deposit at all. Their
@@ -995,6 +1005,9 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
     // `ashoreOf` for that one case, injected because it lives in the clone.
     if (where.stop)
       deposit = { ...where, anchor: depositPointFor(where.stop, service, { ashore: mod?.ashoreOf ?? null }), ride: state.standingRide ?? null };
+    // a stop the office can name but not place is no deposit: refuse, never a guessed point (POS-943)
+    if (deposit && !(Number.isFinite(Number(deposit.anchor?.x)) && Number.isFinite(Number(deposit.anchor?.y))))
+      throw noDeposit(`where ${deposit.stop} stands`);
   }
 
   const written = await deps.record({

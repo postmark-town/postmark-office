@@ -264,20 +264,24 @@ function child(body) {
 function pathToFileUrlString(p) { return new URL(`file:///${p.replace(/\\/g, "/")}`).href; }
 
 const HOOK = `
+// Each target's fs import line, in EVERY form the town has spelled it: exactly one of them must appear exactly once, or the hook refuses by name. The pinned town's
+// quest-progress.mjs dropped readdirSync when it took listRoomDirs from envelope.mjs (POS-1031, the town past be71875e4); the older form is kept so the hook reads either pin.
 const TARGETS = new Map([
-  ["tools/stamp-mint.mjs", "import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';"],
-  ["tools/quest-progress.mjs", "import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';"],
+  ["tools/stamp-mint.mjs", ["import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';"]],
+  ["tools/quest-progress.mjs", ["import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';", "import { readFileSync, writeFileSync, existsSync } from 'node:fs';"]],
 ]);
 const SHIM = (orig) =>
   orig.replace("readFileSync,", "readFileSync as __pos167_rfs,") +
   "\\nconst readFileSync = (p, ...a) => { if (typeof p === 'string' && p.includes('stamp-ledger')) { globalThis.__POS167 = (globalThis.__POS167 ?? 0) + 1; } return __pos167_rfs(p, ...a); };\\n";
 export async function load(url, context, nextLoad) {
   const r = await nextLoad(url, context);
-  for (const [suffix, importLine] of TARGETS) {
+  for (const [suffix, importLines] of TARGETS) {
     if (!url.endsWith(suffix)) continue;
     let src = typeof r.source === "string" ? r.source : Buffer.from(r.source).toString("utf8");
-    const n = src.split(importLine).length - 1;
+    const found = importLines.filter((l) => src.includes(l));
+    const n = found.reduce((c, l) => c + src.split(l).length - 1, 0);
     if (n !== 1) throw new Error("POS167 HOOK: expected exactly 1 fs import in " + url + ", found " + n);
+    const importLine = found[0];
     src = src.replace(importLine, SHIM(importLine));
     if (!src.includes("__pos167_rfs")) throw new Error("POS167 HOOK: shim did not land in " + url);
     return { ...r, source: src };

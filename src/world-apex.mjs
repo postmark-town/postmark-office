@@ -53,6 +53,7 @@ import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, 
 import { explainAnswer, explainPath, encodeCursor, decodeCursor, CURSOR_RENAMES_UNTIL, moreLine } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table; the one cursor; the more line
 import { entityKindOf, investigateResident, RECENT_SQL, RECENT_CAP } from "./world-investigate-entity.mjs"; // POS-632 PR-4: the entity read
 import { PUBLIC_ACTS as PUBLIC_ACTS_FOR_INVESTIGATE, ACTIVE_WINDOW_MS as ACTIVE_WINDOW_FOR_INVESTIGATE } from "./world-read-v2.mjs"; // POS-632 PR-4: the entity read's public acts and window
+import { SOURCE_ACT_READ, readSourceAct } from "./source-act.mjs"; // WLD-146: the Worldkeeper reads one source act
 import { join } from "node:path";
 
 import {
@@ -89,6 +90,7 @@ import {
   engineDescend, // WLD-83 P10: the engine's one descent, for an appearance tree
   isOutsiderLens, OUTSIDER_LENS, // WLD-26: the outsider lens, one switch on the owner rule
   lensNoteFor, // POS-823: the line a lens read carries when the lens changed nothing for the household
+  servedLedgerNow, // POS-1048: one enter-record scan for every ledger read of a burst of acts
 } from "./world.mjs";
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
@@ -107,7 +109,6 @@ import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOf
 // is the block now, and an import this file no longer reads would be a false
 // claim about what it reads.
 import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopDoorsNearest, stopsOfService, vesselIdOf } from "./world-ride.mjs";
-import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
 import { ACTION_STANCE, STANCE_TOOLS, declareStanceViaOffice, readNeverPerforms, stanceShadow, stancesBlock, withEdgeWords } from "./world-stance.mjs";
@@ -263,8 +264,15 @@ export function standpointForCrossing(here, who) {
  * the pool cannot be reached, and both land here as `[]` — which is the input
  * that makes the deposit rule decline to move the rider. That is the same
  * fail-safe this function has always had, now with one source rather than two.
+ *
+ * EXCEPT FOR THE EXIT'S DEPOSIT (POS-943): "decline to move the rider" is,
+ * after the exit is written, a rider out of the hull standing wherever the hull
+ * was (finch, 100 km out). `strict` lets an unreachable store THROW, so the
+ * vessel's exit refuses before it writes anything (`crossingDeps().actsStrict`).
+ * "Not configured" still answers `[]`: an office with no store has no boarding
+ * to read and never had a deposit to make.
  */
-async function actsOfActor(who) {
+async function actsOfActor(who, { strict = false } = {}) {
   try {
     const { actsQuery } = await import("./world2-acts.mjs");
     const rows = await actsQuery(
@@ -275,7 +283,7 @@ async function actsOfActor(who) {
     return rows.map((r) => ({
       action: r.action, object: r.object ?? null, payload: actPayload(r.payload),
     }));
-  } catch { return []; }
+  } catch (e) { if (strict) throw e; return []; }
 }
 
 /**
@@ -491,7 +499,7 @@ export function crossingDeps() {
     // folding occupancy out of a fossil — so a resident who entered a room and
     // entered again was adjudicated as though he had never been inside.
     // src/enter-exit-ledger.mjs is the one deriver; this is one of its readers.
-    ledger: async () => { try { return (await servedEnterExitLedger(WORLD_CLONE)).ledger; } catch { return ""; } },
+    ledger: async () => { try { return (await servedLedgerNow()).ledger; } catch { return ""; } },
     standpointOf: async (who) => standpointForCrossing(await residentStandpoint(who).catch(() => null), who),
     // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12; postmark-town/postmark #2685).
     // `walking` is the ONE reader of "where is this resident" (residentStandpoint:
@@ -528,10 +536,14 @@ export function crossingDeps() {
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
     // (world-ride.mjs § rideStateFrom). Read from the STORE (POS-152), which is
     // never truncated, so an entry older than the drain cursor is still here; a
-    // store that cannot be opened answers with no history, and the deposit rule
-    // then falls back to "you came in nowhere" and leaves a resident exactly
-    // where they are rather than setting them down somewhere they never earned.
+    // store that cannot be opened answers with no history here. The vessel
+    // exit's deposit reads `actsStrict` below instead (POS-943): "leave a
+    // resident exactly where they are" was, after the exit, a resident standing
+    // where the hull had been.
     acts: async (who) => actsOfActor(who),
+    // THE SAME READ FOR THE VESSEL EXIT'S DEPOSIT (POS-943): an unreachable store throws here, and the exit refuses
+    // with nothing written, rather than writing an exit that sets the rider down nowhere.
+    actsStrict: async (who) => actsOfActor(who, { strict: true }),
     // What the class of a mark LENDS, resolved for a resident — the § 5 roster.
     // It lives here and not in world-crossings.mjs because the roster is in the
     // hydrated store and that module is deliberately store-free.
@@ -1989,7 +2001,18 @@ async function usableHere(args, key, oriented, nearby = []) {
     const { usableAt } = await import("./world-kinds.mjs");
     const here = { x: Number(sp.x), y: Number(sp.y) };
     // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
-    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
+    // A FOCUSED MARK ALWAYS GETS ITS COLUMN (WLD-79): the eyes list is capped, so a mark 10 m away that
+    // the glance dropped was never in the matrix and its close look said `can: []` whatever its distance.
+    // The matrix measures reach itself (usable-verbs § standsWithin), so adding the focus adds no verb it does not earn.
+    // But the eyes are sight-filtered and the focus is not: a thing in a dungeon room the reader has not entered is no
+    // mark to the take door (WLD-74), so the focus joins the matrix only where the one sight function (world.mjs § reachableBy,
+    // null when the world hides nothing) lets this reader reach it.
+    let focused = focusArgs(args)?.mark;
+    if (focused) {
+      try { const reachable = await (await import("./world.mjs")).reachableBy(who, key); if (reachable && !reachable(focused)) focused = null; }
+      catch { focused = null; } // the sight could not be read: the focus stays out, as the eyes' own list would
+    }
+    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby: focused ? [...nearby, focused] : nearby }),
       residents: oriented.present?.residents ?? [] });
     // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing
     return [...pairs, ...(await creaturePairsHere(who, here, oriented.present?.residents ?? []))];
@@ -2611,13 +2634,24 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     // THE CREATURES' ANSWERS TO YOU (POS-637 PR-C; C1): v2's live read only.
     let creatureEffects = null;
     if (who && live) try {
-      const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
+      const { creaturesForRead, creatureToYou, readFleeRows, fleeEventsOf } = await import("./creatures-read.mjs");
       const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
       const cur = await creaturesForRead({ as: who });
+      const sinceMs = cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS;
+      // THE FLEE THE OFFICE MADE FOR YOU AT 0 NERVE (WLD-164): its exit act is in the record with its cause, and is said here
+      // from that record alone. An unreadable record is said incomplete, never read as "you did not flee"
+      let fled = [], fledUnread = null;
+      try {
+        const { actsQuery } = await import("./world2-acts.mjs");
+        fled = await readFleeRows(who, (sql, params) => actsQuery(sql, params));
+      } catch (e) { fledUnread = plainReason(e, "record", "the exit record"); faultLogged("a resident's recorded flee could not be read for their happened", e); }
       // whenever the law is read here, an empty fold included: a since older than
       // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
       if (cur?.living)
-        creatureEffects = creatureToYou(cur, who, { sinceMs: cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS });
+        creatureEffects = creatureToYou(cur, who, { sinceMs, fled });
+      else if (fled.length) creatureEffects = { events: fleeEventsOf(fled, { sinceMs, nowMs: Date.now() }), readable: true };
+      if (fledUnread && creatureEffects?.readable !== false)
+        creatureEffects = { events: creatureEffects?.events ?? [], readable: false, missing: "your flee at 0 nerve", reason: `the exit record could not be read (${fledUnread}): this is not an answer about whether you fled` };
     } catch { creatureEffects = null; }
 
     const block = happenedBlock({
@@ -2672,7 +2706,11 @@ async function closeLooks(args, key, oriented, usable) {
   if (focus && !focus.error && focusArgs(args)) {
     try {
       const { investigateMark } = await import("./world-kinds.mjs");
-      const close = await investigateMark(focusArgs(args).mark, usable);
+      // `here`: where the reader stands, so the close look says how far the mark is (WLD-79); a reader standing nowhere gets none
+      const sp = oriented?.standpoint;
+      const here = sp?.stance === "embodied" && Number.isFinite(Number(sp.x)) && Number.isFinite(Number(sp.y)) ? { x: Number(sp.x), y: Number(sp.y) } : null;
+      const close = await investigateMark(focusArgs(args).mark, usable, { here });
+      if (close.distance) focus.distance = close.distance;
       if (close.can) focus.can = close.can;
       if (close.holds) Object.assign(focus, { holder: close.holder, holds: close.holds });
     } catch { /* the close look stands without its column; the doors still answer */ }
@@ -3225,7 +3263,7 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
+  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [], note: false }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
   // no porch lights: this answer shows no houses (WLD-29)
   const seen = await worldEyes(args, key, { lights: false });
@@ -3748,7 +3786,7 @@ export const WORLD_READ_FIELDS = Object.freeze({
   say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
          since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, with the counts, and each list only when it changed (`unchanged` names the ones held back). Milliseconds, and NOT the top-level since_crossing: (a crossing number, which buys `happened`)." },
          // POS-226: the backward cursor, the mirror of `since`.
-         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as the last settlement. Milliseconds, like since:." },
+         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as `hearable_since` (the last settlement, or earlier for a room that carried across it). Milliseconds, like since:." },
          // POS-265: world_say's retry key guards a voice; a read speaks none, so
          // it is refused here by name rather than carried to a listen.
          nonce: { type: "string", description: "refused — a read speaks nothing, so a retry key has nothing to guard; pass it on do: \"say\" with your text" },
@@ -3955,6 +3993,10 @@ async function apexReadAction(args, key, ctx = {}) {
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope))) {
     return bounce(422, "`args` must be an object", `narrowing fields ride inside it — world { read: "${action}", args: { … } }`);
   }
+  // THE WORLDKEEPER'S SOURCE-ACT READ (WLD-146): the act behind one STATE/log
+  // seq, for the keeper's own hand only. Like find, it performs nothing and
+  // belongs to no ground, so it is answered before any standpoint is taken.
+  if (action === SOURCE_ACT_READ) return readSourceAct(envelope ?? {}, key, { handle: args.handle });
 
   // ── FIND: THE ONE READ WITH NO ACT BEHIND IT (2026-09-26) ──────────────────
   //
@@ -4352,7 +4394,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // before the seam can see it. The human class shipped behind a door that
     // refused to pass its own word through: found live on the dungeon stage,
     // the night the first embodied act was actually attempted.
-    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand, honoured only where the ground's class grants them feet (LOGOS/classes.md § The human class); the act records under the human's hand, never the resident's." },
+    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand: speaking only, for now, beside one of your household's residents and from that resident's standing; walking may come later (LOGOS/classes.md § The human class). The act records under the human's hand, never the resident's." },
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see, in the town's own words: a resident's mark is named there by its author and id, never quoted (its body is `nearby[].body`, or mark: \"<id>\"); omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).

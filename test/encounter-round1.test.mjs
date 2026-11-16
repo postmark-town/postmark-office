@@ -174,7 +174,10 @@ test("F8: a finish says what it pays at the settlement, to whom (the first by re
   const e = endingSaid(c, NOW);
   assert.equal(e.first, "kai", "the lowest act id, never the row's order");
   assert.equal(e.at, iso(windowAt(NOW).ends));
-  assert.match(e.note, /^At the settlement \(18:00Z\), what it carries \(the-town\/a-thing\) goes to kai, the first to finish it, and everyone it answered is named\.$/);
+  // WLD-123: a carried item is PENDING until the settlement hands it over, never told as already held
+  assert.match(e.note, /^Pending until the settlement \(18:00Z\): what it carries \(the-town\/a-thing\) is named for kai, the first to finish it, at the next settlement, and everyone it answered is named\. It is handed over only when the settlement lands\.$/);
+  assert.doesNotMatch(e.note, /\bgoes to\b/, "the old unconditional handover wording is gone");
+  assert.equal(pendingFor(living, "kai", NOW)[0].note, e.note, "the finisher's glance carries the same pending telling");
   assert.deepEqual(pendingFor(living, "kai", NOW).map((p) => p.creature), [ID]);
   assert.deepEqual(pendingFor(living, "ren", NOW), []);
   assert.equal(encounterRead({ living }, c, KEEPER, { handle: "kai", now: NOW }).ending.first, "kai");
@@ -185,6 +188,33 @@ test("F8: a finish says what it pays at the settlement, to whom (the first by re
     present: presentOf([["kai", 10]]), households: async () => lookup, flee: () => {}, aimed: fresh.byId.get(ID) });
   assert.equal(answer.finished, true);
   assert.equal(answer.ending.first, "kai");
+});
+
+test("WLD-123: the finish reply names a carried item as pending; no carried item, no finish and an already-gone creature gain no promise", async () => {
+  // the real consumer: a finishing reaction's reply, for a creature that carries an invented thing
+  const carrying = new LivingSet({ law: lawWith() }).fold([spawn({ carries: "the-town/a-lantern" })]);
+  const w = recordingWrite();
+  const [answer] = await reactTo(act({ verb: "call", actor: "kai" }), { living: carrying, law: carrying.law, write: w.write, writeCost: w.write, now: NOW, env: { CREATURE_JUDGE: "code" },
+    present: presentOf([["kai", 10]]), households: async () => lookup, flee: () => {}, aimed: carrying.byId.get(ID) });
+  assert.equal(answer.finished, true);
+  assert.equal(answer.ending.first, "kai");
+  assert.equal(answer.ending.carries, "the-town/a-lantern");
+  assert.match(answer.ending.note, /^Pending until the settlement/);
+  assert.doesNotMatch(answer.ending.note, /\bgoes to\b/);
+  // no carried item: the ending keeps its plain telling and names no item
+  const bare = new LivingSet({ law: lawWith() }).fold([spawn()]).fold([row(ID, "finish", ID, { by: "kai", act: "800" })], { advance: false });
+  const none = endingSaid(bare.byId.get(ID), NOW);
+  assert.equal(none.carries, undefined);
+  assert.match(none.note, /^At the settlement \(18:00Z\), its ending goes to kai, the first to finish it, and everyone it answered is named\.$/);
+  assert.doesNotMatch(none.note, /carries|Pending/);
+  // no finish: nothing is promised
+  const unfinished = new LivingSet({ law: lawWith() }).fold([spawn({ carries: "the-town/a-lantern" })]);
+  assert.equal(endingSaid(unfinished.byId.get(ID), NOW), null);
+  // already gone: nothing is promised, however it was finished
+  const done = new LivingSet({ law: lawWith() }).fold([spawn({ carries: "the-town/a-lantern" })]).fold([row(ID, "finish", ID, { by: "kai", act: "800" })], { advance: false });
+  done.byId.get(ID).gone = "ended";
+  assert.equal(endingSaid(done.byId.get(ID), NOW), null);
+  assert.deepEqual(pendingFor(done, "kai", NOW), []);
 });
 
 // ── F9 ─────────────────────────────────────────────────────────────────────

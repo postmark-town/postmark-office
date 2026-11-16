@@ -71,6 +71,88 @@ test("thread is optional at the door and defaults to new", () => {
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
+// POS-921: `thread:` is written straight into the letter's frontmatter, one line, so the door admits only
+// `new` or a letter id (the grammar the ferry's envelope demands of every id). The falsifier is the
+// reporter's case: a padded thread and a thread carrying a line break (which also let a resident add
+// `stake_*` lines of their own) are refused, and a thread of 200,000 blanks is refused in milliseconds
+// instead of becoming a letter the crossing's parsers chew on at every sailing.
+// LAW (envelope.mjs classify): "[the id] must therefore be a single safe path segment" — /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const outboxOf = (clone) => join(clone, "WHITE_PAGES", "wright", "outbox");
+const LS = String.fromCharCode(0x2028);
+const BAD_THREADS = {
+  "padded after": "limen-2026-07-01-to-wright-hello   ",
+  "padded before": "   limen-2026-07-01-to-wright-hello",
+  "blanks only": "   ",
+  "a tab inside": "limen-2026-07-01-to-wright\thello",
+  "a line break and stake lines of its own": "new\nstake_topic: the-name\nstake_candidate: Waystation\nstake_stamps: 5",
+  "a trailing line break": "limen-2026-07-01-to-wright-hello\n",
+  "a lone CR": "limen-2026-07-01-to-wright-hello\rx: y",
+  "a lone U+2028": `limen-2026-07-01-to-wright-hello${LS}x: y`,
+  "quotes around the id": '"limen-2026-07-01-to-wright-hello"',
+  "a slash": "postmaster/halloween-in-postmark",
+  "a leading dot": ".hidden",
+  "a placeholder": "cassian-<the-id-of-the-letter-where-he-asked>",
+  "256 characters": "a".repeat(256),
+  "200,000 blanks then a CR": ` ${" ".repeat(200_000)}x\ry`,
+};
+for (const [name, thread] of Object.entries(BAD_THREADS)) {
+  test(`a thread with ${name} → 422 naming the fix, and no letter is written`, () => {
+    const clone = tempClone();
+    try {
+      let e = null;
+      const t0 = performance.now();
+      try { enqueueLetter({ ...ok, thread }, fixtureKey, db, clone); } catch (err) { e = err; }
+      assert.ok(e, "the letter was refused");
+      assert.ok(performance.now() - t0 < 1_000, "the refusal is quick, whatever the size");
+      assert.equal(e.code, 422);
+      assert.match(e.message, /^thread ".*" is not a letter id$/);
+      assert.ok(e.message.length < 80, "the refusal does not echo the value back whole");
+      assert.equal(e.message, e.message.replace(/[^ -~]/g, "?"), "the refusal is printable ASCII, with no line break of its own");
+      assert.match(e.hint, /"new", or to the exact id of the letter you are answering/);
+      // the refusal came from the thread check, not from some other bounce
+      assert.equal(existsSync(outboxOf(clone)) ? readdirSync(outboxOf(clone)).length : 0, 0, "nothing was written");
+      // control: the same letter with an honest thread is live on this clone
+      enqueueLetter({ ...ok, thread: "new" }, fixtureKey, db, clone);
+      assert.equal(readdirSync(outboxOf(clone)).length, 1, "the writer is live: the control letter landed");
+    } finally { rmSync(clone, { recursive: true, force: true }); }
+  });
+}
+
+test("a thread that is not a string → 422", () => {
+  for (const thread of [5, true, { id: "x" }, ["limen-2026-07-01-to-wright-hello"]]) {
+    const e = bounce({ ...ok, thread });
+    assert.equal(e.code, 422, JSON.stringify(thread));
+    assert.match(e.message, /is not a letter id$/);
+  }
+});
+
+test("new, and a real letter id, still pass: the id is written to the frontmatter as given", () => {
+  const ids = [
+    "new",
+    "limen-2026-07-01-to-wright-hello",
+    "fizz-2026-10-14-to-sparrobot-re-fizz-2026-10-12-to-sparr-20261013221621756513", // a real id's shape, with a numeric tail
+    "Legacy_Letter.v2-1", // the envelope's grammar also admits capitals, dots and underscores
+    "a".repeat(255), // the longest filename segment
+  ];
+  for (const thread of ids) {
+    const clone = tempClone();
+    try {
+      const r = enqueueLetter({ ...ok, thread }, fixtureKey, db, clone);
+      assert.match(r.commit, /^[0-9a-f]{40}$/, thread);
+      const text = readFileSync(join(outboxOf(clone), readdirSync(outboxOf(clone))[0]), "utf8");
+      assert.ok(text.includes(`\nthread: ${thread}\n`), `the frontmatter carries ${thread.slice(0, 40)}`);
+    } finally { rmSync(clone, { recursive: true, force: true }); }
+  }
+  // an absent or empty thread still defaults to new
+  for (const empty of [undefined, null, ""]) {
+    const clone = tempClone();
+    try {
+      enqueueLetter({ ...ok, thread: empty }, fixtureKey, db, clone);
+      assert.match(readFileSync(join(outboxOf(clone), readdirSync(outboxOf(clone))[0]), "utf8"), /\nthread: new\n/);
+    } finally { rmSync(clone, { recursive: true, force: true }); }
+  }
+});
+
 test("size courtesy → 413", () => {
   assert.equal(bounce({ ...ok, body: "x".repeat(100_001) }).code, 413);
 });

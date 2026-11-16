@@ -185,7 +185,7 @@ async function setHead(client, sha) {
 /** Each table's row count and content digest, computed in the store. */
 export async function tableFingerprints(client) {
   const counts = {}, digests = {};
-  const discovery = await discoveryTablesIn(client); // a store without 088 has neither of discovery's tables, and its snapshot names neither
+  const discovery = await discoveryTablesIn(client); // a store without 097 has neither of discovery's tables, and its snapshot names neither
   for (const name of Object.keys(TOWN_TABLES)) {
     if (DISCOVERY_TABLES.has(name) && !discovery) continue;
     const t = tableOf(name);
@@ -311,7 +311,7 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
     discovery: discovery ? { mode: "seed", skipped: discoverySkipped } : { mode: "absent" } };
 }
 
-// ── discovery (088, POS-497) ─────────────────────────────────────────────────
+// ── discovery (097, POS-497) ─────────────────────────────────────────────────
 //
 // Discovery's pieces and edges are derived from town_letters and town_homes
 // (src/town-discovery.mjs § discoveryRowsOf) and kept in this transaction, so
@@ -323,12 +323,12 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
 // ADDS those of the rows that arrived, plus the resident keys that joined or
 // left. That is work in the touched rows, never the store. A whole pass reads
 // the store's own letters and homes and adds every row once: the first ingest
-// after 088 lands (no epoch yet), an epoch whose rule changed, a revision that
+// after 097 lands (no epoch yet), an epoch whose rule changed, a revision that
 // is not a fingerprint of this epoch's width, and the seal's audit, which counts
-// what it repaired. A store without 088 skips all of it and says so.
+// what it repaired. A store without 097 skips all of it and says so.
 
 const DISCOVERY_META = ["discovery_epoch", "discovery_revision"];
-const DISCOVERY_ABSENT = "  discovery: 088_town_discovery.sql is not applied; its pieces, edges and generation were not written";
+const DISCOVERY_ABSENT = "  discovery: 097_town_discovery.sql is not applied; its pieces, edges and generation were not written";
 
 /** Discovery's whole derivation from the store's own rows, written where it differs: its two meta rows and how many rows it moved. */
 async function discoveryWhole(client, tally) {
@@ -797,7 +797,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   let homesTouched = new Set();
   if (atlas) { await diffTable(client, "regions", atlas.regions, tally); homesTouched = await diffTable(client, "homes", atlas.homes, tally); }
 
-  // discovery (088, POS-497): the letters and homes this delta touched,
+  // discovery (097, POS-497): the letters and homes this delta touched,
   // re-derived (a later set's row wins: the audit's over the delta's), and the
   // generation moved by what they replaced and by the roll's keys. Its own clock,
   // kept out of the phase around it.
@@ -829,7 +829,8 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   ];
   if (hasStamps) metaRows.push(["stamps_minted", minted], ["stamps_tip", tip]);
   if (q) metaRows.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
-  metaRows.push(...discovery.meta); // none on a store without 088, so its two keys are dropped there
+  if (q?.invites) metaRows.push(["quest_invites", q.invites]); // POS-961: bring a neighbour's monthly count, as the seed writes it
+  metaRows.push(...discovery.meta); // none on a store without 097, so its two keys are dropped there
   await diffTable(client, "meta", metaRows, tally);
   lap("bulletin+atlas+meta");
 

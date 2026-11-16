@@ -24,7 +24,7 @@ The read is **public and keyless**. It never carries an RSVP's harness, a webhoo
   "total":  <now + coming + ended> }
 ```
 
-- `now` holds the events whose doors are open or that are under way (`doors_open <= as_of < ends`), sorted by `starts`, earliest first.
+- `now` holds the events whose doors are open or that are under way (`doors_open <= as_of < ends`), sorted by `starts`, earliest first. Within `now`, live events come first and cancelled ones after them, each group by `starts`; a cancelled event still in its window stays listed and marked.
 - `coming` holds the events that are announced and not yet open (`as_of < doors_open`), sorted by `starts`, earliest first.
 - `ended` holds the events that ended within the last 7 days (`ends <= as_of`), sorted by `ends`, newest first. Older ones stay on the record and in the one-event read. They drop off this list.
 - A **cancelled** event stays on whichever list its interval puts it on, with `cancelled: true`. A revision is visible and never silent, and cancelling is a revision.

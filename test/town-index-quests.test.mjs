@@ -55,7 +55,8 @@ before(async () => {
   db = fixtureTown();
   const put = (...v) => putValues(db, "meta", v);
   put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-  put("quest_day", townDay());
+  fixtureDay = townDay();
+  put("quest_day", fixtureDay);
   const qp = (...v) => putValues(db, "quest_progress", v, ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
   qp("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen", "errant"]), JSON.stringify(["limen"]));
   qp("limen", 0, 3, 2, 1, 3, "not json", null);
@@ -116,7 +117,12 @@ const same = async (label, newAnswer) => eq(label, JSON.stringify(await newAnswe
 // byte, a missing one built from the file's row, never from the store's answer), and the postings for the file's bounty ids
 // that have no pot in this fixture's pot table. Everything else stays the record's, compared as bytes.
 const FIXTURE_POT_IDS = ["darko-fund", "Keeping", "a-closed-pot"];   // the pots before() puts in the store; a bounty id outside it has no pot file
-const rawQuests = () => JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+// POS-857 (the town, past the S158 seed pin): a registry row with `ends` is offered through that town day, inclusive, so the
+// board drops it after. The expectation spells the rule itself from the fixture's day (the `quest_day` put in before()), not
+// through the town's boardForHandle: the registry file is read, then its rows past their `ends` are left out.
+let fixtureDay = null;
+const rawQuests = () => JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests
+  .filter((q) => !(typeof q.ends === "string" && typeof fixtureDay === "string" && fixtureDay > q.ends));
 const expectedFor = (label) => overlayRegistry(TWINS.of(label), { rawQuests: rawQuests(), fixturePotIds: FIXTURE_POT_IDS });
 const eq = (label, value) => assert.equal(steady(value), expectedFor(label), label);
 const eqResponse = async (label, response, message = label) => {
