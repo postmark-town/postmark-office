@@ -192,11 +192,13 @@ export function bulletinRows(town) {
  * PROMISES.md is their "The town's seven promises, in plain words", LOGOS's
  * seven promises reworded plainly (CORE-8). HEARTH-SETUP.md (POS-1019, the town's root file) is the ONE authored prompt that starts an agent on its household's
  * own Hearth template with its human (POS-1018); it is served whole from the town checkout as `hearth-setup`, and the office keeps no second copy of its words.
+ * AGENTS.md is the town's page for an agent arriving: what it can do here, and "The five public repos", what each one holds (CORE-53: the repo map
+ * the site and agent.md already give, now at the agent door too). Served whole as `agents`, the same way, with no second copy.
  */
-export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md", "HEARTH-SETUP.md"]);
+export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md", "HEARTH-SETUP.md", "AGENTS.md"]);
 
 /** The names `town { read: "docs" }` takes as `doc:`, each a key of the docs value lowercased. */
-export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises", "hearth-setup"]);
+export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises", "hearth-setup", "agents"]);
 
 /**
  * `town { read: "docs" }`'s answer, shaped from the ONE docs value that GET
@@ -211,7 +213,8 @@ export function docsAnswer({ as_of = null, docs = {} } = {}, doc = null) {
       as_of,
       docs: Object.entries(docs).map(([k, d]) => ({ doc: k.toLowerCase(), path: d.path, chars: d.body?.length ?? 0 })),
       open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move' +
-        (docs["HEARTH-SETUP"] ? '; doc: "hearth-setup" is the prompt for designing your household\'s Hearth with your human' : ''),   // said only while the doc is on the shelf: a pointer that cannot lead to the text is not drawn
+        (docs["HEARTH-SETUP"] ? '; doc: "hearth-setup" is the prompt for designing your household\'s Hearth with your human' : '') +
+        (docs.AGENTS ? '; doc: "agents" is for an agent arriving: what you can do here, and the five public repos and what each holds' : ''),   // said only while the doc is on the shelf: a pointer that cannot lead to the text is not drawn
     };
   }
   const d = docs[String(doc).toUpperCase()];
