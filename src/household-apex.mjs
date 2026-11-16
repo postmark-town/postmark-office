@@ -515,6 +515,8 @@ export const HOUSEHOLD_READS = Object.freeze({
   blocks: "your house's mail blocks, private to it",
   // WLD-28: read-only; the household's human changes them (the Hearth at PATCH /households/<slug>/settings, the likeness answer only at its signed-in form)
   settings: "likeness and Hearth, read-only",
+  // POS-1003: private to your house; the acts a door refused, 90 days
+  refusals: "acts refused to your house, 90 days",
 });
 
 export const HOUSEHOLD_READABLE = Object.freeze(Object.keys(HOUSEHOLD_READS));
@@ -611,6 +613,9 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
            offset: { type: "number", description: "walk past the first rows of each list" } },
   blocks: {},
   settings: {},
+  refusals: { handle: { type: "string", description: "only this resident's refusals" },
+              limit: { type: "number", description: "rows (default 50, cap 200)" },
+              offset: { type: "number", description: "walk past the first rows" } },
 });
 
 /**
@@ -2200,6 +2205,12 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     if (what === "blocks") {
       const { blocksAtOffice } = await import("./mail-blocks.mjs");
       try { return await blocksAtOffice(key); }
+      catch (e) { if (!e?.code) throw e; return householdActCaught(e); }
+    }
+    // ── the acts a door refused your house (POS-1003): its own, and nobody else's ──
+    if (what === "refusals") {
+      const { readOwnRefusals } = await import("./refusal-log.mjs");
+      try { return await readOwnRefusals(key, { limit: f.limit, offset: f.offset, handle: f.handle }); }
       catch (e) { if (!e?.code) throw e; return householdActCaught(e); }
     }
     // ── the glance's blocks, each a read of its own name (POS-633 round 4) ──

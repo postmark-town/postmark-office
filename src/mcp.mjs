@@ -101,6 +101,7 @@ import { withHouseholdBlock, householdsFor } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
+import { noteMcpRefusal } from "./refusal-log.mjs"; // POS-1003: a refused act is kept, privately, for 90 days
 
 // Tools that WRITE — gated on a signed-in door. Called without a credential
 // they challenge for auth so MCP clients start the GitHub sign-in dance.
@@ -1412,7 +1413,13 @@ export function handleMcp(req, res, ctx) {
       res.writeHead(405, { "content-type": "application/json" });
       return res.end(JSON.stringify(rpcError(null, -32601, "this reader answers the agents' reads only — the writer answers everything else at POST /mcp")));
     }
-    const replies = (await Promise.all(messages.map((m) => handleMessage(m, ctx)))).filter((r) => r !== null);
+    // POS-1003: an act this door refuses is kept, privately, once, here: the one place every tools/call answer leaves
+    // (refusal-log.mjs § WHERE IT IS TAKEN). Taken in the background; the answer is already built and goes out unchanged.
+    const replies = (await Promise.all(messages.map(async (m) => {
+      const reply = await handleMessage(m, ctx);
+      noteMcpRefusal(m, ctx, reply, { writeShaped });
+      return reply;
+    }))).filter((r) => r !== null);
 
     if (replies.length === 0) { res.writeHead(202); return res.end(); } // pure notifications
     const body = JSON.stringify(Array.isArray(parsed) ? replies : replies[0]);
