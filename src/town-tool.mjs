@@ -45,7 +45,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const PIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "town-pins");
@@ -56,6 +57,12 @@ export const PIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "town-pins
 // sets it; a root inside the clone is refused below, so it can never point the
 // loader back at the code it checks.
 const pinRoot = () => process.env.TOWN_PINS_DIR || PIN_ROOT;
+
+// `from "./x.mjs"`, `import("./x.mjs")`, `import "./x.mjs"`: a relative specifier only.
+const RELATIVE = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"](\.{1,2}\/[^'"]+)['"]/g;
+/** The repo-relative paths `text` (the file at `path`) imports by a relative specifier. */
+export const relativeImports = (path, text) =>
+  [...text.matchAll(RELATIVE)].map((m) => posix.normalize(posix.join(posix.dirname(path), m[1])));
 
 /** git's blob id for these bytes (what `git hash-object` prints). */
 export function gitBlobSha(buf) {
@@ -134,6 +141,72 @@ export const isPinStop = (e) => e?.code === "TOWN_PIN_MISMATCH" || e?.code === "
 /** `import()` of the pinned module, checked as townTool checks it. */
 export async function importTownTool(clone, name, opts) {
   return import(pathToFileURL(townTool(clone, name, opts)).href);
+}
+
+// ── A TOWN CHECKOUT AT A PAST POSITION (Wright, POS-994, 2026-11-16 08:5x EST) ─
+// A snapshot's replay reads the town AT its ledger position (world-snapshot.mjs §
+// householdsAt, parcel-room.mjs § houseFactsAt). Today's pin would stop every
+// replay of a window whose engine has since changed. So a checkout's OWN engine
+// may load, but only when its commit is already inside what the office reviewed:
+// the snapshot's sha is the pin's town commit or one of its ancestors
+// (`git merge-base --is-ancestor <sha> <pin commit>`, exit 0). And the files that
+// load must be that commit's: the module and its relative-import closure, read
+// from the checkout, are held to git's blobs at <sha>, so a checkout edited by
+// hand never runs. Anything else, a sha after the pin (exit 1) or one git cannot
+// place at all (exit 128: the repo lacks the pin commit or the sha), goes through
+// the pins as usual: equal loads the pinned copy, different stops by name. An
+// unknown answer is never "allowed".
+
+/** The `git merge-base --is-ancestor` exit for sha → the pin's commit: 0 inside the review, 1 after it, 128 git could not tell. */
+export function ancestorOfPin(gitRepo, sha, { root = pinRoot() } = {}) {
+  const pin = readPins(root).town_commit;
+  const r = spawnSync("git", ["-C", gitRepo, "merge-base", "--is-ancestor", String(sha), pin], { stdio: "ignore" });
+  return r.status ?? 128;
+}
+
+/** Each file's blob at <sha> in gitRepo, or null when that path is not there. */
+function blobAt(gitRepo, sha, path) {
+  const r = spawnSync("git", ["-C", gitRepo, "rev-parse", "--verify", "-q", `${sha}:${path}`], { encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/**
+ * `import()` of the town's `tools/<name>` from a checkout at a past ledger
+ * position. `repoAtSha` holds the files that load (the checkout, or a scratch
+ * copy of its tools/), `sha` is the commit they are, `gitRepo` the repository
+ * that can answer for it (default: repoAtSha). Inside the pin's history and
+ * byte-equal to git at <sha>: the checkout's own module. Otherwise: the pins,
+ * checked against `repoAtSha` as importTownTool checks a clone.
+ */
+export async function importTownToolAt(repoAtSha, sha, name, { gitRepo = repoAtSha, root = pinRoot() } = {}) {
+  if (!sha) throw new Error(`importTownToolAt(${name}): no sha was named for the checkout at ${repoAtSha}`);
+  if (ancestorOfPin(gitRepo, sha, { root }) !== 0) return importTownTool(repoAtSha, name, { root });
+  const rel = name.includes("/") ? name : `tools/${name}`;
+  const seen = new Set();
+  const walk = (p) => {
+    if (seen.has(p)) return;
+    seen.add(p);
+    const at = join(repoAtSha, p);
+    const want = blobAt(gitRepo, sha, p);
+    const found = existsSync(at) ? gitBlobSha(readFileSync(at)) : null;
+    if (!want || found !== want) {
+      throw new TownPinMismatch({ file: p, pinned: want ?? "(absent at that commit)", found, townCommit: sha, clone: repoAtSha });
+    }
+    for (const d of relativeImports(p, readFileSync(at, "utf8"))) walk(d);
+  };
+  walk(rel);
+  return import(pathToFileURL(join(repoAtSha, rel)).href);
+}
+
+/**
+ * importTownToolAt for a checkout at whatever commit it stands on (its HEAD):
+ * the ingests read the town where its clone stands, today's or a past one. A
+ * folder git cannot name a commit for is checked against the pins as a clone.
+ */
+export async function importTownToolAtHead(repo, name, opts = {}) {
+  const r = spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" });
+  const sha = r.status === 0 ? r.stdout.trim() : null;
+  return sha ? importTownToolAt(repo, sha, name, opts) : importTownTool(repo, name, opts);
 }
 
 // The town CLIs whose repo, unnamed, is their own folder's parent. Run from the

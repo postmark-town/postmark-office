@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PIN_ROOT, gitBlobSha } from "../src/town-tool.mjs";
+import { PIN_ROOT, gitBlobSha, relativeImports } from "../src/town-tool.mjs";
 
 /** The town modules the office reaches next to a key or the store (POS-994's inventory). */
 export const MODULES = [
@@ -32,10 +32,9 @@ export const MODULES = [
   "household-keys.mjs",
 ];
 
-// `from "./x.mjs"`, `import("./x.mjs")`, `import "./x.mjs"`: a relative specifier only.
-const RELATIVE = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"](\.{1,2}\/[^'"]+)['"]/g;
-export const relativeImports = (path, text) =>
-  [...text.matchAll(RELATIVE)].map((m) => posix.normalize(posix.join(posix.dirname(path), m[1])));
+// The relative-import reader is the loader's own (src/town-tool.mjs), so the pins
+// and the historical check follow one closure rule.
+export { relativeImports };
 
 /** { path: { bytes, deps } } for the modules and their closures, read by `read(path)`. */
 export function collect(read, modules = MODULES) {

@@ -22,7 +22,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, gitBlobSha, importTownTool, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
+import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
+import { stampKeyRefusal } from "../tools/stamp-sandbox.mjs";
 import { MODULES, checkPins, collect, manifest } from "../tools/town-pins.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -168,20 +169,33 @@ function walk(dir) {
   return out;
 }
 
+// EXEMPT BY NAME (Wright, POS-994, 2026-11-16 08:5x EST). The stamp sandbox's
+// purpose is to run the --town checkout's own engines against this office tree;
+// it refuses to start where a mint key is present (stamp-sandbox.mjs §
+// stampKeyRefusal, held below). Nothing else is exempt.
+const SOURCE_LAW_EXEMPT = new Set(["tools/stamp-sandbox.mjs"]);
+
 test("no office file reaches a pinned town module except through the loader", () => {
   const names = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
   // One nested call may sit inside the join: `join(resolve(town), "tools", …)` (witness-settlement's shape).
   const reach = new RegExp(`join\\((?:[^()]|\\([^()]*\\))*"tools",\\s*"(${names})"\\)`, "g");
+  // A local helper hides the join (`import(toolUrl(repo, "stamp-mint.mjs"))`, escrow-ingest's and
+  // stamp-ingest's shape): a line that imports or spawns AND names a pinned module is a reach too.
+  const helperReach = new RegExp(`\\b(import\\(|spawnSync\\(|execFileSync\\(|spawn\\()[^\\n]*"(${names})"`);
   const scanned = ["src", "tools", "world2", "deploy"].flatMap((d) => walk(join(ROOT, d)))
-    .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`) && !p.includes(`${sep}node_modules${sep}`));
+    .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`) && !p.includes(`${sep}node_modules${sep}`))
+    .filter((p) => !SOURCE_LAW_EXEMPT.has(relative(ROOT, p).split(sep).join("/")));
   const found = [];
   for (const p of scanned) {
     readFileSync(p, "utf8").split("\n").forEach((line, i) => {
+      const at = `${relative(ROOT, p).split(sep).join("/")}:${i + 1}`;
+      if (/^\s*(\/\/|\*)/.test(line)) return;
       for (const m of line.matchAll(reach)) {
         const before = line.slice(0, m.index);
         if (/existsSync\(\s*$/.test(before)) continue;
-        found.push(`${relative(ROOT, p).split(sep).join("/")}:${i + 1}: ${m[0]}`);
+        found.push(`${at}: ${m[0]}`);
       }
+      if (helperReach.test(line) && !/importTownTool|townToolArgv/.test(line)) found.push(`${at}: ${line.trim().slice(0, 140)}`);
     });
   }
   assert.deepEqual(found, [], `town modules reached around the loader:\n${found.join("\n")}`);
@@ -196,4 +210,115 @@ test("only the loader turns a pin into a path: no office file imports the bare t
     .filter((p) => /\.(mjs|js)$/.test(p) && !p.includes(`${sep}town-pins${sep}`));
   const found = scanned.filter((p) => bare.test(readFileSync(p, "utf8"))).map((p) => relative(ROOT, p));
   assert.deepEqual(found, []);
+});
+
+test("the two snapshot replays reach the town engine only through importTownToolAt", () => {
+  for (const f of ["src/world-snapshot.mjs", "src/parcel-room.mjs"]) {
+    assert.match(readFileSync(join(ROOT, f), "utf8"), /importTownToolAt(Head)?\(/, `${f} no longer loads its snapshot engine through importTownToolAt`);
+  }
+});
+
+// ── A CHECKOUT AT A PAST POSITION (importTownToolAt; Wright, POS-994) ──────
+// A real git town: c1 holds mint v1, c2 holds mint v2. Pins are written for one
+// of them; the checkout stands at the other (or is edited), and the helper either
+// loads the checkout's own module or goes through the pins.
+
+function gitTown() {
+  const base = mkdtempSync(join(tmpdir(), "town-tool-at-"));
+  const repo = join(base, "town");
+  const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
+  mkdirSync(join(repo, "tools"), { recursive: true });
+  git("init", "-q", "-b", "main");
+  git("config", "core.autocrlf", "false");
+  const commit = (who) => {
+    writeFileSync(join(repo, "tools", "mint.mjs"), `import { rule } from "./rule.mjs";\nexport const who = "${who}";\nexport const r = rule;\n`);
+    writeFileSync(join(repo, "tools", "rule.mjs"), `export const rule = "${who}-rule";\n`);
+    git("add", "-A"); git("commit", "-qm", who);
+    return git("rev-parse", "HEAD");
+  };
+  const c1 = commit("v1"), c2 = commit("v2");
+  // pins for a commit: the module and its closure as git holds them there
+  const pinsAt = (sha) => {
+    const root = join(base, `pins-${sha.slice(0, 7)}`);
+    const files = collect((p) => execFileSync("git", ["-C", repo, "show", `${sha}:${p}`]), ["mint.mjs"]);
+    for (const [p, { bytes }] of files) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), bytes); }
+    writeFileSync(join(root, "PINS.json"), JSON.stringify(manifest(files, { townCommit: sha, readAt: "2026-11-16T00:00:00Z" })));
+    return root;
+  };
+  return { base, repo, git, c1, c2, pinsAt, done: () => rmSync(base, { recursive: true, force: true }) };
+}
+
+test("AT: a checkout at an ANCESTOR of the pin's commit loads its own module (not the pinned one)", async () => {
+  const t = gitTown();
+  try {
+    const root = t.pinsAt(t.c2);
+    t.git("checkout", "-q", t.c1);
+    assert.equal(ancestorOfPin(t.repo, t.c1, { root }), 0);
+    const mod = await importTownToolAt(t.repo, t.c1, "mint.mjs", { root });
+    assert.equal(mod.who, "v1", "the checkout's own engine at its own commit");
+    assert.equal(mod.r, "v1-rule", "and its own closure");
+  } finally { t.done(); }
+});
+
+test("AT: a checkout PAST the pin (exit 1) with a differing file stops by name", async () => {
+  const t = gitTown();
+  try {
+    const root = t.pinsAt(t.c1);
+    assert.equal(ancestorOfPin(t.repo, t.c2, { root }), 1);
+    await assert.rejects(importTownToolAt(t.repo, t.c2, "mint.mjs", { root }), (e) => e instanceof TownPinMismatch && e.file === "tools/mint.mjs");
+  } finally { t.done(); }
+});
+
+test("AT: a sha git cannot place (exit 128) is never allowed: it goes through the pins and stops", async () => {
+  const t = gitTown();
+  try {
+    const root = t.pinsAt(t.c1);
+    const unknown = "0123456789abcdef0123456789abcdef01234567";
+    assert.equal(ancestorOfPin(t.repo, unknown, { root }), 128);
+    await assert.rejects(importTownToolAt(t.repo, unknown, "mint.mjs", { root }), TownPinMismatch);
+  } finally { t.done(); }
+});
+
+test("AT: an ancestor checkout EDITED by hand stops: the files that load must be git's at that commit", async () => {
+  const t = gitTown();
+  const marker = join(t.base, "the-edit-ran");
+  try {
+    const root = t.pinsAt(t.c2);
+    t.git("checkout", "-q", t.c1);
+    writeFileSync(join(t.repo, "tools", "rule.mjs"), `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\nexport const rule = "edited";\n`);
+    await assert.rejects(importTownToolAt(t.repo, t.c1, "mint.mjs", { root }), (e) => e instanceof TownPinMismatch && e.file === "tools/rule.mjs");
+    assert.equal(existsSync(marker), false, "the edited closure file ran");
+  } finally { t.done(); }
+});
+
+test("AT: past the pin but equal to it, the PINNED copy loads (as importTownTool would)", async () => {
+  const t = gitTown();
+  try {
+    const root = t.pinsAt(t.c2);
+    // c2 IS the pin commit, so it is an ancestor-or-equal: its own module. A third commit that keeps the files is past the pin.
+    t.git("commit", "-q", "--allow-empty", "-m", "v3, same files");
+    const c3 = t.git("rev-parse", "HEAD");
+    assert.equal(ancestorOfPin(t.repo, c3, { root }), 1);
+    const mod = await importTownToolAt(t.repo, c3, "mint.mjs", { root });
+    assert.equal(mod.who, "v2");
+    assert.ok(!fileURLToPath(import.meta.url).startsWith(t.repo));
+  } finally { t.done(); }
+});
+
+// ── THE SANDBOX'S CONDITION (stamp-sandbox.mjs § stampKeyRefusal) ───────────
+
+test("the stamp sandbox refuses to run where a stamp key is present, and runs where none is", () => {
+  const base = mkdtempSync(join(tmpdir(), "sandbox-key-"));
+  try {
+    const key = join(base, "stamp-key.pem");
+    assert.equal(stampKeyRefusal([key, join(base, "nor-this.pem")]), null, "no key, no refusal");
+    writeFileSync(key, "a stand-in, not a key\n");
+    const said = stampKeyRefusal([join(base, "nor-this.pem"), key]);
+    assert.match(said, /^stamp-sandbox: refused — a stamp key is present at /);
+    assert.ok(said.includes(key), "it names the path it found");
+    // the CLI exits nonzero with that sentence before it does anything, here via STAMP_KEY
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "stamp-sandbox.mjs")], { encoding: "utf8", env: { ...process.env, STAMP_KEY: key } });
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.stderr, /stamp-sandbox: refused — a stamp key is present at/);
+  } finally { rmSync(base, { recursive: true, force: true }); }
 });

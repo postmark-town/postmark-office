@@ -304,11 +304,12 @@ test("5 · the pass refuses a town whose stamp-mint has no stage grammar, before
   // the pin stops it first. This test is about the plan's own grammar check, so
   // the old mint gets pins of its own and is what runs.
   const pinsBefore = process.env.TOWN_PINS_DIR;
-  process.env.TOWN_PINS_DIR = await pinTown(repo);
+  const oldPins = pinTown(repo);
+  process.env.TOWN_PINS_DIR = oldPins;
   const errs = [];
   let code;
   try { code = await main(["--town", repo], { facts: { acts: [], houses: new Map() }, log: () => {}, err: (s) => errs.push(s) }); }
-  finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; rmSync(`${repo}-pins`, { recursive: true, force: true }); }
+  finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; rmSync(oldPins, { recursive: true, force: true }); }
   assert.equal(code, 1);
   assert.match(errs.join("\n"), /has no stage grammar/);
   rmSync(repo, { recursive: true, force: true });
@@ -706,7 +707,13 @@ export * from "./stamp-mint-real.mjs";
 // townEngine calls parseLaws after it decided whether to read the ledger: the ledger appears now
 export function parseLaws(entries) { writeFileSync(${JSON.stringify(late.ledger)}, ${JSON.stringify(bytes)}); return real.parseLaws(entries); }
 `);
-      const raced = await townEngine(late.repo);
+      // POS-994: the plan loads the office's pinned copy; this town's wrapper (and the real
+      // mint it re-exports) is pinned to itself for this one load, so the wrapper is what runs.
+      const pinsBefore = process.env.TOWN_PINS_DIR;
+      process.env.TOWN_PINS_DIR = pinTown(late.repo);
+      let raced;
+      try { raced = await townEngine(late.repo); }
+      finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
       assert.ok(existsSync(late.ledger), "the ledger appeared after the read decision");
       assert.equal(raced.ledgerRead, false, "LAW (POS-931): a ledger the plan did not read is never reported read");
       assert.equal(raced.paid.size, 0, "and nothing was read from it");

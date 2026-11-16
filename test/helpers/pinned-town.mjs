@@ -8,10 +8,11 @@
 // every file the pins name, copied from the pins in force (TOWN_PINS_DIR when
 // the suite's helper set it, else src/town-pins), and nothing else.
 
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { PIN_ROOT } from "../../src/town-tool.mjs";
+import { PIN_ROOT, relativeImports } from "../../src/town-tool.mjs";
+import { MODULES, collect, manifest } from "../../tools/town-pins.mjs";
 
 /** The pin root the loader reads in this process. */
 export const pinRootNow = () => process.env.TOWN_PINS_DIR || PIN_ROOT;
@@ -34,16 +35,16 @@ export function pinnedTown(into = null) {
 
 /**
  * Pins of a FIXTURE town's own files (its stubs), written beside it at
- * `<town>-pins` (never inside it: the loader refuses that), for a test whose
+ * a fresh `<town>-pins-<pid>-<n>` (the loader caches a pin root per process, so a
+ * re-pin after a rewrite gets a new one), or at `root`; never inside the town (the
+ * loader refuses that). For a test whose
  * point is the office's control flow around a stub, not the town's code. Name
  * the result in TOWN_PINS_DIR for the code under test (a child's env, or
  * process.env around an in-process call). Only the modules the office pins and
  * the town holds are pinned, with their relative-import closures.
  */
-export async function pinTown(town) {
-  const { MODULES, collect, manifest } = await import("../../tools/town-pins.mjs");
-  const { existsSync, writeFileSync } = await import("node:fs");
-  const root = `${town}-pins`;
+let pinSeq = 0;
+export function pinTown(town, root = `${town}-pins-${process.pid}-${++pinSeq}`) {
   const present = MODULES.filter((m) => existsSync(join(town, "tools", m)));
   const files = collect((p) => readFileSync(join(town, p)), present);
   for (const [p, { bytes }] of files) {
@@ -51,7 +52,25 @@ export async function pinTown(town) {
     writeFileSync(join(root, p), bytes);
   }
   writeFileSync(join(root, "PINS.json"), JSON.stringify(manifest(files, { townCommit: "0".repeat(40), readAt: new Date(0).toISOString() })));
+  process.on("exit", () => { try { rmSync(root, { recursive: true, force: true }); } catch { /* litter */ } });
   return root;
+}
+
+/**
+ * Copy a town module AND its relative-import closure from one town to another
+ * (a fixture that used to copy stamp-mint.mjs alone now also needs
+ * registry-source.mjs: the loader checks the whole closure).
+ */
+export function copyTownModule(fromTown, toTown, name) {
+  const seen = new Set();
+  const walk = (p) => {
+    if (seen.has(p) || !existsSync(join(fromTown, p))) return;
+    seen.add(p);
+    mkdirSync(dirname(join(toTown, p)), { recursive: true });
+    copyFileSync(join(fromTown, p), join(toTown, p));
+    for (const d of relativeImports(p, readFileSync(join(fromTown, p), "utf8"))) walk(d);
+  };
+  walk(`tools/${name}`);
 }
 
 /** The pinned path of a town module, as townTool returns it. */

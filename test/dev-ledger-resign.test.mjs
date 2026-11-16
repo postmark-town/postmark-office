@@ -16,6 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { generateKeyPairSync, createPublicKey, verify as edVerify } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -51,13 +52,14 @@ function seedTown(prod) {
   g("init", "-q", "-b", "main");
   g("config", "user.name", "seed"); g("config", "user.email", "seed@postmark.invalid"); g("config", "core.autocrlf", "false");
   mkdirSync(join(dir, "tools")); mkdirSync(join(dir, "WHITE_PAGES"));
-  copyFileSync(join(TOWN, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
   const seals = ENGINE.sealChain(BASE);
   const sigs = BASE.map((_, i) => ENGINE.signSeal(seals[i], prod.key));
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), `# the stamp ledger\n\n${BASE.map((c, i) => `${c} · sig: ${sigs[i]}`).join("\n")}\n`);
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), prod.pub);
   writeFileSync(join(dir, "tools", "ruled.mjs"), `export const RULED = new Set(["${sigs[1]}"]);\n`);
   g("add", "-A"); g("commit", "-q", "-m", "the seed");
+  process.env.TOWN_PINS_DIR = pinTown(dir); // POS-994: the resign runs the pinned copies of the town mint and verifier; this town pinned to itself
   g("tag", "sandbox/seed"); // the box's seed tag: its tools/stamp-pubkey.pem is prod's public key
   return { dir, g, sigs };
 }
@@ -230,6 +232,7 @@ test("--verify: a red town verifier refuses, and the clone is put back on the se
   const t = seedTown(prod);
   writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "console.log('stamp-verify: RED (a fixture that refuses)'); process.exit(1);\n");
   t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that refuses");
+  process.env.TOWN_PINS_DIR = pinTown(t.dir); // POS-994: the stub verifier is what the pinned loader runs
   const head = t.g("rev-parse", "HEAD");
   const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true });
   assert.equal(r.status, "refused");
@@ -240,6 +243,7 @@ test("--verify: a red town verifier refuses, and the clone is put back on the se
   // and a green verifier lets the re-sign land
   writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "process.exit(0);\n");
   t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that passes");
+  process.env.TOWN_PINS_DIR = pinTown(t.dir);
   assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true })).status, "resigned");
 });
 
@@ -267,8 +271,8 @@ function seedCorrectionTown(prod, { withVerifier = false } = {}) {
   g("init", "-q", "-b", "main");
   g("config", "user.name", "seed"); g("config", "user.email", "seed@postmark.invalid"); g("config", "core.autocrlf", "false");
   mkdirSync(join(dir, "tools")); mkdirSync(join(dir, "WHITE_PAGES"));
-  copyFileSync(join(TOWN, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
-  if (withVerifier) copyFileSync(join(TOWN, "tools", "stamp-verify.mjs"), join(dir, "tools", "stamp-verify.mjs"));
+  copyTownModule(TOWN, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  if (withVerifier) copyTownModule(TOWN, dir, "stamp-verify.mjs");
   // the verifier replays the witnessed mail, so the lawful-fixture arm carries no BASE mints (they would be owed): the rules line, the stage, the pair
   const head = [...(withVerifier ? BASE.slice(0, 1) : BASE), NAMED_STAGE];
   const stageSig = ENGINE.signSeal(ENGINE.sealChain(head)[head.length - 1], prod.key);
@@ -278,6 +282,7 @@ function seedCorrectionTown(prod, { withVerifier = false } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), `# the stamp ledger\n\n${all.map((c, i) => `${c} · sig: ${sigs[i]}`).join("\n")}\n`);
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), prod.pub);
   g("add", "-A"); g("commit", "-q", "-m", "the seed");
+  process.env.TOWN_PINS_DIR = pinTown(dir); // POS-994: the resign runs the pinned copies of the town mint and verifier; this town pinned to itself
   g("tag", "sandbox/seed");
   return { dir, g, stageSig, stageIdx: head.length - 1 };
 }

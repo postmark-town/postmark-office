@@ -34,6 +34,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -130,6 +131,7 @@ function standInTown({ purse = 200 } = {}) {
   execFileSync("git", ["init", "-q"], { cwd: town });
   execFileSync("git", ["add", "-A"], { cwd: town });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: town });
+  process.env.TOWN_PINS_DIR = pinTown(town); // POS-994: the stand-in engine is what the pinned loader runs
   return town;
 }
 const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n")

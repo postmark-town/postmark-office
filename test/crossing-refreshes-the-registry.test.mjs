@@ -46,6 +46,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -206,6 +207,7 @@ process.stdout.write(JSON.stringify({
     // the trip moved to the one source it does read.)
     env = { ...env, WORLD2_PG_URL: "postgres://office_api@127.0.0.1:9/none" };
   }
+  process.env.TOWN_PINS_DIR = pinTown(townSeed); // POS-994: the crossing runs pinned town code; this seed (and its clone) pinned to itself
   g(".", "init", "-q", "-b", "main", townSeed);
   g(townSeed, "config", "user.email", "seed@postmark.invalid");
   g(townSeed, "config", "user.name", "seed");

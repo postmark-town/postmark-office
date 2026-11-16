@@ -26,6 +26,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -233,6 +234,11 @@ function fixture(ledger = ["row 1", "row 2"], { realFlock = false } = {}) {
   write(fx.town, { ".git/hooks/pre-commit": `#!/bin/sh\n[ -z "$STUB_REJECT_COMMIT" ]\n` }, 0o755);
   write(fx.office, OFFICE_FILES);
   write(fx.office, { "deploy/keep-history.mjs": readFileSync(join(OFFICE, "deploy", "keep-history.mjs"), "utf8") });
+  // POS-994: the tick runs the town's mint, verifier and household keys through the
+  // office's loader, as the office's pinned copies; the fixture office carries the
+  // real loader and pins of THIS town's stubs (its env names no TOWN_PINS_DIR).
+  write(fx.office, { "src/town-tool.mjs": readFileSync(join(OFFICE, "src", "town-tool.mjs"), "utf8") });
+  pinTown(fx.town, join(fx.office, "src", "town-pins"));
   for (const d of [fx.bin, fx.harbor, fx.tmp]) mkdirSync(d, { recursive: true });
   symlinkSync(process.execPath, join(fx.bin, "node"));
   symlinkSync(SH, join(fx.bin, "sh"));   // the tick runs its world step as `sh deploy/office-world-hydrate.sh`

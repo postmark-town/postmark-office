@@ -36,7 +36,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { importTownTool, isPinStop } from "./town-tool.mjs"; // POS-994: the live clone's engine is the office's pinned copy
+import { importTownTool, importTownToolAtHead, isPinStop } from "./town-tool.mjs"; // POS-994: the live clone's engine is the office's pinned copy
 
 /**
  * A key → the house's canonical `hh:<slug>`, by the registry: a slug the house
@@ -109,11 +109,15 @@ async function townEngineNow(clone) {
   return importTownTool(clone, "stamp-mint.mjs");
 }
 
-/** The town's engine at a checkout, or null when it has none. */
+/**
+ * The town's engine at a checkout AT A SNAPSHOT'S LEDGER POSITION, or null when
+ * it has none. Its own engine loads only inside the office's reviewed history
+ * (POS-994, Wright 2026-11-16: town-tool.mjs § importTownToolAt); a checkout
+ * past the pin runs the pinned copy, or stops by name where they differ.
+ */
 async function townEngineAt(townRepo) {
-  const p = join(townRepo, "tools", "stamp-mint.mjs");
-  if (!existsSync(p)) return null;
-  return import(pathToFileURL(p).href);
+  if (!existsSync(join(townRepo, "tools", "stamp-mint.mjs"))) return null;
+  return importTownToolAtHead(townRepo, "stamp-mint.mjs");
 }
 
 /**

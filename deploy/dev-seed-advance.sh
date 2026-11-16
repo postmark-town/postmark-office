@@ -209,13 +209,15 @@ chain_counts() {
     import { join } from "node:path";
     import { pathToFileURL } from "node:url";
     const clone = process.argv[1];
-    const { parseStampLedger } = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+    // POS-994: the pinned copy of the town mint (the office loader), checked against the clone.
+    const { importTownTool } = await import(pathToFileURL(join(process.argv[2], "src", "town-tool.mjs")).href);
+    const { parseStampLedger } = await importTownTool(clone, "stamp-mint.mjs");
     const ledger = parseStampLedger(readFileSync(join(clone, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
     const store = readFileSync(0, "utf8").split("\n").filter(Boolean);
     let k = 0;
     while (k < store.length && k < ledger.length && store[k] === ledger[k].sig) k++;
     console.log(k, ledger.length, store.length);
-  ' "$D/town-clone"
+  ' "$D/town-clone" "$D"
 }
 counts="$(chain_counts)" || stop "could not compare the store's chain with the clone's ledger"
 read -r KEEP LEDGER HELD <<<"$counts"
