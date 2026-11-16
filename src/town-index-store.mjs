@@ -1205,7 +1205,9 @@ export async function search(q, term, { limit, offset } = {}) {
 // table. And the roll check and the match sit behind `OFFSET 0`, so each runs
 // once a step; flattened, every mention of them ran its own probe.
 
-const foldSql = (expr) => `translate(${expr}, '${UPPER}', '${LOWER}')`;
+// ASCII case fold, as search's `like` above folds it (POS-1072, and why): `lower(x COLLATE "C")` folds exactly A-Z, as `translate(x, 'A-Z', 'a-z')` did, at a fraction of the cost.
+// `strpos` takes the fold of the piece and of the (text-cast) term, so the match is the same literal, ASCII case-folded, and nothing locale-aware.
+const foldSql = (expr) => `lower(${expr} COLLATE "C")`;
 const WALK_KEY = `t.author COLLATE "C", t.source_kind COLLATE "C", t.source_id COLLATE "C", t.ordinal`;
 const DISCOVERY_GEN = `SELECT (SELECT value FROM town_meta WHERE key = 'discovery_epoch') AS epoch,
     (SELECT value FROM town_meta WHERE key = 'discovery_revision') AS revision`;

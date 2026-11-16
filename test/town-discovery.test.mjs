@@ -177,6 +177,54 @@ test("the literal: ASCII letters match in either case and nothing else is folded
   assert.deepEqual(await who("1000 WAYS"), ["bex"]);
 });
 
+// POS-1073 (Wright 2026-11-16, "as POS-1072 does"): the walk folds ASCII case with `lower(x COLLATE "C")`, the same fold search uses, and no other.
+test("the fold: the walk's statement folds with lower(x COLLATE \"C\") and never translate, and the match is exactly the old translate fold's, ASCII case only", async (t) => {
+  if (skip) return t.skip(skip);
+  await seed({
+    residents: ["ada", "bex", "cyd", "dee", "eve", "fay"],
+    letters: [
+      { id: "a", from: "ada", to: "bex", body: "The Quay Floods; the LAMPLIGHT keeps counsel" },
+      { id: "b", from: "bex", to: "ada", body: "İstanbul, ISTANBUL and istanbul" },
+      { id: "c", from: "cyd", to: "ada", body: "the Kelvin sign K and a plain k" },
+      { id: "d", from: "dee", to: "ada", body: "Straße and STRASSE, ẞtra" },
+      { id: "e", from: "eve", to: "ada", body: "ΣΊΣΥΦΟΣ and σίσυφος, ς" },
+      { id: "f", from: "fay", to: "ada", body: "ÀÉÎÕÜ àéîõü" },
+    ],
+  });
+  // the cause: what the walk sends carries the cheap fold and none of the dear one
+  const sent = [];
+  const spy = { query: (text, params) => { sent.push(String(typeof text === "string" ? text : text.text)); return api.query(text, params); } };
+  await store.discover(spy, { mode: "text", q: "Lamplight" });
+  const walks = sent.filter((q) => /town_discovery_chunks/.test(q) && /strpos/.test(q));
+  assert.ok(walks.length >= 1, "the text walk's statement was sent");
+  for (const q of walks) {
+    assert.doesNotMatch(q, /translate\(/i, "the walk still folds with translate");
+    assert.match(q, /strpos\(lower\(n\.piece COLLATE "C"\), lower\(\$1::text COLLATE "C"\)\) > 0/, "the walk does not fold both sides with lower(... COLLATE \"C\")");
+  }
+  // the answer: for every piece and term, the cheap fold's position is the old fold's, so the same pieces hit
+  const UP = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", LO = "abcdefghijklmnopqrstuvwxyz";
+  const terms = ["lamplight", "LAMPLIGHT", "Lamplight", "quay", "the", "a", "k", "K", "istanbul", "İSTANBUL", "İstanbul", "kelvin", "straße", "STRASSE", "ẞtra", "σίσυφος", "ΣΊΣΥΦΟΣ", "ς", "Σ", "àéîõü", "ÀÉÎÕÜ", "100%", "a_b", "\\", "nothing-matches-this"];
+  let hits = 0;
+  for (const term of terms) {
+    const r = await api.query(`SELECT count(*) FILTER (WHERE strpos(translate(piece, $2, $3), translate($1::text, $2, $3)) > 0) AS old_n,
+        count(*) FILTER (WHERE strpos(lower(piece COLLATE "C"), lower($1::text COLLATE "C")) > 0) AS new_n,
+        count(*) FILTER (WHERE (strpos(translate(piece, $2, $3), translate($1::text, $2, $3)) > 0) IS DISTINCT FROM (strpos(lower(piece COLLATE "C"), lower($1::text COLLATE "C")) > 0)) AS differ
+      FROM town_discovery_chunks`, [term, UP, LO]);
+    assert.equal(r.rows[0].differ, "0", `term ${JSON.stringify(term)}: a piece hits under one fold and not the other`);
+    assert.equal(r.rows[0].old_n, r.rows[0].new_n);
+    hits += Number(r.rows[0].new_n);
+  }
+  assert.ok(hits > 10, `only ${hits} piece/term hits: the corpus is not exercising the fold`);
+  // and through the real reader
+  const who = async (q) => (await store.discover(api, { mode: "text", q })).hits.map((h) => h.handle);
+  assert.deepEqual(await who("lamplight"), ["ada"]);
+  assert.deepEqual(await who("LAMPLIGHT"), ["ada"]);
+  assert.deepEqual(await who("istanbul"), ["bex"], "İ is not folded to i: only the ASCII spellings match");
+  assert.deepEqual(await who("İSTANBUL"), ["bex"]);
+  assert.deepEqual(await who("σίσυφος"), ["eve"], "Σ is not folded to σ");
+  assert.deepEqual(await who("àéîõü"), ["fay"], "À is not folded to à");
+});
+
 // ── the generation: the fingerprint's laws (POS-497 FIX 4) ───────────────────
 //
 // LAW (Rivet's FIX packet): "explicit additive ADD/REMOVE operations (not XOR),
