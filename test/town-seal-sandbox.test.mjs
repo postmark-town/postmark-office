@@ -62,6 +62,20 @@ test("the sandbox unit: no environment, a DynamicUser, no network, and /srv hidd
     ["BindReadOnlyPaths=/srv/postmark-office/tools/town-seal-sandbox.mjs"], "the one path under /srv it can see is the tool, read-only");
 });
 
+test("CollectMode sits under [Unit], where systemd reads it (crossing 314: under [Service] it was ignored)", () => {
+  const text = unit("postmark-town-seal@.service");
+  const section = (key) => {
+    let at = null;
+    for (const l of text.split("\n")) {
+      const head = /^\[([A-Za-z]+)\]\s*$/.exec(l);
+      if (head) at = head[1];
+      else if (l.startsWith(`${key}=`)) return at;
+    }
+    return undefined;
+  };
+  assert.equal(section("CollectMode"), "Unit", "CollectMode= is a [Unit] setting; systemd ignores it in [Service]");
+});
+
 test("the socket: the box's path, one unit per connection, meepo's alone", () => {
   const s = settings(unit("postmark-town-seal.socket"));
   for (const line of [`ListenStream=${SOCKET}`, "Accept=yes", "SocketUser=meepo", "SocketGroup=meepo", "SocketMode=0600"]) {
