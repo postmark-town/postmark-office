@@ -22,7 +22,7 @@
 // suites that need the clone skip by their own names as before.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +39,18 @@ if (process.env.TOWN_PINS_DIR === undefined && existsSync(join(CLONE, ".git"))) 
     const git = (args) => execFileSync("git", ["-C", CLONE, ...args], { maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] });
     const head = git(["rev-parse", "HEAD"]).toString().trim();
     const dir = join(tmpdir(), "office-town-pins", head);
-    if (!existsSync(join(dir, "PINS.json"))) {
-      const { MODULES, collect, manifest } = await import("../../tools/town-pins.mjs");
+    const { MODULES, checkPins, collect, manifest } = await import("../../tools/town-pins.mjs");
+    // A cached folder is reused only when its bytes are the town's at that commit
+    // (a shared /tmp can hold anyone's folder of that name; Truey's review of #1065).
+    const holds = () => {
+      try {
+        const pins = JSON.parse(readFileSync(join(dir, "PINS.json"), "utf8"));
+        const townBlob = (c, p) => { try { return git(["rev-parse", `${c}:${p}`]).toString().trim(); } catch { return null; } };
+        return pins.town_commit === head && checkPins(dir, { townBlob, complete: false }).length === 0;
+      } catch { return false; }
+    };
+    if (!holds()) {
+      rmSync(dir, { recursive: true, force: true });
       // Only the modules the clone's commit has: an older town lacks witness-chain.
       const present = MODULES.filter((m) => { try { git(["cat-file", "-e", `${head}:tools/${m}`]); return true; } catch { return false; } });
       const files = collect((p) => git(["show", `${head}:${p}`]), present);

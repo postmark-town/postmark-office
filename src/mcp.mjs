@@ -100,6 +100,7 @@ import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the thre
 import { withHouseholdBlock, householdsFor } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
+import { isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
 
 // Tools that WRITE — gated on a signed-in door. Called without a credential
 // they challenge for auth so MCP clients start the GitHub sign-in dance.
@@ -1314,6 +1315,7 @@ async function handleMessage(msg, ctx) {
           faultLogged(`mcp ${name}: the store went away`, e);
           return refusal(msg.id, { error: "bounce", code: 503, defect: STORE_LOST, hint: writeShaped(name, args) ? ACT_RETRY : READ_RETRY, retry_after: STORE_RETRY_AFTER_S }, { compact: true });
         }
+        if (isPinStop(e)) return refusal(msg.id, { error: "bounce", code: 503, defect: "town-pin-mismatch", hint: pinStopHint(e) }, { compact: true }); // POS-994
         return refusal(msg.id, { error: "bounce", defect: "the office tripped", hint: faultLogged(`mcp ${name}: the office tripped`, e) }, { compact: true });
       }
     }

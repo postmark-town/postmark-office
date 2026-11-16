@@ -11,6 +11,8 @@ ExecStart=/srv/postmark-office-dev/postmark-dev-freshen.sh
 # restarts onto the pins the freshen just wrote. ExecStartPost runs only after
 # ExecStart exited 0 (a oneshot), so a freshen that failed (a refused re-sign, a red
 # verify put back on the seed) restarts nothing. The `+` runs this one line with full
-# privileges; the freshen itself stays meepo. No live user at 08:10Z: the dev office's
-# access log showed 0 requests 07:55-08:30Z on 11-13, 11-14 and 11-15.
-ExecStartPost=+/usr/bin/systemctl restart postmark-office-dev.service
+# privileges; the freshen itself stays meepo. --no-block queues the restart rather than
+# waiting on it, so it can never wait on a job ordered after this one (Truey's review of
+# #1065, finding 8; the dev unit is only After=network.target today). No live user at
+# 08:10Z: the dev office's access log showed 0 requests 07:55-08:30Z on 11-13, 11-14, 11-15.
+ExecStartPost=+/usr/bin/systemctl --no-block restart postmark-office-dev.service

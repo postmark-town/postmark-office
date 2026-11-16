@@ -5,7 +5,7 @@
 //   node /srv/postmark-office/tools/stamp-verify-owed.mjs [--repo <town clone>] [the town verify's own args]
 //
 // Runs the town's `tools/stamp-verify.mjs` as the office's pinned copy, checked
-// against the town (POS-994; a mismatch is exit 1, saying so), over --repo, else
+// against the town (POS-994; a mismatch is exit 3, saying so), over --repo, else
 // the working directory, with the same arguments, and passes its output through. Exit 0 when
 // it is green, OR when every problem it names is one of its two "not a tamper"
 // sentences: the ledger is behind the derivation (mints owed), or a paying
@@ -55,13 +55,14 @@ if (isMain) {
   }
   // POS-994: the office's pinned copy of the verifier, checked against the town
   // and handed it by name (the --repo given is re-said as the resolved path). A
-  // pin stop is a red check that says why, never a green one.
+  // pin stop is never green: it exits 3, the shell door's number for a pin stop,
+  // so a caller names it as one and never as a red ledger.
   let argv;
   try { argv = townToolArgv(repo, "stamp-verify.mjs", i !== -1 ? [...args.slice(0, i), ...args.slice(i + 2)] : args); }
   catch (e) {
     if (!isPinStop(e)) throw e;
     console.error(`[stamp-verify-owed] ${e.message}`);
-    process.exit(1);
+    process.exit(3);
   }
   const r = spawnSync(process.execPath, argv, { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.stdout) process.stdout.write(r.stdout);

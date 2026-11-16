@@ -446,6 +446,40 @@ test("mint · the mint itself fails: mint-failed, the roll-back runs, nothing af
   assert.ok(published(fx));
 });
 
+// POS-994 (Truey's review of #1065, findings 4 and 7): a pin stop is named as one in
+// the receipt (town-pin-mismatch), never as a red ledger or a failed mint.
+const unreviewed = (fx, file) => {
+  write(fx.town, { [file]: readFileSync(join(fx.town, file), "utf8") + "// a town change the office has not reviewed\n" });
+  fx.g("-C", fx.town, "commit", "-qam", "an unreviewed change");
+  fx.g("-C", fx.town, "push", "-q");
+};
+
+test("mint · POS-994: the town's verifier is not the pinned copy: the arrival check stops by name, mint refused town-pin-mismatch, not ledger-red", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/stamp-verify.mjs");
+  const r = run(fx, { ...OWED, STUB_WELCOME: "a welcome" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), {
+    ...GREEN, mint: "refused:town-pin-mismatch", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
+    verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
+  });
+  assert.match(r.stderr, /the town's code is not the office's pinned copy/);
+  assert.equal(calls(fx).includes("verify"), false, "the town's verifier never ran");
+});
+
+test("mint · POS-994: the town's mint is not the pinned copy: mint refused town-pin-mismatch, never mint-failed, nothing minted", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/stamp-mint.mjs");
+  const r = run(fx, { ...OWED });
+  assert.equal(r.status, 0, r.stderr);
+  const s = steps(receipt(fx));
+  assert.equal(s.mint, "refused:town-pin-mismatch");
+  assert.equal(s.welcome, "notrun");
+  assert.match(s.rollback, /^ok:/);
+  assert.equal(calls(fx).includes("mint"), false, "the town's mint never ran");
+  assert.equal(status(fx), "");
+});
+
 test("mint · the verify after the write is red: verify-red, rolled back, nothing committed", { skip }, () => {
   const fx = fixture();
   const head = fx.g("-C", fx.town, "rev-parse", "HEAD");

@@ -594,7 +594,12 @@ export function fullVerify(sb) {
 // can be reached. So it refuses to start where one is present: the box's key
 // path, or the path the office environment names for the mint (STAMP_KEY).
 /** The places a real stamp key would be on a machine that mints. */
-export const stampKeyPaths = (env = process.env) => ["/srv/postmark-office/stamp-key.pem", env.STAMP_KEY].filter(Boolean);
+export const stampKeyPaths = (env = process.env) => [
+  "/srv/postmark-office/stamp-key.pem",      // prod's mint key
+  "/srv/postmark-office-dev/stamp-key.pem",  // dev's own mint key (POS-354)
+  env.STAMP_KEY,                             // the office env's mint key
+  env.WITNESS_KEY,                           // the witness's key (Truey's review of #1065: "a key or the store")
+].filter(Boolean);
 
 /** Null where none of `paths` exists; else the sentence the sandbox refuses with. */
 export function stampKeyRefusal(paths = stampKeyPaths()) {

@@ -228,6 +228,29 @@ test("NOT CONFIGURED: no witness key, no witness call; the crossing is what it w
   assert.match(r.stderr, /\[witness\] not configured \(WITNESS_KEY, WITNESS_OWED\): this crossing owes no record/);
 });
 
+// POS-994 (Truey's review of #1065, findings 3 and 7): the town's code is not the
+// office's pinned copy. The mint step stops by name (the door's exit 3), and the
+// crossing is STILL witnessed: owe-open runs (it never reads the clone), the stopped
+// owe-mail is owed as incomplete with "town-pin-mismatch: <file>", and the stopped
+// publish leaves it owed for the first publish after the re-pin.
+test("A PIN STOP is witnessed: the mint stops by name, and the crossing is owed as town-pin-mismatch", { skip: fskip }, () => {
+  const fx = fixture();
+  const env = CONFIGURED(fx);
+  // a town change the office has not reviewed: a file in every stub's closure
+  writeFileSync(join(fx.town, "tools", "stub-calls.mjs"), readFileSync(join(fx.town, "tools", "stub-calls.mjs"), "utf8") + "// a town change\n");
+  execFileSync("git", ["-C", fx.town, "commit", "-qam", "an unreviewed change"], { env: { ...process.env, ...GIT_ENV } });
+  const r = runFerry(fx, env);
+  assert.equal(r.status, 3, `the pin stop is the crossing's exit: ${r.stderr}`);
+  assert.match(r.stderr, /\[town-tool\] the town's tools\/stub-calls\.mjs is not the copy the office pinned/);
+  assert.ok(!r.calls.some((c) => c.startsWith("mint")), "the town's mint never ran");
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`, "opened, from the pinned copy, though the clone differs");
+  assert.ok(r.witness.includes(`witness owe-incomplete --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --why town-pin-mismatch: tools/stub-calls.mjs [clean clone]`),
+    `the outcome is owed, by name: ${r.witness.join(" | ")}`);
+  assert.ok(!r.witness.some((c) => c.startsWith("witness publish")), "the publish the pin stopped did not run");
+  assert.match(r.stderr, /the record is owed, not published \(town-pin-mismatch: tools\/stub-calls\.mjs\)/);
+});
+
+
 test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and then published", { skip: fskip }, () => {
   const fx = fixture();
   const env = CONFIGURED(fx);

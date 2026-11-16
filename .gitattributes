@@ -30,3 +30,5 @@
 # wrote — the same guard as above, for the same reason, on the one extension
 # that carries evidence rather than source.
 test/fixtures/** text eol=lf
+# POS-994: the pinned town copies are reviewed as code; a NUL byte in one (seal.mjs) must not hide its diff
+src/town-pins/** diff

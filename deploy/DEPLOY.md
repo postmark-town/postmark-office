@@ -324,8 +324,8 @@ night, and the re-sign rewrites signatures inside the town's own tools, so a dev
 clone never equals prod's pins. Dev pins its OWN re-signed town (Wright, 2026-11-16):
 `postmark-dev-freshen.sh` writes `/srv/postmark-office-dev/town-pins-dev` (outside the
 clone) around the re-sign, every dev unit names it, and the freshen's unit restarts
-the dev office once the new pins are written (`ExecStartPost=+/usr/bin/systemctl restart
-postmark-office-dev.service`; a failed freshen restarts nothing). There is no switch
+the dev office once the new pins are written (`ExecStartPost=+/usr/bin/systemctl --no-block
+restart postmark-office-dev.service`: queued, not waited on; a failed freshen restarts nothing). There is no switch
 that turns the pinning off. Box steps, on dev only, when the release carrying this
 reaches dev (Darko's look first):
 ```sh

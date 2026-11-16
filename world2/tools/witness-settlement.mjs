@@ -34,7 +34,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isPinStop, townToolArgv } from "../../src/town-tool.mjs"; // POS-994: the witness chain is the office's pinned copy
+import { CLONE_FREE_VERBS, isPinStop, townToolArgv } from "../../src/town-tool.mjs"; // POS-994: the witness chain is the office's pinned copy
 
 import { isDecision } from "../../deploy/settlement-history.mjs";
 
@@ -143,12 +143,16 @@ function main(argv) {
   if (!key || !owed) { log("not configured (WITNESS_KEY, WITNESS_OWED): this settlement owes no record"); return 0; }
   if (!existsSync(join(resolve(town), "tools", "witness-chain.mjs"))) { log(`the town clone has no tools/witness-chain.mjs yet: no record (${town})`); return 0; }
   // POS-994: the witness chain is the office's pinned copy, checked against the
-  // town clone at every call. A mismatch runs nothing and is said by name; the
-  // record is then owed, exactly as when it cannot publish (exit 3, the
-  // shell door's number for a pin stop).
+  // town clone at every call; a mismatch runs nothing and is said by name (exit 3,
+  // the shell door's number for a pin stop). The witness still owes the outcome
+  // (Truey's review of #1065, finding 3): owe-open and owe-incomplete never read
+  // the clone and run from the pinned copy without its check (CLONE_FREE_VERBS),
+  // and an owe the pin stopped is owed as incomplete, "town-pin-mismatch: <file>".
+  let pinStop = null;
   const cliArgv = (args) => {
-    try { return townToolArgv(resolve(town), "witness-chain.mjs", args); }
-    catch (e) { if (isPinStop(e)) { log(e.message); return null; } throw e; }
+    const verifyClone = !(CLONE_FREE_VERBS["witness-chain.mjs"] ?? []).includes(args[0]);
+    try { return townToolArgv(resolve(town), "witness-chain.mjs", args, { verifyClone }); }
+    catch (e) { if (isPinStop(e)) { pinStop = e.file ?? "tools/witness-chain.mjs"; log(e.message); return null; } throw e; }
   };
   const town_ = (args, input = null) => {
     const argv = cliArgv(args);
@@ -211,7 +215,9 @@ function main(argv) {
   try { decided = settlementDecided({ receiptText, attempt, event, sweep: opt("--sweep") }); } catch (e) {
     return incomplete(`the settlement's outcome could not be composed: ${e.message}`);
   }
+  pinStop = null;
   const oweStatus = town_(["owe", "--owed", owed, "--decided", "-"], JSON.stringify(decided));
+  if (oweStatus === 3 && pinStop) return incomplete(`town-pin-mismatch: ${pinStop}`);
   if (oweStatus !== 0) return incomplete(`the settlement's outcome could not be owed (exit ${oweStatus})`);
   return publishNow();
 }

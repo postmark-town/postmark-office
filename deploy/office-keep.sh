@@ -309,7 +309,14 @@ keep_settle_unlanded() {
     # this tick, and a plain verify here would refuse the catch-up that pays them.
     # Anything else the town verifier finds is still red, and every verify after
     # a write below stays the plain one (tools/stamp-verify-owed.mjs).
-    if ! node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE"; then
+    arrived_rc=0
+    node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE" || arrived_rc=$?
+    if [ "$arrived_rc" -eq 3 ]; then
+      # POS-994: the pin stopped the arrival check (the town's verifier is not the office's pinned copy). Not a red ledger.
+      echo "[office-keep] mint catch-up OFF — the town's code is not the office's pinned copy (the line above names the file), so this tick appended nothing; it resumes once the pin and the town agree" >&2
+      keep_step mint refused town-pin-mismatch
+      exit 0
+    elif [ "$arrived_rc" -ne 0 ]; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       # exit 0 keeps the tick's flow as it was; the receipt says what it is: the mint REFUSED
       keep_step mint refused ledger-red
@@ -373,7 +380,8 @@ keep_settle_unlanded() {
     else
       # POS-994: the office's pinned copy of the town's mint, checked against the
       # clone (exit 3 and its words on stderr when they differ: nothing runs).
-      node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem || { keep_step mint refused mint-failed; exit 1; }
+      # A pin stop (the door's exit 3) is named as one, never as a failed mint (Truey's review of #1065, finding 4).
+      node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step mint refused town-pin-mismatch; else keep_step mint refused mint-failed; fi; exit 1; }
     fi
     keep_step mint ok
     if node /srv/postmark-office/deploy/welcome-pass.mjs \
@@ -416,7 +424,8 @@ keep_settle_unlanded() {
       echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     fi
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
-      node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" -- --registry "$REGISTRY_FILE" || { keep_step verify refused verify-red; exit 1; }
+      # A pin stop is not a red ledger (the tamper word): it is named as itself.
+      node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" -- --registry "$REGISTRY_FILE" || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step verify refused town-pin-mismatch; else keep_step verify refused verify-red; fi; exit 1; }
       keep_step verify ok
     else
       keep_step verify ok no-change
@@ -546,7 +555,8 @@ HK_LOG="${HOUSEHOLD_KEYS_LOG:-/srv/postmark-harbor/household-keys.jsonl}"
 # The predicate is the office's pinned copy (POS-994), checked against the
 # snapshot's copy: a mismatch runs nothing, says so on stderr ([town-tool] …),
 # and leaves no JSON, so the line below is `checked: false` with those words.
-hk_out="$(node /srv/postmark-office/src/town-tool.mjs run household-keys.mjs --clone "$SNAP/town" -- --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
+hk_rc=0
+hk_out="$(node /srv/postmark-office/src/town-tool.mjs run household-keys.mjs --clone "$SNAP/town" -- --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || hk_rc=$?
 if node -e '
   const text = process.argv[1] ?? "";
   let j = null;
@@ -569,10 +579,8 @@ if node -e '
   try { j = JSON.parse(String(process.argv[1] ?? "").trim().split("\n").pop()); } catch {}
   process.exit(j && Array.isArray(j.split_households) ? 0 : 3);
 ' "$hk_out"; then keep_step hhkeys ok
-else case "$hk_out" in
-  *"[town-tool]"*) keep_step hhkeys refused town-pin-mismatch ;;
-  *) keep_step hhkeys refused unchecked ;;
-  esac
+elif [ "$hk_rc" -eq 3 ]; then keep_step hhkeys refused town-pin-mismatch   # the door's exit 3 is a pin stop, and only that
+else keep_step hhkeys refused unchecked
 fi
 
 # ── the world hydration (moved from the retired rehydrate, POS-268 5b) ───────

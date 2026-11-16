@@ -17,7 +17,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -386,7 +386,7 @@ test("DEV: the freshen restarts the dev office only after the pins are written, 
   const at = (re) => unit.findIndex((l) => re.test(l));
   assert.notEqual(at(/^Type=oneshot$/), -1, "a oneshot: ExecStartPost waits for ExecStart to exit 0");
   const start = at(/^ExecStart=\/srv\/postmark-office-dev\/postmark-dev-freshen\.sh$/);
-  const post = at(/^ExecStartPost=\+\/usr\/bin\/systemctl restart postmark-office-dev\.service$/);
+  const post = at(/^ExecStartPost=\+\/usr\/bin\/systemctl --no-block restart postmark-office-dev\.service$/);
   assert.ok(start !== -1 && post > start, "the restart is the unit's step after the script, never inside it");
   const script = readFileSync(join(ROOT, "deploy", "postmark-dev-freshen.sh"), "utf8");
   assert.doesNotMatch(script, /systemctl/, "the script itself restarts nothing: only a freshen that exited 0 does");
@@ -488,4 +488,77 @@ test("THE STRONG SOURCE LAW: no string names a pinned module on a reach outside 
   assert.deepEqual(switches.map((p) => relative(ROOT, p)), [], "an engine-folder switch reads past the loader");
   // every allowlisted shell line still exists (a stale allowance is a red, not a silent pass)
   for (const a of SHELL_ALLOW) assert.ok(readFileSync(join(ROOT, a.file), "utf8").includes(a.text), `${a.file} no longer holds "${a.text}": drop it from the allowlist (${a.why})`);
+});
+
+// ── THE SHELL'S DOOR: 3 is a pin stop, and only that (Truey, #1065 findings 5 and 3) ──
+const DOOR = join(ROOT, "src", "town-tool.mjs");
+const door = (args, env = {}) => spawnSync(process.execPath, [DOOR, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+
+test("DOOR: a clone that differs from the pins exits 3, runs nothing, and names the stopped file in --stop-file", () => {
+  const f = fixture(TOWN);
+  const marker = join(f.base, "the-clone-ran");
+  try {
+    f.write(f.clone, "tools/rule.mjs", `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\nexport const rule = "x";\n`);
+    const stop = join(f.base, "stop");
+    const r = door(["run", "mint.mjs", "--clone", f.clone, "--stop-file", stop, "--", "anything"], { TOWN_PINS_DIR: f.pins });
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.stderr, /^\[town-tool\] the town's tools\/rule\.mjs is not the copy the office pinned/m);
+    assert.equal(readFileSync(stop, "utf8").trim(), "tools/rule.mjs");
+    assert.equal(existsSync(marker), false, "nothing ran");
+  } finally { f.done(); }
+});
+
+test("DOOR: anything else it refuses exits 2, never 3: no pins to read, a foreign --repo, a bad call", () => {
+  const f = fixture({ "tools/stamp-mint.mjs": "export {};\n" });
+  try {
+    const empty = join(f.base, "no-pins-here");
+    mkdirSync(empty);
+    const noPins = door(["run", "stamp-mint.mjs", "--clone", f.clone, "--", "--derive"], { TOWN_PINS_DIR: empty });
+    assert.equal(noPins.status, 2, `a missing PINS.json is a broken deploy, not "the town changed": ${noPins.stderr}`);
+    const foreign = door(["run", "stamp-mint.mjs", "--clone", f.clone, "--", "--repo", f.base], { TOWN_PINS_DIR: f.pins });
+    assert.equal(foreign.status, 2, foreign.stderr);
+    assert.match(foreign.stderr, /is not the clone the pin was checked against/);
+    assert.equal(door(["run", "stamp-mint.mjs", "--", "x"]).status, 2, "no --clone: a bad call");
+    assert.equal(door(["walk"]).status, 2);
+  } finally { f.done(); }
+});
+
+test("CLONE-FREE: the witness's owe-open and owe-incomplete run from the pinned copy with NO clone at all, and nothing else may", () => {
+  // The real pinned witness chain (src/town-pins), its owed queue in a scratch folder,
+  // and a --clone that does not exist: if either verb read the clone, it could not run.
+  const base = mkdtempSync(join(tmpdir(), "town-tool-clonefree-"));
+  try {
+    const owed = join(base, "owed");
+    const noClone = join(base, "there-is-no-clone");
+    const env = { TOWN_PINS_DIR: PIN_ROOT };
+    const open = door(["run", "witness-chain.mjs", "--clone", noClone, "--", "owe-open", "--owed", owed, "--kind", "mail-crossing", "--attempt", "ferry-t1"], env);
+    assert.equal(open.status, 0, open.stderr);
+    const inc = door(["run", "witness-chain.mjs", "--clone", noClone, "--", "owe-incomplete", "--owed", owed, "--kind", "mail-crossing", "--attempt", "ferry-t1", "--why", "town-pin-mismatch: tools/stamp-mint.mjs"], env);
+    assert.equal(inc.status, 0, inc.stderr);
+    assert.equal(existsSync(noClone), false, "neither verb made or read the clone");
+    const files = walk(owed);
+    assert.ok(files.length > 0, "the outcome is owed");
+    assert.ok(files.some((p) => readFileSync(p, "utf8").includes("town-pin-mismatch: tools/stamp-mint.mjs")), "owed with the pin stop's own why");
+    // every other verb keeps the clone check: publish against a clone that is not there stops
+    const pub = door(["run", "witness-chain.mjs", "--clone", noClone, "--", "publish", "--repo", noClone, "--owed", owed, "--key", join(base, "k.pem")], env);
+    assert.equal(pub.status, 3, pub.stderr);
+    // and the exemption is by name and verb, nowhere else
+    assert.throws(() => townToolArgv(noClone, "witness-chain.mjs", ["publish"], { verifyClone: false }), /only witness-chain\.mjs owe-open\/owe-incomplete may run without the clone check/);
+    assert.throws(() => townToolArgv(noClone, "stamp-mint.mjs", ["owe-open"], { verifyClone: false }), /only witness-chain\.mjs/);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("AT: a symlinked module in an ancestor checkout is refused by name (node would import it by its real path)", async (t) => {
+  const g = gitTown();
+  try {
+    const root = g.pinsAt(g.c2);
+    g.git("checkout", "-q", g.c1);
+    const outside = join(g.base, "elsewhere.mjs");
+    writeFileSync(outside, "export const rule = 'from elsewhere';\n");
+    rmSync(join(g.repo, "tools", "rule.mjs"));
+    try { symlinkSync(outside, join(g.repo, "tools", "rule.mjs")); }
+    catch (e) { return t.skip(`this machine cannot make a symlink (${e.code})`); }
+    await assert.rejects(importTownToolAt(g.repo, g.c1, "mint.mjs", { root }),
+      (e) => e instanceof TownPinMismatch && e.file === "tools/rule.mjs" && /a symlink/.test(e.message));
+  } finally { g.done(); }
 });

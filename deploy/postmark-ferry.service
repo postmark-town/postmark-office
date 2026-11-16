@@ -168,8 +168,13 @@ WorkingDirectory=/srv/postmark-office
 # office's pinned copy, handed the clone by --repo. A mismatch runs nothing,
 # says which file on stderr ([town-tool] ...) and exits 3: in the chain that is
 # a refused step at its wstage (undo puts the clone back, the witness owes the
-# crossing); in the witness itself it is the same "owed" the witness already
-# says when it cannot publish, so the crossing's exit is unchanged.
+# crossing). The witness keeps owing when the pin stops it (Truey's review of
+# #1065, finding 3; Darko's POS-907 "Quiet and refused crossings get records
+# too"): owe-open and owe-incomplete run from the pinned copy without the clone
+# check (they write only WITNESS_OWED), an owe-mail stopped by the pin is owed as
+# incomplete with "town-pin-mismatch: <file>" (the door's --stop-file), and a
+# publish stopped by the pin leaves the record owed for the first publish after
+# the re-pin. The crossing's exit is unchanged.
 # tools/ferry.mjs is not pinned here: it runs in its own keyless sandbox (#1048).
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=start; wreport=/tmp/witness-ferry-report.json; : > "$wreport"; wattempt="ferry-$INVOCATION_ID"; \
@@ -181,14 +186,18 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
         echo "[witness] the town clone has no tools/witness-chain.mjs yet: no record" >&2; return 1; fi; }; \
   witness() { \
       witness_ready 2>/dev/null || return 0; \
-      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
+      wstop=/tmp/witness-pin-stop; : > "$wstop"; \
+      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" --stop-file "$wstop" -- owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
           --attempt "$wattempt" --exit "$1" --stage "$wstage" --ferry-report "$wreport" \
-        || { echo "[witness] the outcome of this crossing could not be composed: it is owed as incomplete" >&2; \
+        || { if [ -s "$wstop" ]; then wwhy="town-pin-mismatch: $(cat "$wstop")"; else wwhy="owe-mail failed after stage $wstage, exit $1"; fi; \
+             echo "[witness] the outcome of this crossing could not be composed ($wwhy): it is owed as incomplete" >&2; \
              /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- owe-incomplete --owed "$WITNESS_OWED" --kind mail-crossing \
-                 --attempt "$wattempt" --why "owe-mail failed after stage $wstage, exit $1" \
+                 --attempt "$wattempt" --why "$wwhy" \
                || echo "[witness] not even that: the open entry stands, and the next publisher records it" >&2; }; \
-      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" -- publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
-        || echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; }; \
+      : > "$wstop"; \
+      /usr/bin/node /srv/postmark-office/src/town-tool.mjs run witness-chain.mjs --clone "$TOWN_CLONE" --stop-file "$wstop" -- publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
+        || { if [ -s "$wstop" ]; then echo "[witness] the record is owed, not published (town-pin-mismatch: $(cat "$wstop")): the first publish after the re-pin pays it" >&2; \
+             else echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; fi; }; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
       git -C "$TOWN_CLONE" reset --hard -q HEAD; \
       git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES; \

@@ -44,7 +44,7 @@
 // a clone at the new town code stops each pinned step by name.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -171,6 +171,9 @@ export async function importTownTool(clone, name, opts) {
 }
 
 // ── A TOWN CHECKOUT AT A PAST POSITION (Wright, POS-994, 2026-11-16 08:5x EST) ─
+// The checkout must be quiescent and symlink-free: nothing writes it while it is
+// read (the settlement's checkout at town_sha, householdsAt's scratch copy), and the
+// At path refuses a symlinked module (node would import it by its real path).
 // A snapshot's replay reads the town AT its ledger position (world-snapshot.mjs §
 // householdsAt, parcel-room.mjs § houseFactsAt). Today's pin would stop every
 // replay of a window whose engine has since changed. So a checkout's OWN engine
@@ -187,13 +190,14 @@ export async function importTownTool(clone, name, opts) {
 /** The `git merge-base --is-ancestor` exit for sha → the pin's commit: 0 inside the review, 1 after it, 128 git could not tell. */
 export function ancestorOfPin(gitRepo, sha, { root = pinRoot() } = {}) {
   const pin = readPins(root).town_commit;
-  const r = spawnSync("git", ["-C", gitRepo, "merge-base", "--is-ancestor", String(sha), pin], { stdio: "ignore" });
+  // refs/replace never answers for the town's history here (Truey's review of #1065)
+  const r = spawnSync("git", ["-C", gitRepo, "merge-base", "--is-ancestor", String(sha), pin], { stdio: "ignore", env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } });
   return r.status ?? 128;
 }
 
 /** Each file's blob at <sha> in gitRepo, or null when that path is not there. */
 function blobAt(gitRepo, sha, path) {
-  const r = spawnSync("git", ["-C", gitRepo, "rev-parse", "--verify", "-q", `${sha}:${path}`], { encoding: "utf8" });
+  const r = spawnSync("git", ["-C", gitRepo, "rev-parse", "--verify", "-q", `${sha}:${path}`], { encoding: "utf8", env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
@@ -214,6 +218,11 @@ export async function importTownToolAt(repoAtSha, sha, name, { gitRepo = repoAtS
     if (seen.has(p)) return;
     seen.add(p);
     const at = join(repoAtSha, p);
+    // node imports by REAL path, so a symlinked module's own imports would resolve
+    // outside the folder checked here: a symlink in the closure is refused by name.
+    if (existsSync(at) && lstatSync(at).isSymbolicLink()) {
+      throw new TownPinMismatch({ file: p, pinned: blobAt(gitRepo, sha, p) ?? "(absent at that commit)", found: "a symlink", townCommit: sha, clone: repoAtSha });
+    }
     const want = blobAt(gitRepo, sha, p);
     const found = existsSync(at) ? gitBlobSha(readFileSync(at)) : null;
     if (!want || found !== want) {
@@ -252,8 +261,33 @@ export const REPO_DEFAULTING = new Set([
  * absent, and a `--repo` naming anything but the clone is refused: the pin
  * vouches for the code, the clone is the only town it may read.
  */
-export function townToolArgv(clone, name, args = [], opts) {
-  const path = townTool(clone, name, opts);
+// THE TWO VERBS THAT NEVER READ THE CLONE (Truey's review of #1065, finding 3). The
+// witness owes a crossing's outcome even when the town's code is not the pinned
+// copy (Darko's POS-907: "Quiet and refused crossings get records too"), so these
+// two run from the pinned copy WITHOUT the clone check: they write only the owed
+// queue (--owed), never the clone. Nothing else may skip the check, and the
+// pinned copy must still exist (test/town-tool.test.mjs runs them with no clone).
+export const CLONE_FREE_VERBS = Object.freeze({ "witness-chain.mjs": Object.freeze(["owe-open", "owe-incomplete"]) });
+
+/**
+ * `[pinned path, ...args]` for a child `node` process, checked as townTool
+ * checks it. For a CLI in REPO_DEFAULTING, `--repo <clone>` is appended when
+ * absent, and a `--repo` naming anything but the clone is refused.
+ * `{ verifyClone: false }` is allowed only for CLONE_FREE_VERBS, by name and verb.
+ */
+export function townToolArgv(clone, name, args = [], opts = {}) {
+  const { verifyClone = true, ...rest } = opts ?? {};
+  let path;
+  if (verifyClone) path = townTool(clone, name, rest);
+  else {
+    if (!(CLONE_FREE_VERBS[name] ?? []).includes(args[0])) {
+      throw new Error(`townToolArgv(${name} ${args[0] ?? ""}): only ${Object.entries(CLONE_FREE_VERBS).map(([n, v]) => `${n} ${v.join("/")}`).join(", ")} may run without the clone check`);
+    }
+    const root = rest.root ?? pinRoot();
+    const rel = `tools/${name}`;
+    if (!readPins(root).files[rel]) throw new TownToolUnpinned(rel, root);
+    path = join(root, rel);
+  }
   const at = args.indexOf("--repo");
   if (at !== -1 && args[at + 1] !== clone) {
     throw new Error(`townToolArgv(${name}): --repo ${args[at + 1]} is not the clone the pin was checked against (${clone})`);
@@ -263,22 +297,34 @@ export function townToolArgv(clone, name, args = [], opts) {
 }
 
 // ── THE SHELL'S DOOR ────────────────────────────────────────────────────────
-//   node src/town-tool.mjs run <name> --clone <town clone> -- <args…>
+//   node src/town-tool.mjs run <name> --clone <town clone> [--stop-file <f>] -- <args…>
 // Runs the pinned copy as townToolArgv builds it, stdio passed through, and
-// exits with its exit. A mismatch exits 3 with the named sentence on stderr and
-// runs nothing, so a unit can tell "the pin stopped this" (3) from the tool's
-// own failure. The ferry unit's witness steps go through here.
+// exits with its exit. A PIN STOP (the clone's copy differs, or the module is not
+// pinned) exits 3 with the named sentence on stderr and runs nothing, and writes
+// the stopped file's path to --stop-file when one is named, so a unit can owe
+// "town-pin-mismatch: <file>". Anything else the door refuses (no pins to read,
+// no clone, a foreign --repo, a bad call) exits 2: a broken deploy never reads as
+// "the town changed" (Truey's review of #1065, finding 5). The two clone-free
+// witness verbs run without the clone check (CLONE_FREE_VERBS).
 async function main(argv) {
   const [verb, name] = argv;
-  const ci = argv.indexOf("--clone");
   const dd = argv.indexOf("--");
-  if (verb !== "run" || !name || ci === -1 || !argv[ci + 1] || dd === -1) {
-    console.error("usage: town-tool.mjs run <name> --clone <town clone> -- <args…>");
+  const head = dd === -1 ? argv : argv.slice(0, dd);
+  const ci = head.indexOf("--clone"), si = head.indexOf("--stop-file");
+  if (verb !== "run" || !name || ci === -1 || !head[ci + 1] || dd === -1 || (si !== -1 && !head[si + 1])) {
+    console.error("usage: town-tool.mjs run <name> --clone <town clone> [--stop-file <f>] -- <args…>");
     return 2;
   }
+  const args = argv.slice(dd + 1);
+  const cloneFree = (CLONE_FREE_VERBS[name] ?? []).includes(args[0]);
   let child;
-  try { child = townToolArgv(argv[ci + 1], name, argv.slice(dd + 1)); }
-  catch (e) { console.error(`[town-tool] ${e.message}`); return 3; }
+  try { child = townToolArgv(head[ci + 1], name, args, { verifyClone: !cloneFree }); }
+  catch (e) {
+    console.error(`[town-tool] ${e.message}`);
+    if (!isPinStop(e)) return 2;
+    if (si !== -1) { const { writeFileSync } = await import("node:fs"); writeFileSync(head[si + 1], `${e.file ?? name}\n`); }
+    return 3;
+  }
   const { spawnSync } = await import("node:child_process");
   const r = spawnSync(process.execPath, child, { stdio: "inherit" });
   return r.status ?? 1;

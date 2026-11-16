@@ -1840,7 +1840,12 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
         ? "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) + the office's household-apex paper gaps — one derivation, two surfaces"
         : "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) — the same derivation the public doorstep bundle publishes",
     };
-  } catch { return null; }
+  } catch (e) {
+    // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
+    const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
+    if (isPinStop(e)) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    return null;
+  }
 }
 
 /** /stamps's page around its balances. Called by the store's stampsRoster (town-index-store.mjs). */
