@@ -93,6 +93,23 @@ export async function welcomeLinesVia(q) {
   return rows.map((r) => r.canonical);
 }
 
+/**
+ * The canonical text of every QUEST PAYMENT the store holds (POS-976): the signed
+ * `MINT → <handle> · <n> · for: quest:<quest-id>/<household-key> · by: the-town`
+ * lines, in chain order. The same reader shape as welcomeLinesVia, for the same
+ * reason: the town's classifyEntry reads the grammar, this only hands it the
+ * lines. The store records a line only after its seal is recomputed and its
+ * signature verified (§ the verifier), so a line here is a signed line. Null when
+ * the store has no stamp_lines table (066 not applied); an empty table is an empty
+ * list. SQL only.
+ */
+export async function questPayLinesVia(q) {
+  const { rows: [t] } = await q.query("SELECT to_regclass('stamp_lines') IS NOT NULL AS ok");
+  if (!t?.ok) return null;
+  const { rows } = await q.query("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% · for: quest:%/%' ORDER BY seq");
+  return rows.map((r) => r.canonical);
+}
+
 /** The store's last row, `{ seq, canonical, sig, seal }` or null: one SQL read. */
 export async function stampHeadVia(q) {
   const { rows: [head] } = await q.query("SELECT seq, canonical, sig, seal FROM stamp_lines ORDER BY seq DESC LIMIT 1");

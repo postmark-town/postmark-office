@@ -2450,6 +2450,24 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
     if (worldSited == null) return { note: STANDING_NOTES.world_elsewhere };
     return { progress: worldSited ? 1 : 0, complete: worldSited, since: null };
   }
+  // ── A QUEST THE TOWN PAYS ONCE PER HOUSEHOLD (POS-976) ───────────────────────
+  //
+  // `read-v2-feedback` (and any row `tools/stamp-mint.mjs` § QUEST_PAY names) is a
+  // hand-reviewed quest: no fold on this board can COUNT it, so its row read
+  // `complete: null`, "this surface did not look", even after the town signed its
+  // payment. The payment IS the fact: a signed `quest:<id>/<household-key>` mint by the
+  // town, which the registry's own derivation sentence names as the row's completion.
+  // The ingest folds the household's qualifying receipts into the standing row
+  // (`paid_quests`: quest id -> the paid day; src/quest-standing.mjs § questPaidFrom),
+  // and this joins them: a paid row is counted and complete, dated by the payment.
+  //
+  // ONLY EVER A YES. No receipt is "not known to be paid", not "unpaid" (a house may
+  // have written in and be waiting for a hand to read it), so an absent key leaves the
+  // row exactly as it was, unknown: `complete: null`, `progress: null`. The earned-once
+  // completion does not depend on the daily snapshot, so it survives a new day.
+  const paidOn = standing?.paid_quests;
+  if (paidOn && typeof paidOn === "object" && Object.hasOwn(paidOn, q.id) && typeof paidOn[q.id] === "string")
+    return { progress: 1, complete: true, since: paidOn[q.id] };
   return null;
 }
 
