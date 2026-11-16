@@ -134,26 +134,27 @@ export async function localDevTarget({
     // the tool must refuse, and the same tool. Real residents' outboxes are then
     // set aside so only the rehearsal's letters cross.
     const { generateKeyPairSync } = await import("node:crypto");
-    const { resignDevTown } = await import("../../tools/dev-ledger-resign.mjs");
     const pemOf = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
     const keyPem = pemOf();
     const stampKey = join(dir, "stamp-key.pem");
     writeFileSync(stampKey, keyPem);
     const prodKey = join(dir, "prod-stamp-key.pem");
     writeFileSync(prodKey, pemOf());
-    // DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16), as the box's freshen does:
-    // the freshen's own pin command (deploy/postmark-dev-freshen.sh § pin), run on the seed
-    // (the engine the re-sign loads), then again on the re-signed town, into a folder outside
-    // the clone that the dev office and the rehearsal name (the dev units' TOWN_PINS_DIR).
+    // DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16), as the box's freshen does
+    // (deploy/postmark-dev-freshen.sh): its own commands, each its own process, in its order:
+    // pin the seed (the engine the re-sign loads), re-sign, pin the re-signed town, into a
+    // folder outside the clone that the dev office and the rehearsal name (the dev units'
+    // TOWN_PINS_DIR). Each is a CHILD, as on the box: a process that has read a pin folder
+    // keeps that manifest (the dev office restarts after a re-pin), so this harness reads
+    // none of it itself before the rehearsal does.
     const pinsDir = join(dir, "town-pins-dev");
-    const pin = () => execFileSync(process.execPath, [join(OFFICE, "tools", "town-pins.mjs"), "--write", "--town", town, "--ref", "HEAD", "--out", pinsDir], { encoding: "utf8" });
+    const asFreshen = (rel, args) => execFileSync(process.execPath, [join(OFFICE, rel), ...args], {
+      encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinsDir }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const pin = () => asFreshen("tools/town-pins.mjs", ["--write", "--town", town, "--ref", "HEAD", "--out", pinsDir]);
     pin();
-    const pinsBefore = process.env.TOWN_PINS_DIR;
-    process.env.TOWN_PINS_DIR = pinsDir;
-    let moved;
-    try { moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") }); }
-    finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
-    if (moved.status !== "resigned") throw new Error(`the stand-in's re-sign: ${moved.status} ${moved.why ?? ""}`);
+    try { asFreshen("tools/dev-ledger-resign.mjs", ["--town", town, "--key", stampKey, "--not-key", prodKey]); }
+    catch (e) { throw new Error(`the stand-in's re-sign: ${String(e.stderr ?? e.stdout ?? e.message).trim().split("\n").slice(-2).join(" | ")}`); }
     pin();
     log(`pins: dev's own, from the re-signed town, at ${pinsDir}`);
     const wp = join(town, "WHITE_PAGES");

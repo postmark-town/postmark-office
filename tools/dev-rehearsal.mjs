@@ -997,7 +997,7 @@ async function keyProblems(ctx) {
   if (prod) p.push(`dev's STAMP_KEY (${t.stampKey}): ${prod}`);
   const pubPath = t.townClone ? join(t.townClone, "tools", "stamp-pubkey.pem") : null;
   const installed = pubPath && existsSync(pubPath) ? readFileSync(pubPath, "utf8").replace(/\r\n/g, "\n") : null;
-  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodPubKey} --verify)`);
+  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it and pins the re-signed town, POS-994: sudo systemctl start postmark-dev-freshen.service)`);
   if (ctx.storeMint && !p.length) {
     const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
     if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);
