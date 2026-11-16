@@ -392,12 +392,16 @@ export function invitesOf(prog) {
  * Null is undated: the default, and what a caller with no store to read (the
  * tests, test/helpers/dev-target.mjs) passes.
  */
-/** The checkout's printed registry (tools/households.json) `households` object, or null: the town's houseCanonOf folds a house's account ids and retired slugs from it. */
+/**
+ * The checkout's printed registry (tools/households.json) `households` object, or null: the town's houseCanonOf folds a house's account ids and retired
+ * slugs from it. It is the FALLBACK: the ingest hands the store's registry when it has one (`houses`, POS-976), because the printout is not the record
+ * and can lag a fresh account or a retired slug.
+ */
 function printedHouseholds(TOWN) {
   try { return JSON.parse(readFileSync(join(TOWN, "tools", "households.json"), "utf8"))?.households ?? null; } catch { return null; }
 }
 
-export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null, questPayLines = null } = {}) {
+export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const questTool = join(TOWN, "tools", "quest-progress.mjs");
   const registryPath = join(TOWN, "quest-registry.json");
   if (!existsSync(questTool) || !existsSync(registryPath)) return null;
@@ -425,7 +429,7 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
       { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf },
-      TOWN, handles, { base, welcomeLines, questPayLines, houses: printedHouseholds(TOWN) });
+      TOWN, handles, { base, welcomeLines, questPayLines, houses: houses ?? printedHouseholds(TOWN) });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();
@@ -501,7 +505,7 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
  * (world2/tools/town-index-ingest.mjs). `meta` rows come in the order built
  * below, which the delta's meta rows repeat.
  */
-export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null, questPayLines = null } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -539,7 +543,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log, base, welcomeLines, questPayLines }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null from a caller with no store (the tests)
+  const q = await questRows(TOWN, town, { log, base, welcomeLines, questPayLines, houses }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null from a caller with no store (the tests)
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);

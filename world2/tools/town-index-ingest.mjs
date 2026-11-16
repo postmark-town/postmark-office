@@ -58,6 +58,8 @@ import {
 import { isResidentHandle } from "../../src/residency.mjs";
 import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
 import { stampLinesOn, welcomeLinesVia, questPayLinesVia } from "../../src/stamp-lines.mjs";
+import { registryRowsVia } from "../../src/registry-store.mjs";
+import { registryFromRows } from "../../src/registry-rows.mjs";
 import { CROSSING_SEAL_SUBJECT } from "../../src/crossings.mjs";
 
 export const HEAD_KEY = "town-index";                     // projection_heads.repo
@@ -288,6 +290,24 @@ async function questPayLines(client, log) {
   }
 }
 
+/**
+ * The store's registry `households` (POS-976), for the town's houseCanonOf: a house's account ids and retired slugs as the RECORD holds them, not as the
+ * checkout's printout last said. The same read the key base makes (registryRowsVia); in a savepoint for the same reason as the lines. Null when the store
+ * holds no households or the read fails: the derivation then canonicalises against the printout, as before.
+ */
+async function questHouses(client, log) {
+  await client.query("SAVEPOINT quest_houses");
+  try {
+    const households = registryFromRows(await registryRowsVia(client))?.households ?? null;
+    await client.query("RELEASE SAVEPOINT quest_houses");
+    return households && Object.keys(households).length ? households : null;
+  } catch (e) {
+    await client.query("ROLLBACK TO SAVEPOINT quest_houses");
+    log.warn(`  quests: the store's registry could not be read (${e?.message ?? e}); a paid quest's house is folded against the printed registry`);
+    return null;
+  }
+}
+
 // ── the seed ─────────────────────────────────────────────────────────────────
 
 /** The whole derivation, every table replaced, the seed snapshot. The one history walk. */
@@ -301,7 +321,8 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
   const base = await questKeyBase(client, townRepo);
   const welcomeLines = await questWelcomeLines(client, log);
   const payLines = await questPayLines(client, log);
-  const { tables } = await deriveTownIndex(townRepo, { log, base, welcomeLines, questPayLines: payLines });
+  const houses = await questHouses(client, log);
+  const { tables } = await deriveTownIndex(townRepo, { log, base, welcomeLines, questPayLines: payLines, houses });
   ms.derive = Date.now() - t0; t0 = Date.now();
   for (const name of Object.keys(TOWN_TABLES)) {
     const r = await client.query(`DELETE FROM ${tableOf(name)}`);
@@ -698,7 +719,8 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const base = await questKeyBase(client, townRepo);
   const welcomeLines = await questWelcomeLines(client, log);
   const payLines = await questPayLines(client, log);
-  const q = await questRows(townRepo, town, { log, base, welcomeLines, questPayLines: payLines });
+  const houses = await questHouses(client, log);
+  const q = await questRows(townRepo, town, { log, base, welcomeLines, questPayLines: payLines, houses });
   if (q) {
     await diffTable(client, "quest_progress", q.progress, tally);
     if (q.standing) await diffTable(client, "quest_standing", q.standing, tally);

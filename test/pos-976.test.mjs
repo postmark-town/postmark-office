@@ -94,20 +94,62 @@ test("nothing else settles a row: the other houses, another quest, amount, autho
   assert.equal(mine, null, "moose's receipt settles read-v2-feedback and nothing else");
 });
 
-test("a household is settled by the key its line names AND by the paid resident's key today (re-keyed and spelling-folded houses keep their receipt)", { skip: SKIP }, () => {
+test("a household is settled by the house its line NAMES (spellings of one declared house folded); a payment does not follow its recipient into another house", { skip: SKIP }, () => {
   // alex-rowan: paid under the gh: spelling, a declared house (hh:alex-house) today: the town's houseCanonOf folds the account id to the house
   const rows = rowsFor([REAL[0]]);
   assert.equal(standingJoin(ROW, rows.get("alex-rowan")).complete, true);
   // a housemate shares the house's key, so the house's receipt settles the housemate's row too (a quest paid ONCE PER HOUSEHOLD)
-  const roll = new Map([["alex-rowan", { key: "hh:alex-house" }], ["alex-mate", { key: "hh:alex-house" }]]);
-  const r = standingRowsFromTown(tools({ currentHouseholds: () => roll }), "/nowhere", ["alex-rowan", "alex-mate"], { questPayLines: [REAL[0]], houses: HOUSES }).rows;
+  const mates = new Map([["alex-rowan", { key: "hh:alex-house" }], ["alex-mate", { key: "hh:alex-house" }]]);
+  const r = standingRowsFromTown(tools({ currentHouseholds: () => mates }), "/nowhere", ["alex-rowan", "alex-mate"], { questPayLines: [REAL[0]], houses: HOUSES }).rows;
   assert.equal(standingJoin(ROW, r.get("alex-mate")).complete, true, "the house was paid once; every resident's row reads it");
+  // a former name of the house is the same house
+  const formerly = { "alex-house": { residents: ["alex-rowan"], accounts: [], formerly: ["old-alex"] } };
+  const f = standingRowsFromTown(tools({ currentHouseholds: () => mates }), "/nowhere", ["alex-rowan"], { questPayLines: ["- 2026-11-07 · MINT → alex-rowan · 5 · for: quest:read-v2-feedback/hh:old-alex · by: the-town"], houses: formerly }).rows;
+  assert.equal(standingJoin(ROW, f.get("alex-rowan")).complete, true, "a payment under a retired slug of the house keeps its receipt");
   // a solo house under a different key is not settled by a stranger's line
   assert.equal(standingJoin(ROW, rowsFor([REAL[0]]).get("domovoi-boulanger")), null);
   // the earliest day wins when a house is named twice
   const twice = questPaidFrom(["- 2026-11-09 · MINT → moose · 5 · for: quest:read-v2-feedback/hh:moose · by: the-town", REAL[1]],
-    { classifyEntry: engine.classifyEntry, questPay: engine.QUEST_PAY, questOpenOn: engine.questOpenOn, roll: ROLL });
+    { classifyEntry: engine.classifyEntry, questPay: engine.QUEST_PAY, questOpenOn: engine.questOpenOn });
   assert.equal(twice.get("hh:moose")["read-v2-feedback"], "2026-11-07");
+});
+
+test("THE MOVED RESIDENT: a resident paid in house A who is in house B today takes no receipt with them; A keeps it and B stays unknown until B is paid on its own line", { skip: SKIP }, () => {
+  // 11-07: x lived in hh:house-a and the town paid house A (the line names hh:house-a). 11-10: x registered into hh:house-b, a distinct house with its own resident y.
+  const roll = new Map([["x", { key: "hh:house-b" }], ["y", { key: "hh:house-b" }], ["z", { key: "hh:house-a" }]]);
+  const houses = { "house-a": { residents: ["z"], accounts: [] }, "house-b": { residents: ["x", "y"], accounts: [] } };
+  const line = "- 2026-11-07 · MINT → x · 5 · for: quest:read-v2-feedback/hh:house-a · by: the-town";
+  const rows = standingRowsFromTown(tools({ currentHouseholds: () => roll }), "/nowhere", ["x", "y", "z"], { questPayLines: [line], houses }).rows;
+  assert.deepEqual(standingJoin(ROW, rows.get("z")), { progress: 1, complete: true, since: "2026-11-07" }, "house A, which was paid, keeps its completion");
+  assert.equal(standingJoin(ROW, rows.get("x")), null, "the moved resident's row in house B stays unknown: the receipt is house A's");
+  assert.equal(standingJoin(ROW, rows.get("y")), null, "house B's other resident stays unknown too");
+  assert.equal(rows.get("y").paid_quests, undefined);
+  // and when house B is later paid on its own line, B reads paid from ITS day, never A's
+  const later = standingRowsFromTown(tools({ currentHouseholds: () => roll }), "/nowhere", ["x", "y", "z"],
+    { questPayLines: [line, "- 2026-11-12 · MINT → y · 5 · for: quest:read-v2-feedback/hh:house-b · by: the-town"], houses }).rows;
+  assert.equal(standingJoin(ROW, later.get("y")).since, "2026-11-12");
+  assert.equal(standingJoin(ROW, later.get("x")).since, "2026-11-12");
+  assert.equal(standingJoin(ROW, later.get("z")).since, "2026-11-07");
+});
+
+test("the registry that folds a house's aliases is the one the ingest hands (the store's), and a printout is only the fallback", { skip: SKIP }, async () => {
+  // a fresh account the store's registry holds and the checkout's printout does not (or the other way round) must follow the store
+  const roll = new Map([["s-res", { key: "hh:store-house" }]]);
+  const storeHouses = { "store-house": { residents: ["s-res"], accounts: [{ login: "s", id: 777 }] } };
+  const printout = { "store-house": { residents: ["s-res"], accounts: [] } };   // lags: no account 777 yet
+  const line = "- 2026-11-07 · MINT → s-res · 5 · for: quest:read-v2-feedback/gh:777 · by: the-town";
+  const run = (houses) => standingRowsFromTown(tools({ currentHouseholds: () => roll }), "/nowhere", ["s-res"], { questPayLines: [line], houses }).rows.get("s-res");
+  assert.equal(standingJoin(ROW, run(storeHouses)).complete, true, "the store's account 777 folds the line to the house");
+  assert.equal(standingJoin(ROW, run(printout)), null, "a lagging printout fails safe: unknown, never a wrong house");
+  // through the derivation the ingest runs: `houses` overrides the checkout's printout (here an empty record, so kogane's gh: line no longer folds to hh:shard-house), and absent falls back to it
+  const ledger = engine.parseStampLedger(readFileSync(join(TOWN, "WHITE_PAGES", "stamp-ledger.md"), "utf8")).map((e) => e.canonical).filter((c) => c.includes(" · for: quest:"));
+  const pinned = engine.currentHouseholds(TOWN);
+  const town = { residents: [...pinned.keys()].map((h) => ({ handle: h })) };
+  const quiet = { log() {}, warn() {} };
+  const viaStore = new Map((await questRows(TOWN, town, { log: quiet, questPayLines: ledger, houses: {} })).standing.map(([h, j]) => [h, JSON.parse(j)]));
+  const viaPrintout = new Map((await questRows(TOWN, town, { log: quiet, questPayLines: ledger })).standing.map(([h, j]) => [h, JSON.parse(j)]));
+  assert.equal(viaStore.get("kogane").paid_quests, undefined, "the store's record (no shard-house account) does not fold kogane's gh: line: unknown");
+  assert.ok(viaPrintout.get("kogane").paid_quests, "the printout, when the ingest has no store registry, does");
 });
 
 test("unknown stays unknown: no receipt is `complete: null`, a store that was not read settles nothing, and first-idea is untouched", { skip: SKIP }, () => {

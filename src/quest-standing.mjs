@@ -123,15 +123,21 @@ export function welcomeDatesFrom(lines, { classifyEntry, roll }) {
  * the grammar does not read) settles nothing. A balance or a recipient's name is
  * never read: only the receipt.
  *
- * WHICH HOUSE a line settles is the town's `--quest-mint` rule for "already
- * paid" (tools/stamp-mint.mjs: `c.household === mine || keyOf(c.handle, c.date)
- * === mine`): the key the line names AND the paid resident's key on today's roll,
- * so a house paid under `gh:<id>` that is `hh:<slug>` now (or was re-keyed) keeps
- * its receipt. `canon` folds the two spellings of one declared house (a
- * `gh:<account id>`, a retired slug) to its `hh:<slug>`, as the town's houseCanonOf
- * does (identity when the checkout exports none). The earliest day wins.
+ * WHICH HOUSE a line settles is the HOUSE THE LINE NAMES, and nothing else. A
+ * quest-pay line names the payee's household AT THE LINE'S DATE: `--quest-mint`
+ * refuses unless `--household === keyOf(handle, date)`, and the verifier reds a
+ * line whose key is not the payee's house on that day (tools/stamp-mint.mjs,
+ * tools/stamp-verify.mjs), so for a lawful line the paid house is exactly
+ * `canon(c.household)`. The payee's house TODAY is deliberately not credited (that
+ * is the WELCOME row's rule, `welcomeDatesFrom`, and not this quest's): a resident
+ * paid in house A who later moves to a distinct house B takes no receipt with
+ * them, so B's rows stay unknown until B is paid on its own line. `canon` folds
+ * the spellings of ONE declared house (a `gh:<account id>`, a retired slug) to its
+ * `hh:<slug>`, as the town's houseCanonOf does (identity when none is given): a
+ * house paid under one spelling keeps its receipt under the others. The earliest
+ * day wins.
  */
-export function questPaidFrom(lines, { classifyEntry, questPay, questOpenOn = null, roll = null, canon = (k) => k }) {
+export function questPaidFrom(lines, { classifyEntry, questPay, questOpenOn = null, canon = (k) => k }) {
   // the window is the town's own formula (QUEST_PAY's `from`/`until`); the town's questOpenOn is used when the checkout exports it, and this is it when not
   const open = typeof questOpenOn === "function" ? questOpenOn
     : (terms, date) => typeof terms?.from === "string" && typeof date === "string" && date >= terms.from && (!terms.until || date <= terms.until);
@@ -151,7 +157,6 @@ export function questPaidFrom(lines, { classifyEntry, questPay, questOpenOn = nu
     if (!terms || c.n !== terms.amount || c.by !== "the-town") continue;
     if (!open(terms, c.date)) continue;
     put(c.household, c.quest, c.date);
-    put(roll?.get(c.handle)?.key, c.quest, c.date);
   }
   return out;
 }
@@ -241,7 +246,7 @@ export function standingRowsFor(handles, { deliveries, friendships, factsFor, we
  * § questPayLinesVia), read by the ingest beside the welcome rows: they settle the
  * rows of the quests the town pays once per household (`paid_quests` on the standing
  * row) and decide nothing else. `houses` is the registry's `households` object (the
- * checkout's printed tools/households.json), for the town's houseCanonOf. Null lines
+ * store's registry when the ingest has it, else the checkout's printed tools/households.json), for the town's houseCanonOf. Null lines
  * (the hydrate, a store that did not answer, a checkout too old to export `QUEST_PAY`
  * or `classifyEntry`) leave every such row unknown, as before.
  */
@@ -257,7 +262,7 @@ export function standingRowsFromTown(tools, repo, handles, { base = null, welcom
   // the quests the town pays once per household: settled by the signed receipt (POS-976), under the house's canonical key
   const canon = typeof tools.houseCanonOf === "function" && houses ? tools.houseCanonOf(houses) : (k) => k;
   const paidOn = households !== undefined && tools.QUEST_PAY
-    ? questPaidFrom(questPayLines, { classifyEntry: tools.classifyEntry, questPay: tools.QUEST_PAY, questOpenOn: tools.questOpenOn, roll: households, canon })
+    ? questPaidFrom(questPayLines, { classifyEntry: tools.classifyEntry, questPay: tools.QUEST_PAY, questOpenOn: tools.questOpenOn, canon })
     : null;
   const keyOf = (h) => households?.get(h)?.key ?? `solo:${h}`;
   const rows = standingRowsFor(handles, {
