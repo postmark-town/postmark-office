@@ -743,6 +743,38 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
   assert.equal(after.length, 2, "no third draft");
 });
 
+// ── AT THE PINNED WORLD (S173, 90a869e1): the REAL mark road and World's own roomsPlace, nothing handed in ──
+// The tests above hand the planner and roomsPlace in; this one runs completion through world.mjs § planSparkLeave (World's spark
+// class, its pre-check and journalLeaveMark { plan }) and § sparkRoomsPlace (the engine's tools/spark.mjs at the blessing), over
+// the suite's pinned world clone — the integration WLD-173's landing makes possible (Wright 22:18Z).
+test("S173 integration: two rooms complete through the REAL mark road and World's engine roomsPlace — two put-forward spark claims, each one room's strict `rooms`, placed by World", async () => {
+  const world = await import("../src/world.mjs");
+  const place = await world.sparkRoomsPlace();
+  assert.equal(typeof place, "function", "the pinned World engine carries tools/spark.mjs § roomsPlace (S173)");
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet at the pin", { at: { x: 640, y: 980 } });
+  const doors = Date.parse(row.fields.doors_open ?? row.starts);
+  await sayAt("pin-a", doors + 60_000, 590, 980);
+  await sayAt("pin-b", doors + 30 * 60_000, 690, 980);
+  const edges = [doors - 3_600_000];
+  const out = await complete(dir, row, now, { edges, planLeave: null, roomsPlace: undefined });
+  assert.equal(out.completed, true, JSON.stringify(out));
+  assert.equal(out.sparks.length, 2, "one spark per room");
+  assert.deepEqual(out.stake, { returned: 20, to: "wright", backing: 2, home: 18 });
+  for (const [i, id] of out.sparks.entries()) {
+    const { rows: [c] } = await owner.query("SELECT class, status, stake, data, geometry FROM claims WHERE slug = $1", [id]);
+    assert.equal(c?.class, "spark", `${id}: a spark claim on the real road`);
+    assert.notEqual(c.status, "draft", `${id}: put forward`);
+    assert.deepEqual(c.data.rooms, [out.rooms[i]], `${id}: its one room, strict`);
+    assert.equal(c.data.event, row.id);
+    const geo = typeof c.geometry === "string" ? JSON.parse(c.geometry) : c.geometry;
+    const room = (await calendarAtOffice({ event: row.id }, { now, env: ENV, settlements: () => edges })).event.evidence.rooms[i];
+    const { x0, y0, x1, y1 } = room.extent;
+    assert.deepEqual([geo.at, geo.extent], [place([{ x0, y0, x1, y1 }]).at, place([{ x0, y0, x1, y1 }]).extent], `${id}: placed by World's roomsPlace`);
+  }
+  assert.equal(verifies(dir).status, 0, "the town's verifier passes");
+});
+
 test("one room: the mark road's refusal or draft holds the completion; then the room's spark completes with that room's own frame, frozen, under the page's id", async () => {
   const dir = townInABottle();
   const { row, after: now } = await endedEvent(dir, "Sorbet single", { at: { x: 700, y: 700 } });
