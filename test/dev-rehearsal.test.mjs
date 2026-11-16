@@ -135,9 +135,11 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
 /** Every job a box shell text runs: office scripts as office-relative paths, the town's (run from the clone) as `town:`. */
 function jobsIn(text) {
   const out = new Set();
-  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1/g)) {
+  // POS-994: the town-tool sandbox's client is one script with three jobs, so its first word is part of the job
+  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1(?:\s+(ferry|verify|quests)\b)?/g)) {
     if (m[3].startsWith("$")) continue;
-    out.add(m[2] ? m[3] : `town:${m[3]}`);
+    const job = m[4] ? `${m[3]} ${m[4]}` : m[3];
+    out.add(m[2] ? job : `town:${job}`);
   }
   return out;
 }

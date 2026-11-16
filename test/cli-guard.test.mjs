@@ -217,6 +217,8 @@ const ROSTER = {
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   // POS-988: the sandboxed seal's client refuses with no --clone before it reads a file or a socket.
   "tools/town-seal-sandbox.mjs": { args: [], code: 2, needle: "usage: town-seal-sandbox.mjs --clone" },
+  // POS-994: the sandboxed town tools' client refuses with no tool or no --clone before it reads a file or a socket.
+  "tools/town-tool-sandbox.mjs": { args: [], code: 2, needle: "usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone" },
   "tools/train-week-check.mjs": { args: [], code: 2, needle: "usage: node tools/train-week-check.mjs" },
   "tools/usdc-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/vessel-parity.mjs": { args: ["--world", NOWHERE], env: NO_PG, code: 9, needle: "vessel-parity tripped" },
