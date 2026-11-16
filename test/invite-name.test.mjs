@@ -23,6 +23,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -191,7 +197,8 @@ function townClone({ law = true, registry = REGISTRY() } = {}) {
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (law) {
-    copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+    copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(dir);
     writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), LAW_KEYS.publicKey.export({ type: "spki", format: "pem" }));
     mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), sealedLedger([

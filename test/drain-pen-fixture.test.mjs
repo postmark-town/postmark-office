@@ -27,10 +27,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import "./helpers/drain-pen.mjs"; // side effect: STAMP_KEY + STAMP_ENGINE_DIR
+import { ENGINE_DIR } from "./helpers/drain-pen.mjs"; // side effect: STAMP_KEY + the stand-in engine's pins (POS-994)
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURE = await import(pathToFileURL(join(process.env.STAMP_ENGINE_DIR, "stamp-mint.mjs")).href);
+const FIXTURE = await import(pathToFileURL(join(ENGINE_DIR, "stamp-mint.mjs")).href);
 
 // ── the shapes, and what the town engine actually answers for each ───────────
 //
@@ -110,7 +110,7 @@ const REAL_KEYS = join(TOWN, "tools", "household-keys.mjs");
 test("the fixture's household fold and predicate answer as the town's do, on the live town", { skip: !existsSync(REAL_KEYS) && `no town predicate at ${REAL_KEYS}` }, async () => {
   const REAL = await import(pathToFileURL(REAL_MINT).href);
   const REALK = await import(pathToFileURL(REAL_KEYS).href);
-  const FIXK = await import(pathToFileURL(join(process.env.STAMP_ENGINE_DIR, "household-keys.mjs")).href);
+  const FIXK = await import(pathToFileURL(join(ENGINE_DIR, "household-keys.mjs")).href);
   const real = REAL.currentHouseholds(TOWN), fix = FIXTURE.currentHouseholds(TOWN);
   assert.deepEqual(Object.fromEntries([...fix].map(([h, v]) => [h, v.key])), Object.fromEntries([...real].map(([h, v]) => [h, v.key])));
   const houses = REALK.readHouses(TOWN);

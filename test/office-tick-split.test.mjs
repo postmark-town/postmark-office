@@ -25,7 +25,7 @@ const KEEPING = [
   ['git -C "$TOWN_CLONE" pull --ff-only', "the town pull"],
   ['git -C "$WORLD_CLONE" fetch --prune', "the world fetch (it carries the keeper's tag)"],
   // POS-341: both branches of the STAMP_LINES switch: the town's own --append unset, the store's runner set
-  ["stamp-mint.mjs --append", "the mint catch-up (STAMP_LINES unset)"],
+  ['town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append', "the mint catch-up (STAMP_LINES unset), the office's pinned copy of the town's mint (POS-994)"],
   ["stamp-mint-run.mjs --append", "the mint catch-up (STAMP_LINES=store, POS-341)"],
   ["[ \"${STAMP_LINES:-}\" = store ]", "the STAMP_LINES switch"],
   ["deploy/welcome-pass.mjs", "the welcome pass"],

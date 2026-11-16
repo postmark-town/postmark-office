@@ -103,6 +103,9 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { MODULES as PINNED_MODULES } from "./town-pins.mjs";
+const PINNED_TOWN = new Set(PINNED_MODULES.map((m) => `tools/${m}`));
 
 import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
 import { SOCKET as SEAL_SOCKET } from "./town-seal-sandbox.mjs";
@@ -285,7 +288,7 @@ export function githubStub({ owner, repo, branch = "main", townClone }) {
  * The rehearsal's target from the dev office's env file and the roles file.
  * Reads files only; connects to nothing. `office` is the dev office's base URL.
  */
-export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE, prodPubKey = PROD_PUBKEY } = {}) {
+export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAULT_ROLES_FILE, office = DEFAULT_OFFICE, officeRoot = OFFICE, prodPubKey = PROD_PUBKEY, pinsDir = join(officeRoot, "town-pins-dev") } = {}) {
   const env = parseEnvFile(readFileSync(envFile, "utf8"));
   const roles = existsSync(rolesFile) ? parseEnvFile(readFileSync(rolesFile, "utf8")) : {};
   return {
@@ -305,6 +308,9 @@ export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAUL
     stampKey: env.STAMP_KEY ?? PROD_STAMP_KEY,
     // prod's public key, read only to prove dev's is not it (a missing one is red, never a skip)
     prodPubKey,
+    // POS-994 (Wright, 2026-11-16): dev runs its OWN pinned town, the pins the freshen writes after
+    // its re-sign (deploy/postmark-dev-freshen.sh, <dev tree>/town-pins-dev), as the dev units name them
+    pinsDir,
   };
 }
 
@@ -312,7 +318,7 @@ export function targetFromFiles({ envFile = DEFAULT_ENV_FILE, rolesFile = DEFAUL
 function childEnv(t, extra = {}) {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|TOWN_CLONE|WORLD_CLONE|TOWN_PUSH|GITHUB_API_URL)$/.test(k)) delete env[k];
-  return { ...env, ...t.env, TOWN_PUSH: "0", ...extra };
+  return { ...env, ...t.env, TOWN_PUSH: "0", TOWN_PINS_DIR: t.pinsDir, ...extra };
 }
 
 /** PG* for a child that reads them (the town-index ingest, the stamp ingest). */
@@ -388,7 +394,13 @@ export function treeTables(officeRoot = OFFICE) {
 // of its switch, not because the rehearsal exercises the town's own mint.
 
 const officeJob = (ctx, rel, args, opts) => ctx.locked([process.execPath, join(ctx.t.officeRoot, rel), ...args], opts);
-const townJob = (ctx, rel, args) => ctx.locked([process.execPath, join(ctx.t.townClone, rel), ...args], { cwd: ctx.t.townClone });
+// POS-994: the town modules the box runs as the office's pinned copies run that
+// way here too (checked against the clone, handed it by --repo); the ferry,
+// which the box runs in its own keyless sandbox, is still the clone's own.
+const townArgv = (clone, rel, args, root) => PINNED_TOWN.has(rel)
+  ? townToolArgv(clone, rel.slice("tools/".length), args, { root })
+  : [join(clone, rel), ...args];
+const townJob = (ctx, rel, args) => ctx.locked([process.execPath, ...townArgv(ctx.t.townClone, rel, args, ctx.t.pinsDir)], { cwd: ctx.t.townClone });
 
 export const CROSSING = [
   { phase: "ferry", name: "drain", box: "tools/town-drain-run.mjs",
@@ -710,7 +722,7 @@ export function plan() {
         // THE HOUSE MINTS AS ONE (10-03). The mint's record is still the town's
         // ledger (the store mint is POS-341); the store's projection must agree
         // with it, and the ledger must hold one welcome for the house.
-        const engine = await importFrom(join(ctx.t.townClone, "tools", "stamp-mint.mjs"));
+        const engine = await importTownTool(ctx.t.townClone, "stamp-mint.mjs", { root: ctx.t.pinsDir }); // POS-994: dev's own pinned copy
         const entries = engine.parseStampLedger(readFileSync(join(ctx.t.townClone, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
         const welcomes = entries.map((e) => engine.classifyEntry(e.canonical)).filter((c) => c?.kind === "welcome" && [ctx.who.a, ctx.who.b].includes(c.handle));
         if (welcomes.length !== 1) p.push(`the ledger holds ${welcomes.length} welcome bundles for the rehearsal house, not 1: the house minted as ${welcomes.length ? welcomes.map((w) => w.household).join(" and ") : "nothing"}`);
@@ -989,7 +1001,7 @@ async function keyProblems(ctx) {
   if (prod) p.push(`dev's STAMP_KEY (${t.stampKey}): ${prod}`);
   const pubPath = t.townClone ? join(t.townClone, "tools", "stamp-pubkey.pem") : null;
   const installed = pubPath && existsSync(pubPath) ? readFileSync(pubPath, "utf8").replace(/\r\n/g, "\n") : null;
-  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it: node tools/dev-ledger-resign.mjs --town ${t.townClone} --key ${t.stampKey} --not-key ${t.prodPubKey} --verify)`);
+  if (installed !== pub) p.push(`the dev town clone's tools/stamp-pubkey.pem is not the public half of dev's STAMP_KEY: the clone is not on dev's key, so every line dev's pens sign fails the town's verifier (the freshen moves it and pins the re-signed town, POS-994: sudo systemctl start postmark-dev-freshen.service)`);
   if (ctx.storeMint && !p.length) {
     const v = await ctx.job("world2/tools/stamp-lines.mjs", ["--verify", "--clone", t.townClone]);
     if (v.code !== 0) p.push(`the store's stamp chain and the dev clone's ledger disagree (stamp-lines --verify exited ${v.code}: ${tail(v.out, 3)}): before a rehearsal the store's lines are trimmed to the clone and synced (deploy/DEPLOY.md § The dev rehearsal)`);
@@ -1433,7 +1445,16 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
  * Answers `{ green, guard, steps: [{ id, title, ok, problems, notes, ms }] }`.
  * Stops at the first red step.
  */
-export async function runRehearsal(t, { only = null, keep = false, log = () => {}, run = runId() } = {}) {
+// POS-994: the rehearsal runs as dev: the office modules it loads in this process
+// check the town against dev's own pins too, for the run's length.
+export async function runRehearsal(t, opts = {}) {
+  const before = process.env.TOWN_PINS_DIR;
+  if (t.pinsDir) process.env.TOWN_PINS_DIR = t.pinsDir;
+  try { return await rehearse(t, opts); }
+  finally { if (before === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = before; }
+}
+
+async function rehearse(t, { only = null, keep = false, log = () => {}, run = runId() } = {}) {
   const t0 = Date.now();
   const report = { green: false, run, office: t.office, steps: [] };
   const guard = storeGuard({ configuredUrl: t.env.WORLD2_PG_URL, urls: t.urls, source: t.source });

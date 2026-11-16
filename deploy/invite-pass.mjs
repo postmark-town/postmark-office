@@ -59,16 +59,17 @@ import { existsSync, realpathSync, mkdtempSync, writeFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 import { planInvitePay, owedLines, townDay } from "../src/invite-pay.mjs";
 import { inviteStoreFacts, townInviteLedger } from "../src/invite-facts.mjs";
 import { storeRegistry, storeKeyBase } from "./welcome-pass.mjs";
 import { keyBaseJson } from "../src/mint-inputs.mjs";
 
-/** The town's own verb for one owed line, by absolute path and with --repo (welcome-pass.mjs § mintArgv's reasons). */
+/** The town's own verb for one owed line (the office's pinned copy, POS-994), by absolute path and with --repo (welcome-pass.mjs § mintArgv's reasons). */
 export function inviteMintArgv(town, l, { date, keyPath, registryFile, baseArgs = [] }) {
-  return [join(town, "tools", "stamp-mint.mjs"), "--invite-mint", l.handle, "--side", l.side,
+  return townToolArgv(town, "stamp-mint.mjs", ["--invite-mint", l.handle, "--side", l.side,
     "--invited", l.invited, "--inviter", l.inviter, ...(l.side === "inviter" ? ["--activated", l.activated] : []),
-    "--date", date, "--key", keyPath, "--registry", registryFile, ...baseArgs, "--repo", town];
+    "--date", date, "--key", keyPath, "--registry", registryFile, ...baseArgs, "--repo", town]);
 }
 
 const run = (town, argv) => spawnSync(process.execPath, argv, { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });

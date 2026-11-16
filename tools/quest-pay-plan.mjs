@@ -102,6 +102,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy, checked against the clone
 
 import { townDate } from "./bug-stage-plan.mjs";
 import { verifyArgv, lockedArgv, scheduled } from "./post-award-plan.mjs";
@@ -340,15 +341,13 @@ export function planDiffers(parsed, rows, date) {
 
 /** The town's QUEST_PAY, classifier, meep law, household keys and line builder, and its mail-ledger reader, from its own clone. */
 export async function townEngine(town, quest) {
-  const tool = join(town, "tools", "stamp-mint.mjs");
-  if (!existsSync(tool)) throw new Error(`quest-pay-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
-  const engine = await import(pathToFileURL(tool).href);
+  if (!existsSync(join(town, "tools", "stamp-mint.mjs"))) throw new Error(`quest-pay-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
+  const engine = await importTownTool(town, "stamp-mint.mjs"); // POS-994: the office's pinned copy, checked against the clone
   if (typeof engine.questPayLine !== "function" || !engine.QUEST_PAY)
     throw new Error("quest-pay-plan: this town's stamp-mint.mjs has no quest grammar (for: quest:<id>/<household-key>) — the town must carry --quest-mint first (POS-632 PR-Q1)");
   const terms = engine.QUEST_PAY[quest];
   if (!terms) throw new Error(`quest-pay-plan: "${quest}" is not a paid quest in the town's QUEST_PAY (${Object.keys(engine.QUEST_PAY).join(", ")})`);
-  const mailTool = join(town, "tools", "mail-state.mjs");
-  const mail = existsSync(mailTool) ? await import(pathToFileURL(mailTool).href) : null;
+  const mail = existsSync(join(town, "tools", "mail-state.mjs")) ? await importTownTool(town, "mail-state.mjs") : null;
   if (typeof mail?.parseLedger !== "function") throw new Error(`quest-pay-plan: no parseLedger in ${town}'s tools/mail-state.mjs — the letters are read by the town's own mail-ledger law`);
   const ledgerFile = join(town, LEDGER_REL);
   const entries = existsSync(ledgerFile) ? engine.parseStampLedger(readFileSync(ledgerFile, "utf8")) : [];
@@ -507,8 +506,8 @@ export function housesFrom(bindings, { keyOf, hasRoom, date }) {
   };
 }
 
-export const questMintArgv = (town, r, { quest, date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
-  "--quest-mint", r.handle, "--quest", quest, "--household", r.household, "--date", date, "--key", keyPath, "--repo", town];
+export const questMintArgv = (town, r, { quest, date, keyPath }) => townToolArgv(town, "stamp-mint.mjs", [
+  "--quest-mint", r.handle, "--quest", quest, "--household", r.household, "--date", date, "--key", keyPath, "--repo", town]);
 
 const run = (town, argv) => spawnSync(process.execPath, argv, { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" }).trim();

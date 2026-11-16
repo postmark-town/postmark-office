@@ -12,9 +12,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
@@ -42,7 +43,6 @@ const penDir = tempDir("pm-fisweep-pen-");
 const KEY = join(penDir, "stamp-key.pem");
 writeFileSync(KEY, PRIV);
 process.env.STAMP_KEY = KEY;
-if (TRAIN_ENGINE) process.env.STAMP_ENGINE_DIR = TRAIN_ENGINE;
 
 const { planFirstIdeaSweep, writeFirstIdeaSweep, FIRST_IDEA_WINDOW_END } = await import("../src/first-idea-sweep.mjs");
 
@@ -61,6 +61,8 @@ function foundedClone() {
     `# ledger\n\n- 2026-06-12 · seed-1 · alice → bob · thread: new\n- 2026-06-13 · seed-2 · bob → alice · thread: new\n`);
   writeFileSync(join(clone, "tools", "stamp-pubkey.pem"), PUB);
   execFileSync(process.execPath, [join(TRAIN_ENGINE, "stamp-mint.mjs"), "--append", "--key", KEY, "--repo", clone], { encoding: "utf8" });
+  // POS-994: the clone carries the train engine's modules, pinned, as a box clone does
+  process.env.TOWN_PINS_DIR = pinTown(stageTownTools(clone, dirname(TRAIN_ENGINE)));
   return clone;
 }
 
@@ -129,12 +131,13 @@ test("THE WRITER HOLDS THE WINDOW: past the end, the sweep plans nothing and say
 test("ENGINE-PREDATES: a clone whose own stamp-mint lacks the rule is refused BY NAME, never law invented locally", { skip: SKIP }, (t) => {
   if (!OLD_ENGINE || !existsSync(join(OLD_ENGINE, "stamp-mint.mjs"))) return t.skip("no pre-rule engine on this machine — set OLD_STAMP_ENGINE_DIR");
   const clone = foundedClone();
-  const prev = process.env.STAMP_ENGINE_DIR;
+  const prev = process.env.TOWN_PINS_DIR;
   try {
-    process.env.STAMP_ENGINE_DIR = OLD_ENGINE;
+    // POS-994: the clone carries the pre-rule engine itself, pinned to itself
+    process.env.TOWN_PINS_DIR = pinTown(stageTownTools(clone, dirname(OLD_ENGINE), ["stamp-mint.mjs"]));
     const plan = planFirstIdeaSweep(clone, { date: "2026-08-30", ideas: [idea("alice", "a-town-calendar")] });
     assert.equal(plan.refused, "engine-predates-first-idea");
     assert.equal(plan.mints.length, 0);
-  } finally { process.env.STAMP_ENGINE_DIR = prev; }
+  } finally { if (prev === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = prev; }
   rmSync(clone, { recursive: true, force: true });
 });

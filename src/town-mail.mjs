@@ -68,7 +68,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 import { appendTownJournal, pendingRows, townLogEnabled, NONCE_MAX, rowSpendingNonce } from "./town-journal.mjs";
 import { LADDER_NOTE, TENSE } from "./paper-fresh.mjs"; // the three words, borrowed rather than re-coined
@@ -276,16 +276,15 @@ export function replayLetter(row, { doors, key, db, clone }) {
 // law owns what the FERRY will judge, which is the half the office was
 // previously guessing at from a projection.
 
-const engines = new Map(); // clone path -> the town's envelope module, or null
 
 async function envelopeLaw(clone) {
   if (!clone) return null;
-  if (engines.has(clone)) return engines.get(clone);
-  let mod = null;
-  try { mod = await import(pathToFileURL(join(clone, "tools", "envelope.mjs"))); }
-  catch { mod = null; } // a clone without the law (a test fixture, a bare checkout) simply has no pre-flight
-  engines.set(clone, mod);
-  return mod;
+  // A clone without the law (a test fixture, a bare checkout) simply has no
+  // pre-flight. A clone WITH it runs the office's pinned copy, checked against
+  // the clone on every call (POS-994): a pin stop is thrown by name, never
+  // read as "no law", and is never cached.
+  if (!existsSync(join(clone, "tools", "envelope.mjs"))) return null;
+  return importTownTool(clone, "envelope.mjs");
 }
 
 /**

@@ -25,6 +25,12 @@
 //       double click's receipt all carry the heads-up.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -109,6 +115,7 @@ function townWith(lines, { engine = true } = {}) {
     + `export const classifyEntry = ${classifyEntry.toString()};\n`
     + "export const parseStampLedger = (text) => text.split(/\\r?\\n/).filter((l) => l.startsWith('- ')).map((l) => ({ canonical: l.replace(/ · sig: \\S+$/, '') }));\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# stamp-ledger\n\n" + lines.map((l) => `${l} · sig: x`).join("\n") + "\n");
+  if (engine) process.env.TOWN_PINS_DIR = pinTown(dir); // POS-994: the stand-in engine is what the pinned loader runs
   return dir;
 }
 
@@ -315,6 +322,7 @@ test("8 · the door: a preview quotes and writes nothing; a stranger or no payer
         .map(([k, v]) => `export const ${k} = ${typeof v === "function" ? v.toString() : JSON.stringify(v)};`),
       "export const householdKeys = () => new Map([['ash', { key: 'gh:101' }]]);",
     ].join("\n"));
+    process.env.TOWN_PINS_DIR = pinTown(town); // POS-994: the stand-in engine is what the pinned loader runs
     const KEY = { household: "the-rowan", handles: new Set(["ash"]) };
     const ledger = join(town, "WHITE_PAGES", "stamp-ledger.md");
     const before = readFileSync(ledger, "utf8");
@@ -409,7 +417,8 @@ function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {})
     "import { appendFileSync, existsSync, writeFileSync } from 'node:fs';",
     "import { join, dirname } from 'node:path';",
     "import { fileURLToPath } from 'node:url';",
-    "const LEDGER = join(dirname(fileURLToPath(import.meta.url)), '..', 'WHITE_PAGES', 'stamp-ledger.md');",
+    // POS-994: the office runs this stand-in from its pins, so it names its town's ledger outright.
+    `const LEDGER = ${JSON.stringify(join(town, "WHITE_PAGES", "stamp-ledger.md"))};`,
     `const RACE = process.env.${RACE};`,
     `const MARK = process.env.${RACE}_MARK;`,
     "if (RACE && MARK && !existsSync(MARK) && String(process.argv[1] ?? '').endsWith('parcel-room-exec.mjs')) {",
@@ -450,6 +459,7 @@ function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {})
   execFileSync("git", ["init", "-q"], { cwd: town });
   execFileSync("git", ["add", "-A"], { cwd: town });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: town });
+  process.env.TOWN_PINS_DIR = pinTown(town); // POS-994: the stand-in engine is what the pinned loader runs
   return town;
 }
 const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n")

@@ -98,6 +98,7 @@ import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's 
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { installRejectionGuard } from "./rejection-guard.mjs";
+import { PIN_STOP_HINT, isPinStop } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
 
 // POS-709: a promise nobody awaited is logged loudly and the office keeps
 // serving; before this, Node's default exit took every resident's door down.
@@ -764,7 +765,12 @@ const bounce = (res, code, defect, hint, field, cause) => {
 // resident reads, which can be a SQL fragment, a path on the box, a table name.
 // The defect stays each door's own sentence ("the drafts door tripped"); the
 // hint is FAULT_LOGGED; the message is logged by bounce, beside the status.
-const bounceFault = (res, defect, e, code = 500) => bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
+// POS-994 (Truey's review of #1065): a pin stop under a read door or the letter
+// send is no trip of the office's: it is the named 503 the exec doors answer, its
+// hint the office's own words, what differs in the log.
+const bounceFault = (res, defect, e, code = 500) => isPinStop(e)
+  ? bounce(res, 503, "town-pin-mismatch", PIN_STOP_HINT, undefined, e)
+  : bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
 
 // ── THE CONTRACT AT THE PLAIN API (POS-70 box 1) ─────────────────────────────
 //

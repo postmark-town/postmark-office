@@ -99,8 +99,11 @@
 // TOWN_TOOL_SOCKET overrides the socket path, for the tests' stand-in of the
 // socket unit; on the box it is unset and the client uses SOCKET below.
 //
-// Built-ins only, and nothing imported from this tree: the sandbox can see this
-// one file and the clone, and nothing else under /srv (deploy/postmark-town-tool@.service).
+// Built-ins, and from this tree only src/town-tool.mjs (POS-994: the loader that
+// checks verify and quests against the pins). Under /srv the sandbox sees this
+// file, the clone, and the three read-only paths that check needs:
+// src/town-tool.mjs, src/stamp-verify-pinned.mjs and src/town-pins
+// (deploy/postmark-town-tool@.service).
 
 import { createConnection, Socket } from "node:net";
 import { spawnSync } from "node:child_process";
@@ -109,14 +112,20 @@ import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isPinStop, townToolArgv } from "../src/town-tool.mjs"; // POS-994: verify and quests run the pinned copies
 
 export const SOCKET = "/run/postmark-town-tool.sock";
 const REPORT_SLOT = "\0report";
 /** The three tools, by name: their fixed argv, and the paths each may change in the clone. */
+// POS-994 /b (on #1065): verify and quests run the office's PINNED copies, their argv
+// built inside the sandbox by src/town-tool.mjs § townToolArgv, which checks the clone's
+// copy and closure against the pins (and runs the verifier with the pinned public key);
+// a pin stop there runs nothing and answers stage "pin", which the client exits 3 on.
+// The ferry is no pinned module and runs the clone's own, keyless, as it was.
 export const TOOLS = {
   ferry: { argv: ["tools/ferry.mjs", "--no-git", "--report", REPORT_SLOT], writes: ["WHITE_PAGES/"] },
-  verify: { argv: ["tools/stamp-verify.mjs"], writes: [] },
-  quests: { argv: ["tools/quest-progress.mjs", "--snapshot"], writes: ["TOWN_BULLETIN/quests.md"] },
+  verify: { pinned: "stamp-verify.mjs", args: [], writes: [] },
+  quests: { pinned: "quest-progress.mjs", args: ["--snapshot"], writes: ["TOWN_BULLETIN/quests.md"] },
 };
 /** The clone's directories the sandbox can write (deploy/postmark-town-tool@.service's BindPaths). */
 export const WRITABLE = ["WHITE_PAGES", "TOWN_BULLETIN"];
@@ -228,7 +237,10 @@ export async function serve(cloneArg, { inUnit = false } = {}) {
     const { tool, env } = checkRequest(JSON.parse((await readAll(input)).toString("utf8")), ownClone);
     dir = mkdtempSync(join(tmpdir(), "town-tool-"));
     const report = join(dir, "report.json");
-    const argv = TOOLS[tool].argv.map((a) => (a === REPORT_SLOT ? report : a));
+    // a pin stop throws here, before anything runs, and is answered below as stage "pin"
+    const argv = TOOLS[tool].pinned
+      ? townToolArgv(ownClone, TOOLS[tool].pinned, TOOLS[tool].args)
+      : TOOLS[tool].argv.map((a) => (a === REPORT_SLOT ? report : a));
     const r = spawnSync(process.execPath, argv, {
       cwd: ownClone, env: { PATH: "/usr/bin:/bin", HOME: dir, ...env }, stdio: ["ignore", "pipe", "pipe"],
       timeout: STEP_MS, killSignal: "SIGKILL", maxBuffer: MAX_OUTPUT,
@@ -244,7 +256,9 @@ export async function serve(cloneArg, { inUnit = false } = {}) {
     if (tool === "ferry") answer.report = existsSync(report) ? readFileSync(report, "utf8").slice(0, MAX_OUTPUT) : null;
   } catch (e) {
     console.error(`[town-tool] refused: ${e?.message ?? e}`);
-    answer = { ok: false, stage: "sandbox", why: String(e?.message ?? e).slice(0, 300) };
+    answer = isPinStop(e)
+      ? { ok: false, stage: "pin", file: e.file ?? null, why: String(e.message).slice(0, 300) }
+      : { ok: false, stage: "sandbox", why: String(e?.message ?? e).slice(0, 300) };
   } finally {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
@@ -361,6 +375,11 @@ export async function runTool(tool, clone, { socketPath = process.env.TOWN_TOOL_
   if (answer.stage === "sandbox") {
     console.error(`${tag} the sandbox refused the request: ${answer.why ?? "?"}`);
     return { code: 1 };
+  }
+  if (answer.stage === "pin") {
+    // the town's code is not the office's pinned copy: nothing ran; exit 3, the pin stop's number
+    console.error(`${tag} ${answer.why ?? "the pin stopped it"}`);
+    return { code: 3 };
   }
   for (const k of ["out", "err"]) {
     if (typeof answer[k] !== "string" || answer[k].length % 4 !== 0 || !BASE64.test(answer[k])) {

@@ -1716,9 +1716,11 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
  */
 export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null } = {}) {
   try {
-    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+    // POS-994: the town's code is checked first, so a pin stop is said the same
+    // whether or not the store answers (the office path and the store path agree)
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
+    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
     const { paperGapRows, worldSitedFor } = await import("./household-apex.mjs");
     // ONE world read, shared by the paper gaps and the onboarding row — the
     // block is not free, and two reads could in principle disagree.
@@ -1840,7 +1842,16 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
         ? "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) + the office's household-apex paper gaps — one derivation, two surfaces"
         : "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) — the same derivation the public doorstep bundle publishes",
     };
-  } catch { return null; }
+  } catch (e) {
+    // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
+    // One case is a true absence, not a stop: a town with no tools/quest-progress.mjs
+    // at all has no quests to step through (as an older checkout without
+    // composeNextSteps, above). A changed file, a missing piece of its closure, or
+    // pins that hold no quest-progress while the town does (TownToolUnpinned), is a stop.
+    const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
+    if (isPinStop(e) && !(e.code === "TOWN_PIN_MISMATCH" && e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    return null;
+  }
 }
 
 /** /stamps's page around its balances. Called by the store's stampsRoster (town-index-store.mjs). */
@@ -2141,12 +2152,12 @@ export function potBoardOf(rows, extraInvalid = []) {
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
 // since the last ingest, we serve a clean zero board (the daily reset) until the
 // next ingest recomputes. Async: the tool import is awaited (then cached).
-let _questTools = null;
+// POS-994: the office's pinned copy, checked against the clone on EVERY call
+// (the blob check is cached on the file's size and mtime, and node caches the
+// import), so a town change after the first load still stops the board by name.
 async function questTools(clone) {
-  if (_questTools) return _questTools;
-  const { pathToFileURL } = await import("node:url");
-  _questTools = await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")));
-  return _questTools;
+  const { importTownTool } = await import("./town-tool.mjs");
+  return importTownTool(clone, "quest-progress.mjs");
 }
 /**
  * THE FACTS THE OFFICE CAN SETTLE for the board's uncounted rows.

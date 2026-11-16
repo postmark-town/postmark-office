@@ -114,6 +114,8 @@ const NO_PG = { WORLD2_PG_URL: undefined, WORLD2_PG: undefined, WORLD2_CLEARING_
 const ROSTER = {
   // src/
   "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
+  "src/town-tool.mjs": { args: [], code: 2, needle: "usage: town-tool.mjs run <name> --clone <town clone>" }, // POS-994: the shell's door to a pinned town module
+  "src/stamp-verify-pinned.mjs": { args: [], code: 2, needle: "usage: stamp-verify-pinned.mjs --pinned" }, // POS-994: the pinned verifier, with the pinned key
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
@@ -210,6 +212,7 @@ const ROSTER = {
   "tools/set-down-ashore.mjs": { args: [], code: 2, needle: "usage: node tools/set-down-ashore.mjs --handle" },
   // POS-341: the owed-tolerant verify refuses a directory with no town verifier before it runs anything.
   "tools/stamp-verify-owed.mjs": { args: [], code: 2, needle: "stamp-verify-owed: no town at" },
+  "tools/town-pins.mjs": { args: [], code: 2, needle: "usage: town-pins.mjs --write" }, // POS-994: writes or checks the office's pins
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   // The PayPal rail (POS-183 part 2): no PAYPAL_ENV, so it refuses before it reads
   // a credential, a clone, PayPal or the ledger.
@@ -344,6 +347,10 @@ const GUARD_RE = /process\.argv\[1\]/;
 function* walk(dir) {
   for (const e of readdirSync(dir)) {
     if (e === "node_modules" || e === "viewer" || e === "schema") continue;
+    // POS-994: src/town-pins/ holds byte copies of the TOWN's modules, pinned; their
+    // entry guards are the town's own, and the office runs them only through
+    // src/town-tool.mjs (on this roster), never as an entry of its own.
+    if (e === "town-pins" && dir.endsWith("src")) continue;
     const p = join(dir, e);
     if (statSync(p).isDirectory()) yield* walk(p);
     else if (/\.(mjs|js|cjs)$/.test(e)) yield p;

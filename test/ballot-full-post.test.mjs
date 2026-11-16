@@ -41,6 +41,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
+import { pinTown } from "./helpers/pinned-town.mjs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -103,6 +104,7 @@ function town({ ballot = null } = {}) {
   git(dir, "config", "core.autocrlf", "false");
   git(dir, "add", "-A");
   git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
+  process.env.TOWN_PINS_DIR = pinTown(dir); // POS-994: the office verifies with the PINNED public key, so a fixture signed with its own key is pinned to itself
   return dir;
 }
 

@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedBetween, checkRequest, ferry, fingerprint, killStragglers, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
 import { DECOY_ENV } from "./helpers/town-tool-socket.mjs";
+import { pinTown } from "./helpers/pinned-town.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "town-tool-sandbox.mjs");
@@ -74,8 +75,11 @@ test("the sandbox unit: meepo with no environment, no network, and only the clon
     ["BindPaths=/srv/postmark-office/town-clone/WHITE_PAGES", "BindPaths=/srv/postmark-office/town-clone/TOWN_BULLETIN"],
     "the only writable places in the clone are the two the tools write; the root, tools/ and .git stay read-only");
   assert.deepEqual(s.filter((l) => /^BindReadOnlyPaths=\/srv/.test(l)),
-    ["BindReadOnlyPaths=/srv/postmark-office/tools/town-tool-sandbox.mjs", "BindReadOnlyPaths=/srv/postmark-office/town-clone"],
-    "under /srv it sees this tool and the clone, nothing else (not the stamp key, not the credential store)");
+    ["BindReadOnlyPaths=/srv/postmark-office/tools/town-tool-sandbox.mjs", "BindReadOnlyPaths=/srv/postmark-office/town-clone",
+      // POS-994: the loader that checks the clone, the verifier's runner, and the pins they run
+      "BindReadOnlyPaths=/srv/postmark-office/src/town-tool.mjs", "BindReadOnlyPaths=/srv/postmark-office/src/stamp-verify-pinned.mjs",
+      "BindReadOnlyPaths=/srv/postmark-office/src/town-pins"],
+    "under /srv it sees this tool, the clone and the pinned town code, nothing else (not the stamp key, not the credential store)");
   const etc = s.filter((l) => /^BindReadOnlyPaths=\/etc/.test(l)).join(" ");
   for (const word of etc.replace(/^BindReadOnlyPaths=/, "").split(/\s+/)) {
     assert.match(word, /^-?\/etc\/(passwd|group|nsswitch\.conf|ld\.so\.cache|localtime)$/, `${word} is not on /etc's allowlist`);
@@ -97,7 +101,8 @@ test("the ferry's chain runs the three town tools through the sandbox, and none 
   assert.ok(p.includes(`else ${client} verify --clone "$TOWN_CLONE"; fi`), "both verifies go through the sandbox");
   assert.ok(p.includes(`${client} quests --clone "$TOWN_CLONE"`), "the quest snapshot goes through the sandbox");
   assert.doesNotMatch(p, /\bnode tools\/(ferry|stamp-verify|quest-progress)\.mjs/, "no town tool of these three runs in the ferry's process");
-  assert.match(p, /node tools\/stamp-mint\.mjs --append --key/, "the git-mode mint still runs here, until POS-994's B is ruled");
+  assert.match(p, /node \/srv\/postmark-office\/src\/town-tool\.mjs run stamp-mint\.mjs --clone "\$TOWN_CLONE" -- --append --key/,
+    "the git-mode mint still runs here, outside the sandbox (it holds the key), as the office's pinned copy (POS-994 /b)");
   assert.equal(p.split('clean -fdxq -- WHITE_PAGES TOWN_BULLETIN').length - 1, 2,
     "the undo and the opening pair both clean the two writable directories, ignored files too (Truey's F4)");
   assert.doesNotMatch(p, /clean -fdq -- WHITE_PAGES[;& ]/, "no clean that leaves ignored files behind");
@@ -108,8 +113,9 @@ test("the ferry's chain runs the three town tools through the sandbox, and none 
 test("the tools' command lines are fixed, and the ferry's is --no-git", () => {
   assert.deepEqual(Object.keys(TOOLS).sort(), ["ferry", "quests", "verify"]);
   assert.deepEqual(TOOLS.ferry.argv.slice(0, 2), ["tools/ferry.mjs", "--no-git"]);
-  assert.deepEqual(TOOLS.verify.argv, ["tools/stamp-verify.mjs"]);
-  assert.deepEqual(TOOLS.quests.argv, ["tools/quest-progress.mjs", "--snapshot"]);
+  // POS-994: the verify and the quests are the office's pinned copies, their argv built by the loader's check
+  assert.deepEqual(TOOLS.verify, { pinned: "stamp-verify.mjs", args: [], writes: [] });
+  assert.deepEqual(TOOLS.quests, { pinned: "quest-progress.mjs", args: ["--snapshot"], writes: ["TOWN_BULLETIN/quests.md"] });
   assert.deepEqual(TOOLS.verify.writes, [], "the verify may change nothing");
 });
 
@@ -188,6 +194,7 @@ function town(tools = {}) {
   put(seed, {
     "WHITE_PAGES/mail-ledger.md": "mail ledger\n", "WHITE_PAGES/stamp-ledger.md": "row 1\n",
     "WHITE_PAGES/alice/outbox/to-bob.md": "a letter\n", "TOWN_BULLETIN/quests.md": "quests\n", "tools/README.md": "town tools\n",
+    "tools/stamp-pubkey.pem": "a stub public key\n", // POS-994: pinned with the verifier
     ".gitignore": "*.cache\n", ...tools,
   });
   g(root, "init", "-q", "-b", "main", seed);
@@ -219,9 +226,11 @@ test("symlinksUnder and fingerprint see what a tool left behind", () => {
 const posix = process.platform === "win32" ? "the exchange needs a POSIX socket: a file descriptor and a half-close" : false;
 
 /** One serve over `clone`, wired with pipes, sent `request`; resolves its answer and exit. */
-function serveOnce(clone, request) {
+function serveOnce(clone, request, { pinsDir = "" } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [TOOL, "serve", "--clone", clone], { stdio: ["pipe", "pipe", "pipe"], env: DECOY_ENV });
+    // POS-994: serve checks verify and quests against the office's pins; a fixture names its own
+    const env = pinsDir ? { ...DECOY_ENV, TOWN_PINS_DIR: pinsDir } : DECOY_ENV;
+    const child = spawn(process.execPath, [TOOL, "serve", "--clone", clone], { stdio: ["pipe", "pipe", "pipe"], env });
     let out = "", err = "";
     child.stdout.on("data", (c) => { out += c; });
     child.stderr.on("data", (c) => { err += c; });
@@ -231,6 +240,8 @@ function serveOnce(clone, request) {
   });
 }
 
+// POS-994: the verify runs through the office's runner, which asks the pinned verifier's library
+const VERIFY_LIB = `export function verifyStampLedger() { return { ok: true, lines: 1, minted: 0, notes: [] }; }\n`;
 const ENV_STUB = `import { writeFileSync } from "node:fs";
 const a = process.argv, i = a.indexOf("--report");
 console.log(JSON.stringify({ argv: a.slice(2), env: Object.keys(process.env).sort(), tz: process.env.TOWN_TZ ?? null }));
@@ -238,9 +249,10 @@ if (i !== -1) writeFileSync(a[i + 1], JSON.stringify({ ran: true, from: "the stu
 `;
 
 test("serve runs the named tool with PATH, HOME and TOWN_TZ alone, and hands back the ferry's report", { skip: posix }, async () => {
-  const t = town({ "tools/ferry.mjs": ENV_STUB, "tools/stamp-verify.mjs": ENV_STUB });
+  const t = town({ "tools/ferry.mjs": ENV_STUB, "tools/stamp-verify.mjs": ENV_STUB + VERIFY_LIB });
   const clone = realpathSync(t.clone);
-  const fr = await serveOnce(clone, { tool: "ferry", clone, env: { TOWN_TZ: "America/New_York" } });
+  const pinsDir = pinTown(t.clone);
+  const fr = await serveOnce(clone, { tool: "ferry", clone, env: { TOWN_TZ: "America/New_York" } }, { pinsDir });
   assert.equal(fr.code, 0, fr.err);
   assert.equal(fr.answer.ok, true);
   const said = JSON.parse(Buffer.from(fr.answer.out, "base64").toString());
@@ -248,8 +260,14 @@ test("serve runs the named tool with PATH, HOME and TOWN_TZ alone, and hands bac
   assert.equal(said.tz, "America/New_York");
   assert.equal(said.argv[0], "--no-git", "the ferry runs --no-git");
   assert.deepEqual(JSON.parse(fr.answer.report), { ran: true, from: "the stub" });
-  const v = await serveOnce(clone, { tool: "verify", clone });
-  assert.deepEqual(JSON.parse(Buffer.from(v.answer.out, "base64").toString()).argv, [], "the verify gets no arguments");
+  const v = await serveOnce(clone, { tool: "verify", clone }, { pinsDir });
+  assert.equal(v.code, 0, v.err);
+  const [vsaid, vline] = Buffer.from(v.answer.out, "base64").toString().split("\n");
+  // POS-994: the verify is the office's runner over the PINNED verifier, which the stub is: it is handed the
+  // pinned folder and the clone, and nothing from the request
+  assert.deepEqual(JSON.parse(vsaid).argv, ["--pinned", join(pinsDir, "tools"), "--repo", clone], "the verify gets the pinned folder and the clone, nothing else");
+  assert.deepEqual(JSON.parse(vsaid).env, ["HOME", "PATH"], "and no key or token either");
+  assert.match(vline, /^✓ stamp-ledger verifies/);
   assert.equal(v.answer.report, undefined);
 });
 
@@ -268,10 +286,31 @@ test("serve refuses another tool, another clone, another env value, or no JSON, 
 test("serve passes a tool's own refusal through as ok:false with its exit", { skip: posix }, async () => {
   const t = town({ "tools/stamp-verify.mjs": `console.error("✗ stamp-ledger verification FAILED"); process.exit(1);\n` });
   const clone = realpathSync(t.clone);
-  const r = await serveOnce(clone, { tool: "verify", clone });
+  const r = await serveOnce(clone, { tool: "verify", clone }, { pinsDir: pinTown(t.clone) });
   assert.equal(r.code, 1);
   assert.deepEqual([r.answer.ok, r.answer.exit], [false, 1]);
   assert.match(Buffer.from(r.answer.err, "base64").toString(), /verification FAILED/);
+});
+
+test("serve answers a pin stop by name, stage \"pin\", and runs nothing; the client exits 3 on it (POS-994)", { skip: posix }, async () => {
+  const marker = join(scratch, `ran-${Math.random().toString(36).slice(2)}`);
+  const ran = `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");\n`;
+  const t = town({ "tools/stamp-verify.mjs": ran + VERIFY_LIB, "tools/quest-progress.mjs": ran });
+  const clone = realpathSync(t.clone);
+  const pinsDir = pinTown(t.clone);
+  // the clone's copies are no longer the pinned ones: a town push changed them
+  for (const f of ["tools/stamp-verify.mjs", "tools/quest-progress.mjs"]) appendFileSync(join(clone, f), "// changed upstream\n");
+  for (const [tool, file] of [["verify", "tools/stamp-verify.mjs"], ["quests", "tools/quest-progress.mjs"]]) {
+    const r = await serveOnce(clone, { tool, clone }, { pinsDir });
+    assert.equal(r.code, 1, r.err);
+    assert.deepEqual([r.answer.ok, r.answer.stage, r.answer.file], [false, "pin", file], `${tool}: the pin stop names its file`);
+    assert.match(r.answer.why, /town-pin-mismatch|not the pinned|pinned/i);
+  }
+  assert.equal(existsSync(marker), false, "neither the verify nor the quests ran");
+  // the client: a pin stop is exit 3, the pin stop's number, as at every other door
+  await withFake(clone, null, { ok: false, stage: "pin", file: "tools/stamp-verify.mjs", why: "town-pin-mismatch: tools/stamp-verify.mjs" }, async (s) => {
+    assert.equal((await runTool("verify", clone, { socketPath: s.path, env: {} })).code, 3);
+  });
 });
 
 // ── the client, against a fake sandbox that does what a bad tool would ──────

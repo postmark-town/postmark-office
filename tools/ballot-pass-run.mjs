@@ -41,7 +41,8 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool, isPinStop, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint and verifier are the office's pinned copies
 
 import { penTransaction } from "../src/write.mjs";
 import { landStamped } from "../src/stamp-lines.mjs";
@@ -132,9 +133,16 @@ const refusedLines = (e) => [
 
 // ── the pass ────────────────────────────────────────────────────────────────
 
-/** The town's verifier over the working tree, as the ferry runs it. */
+/**
+ * The town's verifier over the working tree, as the ferry runs it: the office's
+ * pinned copy (POS-994), checked against the clone and handed the clone by name.
+ * A pin stop is a failed verification, saying why.
+ */
 function townVerifies(repo) {
-  const r = spawnSync(process.execPath, [join(repo, "tools", "stamp-verify.mjs")], { cwd: repo, encoding: "utf8" });
+  let argv;
+  try { argv = townToolArgv(repo, "stamp-verify.mjs"); }
+  catch (e) { if (isPinStop(e)) return { ok: false, out: e.message }; throw e; }
+  const r = spawnSync(process.execPath, argv, { cwd: repo, encoding: "utf8" });
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ") };
 }
 
@@ -151,7 +159,7 @@ export async function ballotPassRun(repo, keyPem, date, { env = process.env, ver
   const out = { processed: 0, receipts: 0, held: [] };
   if (!existsSync(inbox)) return out;
 
-  const { parseStampLedger, classifyEntry } = await import(pathToFileURL(join(repo, "tools", "stamp-mint.mjs")).href);
+  const { parseStampLedger, classifyEntry } = await importTownTool(repo, "stamp-mint.mjs"); // POS-994: the pinned copy
   const ledgerPath = join(repo, "WHITE_PAGES", "stamp-ledger.md");
   const staked = new Set();
   if (existsSync(ledgerPath)) {

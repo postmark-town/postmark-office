@@ -5,7 +5,11 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 # tools/town-tool-sandbox.mjs: one of the town's tools/ferry.mjs --no-git,
 # tools/stamp-verify.mjs or tools/quest-progress.mjs --snapshot, chosen by name
 # from a fixed list, run in the town clone. The client keeps the pull, the
-# commit and the push.
+# commit and the push. The verify and the quests run as the OFFICE'S PINNED
+# copies (POS-994 /b): serve checks the clone's copy and closure against
+# src/town-pins through src/town-tool.mjs and runs the pinned one, the verify
+# with the pinned public key (src/stamp-verify-pinned.mjs); a pin stop runs
+# nothing. Those three paths come back read-only below, for that.
 #
 # WHAT IT IS DENIED, AND WHY EACH LINE IS HERE. The three are town repo code,
 # run at every crossing. Measured on POS-994 (2026-11-14), they need TOWN_TZ,
@@ -76,6 +80,9 @@ PrivateUsers=yes
 TemporaryFileSystem=/srv:ro
 BindReadOnlyPaths=/srv/postmark-office/tools/town-tool-sandbox.mjs
 BindReadOnlyPaths=/srv/postmark-office/town-clone
+BindReadOnlyPaths=/srv/postmark-office/src/town-tool.mjs
+BindReadOnlyPaths=/srv/postmark-office/src/stamp-verify-pinned.mjs
+BindReadOnlyPaths=/srv/postmark-office/src/town-pins
 BindPaths=/srv/postmark-office/town-clone/WHITE_PAGES
 BindPaths=/srv/postmark-office/town-clone/TOWN_BULLETIN
 TemporaryFileSystem=/etc:ro

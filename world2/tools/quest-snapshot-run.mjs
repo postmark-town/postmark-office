@@ -23,14 +23,15 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool } from "../../src/town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the clone
 
 import { keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
 
 /** The snapshot's bytes from the store's base, and whether they moved: `{ path, next, changed }`. Writes nothing. `today` is the town's day unless a test names one. */
 export async function snapshotFromStore(clone, { env = process.env, today = null } = {}) {
-  const engine = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+  const engine = await importTownTool(clone, "stamp-mint.mjs");
   if (!takesKeyBase(engine, clone)) throw new Error("this town checkout's engine takes no key base (town #3540): nothing written");
-  const quests = await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")).href);
+  const quests = await importTownTool(clone, "quest-progress.mjs");
   const { officeRead } = await import("../../src/world2-pen.mjs");
   const base = await officeRead((q) => keyBaseVia(q, engine), { env });
   const path = join(clone, "TOWN_BULLETIN", "quests.md");

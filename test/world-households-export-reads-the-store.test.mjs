@@ -69,6 +69,11 @@ function exportTo(label, env) {
   return { res, file, emitted: existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null };
 }
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("the world file renders the store's houses and pins, not the printouts'", () => {
   const { res, emitted } = exportTo("store", REG.env);
   assert.equal(res.status, 0, `the export must complete: ${res.stderr}`);

@@ -26,8 +26,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
@@ -74,14 +75,22 @@ const TOWN_TOOLS = {
   // A line written "<row> after:<the line before it>" is a CHAINED line (POS-1030): it stands for a signed
   // line, whose seal chains to the line before it, so a chained line moved onto another tail (a rebase) or
   // written twice reads red here, as a re-sealed line would to the town's verifier.
+  // POS-994: the verifier's public key is pinned with it, and the office verifies with the pinned one
+  "tools/stamp-pubkey.pem": "a stub public key\n",
+  // POS-994: the tick's verify passes --registry, which the office's runner hands to the pinned
+  // registry-source (in stamp-verify's closure, as in the town's)
+  "tools/registry-source.mjs": `export async function registryFromArgv() { return { registry: null }; }\n`,
   "tools/stamp-verify.mjs": `${PRELUDE}
 import { readFileSync } from "node:fs";
+import "./registry-source.mjs";
 trail("verify");
 const lines = readFileSync(${JSON.stringify(LEDGER)}, "utf8").split("\\n");
 const bad = lines.findIndex((l) => l.includes("RED"));
 if (bad !== -1) { console.log("stamp-ledger verification FAILED: line " + (bad + 1)); process.exit(1); }
 const unchained = lines.findIndex((l, i) => l.includes(" after:") && l.slice(l.indexOf(" after:") + 7) !== lines[i - 1]);
 if (unchained !== -1) { console.log("stamp-ledger verification FAILED: line " + (unchained + 1) + " does not chain to the line before it"); process.exit(1); }
+// green: the office's runner (src/stamp-verify-pinned.mjs) asks the pinned verifier's library
+export function verifyStampLedger() { return { ok: true, lines: 1, minted: 0, notes: [] }; }
 `,
   // STUB_OWED is the derivation: each named payment the ledger does not yet hold is appended once, chained
   // to the tail it was decided on; one the ledger already holds is owed no more.
@@ -233,6 +242,14 @@ function fixture(ledger = ["row 1", "row 2"], { realFlock = false } = {}) {
   write(fx.town, { ".git/hooks/pre-commit": `#!/bin/sh\n[ -z "$STUB_REJECT_COMMIT" ]\n` }, 0o755);
   write(fx.office, OFFICE_FILES);
   write(fx.office, { "deploy/keep-history.mjs": readFileSync(join(OFFICE, "deploy", "keep-history.mjs"), "utf8") });
+  // POS-994: the tick runs the town's mint, verifier and household keys through the
+  // office's loader, as the office's pinned copies; the fixture office carries the
+  // real loader and pins of THIS town's stubs (its env names no TOWN_PINS_DIR).
+  write(fx.office, {
+    "src/town-tool.mjs": readFileSync(join(OFFICE, "src", "town-tool.mjs"), "utf8"),
+    "src/stamp-verify-pinned.mjs": readFileSync(join(OFFICE, "src", "stamp-verify-pinned.mjs"), "utf8"),
+  });
+  pinTown(fx.town, join(fx.office, "src", "town-pins"));
   for (const d of [fx.bin, fx.harbor, fx.tmp]) mkdirSync(d, { recursive: true });
   symlinkSync(process.execPath, join(fx.bin, "node"));
   symlinkSync(SH, join(fx.bin, "sh"));   // the tick runs its world step as `sh deploy/office-world-hydrate.sh`
@@ -438,6 +455,71 @@ test("mint · the mint itself fails: mint-failed, the roll-back runs, nothing af
   });
   assert.equal(status(fx), "", "the appended row was put back");
   assert.ok(published(fx));
+});
+
+// POS-994 (Truey's review of #1065, findings 4 and 7): a pin stop is named as one in
+// the receipt (town-pin-mismatch), never as a red ledger or a failed mint.
+const unreviewed = (fx, file) => {
+  write(fx.town, { [file]: readFileSync(join(fx.town, file), "utf8") + "// a town change the office has not reviewed\n" });
+  fx.g("-C", fx.town, "commit", "-qam", "an unreviewed change");
+  fx.g("-C", fx.town, "push", "-q");
+};
+
+test("mint · POS-994: the town's verifier is not the pinned copy: the arrival check stops by name, mint refused town-pin-mismatch, not ledger-red", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/stamp-verify.mjs");
+  const r = run(fx, { ...OWED, STUB_WELCOME: "a welcome" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), {
+    ...GREEN, mint: "refused:town-pin-mismatch", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
+    verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
+  });
+  assert.match(r.stderr, /the town's code is not the office's pinned copy/);
+  assert.equal(calls(fx).includes("verify"), false, "the town's verifier never ran");
+});
+
+test("mint · POS-994: the town's mint is not the pinned copy: mint refused town-pin-mismatch, never mint-failed, nothing minted", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/stamp-mint.mjs");
+  const r = run(fx, { ...OWED });
+  assert.equal(r.status, 0, r.stderr);
+  const s = steps(receipt(fx));
+  assert.equal(s.mint, "refused:town-pin-mismatch");
+  assert.equal(s.welcome, "notrun");
+  assert.match(s.rollback, /^ok:/);
+  assert.equal(calls(fx).includes("mint"), false, "the town's mint never ran");
+  assert.equal(status(fx), "");
+});
+
+// Truey's re-read of #1065 (finding 2): the household-keys predicate's pin stop is
+// named as one in the receipt, apart from a predicate that left no JSON.
+test("hhkeys · POS-994: the town's household-keys is not the pinned copy: hhkeys refused town-pin-mismatch, never unchecked; the line still lands", { skip }, () => {
+  const fx = fixture();
+  unreviewed(fx, "tools/household-keys.mjs");
+  const r = run(fx, { ...OWED });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), { ...GREEN, hhkeys: "refused:town-pin-mismatch" });
+  assert.equal(calls(fx).includes("hhkeys"), false, "the town's predicate never ran");
+  const line = JSON.parse(readFileSync(join(fx.harbor, "household-keys.jsonl"), "utf8").trim().split("\n").pop());
+  assert.equal(line.checked, false, "a predicate the pin stopped is a line that says it did not run");
+  assert.match(line.error, /tools\/household-keys\.mjs is not the copy the office pinned/);
+});
+
+// Truey's re-read of #1065 (finding 4): an arrival check the office could not
+// prepare (here, pins that carry no public key) is the office's defect, named
+// prep-failed, never a red ledger.
+test("mint · POS-994: the office's pins carry no public key: the arrival check exits 2, mint refused prep-failed, not ledger-red", { skip }, () => {
+  const fx = fixture();
+  rmSync(join(fx.office, "src", "town-pins", "tools", "stamp-pubkey.pem"));
+  const r = run(fx, { ...OWED, STUB_WELCOME: "a welcome" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(steps(receipt(fx)), {
+    ...GREEN, mint: "refused:prep-failed", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
+    verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
+  });
+  assert.match(r.stderr, /the office could not prepare the arrival check/);
+  assert.doesNotMatch(r.stderr, /the ledger arrived red/);
+  assert.equal(calls(fx).includes("verify"), false, "the town's verifier never ran");
 });
 
 test("mint · the verify after the write is red: verify-red, rolled back, nothing committed", { skip }, () => {

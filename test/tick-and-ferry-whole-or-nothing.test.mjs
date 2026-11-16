@@ -41,6 +41,7 @@ import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
+import { MODULES, collect, manifest } from "../tools/town-pins.mjs";
 import { startToolSocket, stopToolSockets } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -87,8 +88,14 @@ const TOWN_TOOLS = {
   "tools/stub-orders.mjs": ORDERS,
   "tools/stub-calls.mjs": CALLS,
   "tools/stub-append.mjs": APPEND,
+  // POS-994: the verifier's public key is pinned with it, and the office verifies with the pinned one
+  "tools/stamp-pubkey.pem": "a stub public key\n",
+  // POS-994: the office-keep verify passes --registry, which the office's runner hands to the
+  // pinned registry-source (in stamp-verify's closure, as in the town's)
+  "tools/registry-source.mjs": `export async function registryFromArgv() { return { registry: null }; }\n`,
   "tools/stamp-verify.mjs": `
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import "./registry-source.mjs";
 import { call } from "./stub-calls.mjs";
 import { O } from "./stub-orders.mjs";
 call("verify");
@@ -110,7 +117,8 @@ if (bad !== -1 || owed) {
   console.error("✗ stamp-ledger verification FAILED:\\n" + problems.map((p) => "  - " + p).join("\\n"));
   process.exit(1);
 }
-console.log("✓ stamp-ledger verified");
+// POS-994: green, the office's runner (src/stamp-verify-pinned.mjs) asks the pinned verifier's library
+export function verifyStampLedger() { return { ok: true, lines: 1, minted: 0, notes: [] }; }
 `,
   "tools/stamp-mint.mjs": `
 import { call } from "./stub-calls.mjs";
@@ -318,7 +326,8 @@ function fixture(ledger) {
 
   const orders = fwd(join(root, "orders.json"));
   const tools = Object.fromEntries(Object.entries(TOWN_TOOLS).map(([k, v]) => [k, v.replaceAll("__ORDERS__", orders)]));
-  write(seed, { ...tools, ...sealStubs(fwd(join(root, "seal-ctl.json"))), [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
+  const townFiles = { ...tools, ...sealStubs(fwd(join(root, "seal-ctl.json"))) };
+  write(seed, { ...townFiles, [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
   // Byte-exact on every platform: a CRLF checkout would read as a dirty clone.
   g("init", "-q", "-b", "main", seed);
   g("-C", seed, "config", "core.autocrlf", "false");
@@ -330,6 +339,16 @@ function fixture(ledger) {
   g("-C", town, "config", "user.email", "pen@postmark.invalid");
   g("-C", town, "config", "user.name", "pen");
   write(office, OFFICE_FILES);
+  // POS-994: the tick and the ferry run the town's modules through the office's
+  // loader, as the office's pinned copies. The fixture office carries the real
+  // loader and pins of THIS town's stubs, so the stubs are what run.
+  write(office, {
+    "src/town-tool.mjs": readFileSync(join(OFFICE, "src", "town-tool.mjs"), "utf8"),
+    "src/stamp-verify-pinned.mjs": readFileSync(join(OFFICE, "src", "stamp-verify-pinned.mjs"), "utf8"),
+  });
+  const pinned = collect((p) => Buffer.from(townFiles[p]), MODULES.filter((m) => townFiles[`tools/${m}`] !== undefined));
+  for (const [p, { bytes }] of pinned) write(join(office, "src", "town-pins"), { [p]: bytes });
+  write(join(office, "src", "town-pins"), { "PINS.json": JSON.stringify(manifest(pinned, { townCommit: "d".repeat(40), readAt: "2026-11-16T00:00:00Z" })) });
   write(bin, BIN);
   return { root, origin, town, office, bin, g };
 }
@@ -338,6 +357,7 @@ function envFor(fx, extra) {
   return {
     ...process.env,
     ...GIT_ENV,
+    TOWN_PINS_DIR: "", // the fixture office's own pins, never the suite clone's
     PATH: `${fx.bin}${delimiter}${process.env.PATH}`,
     TOWN_CLONE: fwd(fx.town),
     WORLD_CLONE: fwd(fx.town),
@@ -376,7 +396,8 @@ function ferryScript(fx) {
   assert.ok(payload.includes("/srv/postmark-office/tools/town-drain-run.mjs") && payload.includes("/usr/bin/node"),
     "the ferry's drain path moved; the fixture root substitution would miss it");
   fx.sealSocket ??= startSealSocket(join(fx.root, "seal.sock"));
-  fx.toolSocket ??= startToolSocket(join(fx.root, "tool.sock"), fx.town);
+  // the sandbox checks the clone against THIS fixture's pins, as the box's checks prod's (POS-994)
+  fx.toolSocket ??= startToolSocket(join(fx.root, "tool.sock"), fx.town, { pinsDir: join(fx.office, "src", "town-pins") });
   return payload.replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
 }
 
@@ -427,7 +448,7 @@ test("tick · control: a green ledger gets the pass's rows committed and pushed,
   assert.equal(status(fx), "", "the clone ends clean");
   const shown = fx.g("-C", fx.origin, "show", `main:${LEDGER}`);
   assert.match(shown, /mint row 3\nwelcome row 4\n$/, "both rows reached origin");
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome", "verify"], "the joins settle first; a verify before the write and one after it");
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome", "verify"], "the joins settle first; a verify before the write and one after it");
   assert.doesNotMatch(r.stderr, /ROLLED BACK|catch-up OFF|FAILED/);
   assert.ok(existsSync(join(fx.office, "panes-published")), "the tick went on to publish the panes");
 });
@@ -459,7 +480,7 @@ test("tick · a verify that fails after the write restores the ledger and remove
     STUB_WELCOME_MAKES: "WHITE_PAGES/made-by-the-pass.md",
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome", "verify"]);
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome", "verify"]);
   assert.equal(tracked(fx), "", "no tracked file left modified: every pull and pen write can proceed");
   assert.equal(ledgerAt(fx), before, "the ledger is back to its arrival bytes");
   assert.equal(existsSync(join(fx.town, "WHITE_PAGES", "made-by-the-pass.md")), false, "the path the pass created is gone");
@@ -486,7 +507,7 @@ test("tick · a quiet tick (nothing owed) costs one verify, as before", { skip }
   const fx = fixture(["row 1"]);
   const r = run(fx, [tickScript(fx)], {});
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome"],
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome"],
     "the arrival check already read these bytes; a second verify would lengthen every tick's lock hold for nothing");
   assert.equal(status(fx), "");
 });
@@ -686,7 +707,7 @@ test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint com
   assert.equal(r.status, 0, r.stderr);
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
-  assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append"), `the switch took the runner: ${calls(fx).join(", ")}`);
+  assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append --repo"), `the switch took the runner: ${calls(fx).join(", ")}`);
   assert.ok(calls(fx).includes("quests-run") && !calls(fx).includes("quests"), `and the quest snapshot on the store's key base: ${calls(fx).join(", ")}`);
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
   assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", FERRY_SUBJECT]);
@@ -769,9 +790,9 @@ for (const [label, extra] of [["the switch off", {}], ["STAMP_LINES=store", STOR
 test("the switch off is the town's --append: the unset tick and crossing never call the runner", { skip: fskip }, () => {
   const tick = fixture(["row 1"]);
   run(tick, [tickScript(tick)], { STUB_APPEND: "mint row 2" });
-  assert.ok(calls(tick).includes("mint --append") && !calls(tick).includes("mint-run --append"), calls(tick).join(", "));
+  assert.ok(calls(tick).includes("mint --append --repo") && !calls(tick).includes("mint-run --append"), calls(tick).join(", "));
   const ferry = fixture(["row 1"]);
   run(ferry, ["-c", ferryScript(ferry)], { STUB_APPEND: "mint row 2" });
-  assert.ok(calls(ferry).includes("mint --append") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
+  assert.ok(calls(ferry).includes("mint --append --repo") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
   assert.ok(calls(ferry).includes("quests") && !calls(ferry).includes("quests-run"), calls(ferry).join(", "));
 });

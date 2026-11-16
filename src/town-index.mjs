@@ -24,7 +24,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the checkout
 import { readTown, parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { isResidentHandle, REGISTRY_PATH } from "./residency.mjs"; // one definition of what a handle is — the door's
 import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off the household's record (POS-219)
@@ -262,12 +262,11 @@ export function ledgerLines(town) {
  * `only` (a Set of handles) recomputes just those residents: the delta's case.
  */
 export async function mailStateRows(TOWN, town, { log = console, only = null } = {}) {
-  const tool = join(TOWN, "tools", "mail-state.mjs");
-  if (!existsSync(tool)) {
+  if (!existsSync(join(TOWN, "tools", "mail-state.mjs"))) {
     log.warn("WARN: town checkout has no tools/mail-state.mjs — doorsteps will say correspondence: null");
     return null;
   }
-  const { mailState, fromTownLedger } = await import(pathToFileURL(tool));
+  const { mailState, fromTownLedger } = await importTownTool(TOWN, "mail-state.mjs");
   const ledgerEvents = fromTownLedger(town.ledger);
   const out = keyed("mail_state");
   for (const r of town.residents) {
@@ -294,10 +293,9 @@ export async function mailStateRows(TOWN, town, { log = console, only = null } =
  * docs/town-index-store.md), so the ingest adds that fold to the stored one.
  */
 export async function stampFold(TOWN, { entries = null } = {}) {
-  const stampTool = join(TOWN, "tools", "stamp-mint.mjs");
   const stampLedger = join(TOWN, "WHITE_PAGES", "stamp-ledger.md");
-  if (!existsSync(stampTool) || !existsSync(stampLedger)) return null;
-  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await import(pathToFileURL(stampTool));
+  if (!existsSync(join(TOWN, "tools", "stamp-mint.mjs")) || !existsSync(stampLedger)) return null;
+  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await importTownTool(TOWN, "stamp-mint.mjs");
   const all = entries ?? parseStampLedger(readFileSync(stampLedger, "utf8"));
   return { entries: all.length, tip: stampTipOf(all), balance: foldBalances(all), mintCount: foldMintCount(all), staked: foldStaked(all) };
 }
@@ -418,10 +416,9 @@ function printedHouseholds(TOWN) {
 }
 
 export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
-  const questTool = join(TOWN, "tools", "quest-progress.mjs");
   const registryPath = join(TOWN, "quest-registry.json");
-  if (!existsSync(questTool) || !existsSync(registryPath)) return null;
-  const questMod = await import(pathToFileURL(questTool));
+  if (!existsSync(join(TOWN, "tools", "quest-progress.mjs")) || !existsSync(registryPath)) return null;
+  const questMod = await importTownTool(TOWN, "quest-progress.mjs");
   const { foldQuestProgress, townDay } = questMod;
   const today = townDay();
   const prog = foldQuestProgress(TOWN, base ? { today, base } : { today });
@@ -440,7 +437,7 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
   // is the office's own admission grammar: the raw list carries `_archived`.
   if (typeof questMod.onboardingFactsFor === "function" && typeof questMod.foldFriendships === "function") {
     const { onboardingFactsFor, foldFriendships, welcomedHouseholds } = questMod;
-    const { parseDeliveries, currentHouseholds, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
+    const { parseDeliveries, currentHouseholds, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf } = await importTownTool(TOWN, "stamp-mint.mjs"); // POS-994: the pinned copy
     const { standingRowsFromTown } = await import("./quest-standing.mjs");
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(

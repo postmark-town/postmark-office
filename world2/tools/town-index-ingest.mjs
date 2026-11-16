@@ -47,6 +47,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// POS-994: the town engine at the checkout's commit, through the loader (town-tool.mjs §
+// importTownToolAtHead): its own inside the office's reviewed history, else the pinned copy or a stop by name.
+import { importTownToolAtHead } from "../../src/town-tool.mjs";
 
 import { assertSha } from "./law-ingest.mjs";
 import { readTown, parseLedger } from "../../vendor/tools/lib/town.mjs";
@@ -256,7 +259,7 @@ async function mintInputs(client, townRepo, tally, { whole = false, appended = n
  */
 async function questKeyBase(client, townRepo) {
   if (!stampLinesOn(process.env)) return null;
-  const engine = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
+  const engine = await importTownToolAtHead(resolve(townRepo), "stamp-mint.mjs");
   if (!takesKeyBase(engine, townRepo))
     throw new Error("STAMP_LINES=store, but this town checkout's engine takes no key base (town #3540): nothing was written");
   return keyBaseVia(client, engine);
@@ -794,7 +797,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   let tip = meta.get("stamps_tip") ?? "";
   const hasStamps = existsSync(join(townRepo, "tools", "stamp-mint.mjs")) && existsSync(join(townRepo, "WHITE_PAGES", "stamp-ledger.md"));
   if (hasStamps) {
-    const { parseStampLedger } = await import(pathToFileURL(resolve(townRepo, "tools", "stamp-mint.mjs")));
+    const { parseStampLedger } = await importTownToolAtHead(resolve(townRepo), "stamp-mint.mjs");
     let before = [];
     try { before = parseStampLedger(git(townRepo, "show", `${head}:WHITE_PAGES/stamp-ledger.md`)); } catch { before = []; }
     const all = parseStampLedger(execFileSync("git", ["-C", townRepo, "show", `${sha}:WHITE_PAGES/stamp-ledger.md`], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }));

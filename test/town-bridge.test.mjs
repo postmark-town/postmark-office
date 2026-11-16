@@ -11,7 +11,7 @@
 // test; a suite that only kept testing those halves would go on being green
 // while the record never moved.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -143,6 +143,7 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q");
   // the bytes a door writes are the bytes the clone holds: a Windows checkout
   // must not turn the batch's fast-forward into a CRLF rewrite (the box never does)

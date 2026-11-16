@@ -35,7 +35,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994
 import * as V from "./lib/ops-viz.mjs";
 
 const TOWN_CLONE = process.env.TOWN_CLONE || "/srv/postmark-office/town-clone";
@@ -49,9 +49,9 @@ const WORLD_REF = process.env.WORLD_REF || "refs/remotes/origin/main";
 const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const gitTry = (repo, args, fallback = null) => { try { return git(repo, args); } catch { return fallback; } };
 
-// ── the town's own money law, imported live ──────────────────────────────────
-const sm = await import(pathToFileURL(join(TOWN_CLONE, "tools", "stamp-mint.mjs")));
-const ws = await import(pathToFileURL(join(TOWN_CLONE, "tools", "world-stake.mjs")));
+// ── the town's own money law: the office's pinned copies, checked against the clone (POS-994) ──
+const sm = await importTownTool(TOWN_CLONE, "stamp-mint.mjs");
+const ws = await importTownTool(TOWN_CLONE, "world-stake.mjs");
 
 const townSha = git(TOWN_CLONE, ["rev-parse", "--short", "HEAD"]).trim();
 // Read the ledger from the WORKING TREE, not `git show HEAD:` — because

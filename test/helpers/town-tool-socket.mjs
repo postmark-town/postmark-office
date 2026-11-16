@@ -26,9 +26,13 @@ export const DECOY_ENV = { PATH: process.env.PATH, GH_TOKEN: "decoy-not-a-token"
 
 const servers = [];
 
-/** Start a stand-in socket at `path` serving `clone`; returns `path` once it is listening. */
-export function startToolSocket(path, clone) {
-  const child = spawn(process.execPath, [HERE, path, clone], { stdio: ["ignore", "ignore", "inherit"], env: { PATH: process.env.PATH } });
+/**
+ * Start a stand-in socket at `path` serving `clone`; returns `path` once it is listening.
+ * POS-994: serve checks the clone against the office's pins before verify and quests
+ * run; `pinsDir` names a fixture's own (TOWN_PINS_DIR in serve's env, never the tool's).
+ */
+export function startToolSocket(path, clone, { pinsDir = "" } = {}) {
+  const child = spawn(process.execPath, [HERE, path, clone, pinsDir], { stdio: ["ignore", "ignore", "inherit"], env: { PATH: process.env.PATH } });
   servers.push(child);
   const until = Date.now() + 10000;
   while (!existsSync(path)) {
@@ -44,11 +48,12 @@ export function stopToolSockets() {
 }
 
 if (process.argv[1] === HERE) {
-  const [path, clone] = process.argv.slice(2);
+  const [path, clone, pinsDir] = process.argv.slice(2);
+  const env = pinsDir ? { ...DECOY_ENV, TOWN_PINS_DIR: pinsDir } : DECOY_ENV;
   createServer({ allowHalfOpen: true, pauseOnConnect: true }, (conn) => {
     // DECOY: serve itself is started with what a careless unit could hand it, so
     // the tests see serve's own scrub (its tools get PATH, HOME and TOWN_TZ only).
-    const child = spawn(process.execPath, [TOOL, "serve", "--clone", clone], { stdio: [conn, conn, "inherit"], env: DECOY_ENV });
+    const child = spawn(process.execPath, [TOOL, "serve", "--clone", clone], { stdio: [conn, conn, "inherit"], env });
     child.on("spawn", () => conn.destroy());
   }).listen(path);
 }

@@ -316,6 +316,31 @@ unit the owner's DELETE on `stamp_lines`, which is Wright's call
 (`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
 in the freshen).
 
+### The dev office's own pins (POS-994)
+
+The office runs only the town code it pinned (`src/town-tool.mjs`; prod's pins are
+`src/town-pins/`, carried with each release). Dev re-signs its town's ledger every
+night, and the re-sign rewrites signatures inside the town's own tools, so a dev
+clone never equals prod's pins. Dev pins its OWN re-signed town (Wright, 2026-11-16):
+`postmark-dev-freshen.sh` writes `/srv/postmark-office-dev/town-pins-dev` (outside the
+clone) around the re-sign, every dev unit names it, and the freshen's unit restarts
+the dev office once the new pins are written (`ExecStartPost=+/usr/bin/systemctl --no-block
+restart postmark-office-dev.service`: queued, not waited on; a failed freshen restarts nothing). There is no switch
+that turns the pinning off. Box steps, on dev only, when the release carrying this
+reaches dev (Darko's look first):
+```sh
+D=/srv/postmark-office-dev
+sudo install -D -m 644 $D/deploy/postmark-office-dev.service-dropin-town-pins.conf /etc/systemd/system/postmark-office-dev.service.d/town-pins.conf
+sudo install -m 644 $D/deploy/postmark-dev-freshen.service /etc/systemd/system/postmark-dev-freshen.service
+sudo install -m 755 -o meepo -g meepo $D/deploy/postmark-dev-freshen.sh $D/postmark-dev-freshen.sh
+sudo systemctl daemon-reload
+sudo systemctl start postmark-dev-freshen.service     # stands back, re-signs, pins dev's town, restarts the dev office
+jq -r .town_commit $D/town-pins-dev/PINS.json          # the re-signed town commit
+systemctl show postmark-office-dev.service -p Environment -p ActiveEnterTimestamp   # TOWN_PINS_DIR=…/town-pins-dev, just restarted
+```
+`dev-seed-advance.sh` and `sandbox-reset.sh` run the freshen and name the same folder;
+`tools/dev-rehearsal.mjs` reads it at `<dev tree>/town-pins-dev`.
+
 ### The dev seed advance (POS-791)
 
 Moving dev's `sandbox/seed` is its own step, one tool, run by hand on its own day

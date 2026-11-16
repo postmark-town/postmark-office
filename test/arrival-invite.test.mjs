@@ -23,6 +23,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town modules
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -166,7 +173,8 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(dir);
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-07-25 · rules: stamps-v3 · meeps: ember-lamp · friendship: 5:5,10:10 · sig: invented\n");
   const lawOf = await meepLawAtOffice(dir);
   assert.equal(lawOf("ember-lamp"), true, "the law line names the meep");
@@ -182,7 +190,8 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   mkdirSync(join(bare, "WHITE_PAGES"), { recursive: true });
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: no WHITE_PAGES\/stamp-ledger\.md/);
   assert.equal((await meepLawAtOffice(bare))("ember-lamp"), false, "the fund page's lenient read is unchanged");
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(bare, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, bare, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(bare);
   writeFileSync(join(bare, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-07-01 · MINT → wick · 5 · for: welcome · sig: invented\n");
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: the ledger holds no law line/);
 });
@@ -325,7 +334,8 @@ function townClone({ law = true } = {}) {
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });
   if (law) {
-    copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+    copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(dir);
     writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), LAW_KEYS.publicKey.export({ type: "spki", format: "pem" }));
     mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), sealedLedger([
@@ -352,7 +362,7 @@ function declareExec(args, key, { at = clone } = {}) {
   const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({ args, key })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: at, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(at, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, `declare-exec answers rather than trips: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split("\n").at(-1));
@@ -423,7 +433,7 @@ test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-816/d): ?invite=wright lands the
     key: { ghId: 5164, ghLogin: "guest-gh", handles: [] } })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(clone, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim().split("\n").at(-1));

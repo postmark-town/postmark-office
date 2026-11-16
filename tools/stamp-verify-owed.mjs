@@ -4,8 +4,9 @@
 //
 //   node /srv/postmark-office/tools/stamp-verify-owed.mjs [--repo <town clone>] [the town verify's own args]
 //
-// Runs the town's own `tools/stamp-verify.mjs` (in --repo, else the working
-// directory) with the same arguments, and passes its output through. Exit 0 when
+// Runs the town's `tools/stamp-verify.mjs` as the office's pinned copy, checked
+// against the town (POS-994; a mismatch is exit 3, saying so), over --repo, else
+// the working directory, with the same arguments, and passes its output through. Exit 0 when
 // it is green, OR when every problem it names is one of its two "not a tamper"
 // sentences: the ledger is behind the derivation (mints owed), or a paying
 // letter is not settled yet (settlement owed). Exit 1 on anything else, with the
@@ -32,6 +33,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { isPinStop, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's verifier is the office's pinned copy
 
 const OWED = /^(ledger is \d+ line\(s\) behind the derivation — mints owed|settlement owed for "mail:[^"]+" — ledger is behind the mail), run the mint pass \(not a tamper\)$/;
 
@@ -47,12 +49,29 @@ if (isMain) {
   const args = process.argv.slice(2);
   const i = args.indexOf("--repo");
   const repo = resolve(i !== -1 ? args[i + 1] : process.cwd());
-  const verifier = join(repo, "tools", "stamp-verify.mjs");
-  if (!existsSync(verifier)) {
+  if (!existsSync(join(repo, "tools", "stamp-verify.mjs"))) {
     console.error(`stamp-verify-owed: no town at ${repo} (no tools/stamp-verify.mjs)`);
     process.exit(2);
   }
-  const r = spawnSync(process.execPath, [verifier, ...args], { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  // POS-994: the office's pinned copy of the verifier, checked against the town
+  // and handed it by name (the --repo given is re-said as the resolved path). A
+  // pin stop is never green: it exits 3, the shell door's number for a pin stop,
+  // so a caller names it as one and never as a red ledger.
+  let argv;
+  try { argv = townToolArgv(repo, "stamp-verify.mjs", i !== -1 ? [...args.slice(0, i), ...args.slice(i + 2)] : args); }
+  catch (e) {
+    // POS-994 (Truey's re-read of #1065, finding 4): a pin stop is 3; anything else
+    // the loader refuses (no pins, an unreadable PINS.json) is the office's own
+    // defect, 2, never a red ledger. The runner's own 2 (the pins carry no public
+    // key) passes through below as 2.
+    if (!isPinStop(e)) {
+      console.error(`[stamp-verify-owed] the office could not prepare the town's verifier (not a ledger verdict): ${e?.message ?? e}`);
+      process.exit(2);
+    }
+    console.error(`[stamp-verify-owed] ${e.message}`);
+    process.exit(3);
+  }
+  const r = spawnSync(process.execPath, argv, { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
   if (r.status === 0) process.exit(0);

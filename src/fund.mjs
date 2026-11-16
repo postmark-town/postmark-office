@@ -48,7 +48,7 @@
 
 import { parseAccountRef, payerRegistry, fundHolder, meepLawOf } from "./fund-holder.mjs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the pinned copies of the town's modules
 import { existsSync } from "node:fs";
 
 import { verifyUsdcPayment, INTAKE, TXHASH_RE } from "./usdc-witness.mjs";
@@ -69,13 +69,14 @@ export const bounce = (code, defect, hint) => {
   return e;
 };
 
-// The town's own engine, imported live from the clone — the stamps precedent
-// (one source of truth for the rule). Returns null when the clone predates the
-// seam, so the door can say "not yet open" instead of guessing at the law.
+// The town's own engine — the office's pinned copy, checked against the clone
+// (POS-994) — the stamps precedent (one source of truth for the rule). Returns
+// null when the clone predates the seam, so the door can say "not yet open"
+// instead of guessing at the law. A town change the office has not pinned is
+// not "not yet open": it throws TownPinMismatch, by name.
 export async function townEngine(clone) {
-  const mint = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(mint)) return null;
-  const m = await import(pathToFileURL(mint));
+  if (!existsSync(join(clone, "tools", "stamp-mint.mjs"))) return null;
+  const m = await importTownTool(clone, "stamp-mint.mjs");
   if (typeof m.intakeCheck !== "function" || typeof m.foldPotReceipts !== "function") return null;
   return m;
 }
