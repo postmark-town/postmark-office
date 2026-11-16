@@ -4,4 +4,6 @@ Description=Postmark dev freshen — dev clones re-mirror the record; local rehe
 [Service]
 Type=oneshot
 User=meepo
+# POS-994: dev's own pins (the script writes them after the re-sign and exports the same path)
+Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev
 ExecStart=/srv/postmark-office-dev/postmark-dev-freshen.sh

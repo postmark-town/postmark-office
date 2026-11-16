@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
+import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, resolvePinRoot, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
 import { stampKeyRefusal } from "../tools/stamp-sandbox.mjs";
 import { MODULES, checkPins, collect, manifest } from "../tools/town-pins.mjs";
 
@@ -321,4 +321,85 @@ test("the stamp sandbox refuses to run where a stamp key is present, and runs wh
     assert.equal(r.status, 3, r.stderr);
     assert.match(r.stderr, /stamp-sandbox: refused — a stamp key is present at/);
   } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+// ── DEV PINS ITS OWN RE-SIGNED TOWN (Wright, POS-994, 2026-11-16) ───────────
+// The freshen re-signs dev's town, which rewrites signatures inside the town's
+// own tools, then pins THAT town into a folder outside the clone with this exact
+// command; the dev units name the folder. Held here on a real git town whose
+// "re-sign" commit changes stamp-verify.
+
+function devTown() {
+  const base = mkdtempSync(join(tmpdir(), "town-tool-dev-"));
+  const repo = join(base, "town-clone");
+  const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
+  mkdirSync(join(repo, "tools"), { recursive: true });
+  git("init", "-q", "-b", "main");
+  git("config", "core.autocrlf", "false");
+  writeFileSync(join(repo, "tools", "registry-source.mjs"), "export const source = 'roll';\n");
+  writeFileSync(join(repo, "tools", "stamp-mint.mjs"), "export const mint = 'seed';\nexport const lazy = () => import('./registry-source.mjs');\n");
+  writeFileSync(join(repo, "tools", "stamp-verify.mjs"), "import { mint } from './stamp-mint.mjs';\nexport const RULED = new Set(['prod-sig-21582']);\nexport const of = mint;\n");
+  git("add", "-A"); git("commit", "-qm", "the seed");
+  const seed = git("rev-parse", "HEAD");
+  const resign = () => {
+    writeFileSync(join(repo, "tools", "stamp-verify.mjs"), "import { mint } from './stamp-mint.mjs';\nexport const RULED = new Set(['dev-sig-21582']);\nexport const of = mint;\n");
+    git("commit", "-qam", "dev: the stamp ledger re-signed under dev's own key");
+    return git("rev-parse", "HEAD");
+  };
+  return { base, repo, git, seed, resign, pins: join(base, "town-pins-dev"), done: () => rmSync(base, { recursive: true, force: true }) };
+}
+const freshenPin = (t) => spawnSync(process.execPath, [join(ROOT, "tools", "town-pins.mjs"), "--write", "--town", t.repo, "--ref", "HEAD", "--out", t.pins], { encoding: "utf8" });
+
+test("DEV: the freshen's pin, run after the re-sign, matches the re-signed clone (and the seed's would not)", async () => {
+  const t = devTown();
+  try {
+    assert.equal(freshenPin(t).status, 0, "the seed's pin");
+    const seedPins = JSON.parse(readFileSync(join(resolvePinRoot(t.pins), "PINS.json"), "utf8"));
+    assert.equal(seedPins.town_commit, t.seed);
+    const signed = t.resign();
+    // the seed's pins no longer vouch for the re-signed verifier
+    assert.throws(() => townTool(t.repo, "stamp-verify.mjs", { root: t.pins }), (e) => e instanceof TownPinMismatch && e.file === "tools/stamp-verify.mjs");
+    const r = freshenPin(t);
+    assert.equal(r.status, 0, r.stderr);
+    const pins = JSON.parse(readFileSync(join(resolvePinRoot(t.pins), "PINS.json"), "utf8"));
+    assert.equal(pins.town_commit, signed, "the pins name the re-signed commit");
+    const townBlob = (c, p) => { try { return t.git("rev-parse", `${c}:${p}`); } catch { return null; } };
+    assert.deepEqual(checkPins(t.pins, { townBlob }), [], "every pinned file is the re-signed town's, byte for byte");
+    const mod = await importTownTool(t.repo, "stamp-verify.mjs", { root: t.pins });
+    assert.deepEqual([...mod.RULED], ["dev-sig-21582"], "and the re-signed verifier is what loads");
+    // the folder moved under this RUNNING process (as under the dev office): CURRENT names the
+    // re-signed commit's folder, the seed's is kept one night for a process still holding it,
+    // and no half-written folder is left
+    assert.deepEqual(readdirSync(t.pins).sort(), ["CURRENT", t.seed, signed].sort());
+    assert.equal(readFileSync(join(t.pins, "CURRENT"), "utf8").trim(), signed);
+    // a third pin (the next night, the same town) keeps CURRENT and prunes nothing it needs
+    assert.equal(freshenPin(t).status, 0);
+    assert.deepEqual(readdirSync(t.pins).sort(), ["CURRENT", signed].sort(), "the seed's folder goes once it is two pins old");
+  } finally { t.done(); }
+});
+
+test("DEV: an --out inside the --town checkout is refused, and nothing is written", () => {
+  const t = devTown();
+  try {
+    const inside = join(t.repo, "pins");
+    const r = spawnSync(process.execPath, [join(ROOT, "tools", "town-pins.mjs"), "--write", "--town", t.repo, "--ref", "HEAD", "--out", inside], { encoding: "utf8" });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /is inside the --town checkout/);
+    assert.equal(existsSync(inside), false, "nothing written inside the clone");
+  } finally { t.done(); }
+});
+
+test("DEV: the dev units name dev's pins; no prod unit names TOWN_PINS_DIR, and the loader reads no other switch", () => {
+  const LINE = "Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev";
+  for (const f of ["deploy/postmark-office-dev.service-dropin-town-pins.conf", "deploy/postmark-dev-freshen.service"]) {
+    assert.ok(readFileSync(join(ROOT, f), "utf8").split("\n").includes(LINE), `${f} names dev's pins`);
+  }
+  assert.match(readFileSync(join(ROOT, "deploy", "postmark-office-dev.service-dropin-town-pins.conf"), "utf8"), /^# \/etc\/systemd\/system\/postmark-office-dev\.service\.d\/town-pins\.conf$/m);
+  assert.match(readFileSync(join(ROOT, "deploy", "postmark-dev-freshen.sh"), "utf8"), /pins="\$dev\/town-pins-dev"/, "the freshen writes where the units point");
+  const prod = readdirSync(join(ROOT, "deploy")).filter((n) => /\.(service|timer|socket|conf)$/.test(n) && !/dev/.test(n));
+  assert.ok(prod.includes("postmark-office.service") && prod.includes("postmark-ferry.service"));
+  for (const n of prod) assert.doesNotMatch(readFileSync(join(ROOT, "deploy", n), "utf8"), /TOWN_PINS_DIR/, `${n} is prod's: it runs the office's own pins`);
+  // NO OFF SWITCH: the loader's only environment read is the pins' folder, and a folder is never "none"
+  const envReads = readFileSync(join(ROOT, "src", "town-tool.mjs"), "utf8").match(/process\.env\.[A-Z_]+/g) ?? [];
+  assert.deepEqual([...new Set(envReads)], ["process.env.TOWN_PINS_DIR"]);
 });

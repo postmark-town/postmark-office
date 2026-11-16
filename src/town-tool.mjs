@@ -91,10 +91,33 @@ export class TownToolUnpinned extends Error {
 }
 
 const pinsCache = new Map();
-/** The pin manifest at `root` (read once per process). */
+// A PIN FOLDER THAT MOVES UNDER A RUNNING OFFICE (the dev office, re-pinned every
+// night by the freshen; POS-994). Such a folder holds one subfolder per pinned
+// town commit and a CURRENT file naming the one in force, swapped atomically
+// (tools/town-pins.mjs --out). The loader follows CURRENT on every call (a stat
+// and a tiny read), so a re-pin is seen at once, and a re-pin with new content
+// lives at new paths, which node's module loader evaluates fresh; the same
+// content keeps its one evaluation. The office's own pins (src/town-pins/) never
+// move under a running office and carry no CURRENT.
+const currentCache = new Map();
+/** `root`, or the commit folder its CURRENT names. */
+export function resolvePinRoot(root) {
+  const cur = join(root, "CURRENT");
+  if (!existsSync(cur)) return root;
+  const st = statSync(cur);
+  const key = `${st.ino}:${st.size}:${st.mtimeMs}`; // a swap is a rename: a new inode, whatever the size and time
+  const hit = currentCache.get(cur);
+  if (hit && hit.key === key) return hit.root;
+  const at = join(root, readFileSync(cur, "utf8").trim());
+  currentCache.set(cur, { key, root: at });
+  return at;
+}
+
+/** The pin manifest at `root` (read once per process per commit folder). */
 export function readPins(root = pinRoot()) {
-  if (!pinsCache.has(root)) pinsCache.set(root, JSON.parse(readFileSync(join(root, "PINS.json"), "utf8")));
-  return pinsCache.get(root);
+  const at = resolvePinRoot(root);
+  if (!pinsCache.has(at)) pinsCache.set(at, JSON.parse(readFileSync(join(at, "PINS.json"), "utf8")));
+  return pinsCache.get(at);
 }
 
 // A clone file's blob, cached on (size, mtime) so a server's repeated loads do
@@ -116,8 +139,9 @@ function cloneBlob(path) {
  * of its whole closure are found equal to the pins. Throws TownPinMismatch or
  * TownToolUnpinned; never returns a path into the clone.
  */
-export function townTool(clone, name, { root = pinRoot() } = {}) {
+export function townTool(clone, name, { root: given = pinRoot() } = {}) {
   if (!clone) throw new Error(`townTool(${name}): no town clone was named`);
+  const root = resolvePinRoot(given);
   const inside = relative(resolve(clone), resolve(root));
   if (!inside.startsWith("..") && !isAbsolute(inside)) {
     throw new Error(`townTool(${name}): the pins (${root}) are inside the clone (${clone}); the office never checks town code against the town's own folder`);

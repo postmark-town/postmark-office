@@ -46,6 +46,20 @@
 # clone whose push URL is disabled, under this root (F1).
 # It runs last, so a refusal leaves the clones stood back and the unit failed.
 #
+# DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16). The office runs
+# only the town code it pinned (src/town-tool.mjs), and dev's re-sign rewrites
+# signatures inside the town's own tools (the ruled exceptions stamp-verify
+# names by signature), so a dev clone never equals the office's pins. So dev pins
+# its own town, into a folder OUTSIDE the clone, $DEV/town-pins-dev, which every
+# dev unit names as TOWN_PINS_DIR (deploy/postmark-office-dev.service.d/
+# town-pins.conf, postmark-dev-freshen.service). Three writes, in order:
+#   1. the seed, as stood back: the engine the re-sign itself loads;
+#   2. after the re-sign (committed), the re-signed town: what dev runs from now on;
+#   3. the town's verifier, the pinned copy, over the re-signed ledger. Red puts the
+#      clone back on the seed, pins the seed again, and fails the unit, as the
+#      re-sign's own --verify used to (it ran before the second pin could exist).
+# There is no switch that skips this: an unpinned dev clone stops every pinned step.
+#
 # POSTMARK_DEV_ROOT, POSTMARK_DEV_FLOCK and the two key paths exist for
 # test/box-rollcall.test.mjs only; the unit sets none, so the box runs the
 # defaults below.
@@ -57,12 +71,23 @@ PROD_PUBKEY="${POSTMARK_PROD_PUBKEY:-/srv/postmark-office/town-clone/tools/stamp
 exec "$FLOCK" -x -w 120 "$DEV/town.lock" bash -c '
   set -euo pipefail
   dev=$1 key=$2 prodpub=$3
+  pins="$dev/town-pins-dev"
+  export TOWN_PINS_DIR="$pins"
+  pin() { node "$dev/tools/town-pins.mjs" --write --town "$dev/town-clone" --ref HEAD --out "$pins"; }
   for c in "$dev/world-clone" "$dev/town-clone"; do
     git -C "$c" fetch -q --tags --force origin
     git -C "$c" switch -q main 2>/dev/null || true
     git -C "$c" reset -q --hard refs/tags/sandbox/seed
   done
   git -C "$dev/world-clone" fetch -q --prune origin "+refs/heads/draft/*:refs/remotes/origin/draft/*"
-  node "$dev/tools/dev-ledger-resign.mjs" --town "$dev/town-clone" --key "$key" --not-key "$prodpub" --verify
-  echo "dev clones stood back on sandbox/seed (+ world draft/* refs), the town ledger on the dev key"
+  pin
+  node "$dev/tools/dev-ledger-resign.mjs" --town "$dev/town-clone" --key "$key" --not-key "$prodpub"
+  pin
+  if ! node "$dev/src/town-tool.mjs" run stamp-verify.mjs --clone "$dev/town-clone" --; then
+    git -C "$dev/town-clone" reset -q --hard refs/tags/sandbox/seed
+    pin
+    echo "the town verifier is red on the re-signed ledger: the town clone is back on sandbox/seed and pinned as such; nothing re-signed stands" >&2
+    exit 1
+  fi
+  echo "dev clones stood back on sandbox/seed (+ world draft/* refs), the town ledger on the dev key, pinned at $pins"
 ' freshen "$DEV" "$DEV_KEY" "$PROD_PUBKEY"

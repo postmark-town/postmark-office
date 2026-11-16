@@ -141,8 +141,21 @@ export async function localDevTarget({
     writeFileSync(stampKey, keyPem);
     const prodKey = join(dir, "prod-stamp-key.pem");
     writeFileSync(prodKey, pemOf());
-    const moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") });
+    // DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16), as the box's freshen does:
+    // the freshen's own pin command (deploy/postmark-dev-freshen.sh § pin), run on the seed
+    // (the engine the re-sign loads), then again on the re-signed town, into a folder outside
+    // the clone that the dev office and the rehearsal name (the dev units' TOWN_PINS_DIR).
+    const pinsDir = join(dir, "town-pins-dev");
+    const pin = () => execFileSync(process.execPath, [join(OFFICE, "tools", "town-pins.mjs"), "--write", "--town", town, "--ref", "HEAD", "--out", pinsDir], { encoding: "utf8" });
+    pin();
+    const pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinsDir;
+    let moved;
+    try { moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") }); }
+    finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
     if (moved.status !== "resigned") throw new Error(`the stand-in's re-sign: ${moved.status} ${moved.why ?? ""}`);
+    pin();
+    log(`pins: dev's own, from the re-signed town, at ${pinsDir}`);
     const wp = join(town, "WHITE_PAGES");
     for (const room of readdirSync(wp, { withFileTypes: true })) {
       const ob = join(wp, room.name, "outbox");
@@ -220,6 +233,7 @@ export async function localDevTarget({
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
       OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
+      TOWN_PINS_DIR: pinsDir, // the dev units' line (deploy/postmark-office-dev.service-dropin-town-pins.conf)
       STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1",
       ...envOverrides,
     };
@@ -248,6 +262,6 @@ export async function localDevTarget({
       office = { child, stderr: () => errText };
       log(`office: listening on :${officePort}`);
     }
-    return { dir, store, town, world, envFile, rolesFile, prodKey, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
+    return { dir, store, town, world, envFile, rolesFile, prodKey, pinsDir, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
   } catch (e) { await stop(); throw e; }
 }

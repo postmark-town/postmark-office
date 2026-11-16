@@ -49,6 +49,12 @@ for C in "$D/town-clone" "$D/world-clone"; do
   echo "  $(basename "$C") -> $(git -C "$C" rev-parse --short HEAD)"
 done
 
+# POS-994: dev runs its own pinned town. The freshen moves the stood-back clone onto
+# dev's key and pins the re-signed town at $D/town-pins-dev (postmark-dev-freshen.sh),
+# so a reset runs it too: without it the dev office would meet a seed it never pinned.
+sudo systemctl start postmark-dev-freshen.service
+export TOWN_PINS_DIR="$D/town-pins-dev"
+
 echo "== derived state: delete + rebuild =="
 # office.db is retired (POS-656) and nothing reads it; a leftover copy goes here too
 rm -f "$D"/office.db* "$D"/dynamic.db* "$D"/world.db*

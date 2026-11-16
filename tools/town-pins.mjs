@@ -1,8 +1,19 @@
 #!/usr/bin/env node
 // town-pins.mjs — WRITE OR CHECK THE OFFICE'S PINNED COPIES OF TOWN CODE (POS-994).
 //
-//   node tools/town-pins.mjs --write --town <town checkout> --ref <town commit>
-//   node tools/town-pins.mjs --check [--town <town checkout>]
+//   node tools/town-pins.mjs --write --town <town checkout> --ref <town commit> [--out <dir>]
+//   node tools/town-pins.mjs --check [--town <town checkout>] [--out <dir>]
+//
+// --out    the pins' folder; the default is the office's own, src/town-pins/. The
+//          dev office pins ITS OWN re-signed town into one outside its clone
+//          (deploy/postmark-dev-freshen.sh, /srv/postmark-office-dev/town-pins-dev;
+//          Wright, POS-994, 2026-11-16), since dev's ledger re-sign rewrites
+//          signatures inside the town's own tools. An --out inside the --town
+//          checkout is refused: the office never checks town code against the
+//          town's own folder (src/town-tool.mjs refuses such a root too). An --out
+//          folder is written whole and swapped in, so no file of an earlier pin
+//          lingers in it; it pins the modules the town holds at <ref>, where the
+//          office's own pins must hold every one.
 //
 // --write  reads every module in MODULES, and every file each one imports by a
 //          relative path (its closure, followed to the end), from the town repo
@@ -20,10 +31,10 @@
 // changes a pinned file rides with that PR in the same train (SHIPPING).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, posix, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PIN_ROOT, gitBlobSha, relativeImports } from "../src/town-tool.mjs";
+import { PIN_ROOT, gitBlobSha, relativeImports, resolvePinRoot } from "../src/town-tool.mjs";
 
 /** The town modules the office reaches next to a key or the store (POS-994's inventory). */
 export const MODULES = [
@@ -77,8 +88,9 @@ function listPinned(root) {
   return out.sort();
 }
 
-/** Problems with the pins at `root`, as sentences. Empty is green. */
-export function checkPins(root = PIN_ROOT, { townBlob } = {}) {
+/** Problems with the pins at `root`, as sentences. Empty is green. The office's own pins must hold every MODULE (`complete`). */
+export function checkPins(given = PIN_ROOT, { townBlob, complete = resolve(given) === resolve(PIN_ROOT) } = {}) {
+  const root = resolvePinRoot(given); // a moving folder (--out) is checked at the commit its CURRENT names
   const problems = [];
   const pins = JSON.parse(readFileSync(join(root, "PINS.json"), "utf8"));
   for (const [p, e] of Object.entries(pins.files)) {
@@ -93,25 +105,64 @@ export function checkPins(root = PIN_ROOT, { townBlob } = {}) {
     }
   }
   for (const p of listPinned(root)) if (!pins.files[p]) problems.push(`${p}: a file under the pins that PINS.json does not name`);
-  for (const m of MODULES) if (!pins.files[`tools/${m}`]) problems.push(`tools/${m}: in MODULES, not pinned`);
+  if (complete) for (const m of MODULES) if (!pins.files[`tools/${m}`]) problems.push(`tools/${m}: in MODULES, not pinned`);
   return problems;
+}
+
+/** Null, or the sentence refusing pins at `root` because they lie inside the `town` checkout. */
+export function outInsideTown(town, root) {
+  const rel = relative(resolve(town), resolve(root));
+  return !rel.startsWith("..") && !isAbsolute(rel)
+    ? `--out ${root} is inside the --town checkout ${town}: the office never checks town code against the town's own folder`
+    : null;
 }
 
 async function main(argv) {
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
   const git = (town, args) => execFileSync("git", ["-C", town, ...args], { maxBuffer: 1 << 26 });
+  const out = arg("--out");
+  const root = out ? resolve(out) : PIN_ROOT;
   if (argv.includes("--write")) {
     const town = arg("--town"), ref = arg("--ref");
-    if (!town || !ref) { console.error("usage: town-pins.mjs --write --town <town checkout> --ref <town commit>"); return 2; }
+    if (!town || !ref || (argv.includes("--out") && !out)) { console.error("usage: town-pins.mjs --write --town <town checkout> --ref <town commit> [--out <dir>]"); return 2; }
+    const refused = outInsideTown(town, root);
+    if (refused) { console.error(`town-pins: ${refused}`); return 2; }
     const commit = git(town, ["rev-parse", "--verify", `${ref}^{commit}`]).toString().trim();
-    const files = collect((p) => git(town, ["show", `${commit}:${p}`]));
-    const before = listPinned(PIN_ROOT);
-    for (const [p, { bytes }] of files) {
-      mkdirSync(dirname(join(PIN_ROOT, p)), { recursive: true });
-      writeFileSync(join(PIN_ROOT, p), bytes);
+    const held = (m) => { try { git(town, ["cat-file", "-e", `${commit}:tools/${m}`]); return true; } catch { return false; } };
+    const modules = out ? MODULES.filter(held) : MODULES;
+    const files = collect((p) => git(town, ["show", `${commit}:${p}`]), modules);
+    const manifestText = JSON.stringify(manifest(files, { townCommit: commit, readAt: new Date().toISOString() }), null, 2) + "\n";
+    if (out) {
+      // A folder that moves under a running office (the dev office, re-pinned nightly):
+      // one subfolder per commit, written whole, then CURRENT swapped by a rename
+      // (src/town-tool.mjs § resolvePinRoot follows it on every call). Kept: the
+      // current commit and the one it replaced (a running process may still hold
+      // modules read from it); older ones go.
+      mkdirSync(root, { recursive: true });
+      const was = existsSync(join(root, "CURRENT")) ? readFileSync(join(root, "CURRENT"), "utf8").trim() : null;
+      const next = join(root, `${commit}.next-${process.pid}`);
+      rmSync(next, { recursive: true, force: true });
+      for (const [p, { bytes }] of files) { mkdirSync(dirname(join(next, p)), { recursive: true }); writeFileSync(join(next, p), bytes); }
+      mkdirSync(next, { recursive: true });
+      writeFileSync(join(next, "PINS.json"), manifestText);
+      if (existsSync(join(root, commit))) {
+        // the same commit pinned again (the freshen, nightly): its files are the same bytes, so it stands
+        rmSync(next, { recursive: true, force: true });
+      } else renameSync(next, join(root, commit));
+      writeFileSync(join(root, `CURRENT.next-${process.pid}`), commit + "\n");
+      renameSync(join(root, `CURRENT.next-${process.pid}`), join(root, "CURRENT"));
+      for (const n of readdirSync(root)) if (n !== "CURRENT" && n !== commit && n !== was) rmSync(join(root, n), { recursive: true, force: true });
+      const absent = MODULES.filter((m) => !modules.includes(m));
+      console.log(`pinned ${files.size} files from town ${commit.slice(0, 12)} into ${join(root, commit)} (CURRENT)${absent.length ? ` (not in the town at that commit: ${absent.join(", ")})` : ""}`);
+      return 0;
     }
-    writeFileSync(join(PIN_ROOT, "PINS.json"), JSON.stringify(manifest(files, { townCommit: commit, readAt: new Date().toISOString() }), null, 2) + "\n");
-    console.log(`pinned ${files.size} files from town ${commit.slice(0, 12)} into ${relative(process.cwd(), PIN_ROOT) || PIN_ROOT}`);
+    const before = listPinned(root);
+    for (const [p, { bytes }] of files) {
+      mkdirSync(dirname(join(root, p)), { recursive: true });
+      writeFileSync(join(root, p), bytes);
+    }
+    writeFileSync(join(root, "PINS.json"), manifestText);
+    console.log(`pinned ${files.size} files from town ${commit.slice(0, 12)} into ${relative(process.cwd(), root) || root}`);
     const stale = before.filter((p) => !files.has(p));
     if (stale.length) console.log(`no longer pinned (remove them in this PR): ${stale.join(", ")}`);
     return 0;
@@ -121,14 +172,15 @@ async function main(argv) {
     const townBlob = town ? (commit, p) => {
       try { return git(town, ["rev-parse", `${commit}:${p}`]).toString().trim(); } catch { return null; }
     } : undefined;
-    const problems = checkPins(PIN_ROOT, { townBlob });
+    const at = resolvePinRoot(root);
+    const problems = checkPins(root, { townBlob, complete: !out });
     for (const p of problems) console.error(`town-pins: ${p}`);
     if (problems.length) return 1;
-    const pins = JSON.parse(readFileSync(join(PIN_ROOT, "PINS.json"), "utf8"));
+    const pins = JSON.parse(readFileSync(join(at, "PINS.json"), "utf8"));
     console.log(`town-pins: ${Object.keys(pins.files).length} files green at town ${pins.town_commit.slice(0, 12)}${town ? " (and equal to the town's)" : ""}`);
     return 0;
   }
-  console.error("usage: town-pins.mjs --write --town <town checkout> --ref <town commit> | --check [--town <town checkout>]");
+  console.error("usage: town-pins.mjs --write --town <town checkout> --ref <town commit> [--out <dir>] | --check [--town <town checkout>] [--out <dir>]");
   return 2;
 }
 

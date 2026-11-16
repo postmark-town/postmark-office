@@ -88,10 +88,11 @@ function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3
   mkdirSync(join(tree, "world-clone"), { recursive: true });
   writeFileSync(join(tree, "town-clone", "tools", "stamp-mint.mjs"), STAMP_MINT);
   // POS-994: the chain comparison loads the town's mint through the dev tree's own
-  // loader; the stand-in tree carries it, with pins of its stand-in clone.
+  // loader, against dev's own pins (the freshen writes them at <dev tree>/town-pins-dev);
+  // the stand-in tree carries the loader, with pins of its stand-in clone there.
   mkdirSync(join(tree, "src"), { recursive: true });
   copyFileSync(join(ROOT, "src", "town-tool.mjs"), join(tree, "src", "town-tool.mjs"));
-  pinTown(join(tree, "town-clone"), join(tree, "src", "town-pins"));
+  pinTown(join(tree, "town-clone"), join(tree, "town-pins-dev"));
   if (ledger) writeFileSync(join(tree, "town-clone", "WHITE_PAGES", "stamp-ledger.md"), ledgerOf(ledger));
   const sigs = join(dir, "store-sigs.txt");
   writeFileSync(sigs, store.length ? `${store.join("\n")}\n` : "");
@@ -113,7 +114,6 @@ function advance({ args = ["--town", TOWN, "--world", WORLD, "--go"], env = {}, 
   for (const k of ["WORLD2_DB", "PGDATABASE", "STUB_FAIL", "STUB_WORLD_PEELED", "STUB_REAL_TOWN", "STUB_REAL_WORLD", "STUB_CHAIN_PRINTS"]) delete base[k];
   const merged = {
     ...base,
-    TOWN_PINS_DIR: "", // POS-994: the stand-in dev tree's own pins (srv-dev/src/town-pins), never the suite clone's
     DEV_SEED_ADVANCE_TEST_ROOT: posix(b.tree),
     WORLD2_DB: SANDBOX,
     WORLD2_ENV_FILE: posix(b.creds),
