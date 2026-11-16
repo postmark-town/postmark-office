@@ -28,7 +28,7 @@ import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { mcpWorkerTakes, wantsWorldWrites, wantsEarshot } from "../src/read-workers.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
-import { indexStore } from "./helpers/office-under-test.mjs";
+import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,6 +68,11 @@ before(async () => {
   if (!haveClone) return;
   tmp = mkdtempSync(join(tmpdir(), "pos1064-"));
   IX = await indexStore(fixtureTown());
+  // both keys' houses are declared in the store's registry, so the glance (which reads the house) answers a standing instead of the door's 422
+  await seedRegistry(IX.store, { schema_version: 1, note: "invented for POS-1064", households: {
+    keemin: { name: "Keemin", since: "2026-08-01", declared_by: "wright", accounts: [{ login: "keemin-gh", id: 8201 }], residents: ["wright"] },
+    limenhouse: { name: "Limen House", since: "2026-08-01", declared_by: "limen", accounts: [{ login: "limen-gh", id: 8202 }], residents: ["limen"] },
+  } }, { wright: { login: "keemin-gh", id: 8201 }, limen: { login: "limen-gh", id: 8202 } });
   const { openDynamic } = await import("../src/dynamic-store.mjs");
   openDynamic(join(tmp, "dynamic.db")).close();
   const { openOauthDb } = await import("../src/oauth.mjs");
@@ -111,8 +116,7 @@ test("§ 2 a real office answers the household's reads on its worker, for the ca
       const r = await o.post(KEY, "household", args);
       assert.equal(r.status, 200, `${label}: ${r.text.slice(0, 300)}`);
       assert.equal(r.reader, "worker-0", `${label} was answered on the main thread`);
-      // the fixture's house is not declared in the registry, so its glance is the door's own 422 ("which household?"): still a worker's answer
-      if (label !== "glance") assert.ok(r.answer && !r.answer.error, `${label}: ${r.text.slice(0, 300)}`);
+      assert.ok(r.answer && !r.answer.error, `${label}: ${r.text.slice(0, 300)}`);
     }
     const door = await o.post(KEY, "doorstep", {});
     assert.equal(door.reader, "worker-0", "the doorstep apex was answered on the main thread");
@@ -169,6 +173,9 @@ test("§ 3 the standing's world_writes is the main thread's live budget, handed 
     assert.deepEqual(viaWorker.answer.world_writes, mainSays.world_writes, `the worker said ${JSON.stringify(viaWorker.answer.world_writes)} (before the act: ${JSON.stringify(before)}), the bouncer says ${JSON.stringify(mainSays.world_writes)}`);
     const glance = await o.post(KEY, "household", { read_shape: "v2" });
     assert.equal(glance.reader, "worker-0");
-    assert.deepEqual(glance.answer?.standing?.world_writes ?? mainSays.world_writes, mainSays.world_writes, "the glance's standing carries the same number");
+    assert.ok(glance.answer && !glance.answer.error, `the glance did not answer: ${glance.text.slice(0, 300)}`);
+    // the glance states the standing's budget as "used/cap this hour" under law.world_writes
+    const w = mainSays.world_writes;
+    assert.equal(glance.answer.law?.world_writes, `${w.used}/${w.cap} this ${w.per ?? "hour"}`, "the glance carries the main thread's number (absent is a failure, not a pass)");
   } finally { await o.stop(); }
 });
