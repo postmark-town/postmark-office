@@ -15,9 +15,9 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { markRecord } from "../src/mark-record.mjs";
@@ -27,7 +27,7 @@ const skip = (!WORLD && NO_WORLD) || false;
 const litter = [];
 after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force: true }); } catch { /* litter */ } } });
 
-const repo = mkdtempSync(join(tmpdir(), "wld27-git-drop-")); litter.push(repo);
+const repo = tempDir("wld27-git-drop-"); litter.push(repo);
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const commit = (msg) => { git("add", "-A", "WORLD", "tools"); git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", msg); };
