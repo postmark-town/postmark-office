@@ -180,10 +180,11 @@ jobs:
       # across its run and reds when one appears, and a shard's own TAP landing in
       # the tree beside it is exactly that (CI's first run).
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
-        # the sparse guard in every process of the suite (POS-652); on this step
+        # the sparse guard (POS-652) and the suite clone's town pins (POS-994,
+        # test/helpers/town-pins-env.mjs) in every process of the suite; on this step
         # only, so the actions' own node never loads a file from the checkout
         env:
-          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs
+          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs --import=${{ github.workspace }}/test/helpers/town-pins-env.mjs
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the
