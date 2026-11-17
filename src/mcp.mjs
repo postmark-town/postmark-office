@@ -1371,7 +1371,7 @@ export function handleMcp(req, res, ctx) {
     if (ctx.req?.tel) {
       const last = messages.findLast((m) => m?.method === "tools/call");
       const name = last?.params?.name;
-      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments) : null;
+      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments, { door: "mcp" }) : null;
     }
     // The bouncer works in contract verbs, not the MCP transport's always-POST
     // method. Preflight before dispatch so a throttle is an honest HTTP 429 with
