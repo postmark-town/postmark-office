@@ -639,7 +639,7 @@ test("POS-902 · the finished doorstep's stakes: the newest few on BOTH skins, t
       assert.equal(left.length, marks.length - DOORSTEP_STAKES, `${skin}: every omitted row is in the continuation`);
       // SAME-FIXTURE SIZES, the original instruments: indent-1 serialized UTF-8 bytes, and compact JSON characters. The base is this very page with the stakes
       // segment as it was before the cap (every row, no preview fields); NOT compressed transfer, NOT today's production.
-      const { limit: _l, shown: _s, total: _t, complete: _c, order: _o, more_note: _m, ...bare } = s;
+      const { limit: _l, offset: _f, shown: _s, total: _t, complete: _c, order: _o, next_offset: _n, more_note: _m, ...bare } = s;
       const baseSeg = { ...bare, args: { handle: "wright" }, rows: whole.rows };
       const base = { ...d, stakes: baseSeg };
       const m = (x) => ({ bytes: Buffer.byteLength(JSON.stringify(x, null, 1), "utf8"), chars: JSON.stringify(x).length });
