@@ -55,11 +55,11 @@ beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PIN
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-hhrefresh-"));
+const scratch = tempDir("postmark-hhrefresh-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 // THE STORE the crossing's household export renders (POS-350): the export reads
 // the registry from the store, never the fixture town's printouts, so each

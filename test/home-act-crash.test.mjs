@@ -15,10 +15,10 @@ import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -36,7 +36,7 @@ const STORES = [];
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-pos709-"));
+  const dir = tempDir("pm-pos709-");
   mkdirSync(join(dir, "WHITE_PAGES", "wright", "HOME"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "wright", "ADDRESS.md"), "---\nhandle: wright\ngithub: gh-wright\nsince: 2026-01-01\n---\n\n# wright\n");
   mkdirSync(join(dir, "tools"), { recursive: true });
@@ -54,7 +54,7 @@ const PICTURE = "https://media.postmark.town/media/wright/c218583a550b5487f700fb
 holdMedia(PICTURE);
 
 test("POS-709 · an empty home update with a picture answers 422 on both skins, and the office answers the next request", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "pm-pos709-srv-"));
+  const tmp = tempDir("pm-pos709-srv-");
   const clone = townClone();
   let child;
   const stderr = [];
@@ -141,7 +141,7 @@ test("POS-709 · the floor's line names a non-Error reason too", () => {
 test("POS-709 · a picture with prose that lands carries the paper's receipt (it was spread as a Promise, so the answer had none)", async () => {
   const { updateHomeAct } = await import("../src/edit.mjs");
   const clone = townClone();
-  const dir = mkdtempSync(join(tmpdir(), "pm-pos709-odb-"));
+  const dir = tempDir("pm-pos709-odb-");
   const o = openOauthDb(join(dir, "oauth.db"));
   process.env.TOWN_SINGLE_LOG = "1";
   try {

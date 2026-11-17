@@ -23,9 +23,9 @@ import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994:
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import {
-  appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -46,7 +46,7 @@ const BOT = ["-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid"]
 // ── the fixture: a bare origin and one clone of it, on main ─────────────────
 const homes = [];
 function town(files = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pen-tx-"));
+  const dir = tempDir("pen-tx-");
   homes.push(dir);
   const origin = join(dir, "origin.git");
   const clone = join(dir, "clone");

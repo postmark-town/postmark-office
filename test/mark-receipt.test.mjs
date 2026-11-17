@@ -17,9 +17,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { receiptFrom, causeOf, checkNameOf, CAUSE_WORDS, RECEIPT_CLOCK, settlementThatCarried } from "../src/mark-receipt.mjs";
 
@@ -384,7 +384,7 @@ test("`held` is now reachable ONLY from held_review — the word names one state
 // the `settlement/S<n>` tags that contain that commit. The fixture below is a
 // world repo with three settlements and a mark that landed at the middle one.
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-carried-"));
+const repo = tempDir("postmark-carried-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
@@ -446,7 +446,7 @@ test("a path the repo never held answers null, and does not throw out of a read"
 // Both flags are needed and each fixes a different case: `--follow` fixes the
 // move, oldest-add fixes the re-leave.
 
-const lives = mkdtempSync(join(tmpdir(), "postmark-carried-lives-"));
+const lives = tempDir("postmark-carried-lives-");
 after(() => rmSync(lives, { recursive: true, force: true }));
 const lgit = (...a) => execFileSync("git", ["-C", lives, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const lput = (p, t) => { const f = join(lives, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };

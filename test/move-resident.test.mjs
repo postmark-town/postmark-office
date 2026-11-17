@@ -41,9 +41,9 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 
 import { fixtureTown } from "./fixture.mjs";
@@ -97,7 +97,7 @@ async function town({ houses = HOUSES(), pins = PINS(), ledger = KEYED, berth = 
   const printed = renderPublicRegistry(await loadRegistryRows());
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const dir = mkdtempSync(join(tmpdir(), "pm-move-resident-"));
+  const dir = tempDir("pm-move-resident-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), printed.households);
@@ -122,7 +122,7 @@ async function town({ houses = HOUSES(), pins = PINS(), ledger = KEYED, berth = 
   const signed = lines.map((l, i) => `${l} · sig: ${edSign(null, Buffer.from(seals[i], "utf8"), key).toString("base64url")}`);
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), `# the ledger\n\n${signed.join("\n")}\n`);
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
-  const keyDir = mkdtempSync(join(tmpdir(), "pm-move-resident-pen-"));
+  const keyDir = tempDir("pm-move-resident-pen-");
   dirs.push(keyDir);
   const keyFile = join(keyDir, "stamp-key.pem");
   writeFileSync(keyFile, pem);
@@ -425,7 +425,7 @@ test("M5e · NO HISTORY, NO GUESS (second review, finding 2): a shallow clone af
   const t = await town({ berth: true });
   await assert.rejects(stall(t), (e) => e.code === 503);
   await otherDrainLands(t.dir);
-  const shallowDir = mkdtempSync(join(tmpdir(), "pm-move-resident-shallow-"));
+  const shallowDir = tempDir("pm-move-resident-shallow-");
   dirs.push(shallowDir);
   execFileSync("git", ["clone", "-q", "--depth", "1", `file://${t.dir}`, join(shallowDir, "town")], { encoding: "utf8" });
   const shallow = join(shallowDir, "town");

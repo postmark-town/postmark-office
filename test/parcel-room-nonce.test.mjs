@@ -40,10 +40,10 @@ import { beforeEach as beforeEachPins } from "node:test";
 // starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
 const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const { startStore } = await import("./helpers/embedded-store.mjs");
 const { __setPoolForTest } = await import("../src/world2-pen.mjs");
@@ -95,7 +95,7 @@ const REGISTRY = { households: {
 const PAUSE = "PARCEL_ROOM_NONCE_TEST_PAUSE_DIR";
 
 function standInTown({ purse = 200 } = {}) {
-  const town = mkdtempSync(join(tmpdir(), "parcel-room-nonce-"));
+  const town = tempDir("parcel-room-nonce-");
   mkdirSync(join(town, "tools"), { recursive: true });
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(town, "tools", "households.json"), JSON.stringify(REGISTRY));
@@ -145,7 +145,7 @@ const commitsIn = (town) => Number(execFileSync("git", ["-C", town, "rev-list", 
 
 /** Run `fn` with the exec's env set (the stand-in key, a lock file outside the town, no push), restoring it after. */
 async function withExecEnv(town, extra, fn) {
-  const lockDir = mkdtempSync(join(tmpdir(), "parcel-room-nonce-lock-"));
+  const lockDir = tempDir("parcel-room-nonce-lock-");
   const set = { STAMP_KEY: join(town, "stamp-key.pem"), BOT_NAME: "t", BOT_EMAIL: "t@t", TOWN_PUSH: undefined, TOWN_LOCK: join(lockDir, "town.lock"), ...extra };
   const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
   for (const [k, v] of Object.entries(set)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -158,7 +158,7 @@ async function withExecEnv(town, extra, fn) {
 
 // A world whose newest blessing carries the parcel law, so the door opens (parcel-room.test.mjs § 11, F2).
 function lawWorld() {
-  const repo = mkdtempSync(join(tmpdir(), "parcel-room-nonce-world-"));
+  const repo = tempDir("parcel-room-nonce-world-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
   g("init", "-q", "-b", "main");
@@ -236,8 +236,8 @@ test("1 · the receipt outlives the purse and the cap: a retry once the payer is
 // shares no in-flight map with the first, and its entry quote would read room 2
 // as bought and sell room 3. The key is what holds.
 async function overlap(town, nonce) {
-  const pause = mkdtempSync(join(tmpdir(), "parcel-room-nonce-pause-"));
-  const lock2 = mkdtempSync(join(tmpdir(), "parcel-room-nonce-lock2-"));
+  const pause = tempDir("parcel-room-nonce-pause-");
+  const lock2 = tempDir("parcel-room-nonce-lock2-");
   try {
     return await withExecEnv(town, { [PAUSE]: pause }, async () => {
       const a = doorA(town, { from: "ash", ...(nonce ? { nonce } : {}) }, ROWAN, on("2026-11-03"));

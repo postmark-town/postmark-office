@@ -16,9 +16,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
@@ -38,7 +38,7 @@ const PNG_1x1 = Buffer.from(
 
 // ── the fixture clone ────────────────────────────────────────────────────────
 
-const repo = mkdtempSync(join(tmpdir(), "pm-world-fixture-"));
+const repo = tempDir("pm-world-fixture-");
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 
 if (SOURCE_WORLD) {

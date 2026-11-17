@@ -54,10 +54,11 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 import { fixtureTown, emptyTown, put, probeOfTown } from "./fixture.mjs";
@@ -93,7 +94,7 @@ const ITS_OWN_THREAD = "limen-2026-07-01-to-wright-the-gap"; // also the `conver
 const trash = [];
 after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
-const dir = mkdtempSync(join(tmpdir(), "pm-thread-"));
+const dir = tempDir("pm-thread-");
 const town = fixtureTown();
 // The checks this file calls in-process read their town index from a store
 // seeded from this fixture (POS-268, office-under-test.mjs).
@@ -115,7 +116,7 @@ const logDb = () => {
 
 /** A town clone the envelope pre-flight can scan and the pen can commit into. */
 function mailClone() {
-  const d = mkdtempSync(join(tmpdir(), "pm-thread-town-"));
+  const d = tempDir("pm-thread-town-");
   trash.push(d);
   for (const h of ["wright", "limen", "postmaster"]) {
     mkdirSync(join(d, "WHITE_PAGES", h, "outbox"), { recursive: true });
@@ -392,7 +393,7 @@ const REST_KEY = "thread-test-key";
 let child, restTmp;
 
 before(async () => {
-  restTmp = mkdtempSync(join(tmpdir(), "pm-thread-rest-"));
+  restTmp = tempDir("pm-thread-rest-");
   const p = fixtureTown();
   const IX_ENV = await storeFor(p);
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", seedStaticKeys(join(restTmp, "oauth.db"), `${REST_KEY}=keemin:wright`)], {

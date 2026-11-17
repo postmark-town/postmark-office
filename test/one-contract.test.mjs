@@ -34,10 +34,10 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, existsSync, statSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { editClone, fixtureTown } from "./fixture.mjs";
 import { awaitListening } from "./spawn-office.mjs";
@@ -49,7 +49,7 @@ const KEY = "onecontractkey";
 let offices = 0; // each office's store is a database of its own
 
 async function office(extraEnv = {}) {
-  const tmp = mkdtempSync(join(tmpdir(), "postmark-one-contract-"));
+  const tmp = tempDir("postmark-one-contract-");
   const town = fixtureTown();
   // the office reads its town index from a store seeded from this fixture
   // (POS-268, office-under-test.mjs), unless it is asked to have no record at all

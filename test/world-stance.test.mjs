@@ -17,9 +17,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
 import { CAP_BYTES, pageStances, textBytes } from "../src/household-read-page.mjs";   // the consumer's own unit and page, read-only here (CORE-95)
@@ -41,7 +41,7 @@ import {
 import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool-stub.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-stance-"));
+const scratch = tempDir("postmark-stance-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────

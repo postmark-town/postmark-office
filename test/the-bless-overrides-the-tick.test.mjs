@@ -23,9 +23,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -38,8 +38,8 @@ import {
   newestSettlementFromRefLines, NEWEST_SETTLEMENT_FORMAT, nextSettlementAttemptAt, SETTLEMENT_HOURS_UTC,
 } from "../src/settlements.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-blessed-"));
-const cache = mkdtempSync(join(tmpdir(), "postmark-blessed-engine-"));
+const repo = tempDir("postmark-blessed-");
+const cache = tempDir("postmark-blessed-engine-");
 after(() => { rmSync(repo, { recursive: true, force: true }); rmSync(cache, { recursive: true, force: true }); });
 
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -213,7 +213,7 @@ test("HYDRATE --ref blessed: the store stands on the blessed sha and stamps the 
   const b = blessed(WORLD);
   if (b.source !== "settlement") return t.skip("WORLD_CLONE carries no settlement tag");
   // The hydration's rows (--rows-out): the meta the store's snapshot is keyed by.
-  const db = join(mkdtempSync(join(tmpdir(), "postmark-blessed-db-")), "rows.json");
+  const db = join(tempDir("postmark-blessed-db-"), "rows.json");
   execFileSync(process.execPath, ["src/world-hydrate.mjs", "--world", WORLD, "--ref", "blessed", "--no-db", "--rows-out", db, "--no-gexf", "--no-lints"],
     { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
   const meta = Object.fromEntries(JSON.parse(readFileSync(db, "utf8")).meta.map((r) => [r.key, r.value]));

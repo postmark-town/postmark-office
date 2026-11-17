@@ -24,8 +24,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, statSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -40,7 +40,7 @@ import { graphSnapshotFromTables, writeGraphSnapshot } from "../world2/tools/gra
 import { reloadWorldGraph, resetWorldGraph, worldGraphSnapshot, worldGraphStanding } from "../src/world-graph-snapshot.mjs";
 
 const pglite = await loadPglite();
-const dir = mkdtempSync(join(tmpdir(), "graph-parity-"));
+const dir = tempDir("graph-parity-");
 after(() => { resetWorldGraph(); try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* litter */ } });
 
 // ── the comparison ───────────────────────────────────────────────────────────
