@@ -37,9 +37,18 @@
 //   · The words are the refusal's own `defect` and `hint`, cut. They can echo what
 //     the resident sent, and they are kept for the resident alone.
 //
-// THE RECORD NEVER CHANGES AN ANSWER. It is taken after the answer is built, in the
-// background, and a store that is absent, unreachable or not yet migrated costs the
-// record and nothing else: the failure is said once in the log.
+// THE RECORD NEVER CHANGES AN ANSWER, AND NEITHER HOOK EVER THROWS. `noteMcpRefusal`
+// and `noteRestRefusal` sit on the only two places an answer leaves, and a call is a
+// caller's JSON (`{"toString":1}` throws when stringified), so both are total: a name
+// comes only from a string or a number, and each body is inside a try/catch that says
+// the failure once a minute and returns. `recordRefusal` never throws either. The record
+// is taken after the answer is built, in the background, at most INFLIGHT_MAX at once
+// (a burst keeps the first few and counts the rest), and a store that is absent,
+// unreachable or not yet migrated costs the record and nothing else.
+//
+// WHO READS A ROW: the resident's own key. A key reads the rows of the residents it
+// holds (a row names its resident; a row no resident could be named for, from a key
+// holding several, is read only by a key that holds all of those residents). Not the house's.
 
 import { officeRead, officeWrite } from "./world2-pen.mjs";
 import { keyHouseholdOf } from "./world2-claims.mjs";
@@ -64,17 +73,21 @@ export const TARGET_FIELDS = Object.freeze([
   "event", "pot", "quest", "stance",
 ]);
 
-export const REFUSALS_NOTE = `private to your household: the town keeps no public record of a refusal. Each row is an act a door refused, who tried it, on what, when and the refusal's own words; rows are kept ${RETENTION_DAYS} days`;
+export const REFUSALS_NOTE = `private to the residents your key holds: the town keeps no public record of a refusal. Each row is an act a door refused, who tried it, on what, when and the refusal's own words; rows are kept ${RETENTION_DAYS} days`;
 
 // ── the shape of what is recorded ────────────────────────────────────────────
 
-const cut = (v, n) => (v == null ? null : String(v).slice(0, n));
+// A NAME ONLY EVER COMES FROM A STRING OR A NUMBER. A call is a caller's JSON: `{"toString":1}` throws when
+// it is stringified, and a hook that threw would keep the answer from leaving (POS-1003, the review of #1074).
+const nameOf = (v) => (typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : null);
+const cut = (v, n) => { const t = nameOf(v); return t == null ? null : t.slice(0, n); };
 const isObj = (v) => v != null && typeof v === "object" && !Array.isArray(v);
 
 /** Which act, by name: an apex's `do:` as `<apex>:<do>`, a flat tool by its own name, a REST route by its method and path. */
 export function actOf(name, args) {
-  const apex = ["world", "household", "town"].includes(name) && isObj(args) && args.do != null && args.do !== "";
-  const raw = apex ? `${name}:${args.do}` : String(name ?? "");
+  const did = isObj(args) ? nameOf(args.do) : null;
+  const apex = ["world", "household", "town"].includes(name) && did != null && did !== "";
+  const raw = apex ? `${name}:${did}` : (nameOf(name) ?? "");
   return raw.replace(/[^A-Za-z0-9_:\-./ {}]/g, "?").slice(0, ACT_MAX);
 }
 
@@ -110,10 +123,13 @@ export function refusalInReply(reply) {
   return { code: isHttpStatus(body.code) ? body.code : null, defect: cut(body.defect, DEFECT_MAX), hint: cut(body.hint, HINT_MAX) };
 }
 
+/** The residents a key holds, as names. */
+export const heldHandles = (key) => [...(key?.handles ?? [])].map(nameOf).filter((h) => h != null && h !== "");
+
 /** The resident who tried: the call's own `handle` when the key holds it, else the key's only resident. */
 export function actorHandle(key, args) {
-  const held = [...(key?.handles ?? [])].map(String);
-  const named = String((isObj(args?.args) && args.args.handle) || (isObj(args) && args.handle) || "").trim();
+  const held = heldHandles(key);
+  const named = (nameOf(isObj(args?.args) ? args.args.handle : null) || nameOf(isObj(args) ? args.handle : null) || "").trim();
   if (named && held.includes(named)) return named;
   return held.length === 1 ? held[0] : null;
 }
@@ -124,9 +140,13 @@ const PRUNE_EVERY_MS = 3_600_000;
 let lastPrune = 0;
 let absentSaid = false;
 const inflight = new Set();
+let skipped = 0;
+/** How many refusals are kept at once (the pen's pool holds three connections). */
+export const INFLIGHT_MAX = 2;
+const HELD_MAX = 20;
 
-/** Test seam: forget the prune clock and the said-once flag. */
-export function __resetForTest() { lastPrune = 0; absentSaid = false; inflight.clear(); }
+/** Test seam: forget the prune clock, the said-once flags and the counts. */
+export function __resetForTest() { lastPrune = 0; absentSaid = false; skipped = 0; lastSaid = 0; inflight.clear(); }
 
 const isMissingTable = (e) => e?.code === "42P01" || e?.code === "42883";
 
@@ -143,9 +163,9 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
     if (!mine) return { recorded: false, why: "no household" };
     await officeWrite(async (c) => {
       await c.query(
-        `INSERT INTO refused_acts (household, handle, door, act, target, code, defect, hint)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
-        [mine, rec.handle ?? null, rec.door === "rest" ? "rest" : "mcp", cut(rec.act, ACT_MAX) || "?",
+        `INSERT INTO refused_acts (household, handle, held, door, act, target, code, defect, hint)
+         VALUES ($1, $2, $3::text[], $4, $5, $6::jsonb, $7, $8, $9)`,
+        [mine, cut(rec.handle, 80), heldHandles(rec.key).slice(0, HELD_MAX).map((h) => h.slice(0, 80)), rec.door === "rest" ? "rest" : "mcp", cut(rec.act, ACT_MAX) || "?",
          JSON.stringify(rec.target ?? {}), rec.code ?? null, cut(rec.defect, DEFECT_MAX), cut(rec.hint, HINT_MAX)]);
     }, { env, household: mine });
     if (now() - lastPrune >= PRUNE_EVERY_MS) {
@@ -161,31 +181,51 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
     const why = e?.name === "NoRecordError" ? "the office is pointed at no record"
       : isMissingTable(e) ? "refused_acts is not on this store yet (migration 098)"
       : "the store could not take the write";
-    if (!known) console.error(`[office] refusal log: a refusal was not kept (${String(e?.message ?? e).slice(0, 160)})`);
+    if (!known) saidAtMost(`a refusal was not kept (${cut(e?.message, 160) ?? "an error with no message"})`);
     else if (!absentSaid) { absentSaid = true; console.error(`[office] refusal log: a refusal was not kept (${why})`); }
     return { recorded: false, why };
   }
 }
 
-/** Fire and forget: keep a refusal in the background, and let a test wait for it (`refusalLogSettled`). */
+/** The log hears an unexpected failure at most once a minute, so a saturated pool is one line and not one per refusal. */
+let lastSaid = 0;
+function saidAtMost(what) {
+  const t = Date.now();
+  if (t - lastSaid < 60_000) return;
+  lastSaid = t;
+  try { console.error(`[office] refusal log: ${what}`); } catch { /* a log that cannot be written is not the answer's concern */ }
+}
+
+/**
+ * Fire and forget: keep a refusal in the background, and let a test wait for it (`refusalLogSettled`).
+ * AT MOST INFLIGHT_MAX AT ONCE: each record takes the pen three times, the pen's pool holds three
+ * connections and a real act waits in the same line, so a burst keeps the first few and counts the
+ * rest (`refusalLogSkipped`), said in the log with the next unexpected failure. A skipped refusal is
+ * the one cost of a burst; no act is slowed by it.
+ */
 export function noteRefusal(rec, opts) {
+  if (inflight.size >= INFLIGHT_MAX) { skipped += 1; saidAtMost(`${skipped} refusals skipped while ${INFLIGHT_MAX} were being kept (a burst)`); return; }
   const p = recordRefusal(rec, opts).finally(() => inflight.delete(p));
   inflight.add(p);
 }
 export const refusalLogSettled = () => Promise.all([...inflight]);
+export const refusalLogSkipped = () => skipped;
 
 /**
  * The MCP door's side: given the call and the answer about to be sent, keep the
  * refusal when it is an act's. `msg` is the JSON-RPC message, `reply` its answer.
  */
 export function noteMcpRefusal(msg, ctx, reply, { writeShaped }) {
-  if (msg?.method !== "tools/call" || !ctx?.key) return;
-  const name = msg.params?.name;
-  const args = msg.params?.arguments;
-  if (!writeShaped(name, args)) return;
-  const refused = refusalInReply(reply);
-  if (!refused) return;
-  noteRefusal({ key: ctx.key, door: "mcp", act: actOf(name, args), target: targetOf(args), handle: actorHandle(ctx.key, args), ...refused });
+  // TOTAL: this runs on the only place an MCP answer leaves, so it never throws (a call is a caller's JSON).
+  try {
+    if (msg?.method !== "tools/call" || !ctx?.key) return;
+    const name = msg.params?.name;
+    const args = msg.params?.arguments;
+    if (!writeShaped(name, args)) return;
+    const refused = refusalInReply(reply);
+    if (!refused) return;
+    noteRefusal({ key: ctx.key, door: "mcp", act: actOf(name, args), target: targetOf(args), handle: actorHandle(ctx.key, args), ...refused });
+  } catch (e) { saidAtMost(`the MCP hook could not read a call (${cut(e?.message, 120) ?? "no message"})`); }
 }
 
 /**
@@ -194,15 +234,18 @@ export function noteMcpRefusal(msg, ctx, reply, { writeShaped }) {
  * stamps nothing and is named by its method and path.
  */
 export function noteRestRefusal(req, code, body) {
-  const method = String(req?.method ?? "GET");
-  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
-  const key = req?.tel?.key;
-  if (!key || !isObj(body) || body.error !== "bounce") return;
-  const staged = req.tel.act;
-  if (!staged && req.tel.call) return; // an apex route's read (no `do:`) is not an act
-  const act = staged ? actOf(staged.name, staged.args) : `${method} ${String(req.tel.path ?? "")}`.slice(0, ACT_MAX);
-  noteRefusal({ key, door: "rest", act, target: targetOf(staged?.args), handle: actorHandle(key, staged?.args),
-    code: isHttpStatus(code) ? code : null, defect: cut(body.defect, DEFECT_MAX), hint: cut(body.hint, HINT_MAX) });
+  // TOTAL: this runs inside `j`, the only writer of a REST answer, so it never throws (a call is a caller's JSON).
+  try {
+    const method = nameOf(req?.method) ?? "GET";
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+    const key = req?.tel?.key;
+    if (!key || !isObj(body) || body.error !== "bounce") return;
+    const staged = req.tel.act;
+    if (!staged && req.tel.call) return; // an apex route's read (no `do:`) is not an act
+    const act = staged ? actOf(staged.name, staged.args) : `${method} ${nameOf(req.tel.path) ?? ""}`.slice(0, ACT_MAX);
+    noteRefusal({ key, door: "rest", act, target: targetOf(staged?.args), handle: actorHandle(key, staged?.args),
+      code: isHttpStatus(code) ? code : null, defect: cut(body.defect, DEFECT_MAX), hint: cut(body.hint, HINT_MAX) });
+  } catch (e) { saidAtMost(`the REST hook could not read a call (${cut(e?.message, 120) ?? "no message"})`); }
 }
 
 // ── the household's read: its own refusals, and nobody else's ───────────────
@@ -219,23 +262,30 @@ export const refusalRow = (r) => ({
 });
 
 /**
- * `household { read: "refusals" }`: the refusals the key's own household has met in
- * the last 90 days, newest first. `handle:` narrows to one of its residents.
+ * `household { read: "refusals" }`: the refusals of the residents this key holds, in
+ * the last 90 days, newest first. `handle:` narrows to one of those residents.
  * An office whose store has not taken 098 says so rather than answering none.
  */
 export async function readOwnRefusals(key, { limit, offset, handle } = {}, { env = process.env } = {}) {
   const lim = Math.min(READ_MAX, Math.max(1, Math.trunc(Number(limit)) || READ_DEFAULT));
   const off = Math.max(0, Math.trunc(Number(offset)) || 0);
-  const named = handle == null || handle === "" ? null : String(handle).trim();
-  if (named && !(key?.handles ?? new Set()).has(named))
-    throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${[...(key?.handles ?? [])].join(", ") || "no resident"}`);
+  const named = nameOf(handle)?.trim() || null;
+  const held = heldHandles(key);
+  if (named && !held.includes(named))
+    throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
+  if (!held.length) throw refuse(403, "refusals are a resident's", "your key holds no resident");
   try {
     const mine = await officeRead(async (c) => (await keyHouseholdOf(c, key)).household, { env, by: "readOwnRefusals" });
     if (!mine) throw refuse(403, "refusals are a household's", "your key is in no household");
+    // THE RESIDENT'S OWN (the ruling: "their own … and nobody else's"; letter notes ride the key that holds the resident the same way, POS-730):
+    // a row whose resident the key holds, or a row no resident could be named for (a key holding several, none named) that a key
+    // holding every resident the filing key held. A key holding only a2 never reads a1's tries.
     const rows = await officeWrite(async (c) => (await c.query(
       `SELECT at, act, target, handle, door, code, defect, hint FROM refused_acts
-        WHERE household = $1 AND at > now() - make_interval(days => $2) AND ($3::text IS NULL OR handle = $3)
-        ORDER BY at DESC, id DESC LIMIT $4 OFFSET $5`, [mine, RETENTION_DAYS, named, lim + 1, off])).rows, { env, household: mine });
+        WHERE household = $1 AND at > now() - make_interval(days => $2)
+          AND ((handle = ANY($3::text[])) OR (handle IS NULL AND cardinality(held) > 0 AND held <@ $3::text[]))
+          AND ($4::text IS NULL OR handle = $4)
+        ORDER BY at DESC, id DESC LIMIT $5 OFFSET $6`, [mine, RETENTION_DAYS, named ? [named] : held, named, lim + 1, off])).rows, { env, household: mine });
     const more = rows.length > lim;
     return { household: mine, refusals: rows.slice(0, lim).map(refusalRow), count: Math.min(rows.length, lim),
       ...(more ? { more: true, next_offset: off + lim, more_note: `more refusals stand — call again with offset: ${off + lim}` } : {}), kept_days: RETENTION_DAYS, note: REFUSALS_NOTE };

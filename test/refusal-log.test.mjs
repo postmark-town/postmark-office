@@ -193,6 +193,43 @@ test("CONTROL, the writer is live and keeps only refused acts: a refused read, a
   assert.equal((await rowsKept()).length, 1);
 });
 
+// ── 2b · NEITHER HOOK EVER THROWS (the review of #1074, finding 1) ───────────
+
+const ODD = JSON.parse('{"toString":1}');   // a caller's JSON that throws when it is stringified
+const PLAIN = [["a hostile `do`", { do: ODD }], ["a hostile `handle`", { do: "letter-note", args: { letter: "no-such-letter", state: "no-reply", handle: ODD } }]];
+
+test("a call whose `do` or `handle` will not stringify is answered as it always was: the MCP door", { skip }, async () => {
+  await fresh(); __resetForTest();
+  const got = {};
+  for (const [what, args] of PLAIN) {
+    const r = await Promise.race([mcpCall("household", args, keyA), new Promise((ok) => setTimeout(() => ok({ none: true }), 6000))]);
+    assert.equal(r.none, undefined, `${what}: an answer arrives`);
+    assert.equal(r.isError, true, `${what}: ${JSON.stringify(r.answer)}`);
+    got[what] = r.answer.code ?? null;
+  }
+  // the base's answer is the one with no hook in front of it: `callTool` for the act, the door's own validator for a `do` that is no string
+  const { callTool } = await import("../src/mcp.mjs");
+  const base = await callTool("household", PLAIN[1][1], { key: keyA });
+  assert.equal(got["a hostile `handle`"], base.code, `the answer the act gives with no hook: ${JSON.stringify(base)}`);
+  assert.equal(got["a hostile `do`"], null, "the validator's bounce names no code, as before");
+  assert.deepEqual((await rowsKept()).map((r) => r.act).sort(), ["household", "household:letter-note"],
+    "both refusals are kept, each under the name that is a name: a `do` that is no string leaves the apex's own name, and a `handle` that is no string is dropped");
+});
+
+// ── 2c · AT MOST INFLIGHT_MAX AT ONCE ────────────────────────────────────────
+
+test("a burst keeps the first few and counts the rest: no more than INFLIGHT_MAX records are in flight", { skip }, async () => {
+  await fresh(); __resetForTest();
+  const { noteRefusal, refusalLogSkipped, INFLIGHT_MAX } = await import("../src/refusal-log.mjs");
+  for (let i = 0; i < INFLIGHT_MAX + 5; i++) noteRefusal({ key: keyA, door: "mcp", act: `world:burst-${i}`, target: {}, code: 403, defect: "d", hint: null });
+  assert.equal(refusalLogSkipped(), 5, "the five over the cap were counted, not queued");
+  await refusalLogSettled();
+  assert.equal((await rowsKept()).length, INFLIGHT_MAX, "and only the first INFLIGHT_MAX were written");
+  noteRefusal({ key: keyA, door: "mcp", act: "world:after", target: {}, code: 403, defect: "d", hint: null });
+  await refusalLogSettled();
+  assert.equal((await rowsKept()).length, INFLIGHT_MAX + 1, "the cap frees as records settle");
+});
+
 // ── 3 · whose, and nobody else's ─────────────────────────────────────────────
 
 test("a household reads its own refusals, newest first, and nobody else's; `handle:` narrows to one resident", { skip }, async () => {
@@ -224,6 +261,26 @@ test("a household reads its own refusals, newest first, and nobody else's; `hand
   assert.equal((await rowsKept()).length, 3, "reading refusals does not make a refusal");
 });
 
+test("a resident's own, and nobody else's: a key holding only a2 never reads a1's tries, words included; a try no resident was named for is read only by a key holding all the filing key's residents", { skip }, async () => {
+  await fresh(); __resetForTest();
+  await mcpCall("household", { do: "letter-note", args: { letter: "a1-try", state: "no-reply", handle: "a1" } }, keyA);
+  await mcpCall("household", { do: "letter-note", args: { letter: "a2-try", state: "no-reply", handle: "a2" } }, keyA);
+  await mcpCall("household", { do: "letter-note", args: { letter: "which-one-try", state: "no-reply" } }, keyA);   // keyA holds two and names none
+  const kept = await rowsKept();
+  assert.deepEqual(kept.map((r) => r.handle), ["a1", "a2", null]);
+  const letters = async (key, o) => (await readOwnRefusals(key, o)).refusals.map((x) => x.target.letter).sort();
+  assert.deepEqual(await letters(keyA), ["a1-try", "a2-try", "which-one-try"], "the key that holds both reads all three");
+  assert.deepEqual(await letters(keyA2), ["a2-try"], "the key that holds only a2 reads only a2's");
+  const key1 = { household: "the-aa-house", handles: new Set(["a1"]) };
+  assert.deepEqual(await letters(key1), ["a1-try"]);
+  assert.ok(!JSON.stringify(await readOwnRefusals(keyA2)).includes("a1-try"), "a1's try is in none of a2's answer");
+  await assert.rejects(readOwnRefusals(keyA2, { handle: "a1" }), (e) => e.code === 403, "naming a resident the key does not hold reads nothing");
+  await assert.rejects(readOwnRefusals({ household: "the-aa-house", handles: new Set() }), (e) => e.code === 403, "a key holding no resident reads nothing");
+  // and through the door, as the key that holds a2
+  const viaDoor = await mcpCall("household", { read: "refusals" }, keyA2);
+  assert.deepEqual(viaDoor.answer.refusals.map((x) => x.target.letter), ["a2-try"]);
+});
+
 test("the row policy: a household's rows are invisible to another's, to a transaction that declared none, and to the export role; office_api cannot edit or delete", { skip }, async () => {
   await fresh();
   await asOwner("INSERT INTO refused_acts (household, door, act, code, defect) VALUES ($1, 'mcp', 'world:give', 403, 'mine'), ($2, 'mcp', 'world:give', 403, 'theirs')", [A, B]);
@@ -243,10 +300,10 @@ test("the row policy: a household's rows are invisible to another's, to a transa
 
 test("ninety days: a row past it is never read and is deleted by the office, any household's; a row inside the window stays", { skip }, async () => {
   await fresh(); __resetForTest();
-  await asOwner(`INSERT INTO refused_acts (household, door, act, code, defect, at) VALUES
-    ($1, 'mcp', 'world:give', 403, 'a-89-days', now() - interval '89 days'),
-    ($1, 'mcp', 'world:give', 403, 'a-91-days', now() - interval '91 days'),
-    ($2, 'mcp', 'world:give', 403, 'b-120-days', now() - interval '120 days')`, [A, B]);
+  await asOwner(`INSERT INTO refused_acts (household, handle, door, act, code, defect, at) VALUES
+    ($1, 'a1', 'mcp', 'world:give', 403, 'a-89-days', now() - interval '89 days'),
+    ($1, 'a1', 'mcp', 'world:give', 403, 'a-91-days', now() - interval '91 days'),
+    ($2, 'b1', 'mcp', 'world:give', 403, 'b-120-days', now() - interval '120 days')`, [A, B]);
   assert.deepEqual((await readOwnRefusals(keyA)).refusals.map((x) => x.defect), ["a-89-days"], "the 91-day row is not read, though it is still in the table");
   assert.deepEqual((await readOwnRefusals(keyB)).refusals, [], "nor is B's");
   assert.equal((await rowsKept()).length, 3);
@@ -328,6 +385,19 @@ test("the real office's j keeps a refused write and its apex act, and not a refu
   const back = await send("POST", "/household", { read: "refusals" });
   assert.equal(back.status, 200, JSON.stringify(back.body));
   assert.deepEqual(back.body.refusals.map((x) => x.act).sort(), ["POST /letters", "world:no-such-act"]);
+  // THE REST HOOK NEVER THROWS (the review of #1074): a `do` or `handle` that will not stringify is still answered, as the base answered it
+  const hostile = async (body) => Promise.race([send("POST", "/household", body), new Promise((ok) => setTimeout(() => ok({ none: true }), 6000))]);
+  const odd = await hostile(JSON.parse('{"do":{"toString":1}}'));
+  assert.equal(odd.none, undefined, "a hostile `do`: an answer arrives");
+  assert.equal(odd.status, 500, `the base's 500 bounce: ${JSON.stringify(odd.body)}`);
+  const oddHandle = await hostile(JSON.parse('{"do":"letter-note","args":{"letter":"no-such-letter","state":"no-reply","handle":{"toString":1}}}'));
+  assert.equal(oddHandle.none, undefined, "a hostile `handle`: an answer arrives");
+  const { callTool } = await import("../src/mcp.mjs");
+  const baseHandle = await callTool("household", { do: "letter-note", args: { letter: "no-such-letter", state: "no-reply", handle: JSON.parse('{"toString":1}') } }, { key: { household: "fixture-house", handles: new Set(["wright"]) } });
+  assert.equal(oddHandle.status, baseHandle.code, `the act's own answer with no hook in front of it: ${JSON.stringify(baseHandle)}`);
+  await refusalLogSettled();
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((await rowsKept()).length, 3, "the 500 kept nothing; the refused act with the hostile handle kept one row (the handle dropped, being no name)");
   office.child.kill();
 });
 

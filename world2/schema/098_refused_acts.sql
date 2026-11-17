@@ -16,6 +16,9 @@
 --
 --   household  the acting household's key as `householdKeyFor` spells it (`hh:<slug>`)
 --   handle     the resident who tried, when the call named one or the key holds one
+--   held       the residents the filing key held (at most 20): who may read a row with no
+--              handle. The office reads a row to a key that holds its handle, or, with no
+--              handle, only when it holds every one of its `held` (src/refusal-log.mjs § readOwnRefusals)
 --   door       `mcp` or `rest`: which door refused
 --   act        which act, by name: `world:give`, `household:send`, `POST /letters`
 --   target     "on what": the call's identifying fields only (an id, a handle, a
@@ -74,7 +77,8 @@ CREATE TABLE IF NOT EXISTS refused_acts (
   id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   household  text NOT NULL,
   handle     text,
-  door       text NOT NULL CHECK (door IN ('mcp', 'rest')),
+  held       text[] NOT NULL DEFAULT '{}',
+  door      text NOT NULL CHECK (door IN ('mcp', 'rest')),
   act        text NOT NULL CHECK (char_length(act) BETWEEN 1 AND 80),
   target     jsonb NOT NULL DEFAULT '{}'::jsonb,
   code       integer,
@@ -115,7 +119,7 @@ GRANT EXECUTE ON FUNCTION refused_acts_prune() TO office_api;
 
 INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
   ('refused_acts', 'source', 'office_api', '{}',
-   'Darko 2026-11-13 (POS-1003, "Private log, own refusals visible"): who tried which act, on what, when, and the refusal''s code and words; kept privately 90 days, never on the public record; a household reads its own; RLS on app.household_keys, office_api only, in no export')
+   'Darko 2026-11-13 (POS-1003, "Private log, own refusals visible"): who tried which act, on what, when, and the refusal''s code and words; kept privately 90 days, never on the public record; a key reads the refusals of the residents it holds; RLS on app.household_keys, office_api only, in no export')
 ON CONFLICT (object) DO NOTHING;
 
 COMMIT;

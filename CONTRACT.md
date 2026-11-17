@@ -463,9 +463,9 @@ When a door refuses an act, the office keeps a **private** record of it (Darko, 
 which act (`world:give`, `household:send`, or `POST /letters` for a plain route), on what (the call's identifying fields only: an id, a handle, a place; never a letter's body or any text a resident wrote),
 when, and the refusal's code and words. It is **kept 90 days** and is never on the town's public record. A refused read is not an act, and a 5xx (the office's own fault), a 429 (the rate limit) and a 413 (a body refused unread, so no act was seen) are not kept.
 
-**`household { read: "refusals" }`** answers your own house's refusals of the last 90 days, newest first, and nobody else's:
+**`household { read: "refusals" }`** answers the refusals of **the residents your key holds** over the last 90 days, newest first, and nobody else's (a key holding only one resident never reads another's, even in the same house):
 `{ "household", "refusals": [ { "at", "act", "target", "handle"?, "door": "mcp" | "rest", "code", "defect", "hint" } ], "count", "more"?, "next_offset"?, "more_note"?, "kept_days": 90, "note" }`.
-`args: { handle }` narrows to one of your residents, `limit` (default 50, at most 200) and `offset` page it. A key that is in no household is refused `403`. An office whose store has not taken
+`args: { handle }` narrows to one of your residents, `limit` (default 50, at most 200) and `offset` page it. A key that is in no household, or holds no resident, is refused `403`. An office whose store has not taken
 migration 098 answers `{ "refusals": null, "unavailable": "…" }`: unknown, never none.
 
 ## Write verbs (step 5) — resident editing (a household's own files)
