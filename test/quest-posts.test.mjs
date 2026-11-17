@@ -324,11 +324,14 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   // POS-732: the list pages (20 a page, `next_offset` while there is more), so the whole class is the walk of its pages.
   // Until then this read answered every quest in one answer.
   assert.equal(page1.total, N_QUESTS);
-  assert.equal(page1.shown, Math.min(N_QUESTS, 20), "a page is 20 (default), or the whole class when it is smaller");
-  assert.equal(page1.limit, 20);
-  assert.equal(page1.complete, N_QUESTS <= 20);
-  assert.equal(page1.next_offset, N_QUESTS > 20 ? 20 : undefined, "`next_offset` while there is more, and `more_note` says how many");
-  assert.equal(typeof page1.more_note, N_QUESTS > 20 ? "string" : "undefined");
+  // a page is 20 by default, held under the connector's cap: a quest row carries its terms and history, so fewer can fit
+  const atMost = Math.min(N_QUESTS, 20);
+  assert.ok(page1.shown >= 1 && page1.shown <= atMost, `a page is at most ${atMost}: ${page1.shown}`);
+  assert.ok(Buffer.byteLength(JSON.stringify(page1, null, 1), "utf8") <= 10000, "held under the connector's cap");
+  assert.equal(page1.limit, page1.shown < atMost ? page1.shown : 20, "`limit` says how many the page carried when the cap cut it");
+  assert.equal(page1.complete, page1.shown === N_QUESTS);
+  assert.equal(page1.next_offset, page1.complete ? undefined : page1.shown, "`next_offset` while there is more");
+  assert.equal(typeof page1.more_note, page1.complete ? "undefined" : "string", "and `more_note` says how many");
   const walked = [...page1.posts];
   for (let at = page1.next_offset; at != null;) {
     const next = await postsAtOffice({ class: "quest", offset: at }, { now: NOW, townClone: TOWN });
@@ -379,6 +382,24 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
 // existing inclusive cutoff ... The post's own state and act history stay as they are: no
 // invented 'closed-by-window' state and no close act." So the terms carry `ends` as a fact
 // for the offer surfaces, an open post stays open and an explicitly closed one stays closed.
+
+// POS-732: the plain REST list (GET /posts) keeps its whole answer when it names no page, for the snapshot readers that make one
+// request and follow nothing (site tools/lib/fetch-town-data.mjs); naming `limit` or `offset` pages it, and an internal reader
+// that wants every post lifts the connector's cap from its pages.
+test("5a · `whole` is the plain REST list: every quest in one answer, paged only when the call names a page", async () => {
+  const { pen } = setup();
+  await seedQuestPosts({ hand: "wright", registry: REGISTRY, now: NOW });
+  const whole = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: TOWN, whole: true });
+  assert.equal(whole.posts.length, N_QUESTS, "every quest, as before POS-732");
+  assert.equal("shown" in whole || "next_offset" in whole, false, "and no page fields: the REST answer's shape did not move");
+  const paged = await postsAtOffice({ class: "quest", limit: "5" }, { now: NOW, townClone: TOWN, whole: true });
+  assert.deepEqual([paged.shown, paged.limit, paged.offset], [5, 5, 0], "a named limit pages the REST list too");
+  const apex = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: TOWN });
+  assert.ok(apex.shown <= 20 && "complete" in apex && "limit" in apex, "while the apex read (no `whole`) pages by default");
+  const lifted = await postsAtOffice({ class: "quest", limit: 200 }, { now: NOW, townClone: TOWN, hold: false });
+  assert.equal(lifted.shown, N_QUESTS, "an internal reader asking 200 with the hold lifted gets the whole class in one page");
+  void pen;
+});
 
 test("5b · a registry row's ends rides the quest post's terms, and the post's state and history are untouched", async () => {
   const { pen, posts } = setup();
