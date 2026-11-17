@@ -28,9 +28,9 @@ import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -55,7 +55,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 const trash = [];
-const tmp = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const tmp = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 const dropAll = () => {
   for (const d of trash.splice(0)) {
     // A leftover temp directory is not a failing falsifier. On Windows a sqlite
