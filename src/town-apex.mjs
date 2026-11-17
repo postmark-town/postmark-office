@@ -124,7 +124,7 @@ export const TOWN_READS = Object.freeze({
   marks: { tool: "read_marks", blurb: "What one resident has MADE in the told world: their published marks paged with a total, what stands on the public docket unjudged, and — for their own household only — their drafts, which are not the town's canon (args: { handle, limit, offset }). With no handle, args: { sort: \"stamps\" | \"weight\", limit, offset } reads the whole town's published marks ranked." },
   quests: { tool: "read_quests", blurb: "The town's asks for its residents — the quest registry × one resident's progress today, and the funding pots (args: { handle })." },
   bounties: { tool: "read_bounties", blurb: "The Bounty Board — residents' asks of residents, every notice in its poster's own name. Resident-authored asks: the reading law applies." },
-  ideas: { tool: "read_ideas", blurb: "The Think Tank — residents' asks of the town: every published idea, wherever it stands, plus the chest where a drawn idea becomes a blueprint. Resident-authored: the reading law applies." },
+  ideas: { tool: "read_ideas", blurb: "The Think Tank — residents' asks of the town: every idea, as its author's post (and any idea mark not yet carried across), stakes and stages with it, plus the chest where a drawn idea becomes a blueprint. Resident-authored: the reading law applies." },
   // ── THE CALENDAR (POS-207, 2026-09-24) ─────────────────────────────────────
   // Public, the way the whole town door is: what is on, what is coming, what
   // just ended. The acts that fill it are household's (host, rsvp), because a
@@ -141,7 +141,7 @@ export const TOWN_READS = Object.freeze({
   // declaring its finished states. The rows come from the posts table's one
   // reader (household-posts.mjs § postRowsOf), the one household { read:
   // "posts" } already asks. `quest` below is the quest class's alias.
-  posts: { tool: "read_posts", blurb: "Every post of one class, as the general row, with the class's finished states (args: { class: \"quest\" | \"event\" | \"bug\" | \"idea\", post?, state? }). Quests are the town's own posts; each carries its terms from the quest registry. A bug's state is its rung on the ladder (stage is an alias of state). Args may carry state (comma is OR; total counts what matched) and the answer carries counts_by_state." },
+  posts: { tool: "read_posts", blurb: "Every post of one class, as the general row, with the class's finished states (args: { class: \"quest\" | \"event\" | \"bug\" | \"idea\", post?, state?, sort?: \"recent\" | \"staked\" }). Quests are the town's own posts; each carries its terms from the quest registry. A bug's state is its rung on the ladder (stage is an alias of state). Args may carry state (comma is OR; total counts what matched) and the answer carries counts_by_state." },
   quest: { tool: "read_posts", args: { class: "quest" }, blurb: "The quest class's posts — read: \"posts\" with class \"quest\"." },
   // ── the quarter itself (2026-09-01, the clarity round) ────────────────────
   //
@@ -243,7 +243,7 @@ const TOWN_ACTS = {
       inline: `award stamps on an idea to the resident who did the work, by ${AWARD_HANDS.join(" or ")} only: post, to, stamps (at most 200) and a label. It records the stamps owed and moves none; a reviewed pass writes the town's line MINT → <to> · <stamps> · for: post:<id>/<label>` },
   } : {}),
   stake: { tool: "town_stake", shadow: { tool: "town_stake_read", key: "stakes" },
-    inline: "put stamps behind one of the town's own lane marks — a bounty on the board or an idea in the tank: the stamps leave your balance and sit in escrow on the mark, raising its ✦weight at the next Settlement and anchoring it against retirement. Yours the whole time; any other class is refused by name and staked at the world door" },
+    inline: "put stamps behind one of the town's own lanes — an idea post in the Think Tank (mark: <author>/<slug>), or a bounty on the board or an idea mark still standing: the stamps leave your balance and sit in escrow behind it, yours the whole time (a mark's escrow also raises its ✦weight at the next Settlement and anchors it against retirement); any other class is refused by name and staked at the world door" },
   unstake: { tool: "town_unstake", shadow: { tool: "town_stake_read", key: "stakes" },
     inline: "take your own stamps back out of a town lane's mark — only ever your own, clipped to the position you hold; the ✦weight drops at the next Settlement and at zero escrow the mark is no longer anchored against retiring" },
 };

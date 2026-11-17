@@ -147,11 +147,20 @@ const hydrate = (r) => ({
   writtenAt: r.written_at, channel: r.channel,
 });
 
-export async function readTownJournal(db, { sinceSeq = 0, limit = null } = {}) {
+/**
+ * The log's rows after `sinceSeq`, oldest first. `cls` and `handle` narrow the read IN THE STORE to one class and one
+ * handle's rows (POS-1057): a reader that wants one sender's letters asked for the whole log and filtered it here, and the
+ * whole log was 71 MB on 2026-11-17 (one such read took 21 s). Left out, every row is read, as before.
+ */
+export async function readTownJournal(db, { sinceSeq = 0, limit = null, cls = null, handle = null } = {}) {
   ensureTownJournal(db);
-  const sql = `SELECT * FROM town_journal WHERE seq > ? ORDER BY seq`
+  const params = [Number(sinceSeq) || 0];
+  let where = "seq > ?";
+  if (cls != null) { where += " AND class = ?"; params.push(String(cls)); }
+  if (handle != null) { where += " AND handle = ?"; params.push(String(handle)); }
+  const sql = `SELECT * FROM town_journal WHERE ${where} ORDER BY seq`
     + (limit != null && Number.isFinite(Number(limit)) ? ` LIMIT ${Math.max(1, Math.floor(Number(limit)))}` : "");
-  return (await asPaper(db).all(sql, Number(sinceSeq) || 0)).map(hydrate);
+  return (await asPaper(db).all(sql, ...params)).map(hydrate);
 }
 
 export const townJournalHead = async (db) => {

@@ -15,14 +15,14 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 const store = await startStore({ db: "votes_test" });
 Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
 after(() => store.stop());
-const { voteList, voteView, doorstepVotes, stakeViaOffice, votesAvailable } = await import("../src/votes.mjs");
+const { voteList, voteView, doorstepVotes, stakeViaOffice, votesAvailable, __ballotStateForTest } = await import("../src/votes.mjs");
 const { ingestBallotFiles } = await import("../src/ballots-store.mjs");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -140,5 +140,31 @@ test("doorstepVotes: open topics with the household's applied + headroom", async
   assert.equal(v[0].topic, "name-vote");
   assert.equal(v[0].candidates.lumen.household_applied, 4, "rei sees wright's stake — same household");
   assert.equal(v[0].candidates.lumen.headroom, 8);
+  rmSync(clone, { recursive: true, force: true });
+});
+
+// POS-1057: the doorstep's votes section folded the town's whole stamp ledger once per resident to read one household key.
+// votes.mjs keeps the fold while the clone's HEAD and the two working-tree files it reads stand.
+// FLIPS, in votes.mjs § ballotStateKey: (a) drop the ledger's stamp from the key → the appended line is not seen (red at
+// "a line appended"); (b) drop the commit from the key → the commit is not seen (red at "a commit").
+test("POS-1057 · the ledger's fold is kept while the clone stands, and a ledger line or a commit moves it", async () => {
+  const clone = await voteClone({ cap: 12 });
+  const { ballotState } = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")).href);
+  const first = await __ballotStateForTest(clone);
+  assert.equal(await __ballotStateForTest(clone), first, "the second read is the first read's fold, not another");
+  assert.equal(first.householdOf("rei", "2026-11-17"), ballotState(clone).householdOf("rei", "2026-11-17"), "and it answers what the engine's own fold answers");
+
+  // a line appended before its commit: the working tree's ledger moved
+  await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 4 }, kKey);
+  const staked = await __ballotStateForTest(clone);
+  assert.notEqual(staked, first, "a line appended to the ledger is a new fold");
+  assert.equal(staked.stakes.length, ballotState(clone).stakes.length, "which holds the stake the old one did not");
+  assert.equal(staked.stakes.length, first.stakes.length + 1);
+
+  // a commit that touches neither file's bytes: HEAD moved
+  const held = await __ballotStateForTest(clone);
+  assert.equal(held, staked, "kept again once it stands");
+  execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "--allow-empty", "-m", "a commit"], { encoding: "utf8" });
+  assert.notEqual(await __ballotStateForTest(clone), held, "a commit is a new fold");
   rmSync(clone, { recursive: true, force: true });
 });

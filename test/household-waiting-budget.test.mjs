@@ -92,6 +92,8 @@ function readersOf({ marks, total = marks.length, cursor = null, extras = {} }) 
       return (extras.keyAsks ?? []).includes(h) ? { cosigned: false, asks_standing: "2026-11-12" } : null;
     },
     likenessNeed: async () => extras.likeness ?? { rows: [] },
+    // POS-1035: the host's recounting invitation, explicitly empty here (intended known none; production reads the record)
+    recountingsAwaiting: async () => extras.recountings ?? [],
   };
 }
 // `connector: true` is mcp.mjs's mark on the connector's own top-level call: only that call is folded (CORE-88)

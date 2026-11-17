@@ -184,11 +184,10 @@ test("D1 · each member is one string: handle · where · last act · what the p
 });
 
 test("D1 · every can act names every field it takes, grouped by intent", async () => {
-  const can = canBlock("resident", "keeminlee");
+  const can = canBlock();
   assert.deepEqual(Object.keys(can), ["answer", "write", "tend", "back", "host", "house"]);
   const text = Object.values(can).join(" · ");
   for (const acts of Object.values(CAN_GROUPS)) for (const act of acts) {
-    if (act === "declare" || act === "begin") { assert.ok(!text.includes(`${act} {`), `${act} is not a resident household's`); continue; }
     assert.ok(text.includes(actFields(act)), `${act} rides with its fields`);
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
@@ -197,10 +196,9 @@ test("D1 · every can act names every field it takes, grouped by intent", async 
   const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
   assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
   assert.match(actFields("profile"), /pronouns\?/);
-  // a berth sees begin and no declare; a caller with no household sees declare and no begin
-  assert.match(canBlock("berth", null).house, /begin \{/);
-  assert.doesNotMatch(canBlock("berth", null).house, /declare \{/);
-  assert.match(canBlock("visitor", null).house, /declare \{/);
+  // CORE-114: no caller's can lists begin, declare or buy-parcel-room: they are offered (the tier's next; first_steps)
+  assert.equal(text.match(/\b(begin|declare|buy-parcel-room) \{/), null);
+  assert.equal(can.house, "add-resident { handle, card }");
 });
 
 test("D2 · the house's human is named by the house, from one function", () => {
@@ -345,6 +343,12 @@ test("happened · D4: hand and for from what the record knows; a route never rec
     assert.ok(!JSON.stringify(r).includes("unknown"));
   }
   assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, after every existing field — never words
+  const reply = happenedRow({ id: "70002", at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay", reply_to: "70001" }, { houseName: "Starforge" });
+  assert.deepEqual(Object.keys(reply), ["at", "hand", "for", "verb", "object", "place", "by", "say"], "the existing fields in their order, then say");
+  assert.deepEqual(reply.say, { id: 70002, reply_to: 70001 });
+  assert.deepEqual(happenedRow({ id: "70003", actor: "rei", action: "say" }).say, { id: 70003 }, "a top say (or old talk): no parent invented");
+  assert.equal("say" in happenedRow({ id: "70004", actor: "rei", action: "walk", reply_to: "70001" }), false, "only a say carries one");
   assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
 });
 

@@ -20,10 +20,11 @@
 // ferry's flock (src/stake-exec.mjs), which writes the vote and the ledger
 // line together (src/ballots-store.mjs § stakeInStore).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { refShaFromDisk } from "./world-branches.mjs"; // a ref's commit, read from disk with no git process
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
 import { headroomOf, appliedBy, choiceOf, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
@@ -46,10 +47,45 @@ export function votesAvailable(clone) {
   return existsSync(join(clone, "tools", "ballot.mjs"));
 }
 
+// ── THE LEDGER IS FOLDED ONCE PER CHANGE, FOR THE MINT KEY (POS-1057) ───────
+//
+// `ballotState` is the town engine's own fold of the whole stamp ledger (8 MB on 2026-11-17), and the doorstep's votes
+// section asked for it once per resident to read one household key: about 40% of a bulk doorstep page's CPU once the
+// stance world was kept. The fold is kept while its inputs stand:
+//   - the clone's HEAD commit, so any committed change to the ledger, the pins or the registry moves it;
+//   - the size and mtime of the two files the fold reads from the working tree (the ledger and tools/github-ids.json),
+//     so a line appended before its commit moves it too.
+//   - the engine copy that folded it (the train's own key, POS-994): `engine` hands back the office's pinned copy of the
+//     town's ballot.mjs, checked against the clone on every call, so a changed tool is a different module, and a fold made
+//     by the old one is not answered for the new.
+// A clone whose HEAD cannot be read from disk gets no memo: the fold runs every time, as it did.
+// Only this read is kept. `intakeOwed` and the stake path fold the ledger themselves, as before.
+let keptState = null; // { clone, key, engine, state }
+function ballotStateKey(clone) {
+  try {
+    const head = readFileSync(join(clone, ".git", "HEAD"), "utf8").trim();
+    const ref = /^ref: (refs\/\S+)$/.exec(head)?.[1];
+    const sha = ref ? refShaFromDisk(clone, ref) : /^[0-9a-f]{40,64}$/.test(head) ? head : null;
+    if (!sha) return null;
+    const stamp = (p) => { try { const s = statSync(p); return `${s.size}:${s.mtimeMs}`; } catch { return "absent"; } };
+    return `${sha}|${stamp(join(clone, "WHITE_PAGES", "stamp-ledger.md"))}|${stamp(join(clone, "tools", "github-ids.json"))}`;
+  } catch { return null; }
+}
+/** Tests only: the kept fold for a clone, as mintKeyOf reads it. */
+export async function __ballotStateForTest(clone) { return ballotStateKept(await engine(clone), clone); }
+function ballotStateKept(b, clone) {
+  const key = ballotStateKey(clone);
+  if (key === null) return b.ballotState(clone);
+  if (keptState?.clone === clone && keptState.key === key && keptState.engine === b) return keptState.state;
+  const state = b.ballotState(clone);
+  keptState = { clone, key, engine: b, state };
+  return state;
+}
+
 /** The household a resident's stake counts in today: the town engine's mint key. */
 async function mintKeyOf(clone, handle, date) {
   const b = await engine(clone);
-  return b.ballotState(clone).householdOf(handle, date);
+  return ballotStateKept(b, clone).householdOf(handle, date);
 }
 
 // ── A BALLOT THE OFFICE HAS NOT TAKEN IN YET (Wright's review of #415) ──────

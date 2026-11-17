@@ -54,6 +54,7 @@ import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; 
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
+import { makeMaintenance, sendMaintenance } from "./maintenance.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
@@ -1034,6 +1035,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
+      // POS-1096: present only while the planned-maintenance switch is on (src/maintenance.mjs), so the sentinel reads "maintenance", not a fault
+      ...maintenance.field(),
     });
   }
 
@@ -1054,6 +1057,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       ...RELEASE, started_at: STARTED_AT, as_of: AS_OF,
       ...roleDisclosure(ROLE, WRITER_URL),
       write_grant: PEN.token !== "",
+      ...maintenance.field(), // POS-1096
       ...(readPool ? { read_workers: readPool.disclose() } : {}),
       // POS-680: which settlement's law and world graph THIS process answers
       // from, and whether its refreshers are keeping up: when each last asked
@@ -1849,12 +1853,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
         // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
         try {
-          if (url.searchParams.get("before") && world2ServeEnabled()) {
+          // POS-1035: a named circle or room (?circle= / ?room=) is looked for in the record too, where the store is engaged — memory
+          // only holds the last voices, and history past the first page must answer complete, folded or unavailable honestly
+          if ((url.searchParams.get("before") || url.searchParams.get("circle") || url.searchParams.get("room")) && world2ServeEnabled()) {
             const r = await world2Serve("/world2/conversations", url.searchParams);
             if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
             return j(res, 200, worldConversations(null, r.body));
           }
-          return j(res, 200, worldConversations(url.searchParams));
+          const body = worldConversations(url.searchParams);
+          if (body.find?.refused) return bounce(res, 422, body.find.refused.defect, body.find.refused.hint);
+          return j(res, 200, body);
         } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from
@@ -2112,8 +2120,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
+        // sort= recent | staked (POS-854); staked on a class that takes no stake answers newest first and says so
+        const sortQ = url.searchParams.get("sort") ?? undefined;
         return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
-          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ, sort: sortQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
@@ -3163,9 +3173,14 @@ const handleRequest = (req, res) => {
   try { tm = newTiming(); req.tm = tm; } catch { tm = undefined; }
   return tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res);
 };
+// POS-1096: the planned-maintenance switch (src/maintenance.mjs). Asked FIRST, before the bearer's lookup (a store read) and before any door, so every
+// door answers at once while the store restarts. The manifest, /release and the keyless in-memory ops reads stay up (the switch names which).
+const maintenance = makeMaintenance();
 const handleRequestBody = (req, res) => {
   const t0 = Date.now();
-  const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
+  const sw = maintenance.refuses(req.method, (req.url ?? "/").split("?")[0].replace(/\/+$/, "") || "/");
+  if (sw) return sendMaintenance(res, sw, { asOf: AS_OF });
+  const auth =/^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };
   if (!auth) return route(req, res, null, t0).catch(tripped);
   resolveBearer(auth[1]).then((key) => key, (e) => {

@@ -1588,6 +1588,28 @@ function fileHouseholds(repo) {
   return _hh.map;
 }
 
+// ── THE HOUSEHOLD GRAIN IS KEPT WHILE THE REGISTRY STANDS (POS-1057) ────────
+//
+// `identities` is a view over two tables, `households` and `household_pins` (055), and reading it costs about 200 ms on
+// prod (a nested loop with a jsonb subplan run 94,166 times for 394 rows, 2026-11-17). Every world read asked for it on
+// the two-connection acts pool: 54 runs of 500 ms or more in the slow-statement log's first 38 minutes.
+//
+// The map is kept per office thread on REGISTRY_PRINT, read from the store on EVERY call (about 1 ms): each table's row
+// count and the sum of its row versions (`xmin`, which Postgres moves on every write to a row). A household declared,
+// changed or removed, or a pin written, moves it. A store, or a test's stub, that cannot answer the print gets no memo.
+const REGISTRY_PRINT = `
+  SELECT (SELECT count(*)::text || ':' || coalesce(sum(xmin::text::bigint), 0)::text FROM households)
+      || '|' ||
+         (SELECT count(*)::text || ':' || coalesce(sum(xmin::text::bigint), 0)::text FROM household_pins) AS print`;
+let _identities = null; // { url, print, map }
+async function registryPrint(actsQuery, env) {
+  try {
+    const rows = await actsQuery(REGISTRY_PRINT, [], env);
+    const print = Array.isArray(rows) && rows.length === 1 ? rows[0]?.print : null;
+    return typeof print === "string" && /^\d+:\d+\|\d+:\d+$/.test(print) ? print : null;
+  } catch { return null; }
+}
+
 /** One read of the household grain -> the synchronous `(handle) => key` (null for no handle). */
 export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } = {}) {
   const { world2Enabled, actsQuery } = await import("./world2-acts.mjs");
@@ -1595,15 +1617,20 @@ export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } 
     const map = fileHouseholds(repo);
     return (handle) => (handle && !isBerthHandle(handle) ? map[handle] ?? `solo:${handle}` : null);
   }
-  let rows;
-  try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
-  catch (e) { throw new HouseholdsUnreadable(e); }
-  if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
-  const map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
+  const print = await registryPrint(actsQuery, env);
+  let map = print !== null && _identities && _identities.url === env.WORLD2_PG_URL && _identities.print === print ? _identities.map : null;
+  if (!map) {
+    let rows;
+    try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
+    catch (e) { throw new HouseholdsUnreadable(e); }
+    if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
+    map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
+    if (print !== null) _identities = { url: env.WORLD2_PG_URL, print, map };
+  }
   // a visitor's body has no household (POS-739): its walk, say, landing and ride all carry none
   return (handle) => (handle && !isBerthHandle(handle) ? map.get(String(handle)) ?? `solo:${handle}` : null);
 }
-export const resetHouseholdCache = () => { _hh = null; };
+export const resetHouseholdCache = () => { _hh = null; _identities = null; };
 
 /**
  * The household's HUMAN, as the office knows them.
@@ -3795,7 +3822,12 @@ export const WORLD_READ_FIELDS = Object.freeze({
          // on its berth, and a read writes nothing, so it is refused by name.
          rules_read: { type: "boolean", description: "refused — a read writes nothing; a visitor acknowledges the town's rules on do: \"say\"" },
          // POS-265: the long-poll rides the read, beside the cursor it needs.
-         wait: { type: "number", description: "seconds to hold this listen open, at most 25, with since: — answered the moment a new voice lands within your earshot, or empty at the deadline with your cursor unmoved" } },
+         wait: { type: "number", description: "seconds to hold this listen open, at most 25, with since: — answered the moment a new voice lands within your earshot, or empty at the deadline with your cursor unmoved" },
+         // POS-1035: the circle reads ride here as they ride world_say (calls 3, 11)
+         circle: { type: "number", description: "read one circle whole — the say with this id (the `id` on a line, or a stub's `circle`) and every reply under it, the says above it as context; paged by `next`" },
+         after: { type: "number", description: "with circle: — the `after` from that circle's previous page's `next`" },
+         with: { type: "string", description: "where this resident is talking in your room: their says, each with the say it answers as context, and the circles they are in" },
+         reply_to: { type: "number", description: "refused — a read speaks nothing; answer a say with do: \"say\", args: { text, reply_to }" } },
   walk: { who: { type: "string", description: "one resident to find, by handle: their x, y, mark_id, moving and toward from the whole roll (not bounded by your radius), or null with a sentence when they are not out or no resident has that handle" } },
   "leave-mark": { mark: { type: "string", description: "one mark to look into — <by>/<slug>" },
                   depth: { type: "number", description: "how far down to descend into that mark" },
@@ -3910,6 +3942,11 @@ export async function readDomainFor(action, fields, key, oriented, ctx = {}) {
         ...(fields?.since == null && ctx?.cursor ? { since: ctx.cursor.ms } : {}),
         ...(fields?.before == null ? {} : { before: fields.before }),
         ...(fields?.wait == null ? {} : { wait: fields.wait }),
+        // POS-1035: the circle reads travel too; a reply_to on a read is refused by world_say itself, by name
+        ...(fields?.circle == null ? {} : { circle: fields.circle }),
+        ...(fields?.after == null ? {} : { after: fields.after }),
+        ...(fields?.with == null ? {} : { with: fields.with }),
+        ...(fields?.reply_to == null ? {} : { reply_to: fields.reply_to }),
       }) };
     }
     case "walk": {
