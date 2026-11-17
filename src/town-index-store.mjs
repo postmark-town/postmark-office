@@ -541,9 +541,27 @@ export async function refreshStoreRoll({ env = process.env, statementTimeoutMs =
 // office.db's rowid kept, which is the vendored readTown's sorted listing:
 // bytewise. The GitHub line is picked in JS from the two jsonb values, with
 // `??` as office.db's reader did, so a JSON null and a missing key read alike.
+//
+// THE TWO JSONB VALUES come from two stored columns when the table has them
+// (world2/schema/100_town_residents_github.sql: `github_top` and `github_address`,
+// the same two expressions, generated at write time), and from the two casts of
+// every resident's whole JSON when it doesn't (POS-1095 b: this code ships with
+// the train, the columns arrive at the restart after it). The table is asked each
+// read, so a store that gets the columns mid-run is read through them at its next
+// reload; the question is one catalog lookup.
+export const RESIDENT_GITHUB_SQL = Object.freeze({
+  stored: `SELECT handle, github_top AS g1, github_address AS g2 FROM town_residents ORDER BY handle COLLATE "C"`,
+  cast: `SELECT handle, json::jsonb -> 'github' AS g1, json::jsonb -> 'address' -> 'data' -> 'github' AS g2 FROM town_residents ORDER BY handle COLLATE "C"`,
+});
+async function residentGithubStored(q) {
+  const { rows } = await q.query(
+    `SELECT count(*)::int AS n FROM pg_attribute
+      WHERE attrelid = to_regclass('town_residents') AND attname IN ('github_top', 'github_address') AND NOT attisdropped`);
+  return rows[0]?.n === 2;
+}
 export async function probeRows(q, { letters = true, logins = true } = {}) {
   const rows = (await q.query(logins
-    ? `SELECT handle, json::jsonb -> 'github' AS g1, json::jsonb -> 'address' -> 'data' -> 'github' AS g2 FROM town_residents ORDER BY handle COLLATE "C"`
+    ? ((await residentGithubStored(q)) ? RESIDENT_GITHUB_SQL.stored : RESIDENT_GITHUB_SQL.cast)
     : `SELECT handle FROM town_residents`)).rows;
   return {
     asOf: await townIndexAsOf(q),
