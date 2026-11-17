@@ -553,8 +553,9 @@ test("POS-902 · a prolific house's preview is the newest DOORSTEP_STAKES rows b
   assert.deepEqual([seg.total, seg.shown, seg.limit, seg.complete], [60, 10, 10, false], "it says it is a preview, and of what");
   assert.match(seg.order, /newest published marks first, by the mark's own date \(not printed\)/);
   assert.match(seg.order, /the whole report is at-risk first, then by mark id/, "and says what the whole report's own order is");
-  assert.match(seg.more_note, /^50 further \(9 of them at risk\) — household \{ read: "stakes" \} with no limit is every row$/, "an at-risk row left out is NAMED, never hidden");
-  assert.equal("next_offset" in seg, false, "no pager: the rest is the one bare read");
+  // until 2026-11-17 (POS-1102) this asserted "household { read: "stakes" } with no limit is every row"; the stakes read now pages, so the rest is the lists' own pager
+  assert.match(seg.more_note, /^50 further \(9 of them at risk\) — call again with offset: 10$/, "an at-risk row left out is NAMED, never hidden");
+  assert.deepEqual([seg.offset, seg.next_offset], [0, 10], "the lists' own pager: offset walks on from where this page ended");
   for (const r of seg.rows) { assert.equal("date" in r, false, "no date is printed"); assert.deepEqual(r, whole.rows.find((w) => w.mark === r.mark), "a preview row is the whole report's row, whole (body included)"); }
   for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at", "rule", "later_stakes"])
     assert.deepEqual(seg[k], whole[k], `${k} stays whole`);
@@ -611,10 +612,17 @@ test("POS-902 · the finished doorstep's stakes: the newest few on BOTH skins, t
     const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
     const marks = (await publishedState(WORLD_CLONE)).state.marks.filter((m) => m.by === "wright");      // THE INDEPENDENT TOTAL, counted off the published world
     assert.ok(marks.length > DOORSTEP_STAKES * 5, `the pinned world gives wright many published marks (${marks.length}); a fixture that fits inside the cap proves nothing`);
-    const whole = await callTool("household", { read: "stakes", args: { handle: "wright" } }, ctx);   // the named continuation, bare
-    assert.equal(whole.rows.length, marks.length, "the bare read returns every row");
-    assert.equal(whole.count, marks.length);
-    assert.equal("shown" in whole, false, "the continuation is not itself a preview");
+    // until 2026-11-17 (POS-1102) the bare read was every row in one answer; it now pages at 20, so the whole report is the pages walked by next_offset
+    const first = await callTool("household", { read: "stakes", args: { handle: "wright" } }, ctx);
+    assert.equal(first.count, marks.length);
+    assert.equal(first.rows.length, Math.min(first.limit, marks.length), "the bare read is one page");
+    const whole = { ...first, rows: [...first.rows] };
+    for (let off = first.next_offset, guard = 0; off != null && guard < 50; guard++) {
+      const p = await callTool("household", { read: "stakes", args: { handle: "wright", offset: off } }, ctx);
+      whole.rows.push(...p.rows); off = p.next_offset;
+    }
+    assert.equal(whole.rows.length, marks.length, "walking next_offset returns every row");
+    assert.equal(new Set(whole.rows.map((r) => r.mark)).size, marks.length, "each once");
     const newestIds = [...marks].sort((a, b) => (Date.parse(b.date) || -Infinity) - (Date.parse(a.date) || -Infinity) || a.id.localeCompare(b.id)).slice(0, DOORSTEP_STAKES).map((m) => m.id);
     const sizes = {};
     for (const slim of [false, true]) {
@@ -624,7 +632,7 @@ test("POS-902 · the finished doorstep's stakes: the newest few on BOTH skins, t
       assert.deepEqual([s.count, s.total, s.shown, s.complete], [marks.length, marks.length, DOORSTEP_STAKES, false], `${skin}: the true total`);
       assert.equal(s.at_risk, whole.at_risk, `${skin}: at_risk is the whole report's`);
       for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at"]) assert.deepEqual(s[k], whole[k], `${skin}: ${k} stays whole`);
-      assert.match(s.more_note, new RegExp(`^${marks.length - DOORSTEP_STAKES} further .*household \\{ read: "stakes" \\} with no limit is every row$`));
+      assert.match(s.more_note, new RegExp(`^${marks.length - DOORSTEP_STAKES} further .*call again with offset: ${DOORSTEP_STAKES}$`));
       assert.deepEqual(s.args, { handle: "wright", limit: DOORSTEP_STAKES });
       assert.equal(s.rows.some((r) => "date" in r), false, "no date is printed");
       const left = whole.rows.filter((r) => !s.rows.some((p) => p.mark === r.mark));

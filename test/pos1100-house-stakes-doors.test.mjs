@@ -227,3 +227,69 @@ test("household { read: \"house\" } is public for any house: its stakes block ca
     }
   }
 });
+
+// ── POS-1102 (Darko, 2026-11-17 09:09 EST: "Page it at 20"): the marks part pages too ────────────────────────────────────────
+// POS-902 ruled a bare read is every row; the POS-844 rulings set a ~10K ceiling and one paging pattern. A house with 200 staked marks read 69,796 bytes
+// bare (measured by the POS-1100 lane). The real door, over a fixture house that stakes on 200 published marks (invented, ~210 characters of body each):
+const MANY = 200;
+const manyReaders = (bodyLength = 210) => {
+  const ids = Array.from({ length: MANY }, (_, i) => `${R0}/stake-mark-${String(i).padStart(3, "0")}`);
+  const marks = ids.map((id, i) => ({ id, kind: "sited", by: R0, household: HOUSE, body: `mark ${i}: ${"a long body of invented words ".repeat(7)}`.slice(0, bodyLength), date: `2026-10-${String(1 + (i % 28)).padStart(2, "0")}T00:00:00.000Z` }));
+  const registry = Object.fromEntries(ids.map((id) => [id, { household: HOUSE, path: `WORLD/marks/${id}/mark.md`, class: "commons" }]));
+  const rows = ids.map((id) => ({ kind: "mark", id, stamps: 1, at_risk: false, by: [{ handle: R0, stamps: 1 }] }));
+  return {
+    world: async () => ({ state: { marks }, ref: "origin/main" }), registry: async () => registry,
+    escrow: async () => ({ townSha: "a".repeat(40), byMark: new Map(ids.map((id) => [id, 1])), reason: null }),
+    rule: async () => () => ({ unpublish: false }), pathAt: async () => () => true,
+    allocation: async () => ({ total: MANY, count: MANY, ledger_staked: MANY, rows }),
+  };
+};
+
+test("POS-1102 · a house with 200 staked marks: a bare stakes read pages both parts in step with a next_offset, under the page cap; paging walks every mark once", { skip }, async () => {
+  const { textBytes, PAGE_BYTES } = await import("../src/household-read-page.mjs");
+  // (a) marks with short bodies: the default page, 20 of each part, fits whole
+  const lean = await householdApex({ read: "stakes" }, key, { ...ctx, stakesReaders: manyReaders(20) });
+  assert.equal(lean.count, MANY, JSON.stringify(lean).slice(0, 300));
+  // LAW (Darko, POS-1102/a, 2026-11-17 09:09 EST): "Page it at 20" — the marks part pages at 20 like every other list
+  assert.equal(lean.limit, 20, "the default page is 20");
+  assert.equal(lean.rows.length, 20, "20 marks on a bare read, not 200");
+  assert.equal(lean.allocation.rows.length, 20, "and 20 rows of the allocation, in step with the marks");
+  assert.deepEqual([lean.shown, lean.offset, lean.complete, lean.next_offset], [20, 0, false, 20]);
+  assert.equal(lean.allocation.next_offset, lean.next_offset, "ONE offset pages both parts: the same next_offset on each");
+  assert.match(lean.more_note, /^180 further — call again with offset: 20$/);
+  assert.equal(lean.allocation.count, MANY, "the whole house's count rides, the page is not the house");
+  assert.ok(textBytes(lean) <= 10000, `${textBytes(lean)}`);
+  // (b) the POS-1100 lane's measured house: ~210 characters of body on each of 200 staked marks was 69,796 bytes with every row. Twenty of each part would be
+  // ~12K here, so the answer is held under the ceiling as a whole and says how many fit (as `allocation` always did); both parts take the same smaller page.
+  const bare = await householdApex({ read: "stakes" }, key, { ...ctx, stakesReaders: manyReaders(210) });
+  assert.equal(bare.count, MANY);
+  assert.ok(textBytes(bare) <= 10000, `LAW (POS-844 call 2, the ~10K ceiling): a bare read is held under it: ${textBytes(bare)} bytes (was 69,796 with every row)`);
+  assert.ok(textBytes(bare) <= PAGE_BYTES, `and under the pager's own byte budget: ${textBytes(bare)}`);
+  assert.ok(bare.shown > 1 && bare.shown <= 20 && bare.limit === bare.shown, `it says how many fit: ${bare.shown}`);
+  assert.equal(bare.rows.length, bare.shown);
+  assert.equal(bare.allocation.rows.length, bare.shown, "both parts take the same page");
+  assert.equal(bare.next_offset, bare.shown);
+  assert.equal(bare.allocation.next_offset, bare.next_offset, "ONE offset pages both parts: the same next_offset on each");
+  assert.match(bare.more_note, new RegExp(`^${MANY - bare.shown} further — call again with offset: ${bare.shown}$`));
+  // walking next_offset reads every mark exactly once, and the allocation's rows ride in step
+  const seen = [], seenStakes = [];
+  let pages = 0;
+  for (let off = 0; off != null; pages++) {
+    const p = await householdApex({ read: "stakes", args: off ? { offset: off } : {} }, key, { ...ctx, stakesReaders: manyReaders() });
+    assert.ok(textBytes(p) <= 10000, `page ${pages}: ${textBytes(p)}`);
+    seen.push(...p.rows.map((r) => r.mark)); seenStakes.push(...(p.allocation?.rows ?? []).map((r) => r.id));
+    assert.equal(p.allocation?.next_offset, p.next_offset, `page ${pages}: both parts name the same next_offset`);
+    off = p.next_offset ?? null;
+    assert.ok(pages < 30, "the walk ends");
+  }
+  assert.equal(new Set(seen).size, MANY, "every mark exactly once");
+  assert.equal(seen.length, MANY);
+  assert.equal(new Set(seenStakes).size, MANY, "and every stake row exactly once");
+  assert.ok(pages >= 10 && pages <= 30, `200 marks at no more than 20 a page: ${pages} pages`);
+  // a small named limit is the doorstep's preview, unchanged: the newest few of the marks
+  const few = await householdApex({ read: "stakes", args: { limit: 5 } }, key, { ...ctx, stakesReaders: manyReaders() });
+  assert.deepEqual([few.rows.length, few.allocation.rows.length, few.next_offset], [5, 5, 5]);
+  // a house that fits one page is answered whole, with no pager fields (what it was)
+  const fits = await householdApex({ read: "stakes", args: { handle: R0 } }, key, ctx);
+  assert.equal("next_offset" in fits, false);
+});

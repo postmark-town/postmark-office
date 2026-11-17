@@ -478,7 +478,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   // under the foyer's 8 KiB bound; it goes when w41 ships.
   rulings: "renamed: outcomes",
   // POS-633 part 2: shortened by Plumb to make room for closer and happened under the foyer's 8 KiB bound (F5c).
-  stakes: "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes; limit/offset page it), and the escrow behind your own published marks, the ones the next settlement would sweep first; bare it is your whole house, handle: narrows",
+  stakes: "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes), and the escrow behind your own published marks, the ones the next settlement would sweep first; limit/offset page both, 20 a page, next_offset walks on; bare it is your whole house, handle: narrows",
   address: "your address card, as the white pages hold it",
   home: "your home page",
   // POS-543: "papers" names its three checks (paperGapRows: HOME page, window,
@@ -572,8 +572,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
              part: { type: "string", description: "connector only: one list of a paged answer instead of the marks: set_downs | takes | standing | ground (cursor walks it) | teach (one block, no cursor)" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
-  stakes: { limit: { type: "number", description: "the newest N of your own marks' rows (the doorstep shows a few; omit for every one), and the page size of `allocation`, everything your house has stamps behind (default 20)" },
-            offset: { type: "number", description: "where `allocation`'s next page starts: the `next_offset` its last page handed you" } },
+  stakes: { limit: { type: "number", description: "the page size of both parts, in step: your own marks' rows (newest first) and `allocation`, everything your house has stamps behind (default 20, at most 200)" },
+            offset: { type: "number", description: "where the next page of both parts starts: the `next_offset` the last page handed you" } },
   address: {},
   home: {},
   standing: {},
@@ -2243,9 +2243,12 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       // read now reaches the ledger, so a stranger's stamps are not this key's to read. (No key at all keeps the marks part's old reading: published marks are public.)
       if (key && named && !held.includes(named)) return bounce(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ")}`);
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
-      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
-      // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset (default 20).
-      return doorstepStakes(named || null, { key, limit: f.limit ?? null, allocationPage: (named ? held.includes(named) : held.length > 0) ? { limit: f.limit, offset: f.offset } : false });
+      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview.
+      // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset.
+      // POS-1102 (Darko, 2026-11-17 09:09 EST: "Page it at 20"): bare, the read is no longer every row in one answer: both parts page by the same
+      // limit (default 20, at most 200) and offset, in step, with next_offset and more_note. Every row is reachable by paging.
+      const limit = Math.min(Math.max(Math.floor(Number(f.limit)) || 20, 1), 200);
+      return doorstepStakes(named || null, { key, limit, offset: f.offset, allocationPage: (named ? held.includes(named) : held.length > 0) ? { limit, offset: f.offset } : false, ...(ctx.stakesReaders ?? {}) });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and
