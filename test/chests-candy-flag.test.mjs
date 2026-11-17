@@ -99,8 +99,11 @@ test("3 · OFF: the reads offer nothing (pinned in source: GET /world/chests, th
   const route = server.slice(at, server.indexOf("m.chestsRead()", at));
   assert.match(route, /if \(!chestsCandyOn\(\)\) return j\(res, 200, \{ chests: \[\], count: 0, off: CHESTS_CANDY_OFF\.defect \}\);/,
     "GET /world/chests answers no chest before it reads one");
-  assert.match(src("src/doorstep-bundle.mjs"), /if \(\(await import\("\.\/chests-candy\.mjs"\)\)\.chestsCandyOn\(\)\) try \{   \/\/ dark by default[^\n]*\n\s*const \{ residentHolds \}/,
-    "the doorstep reads holdings only with the doors open");
+  // POS-1084: the doorstep's `holds` is one producer, `holdsBlock`, which the doorstep and the full house read both call; its guard comes before any holdings read
+  const doorstep = src("src/doorstep-bundle.mjs");
+  assert.match(doorstep, /if \(!\(await import\("\.\/chests-candy\.mjs"\)\)\.chestsCandyOn\(\)\) return null;   \/\/ dark by default[^\n]*\n\s*try \{\n\s*const residentHolds = [^\n]*\n\s*const h = await residentHolds\(handle\)/,
+    "the doorstep (and the house) read holdings only with the doors open");
+  assert.match(doorstep, /await holdsBlock\(handle, \{ readers: ctx\.holdsReaders \}\)/, "the doorstep gets its holds from that one producer");
   assert.match(src("src/world-hold.mjs"), /\.\.\.\(\(await import\("\.\/chests-candy\.mjs"\)\)\.chestsCandyOn\(\) \? \{ units: await unitsHeldBy\(actor\) \} : \{\}\)/,
     "world_holdings carries units only with the doors open");
 });

@@ -33,6 +33,26 @@ import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reas
 import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
 
 /**
+ * WHAT ONE RESIDENT HOLDS, the doorstep's `holds` block and the full house read's (POS-1084): ONE producer, called by both, so there is no second holdings
+ * definition. Answers the block to put under `holds`, or `null` when there is nothing to say (feature dark, or empty hands: the doorstep adds no key then), or the
+ * `unavailable` block when the office is pointed at the record and could not read it ("unknown, not empty"). `readers.residentHolds` is the suite's seam.
+ */
+export async function holdsBlock(handle, { readers = {} } = {}) {
+  if (!(await import("./chests-candy.mjs")).chestsCandyOn()) return null;   // dark by default (chests-candy.mjs)
+  try {
+    const residentHolds = readers?.residentHolds ?? (await import("./world-units.mjs")).residentHolds;
+    const h = await residentHolds(handle);
+    if (h.holds.count > 0 || h.chests.length || h.label) return { serves: "world.holdings", args: { handle }, ...h };
+    return null;
+  } catch (e) {
+    const { world2Enabled } = await import("./world2-acts.mjs");
+    if (world2Enabled()) return { serves: "world.holdings", args: { handle },
+      unavailable: `what ${handle} holds could not be read (${plainReason(e, "record", "the doorstep's holdings")}) — unknown, not empty` };
+    return null;
+  }
+}
+
+/**
  * The finished doorstep for one resident, or null when there is no such
  * resident (the caller owns the 404 — REST and MCP word it differently).
  *
@@ -332,15 +352,8 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // record has no holding to read and says nothing either; one that IS pointed
   // at it and cannot read it says so, because there "unknown" must not read as
   // "empty".
-  if ((await import("./chests-candy.mjs")).chestsCandyOn()) try {   // dark by default (chests-candy.mjs)
-    const { residentHolds } = await import("./world-units.mjs");
-    const h = await residentHolds(handle);
-    if (h.holds.count > 0 || h.chests.length || h.label) d.holds = { serves: "world.holdings", args: { handle }, ...h };
-  } catch (e) {
-    const { world2Enabled } = await import("./world2-acts.mjs");
-    if (world2Enabled()) d.holds = { serves: "world.holdings", args: { handle },
-      unavailable: `what ${handle} holds could not be read (${plainReason(e, "record", "the doorstep's holdings")}) — unknown, not empty` };
-  }
+  const holdsBlockOf = await holdsBlock(handle, { readers: ctx.holdsReaders });
+  if (holdsBlockOf) d.holds = holdsBlockOf;
   // ── THE MISTS BLOCK IS GONE FROM THE DOORSTEP (POS-902) ───────────────────────────────────────
   //
   // WLD-38 put `mists` here: when the advancing Mists reach the house's published marks. The published skeleton now carries `mists.withdrawn_from`

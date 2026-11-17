@@ -272,6 +272,8 @@ test("the house and needs-you answer through the store's index as they did over 
   // the world's reads, stubbed: they are not the index, and both sides get the same
   const readers = {
     stances: async (_h, opts) => ({ stances_awaiting: 0, awaiting: [], standing: [], cursor: null, complete: true, set_downs_awaiting: [], limit: opts.limit }),
+    // each resident's own waiting count (POS-1084), the batch reader answered the same way: nothing waits
+    stanceCounts: async (handles) => new Map(handles.map((h) => [h, { stances_awaiting: 0 }])),
     stakesFor: async () => ({ next_settlement: { at: "2026-07-15T00:00:00.000Z" }, count: 0, at_risk: 0, rows: [] }),
     walkers: async () => ({ at: 190.5, walkers: [] }),
     claimEffects: async () => ({ readable: true, store: "docket", events: [] }),
