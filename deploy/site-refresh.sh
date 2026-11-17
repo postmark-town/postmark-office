@@ -761,7 +761,37 @@ build_once() {
   rel="$base"; n=0
   while [ -e "$rel" ]; do n=$((n + 1)); rel="$base.$n"; done
   mkdir -p "$rel"
-  rsync -a --delete "$BUILD/dist-town/" "$rel/"
+
+  # HARD-LINK WHAT DID NOT CHANGE (POS-1087). A release is ~1.5 GB, and most of
+  # it is byte-identical to the one being served. --link-dest makes the new
+  # release a hard link to the serving release's copy of every file whose
+  # CONTENT matches, so a publish writes only the files that changed. Three
+  # choices carry it:
+  #  * --checksum, not the quick check: every build stamps fresh mtimes, so a
+  #    time-and-size check links nothing, and a same-size same-second edit would
+  #    be linked wrongly. Content decides.
+  #  * no -t (-rlpgoD, not -a): with times preserved a linked file's mtime would
+  #    have to equal the new build's, which it never does, and rsync then copies
+  #    it. Unchanged files keep the mtime of the release they came from, which
+  #    also keeps their ETag and Last-Modified stable for nginx and browsers.
+  #  * the previous release is the one the webroot SERVES, and only if it sits in
+  #    $RELEASES (before the INSTALL cutover the webroot is a plain directory, and
+  #    its bytes are never linked into a release).
+  # Nothing writes into a release after this rsync (the state file, the pin and
+  # build.json are written before it or beside it; nginx and box-rollcall only
+  # read), so a shared inode is never changed under an older release. Prune is
+  # unchanged: rm -rf of an old release drops its links; a file's bytes go when
+  # its last link does. No previous release, or a link-dest run that fails (a
+  # filesystem that refuses hard links): the whole-copy rsync that ran before.
+  local prev
+  prev="$(readlink -f "$WEBROOT" 2>/dev/null || true)"
+  case "$prev" in "$RELEASES"/*) [ -d "$prev" ] || prev="";; *) prev="";; esac
+  if [ -n "$prev" ] && [ "$prev" != "$rel" ]; then
+    rsync -rlpgoD --checksum --delete --link-dest="$prev" "$BUILD/dist-town/" "$rel/" \
+      || { say "link-dest publish failed; copying every file instead"; rsync -a --delete "$BUILD/dist-town/" "$rel/"; }
+  else
+    rsync -a --delete "$BUILD/dist-town/" "$rel/"
+  fi
 
   # ATOMICITY, and why it is a rename and not `ln -sfn`. `ln -sfn` over an
   # existing symlink unlinks and re-links: there is a window, however short, in
