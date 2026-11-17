@@ -28,9 +28,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
@@ -41,7 +41,7 @@ import {
 } from "../src/town-stance.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-town-stance-"));
+const scratch = tempDir("postmark-town-stance-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────

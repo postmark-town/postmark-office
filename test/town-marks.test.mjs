@@ -20,12 +20,12 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { marksRead, marksCountsFor, publishedMarksOf, DOCKET_UNREADABLE } from "../src/town-marks.mjs";
 
-const scratch = mkdtempSync(join(tmpdir(), "pm-town-marks-"));
+const scratch = tempDir("pm-town-marks-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* litter */ } });
 
 // ── a world in a bottle: errant has laid three, argos one, nobody none ───────

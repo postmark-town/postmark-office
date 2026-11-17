@@ -19,8 +19,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, readFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -52,7 +52,7 @@ const why = NO_WORLD || (newestBlessing(CLONE) ? null : `the world checkout at $
 let dir, file, tables;
 before(() => {
   if (why) return;
-  dir = mkdtempSync(join(tmpdir(), "graph-db-"));
+  dir = tempDir("graph-db-");
   file = join(dir, "world.db");
   // The hydration's ROWS (--rows-out), and the SQL's file built from them here:
   // the office never opens a world.db (POS-270 lane W 3a); only this test's own

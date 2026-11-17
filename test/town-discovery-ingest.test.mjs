@@ -19,10 +19,10 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ingest, applyDelta, readHead, SEAL_SUBJECT } from "../world2/tools/town-index-ingest.mjs";
@@ -36,7 +36,7 @@ const CLONE = join(ROOT, "town-clone");
 const SCHEMA_097 = join(ROOT, "world2", "schema", "097_town_discovery.sql");
 const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSync(join(CLONE, "WHITE_PAGES", "stamp-ledger.md"));
 
-const tmp = mkdtempSync(join(tmpdir(), "town-discovery-ingest-"));
+const tmp = tempDir("town-discovery-ingest-");
 let s = null, w = null, api = null, owner = null;
 let skip = hasClone ? false : "no town-clone with tools/stamp-mint.mjs beside the office: the fixture copies the town's own tools from it";
 

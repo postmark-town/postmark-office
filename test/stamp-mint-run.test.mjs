@@ -27,9 +27,9 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -44,7 +44,7 @@ const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSyn
 const skip = hasClone ? false : "no town-clone beside the office: the fixture is built from its files";
 const MAIL_LINES = 3000, STAMP_LINES = 200;
 
-const tmp = mkdtempSync(join(tmpdir(), "stamp-mint-run-"));
+const tmp = tempDir("stamp-mint-run-");
 const A = join(tmp, "a"), B = join(tmp, "b");
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PRIV = privateKey.export({ type: "pkcs8", format: "pem" });
