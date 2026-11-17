@@ -2551,7 +2551,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /residency", JSON.parse(raw || "{}"));
           if (!judged) return;
-          const result = await requestResidency(judged.fields, key, null, PEN, { odb, clone: TOWN_CLONE });
+          const result = await requestResidency(judged.fields, key, null, PEN);
           return j(res, 202, withRenamed(result, judged.renamed)); // 202: the ask is accepted; a human merge admits you
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);

@@ -12,7 +12,7 @@
 // dance uses) so the whole pen path is testable against a mock GitHub; the
 // real pen token (POSTMARK_PEN_TOKEN) lives only on the box.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,7 +60,7 @@ const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry", 
  *  `berth-ferry`. One set, both doors. */
 export function isReservedHandle(name) { return RESERVED.has(String(name ?? "").trim().toLowerCase()); }
 
-import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled, pendingRows, rowSpendingNonce } from "./town-journal.mjs";
+import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 import { nonceDefect } from "./act-nonce.mjs";
 import { reservedHandleRefusal } from "../vendor/tools/reserved-handles.mjs"; // POS-884: the town's one reserved-prefix rule
 import { probeOf } from "./index-probe.mjs";
@@ -735,47 +735,53 @@ const defaultClone = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-c
 //
 //   1. THE ANSWER WAITED ON THE BINDING. The bind runs under the town lock, as
 //      a child, and a slow lock held the receipt past a common client timeout
-//      although the act had landed. `BIND_WAIT_MS` bounds the wait; past it, if
-//      the act can be RECORDED (a town log to write it in), the door writes the
-//      act's row and answers `binding: "pending"`, and the bind goes on without
-//      the caller. A bind that fails INSIDE the bound still answers its own
-//      refusal and writes no row, exactly as before: a refused bind never
-//      leaves an act behind that a crossing could settle against the refusal.
-//      With no log to record in, nothing is promised early and the door waits
-//      as it always did.
-//   2. NO RETRY KEY. `nonce` is the paper acts' own (town-updates.mjs § paperDoor):
-//      the same nonce returns the FIRST call's receipt. It is kept where the
-//      paper acts keep theirs, in the args of the act's journal row, scoped to
-//      the verified account that sent it, and it is read from the un-drained
-//      log only, so it answers until the crossing drains the row.
-//
-// A recorded row is also the fallback for a bind that never lands (the office
-// restarts under it): the ferry's next crossing settles a request-residency row
-// from the record, or skips it where the card already stands (town-drain.mjs).
+//      although the act had landed. `BIND_WAIT_MS` bounds the wait; past it the
+//      door answers `binding: "pending"` and says what is true: the binding is
+//      still running, nothing has landed, and the outcome is not known. It is
+//      NOT an admission (no `admitted`, no `commit`), and NOTHING IS WRITTEN TO
+//      THE TOWN LOG for it: a log row is settleable by the ferry's drain, which
+//      re-plans it from the record with nobody deciding, whatever the bind later
+//      did (a late refusal overridden, the card's words lost, a held join
+//      admitted). The bind carries on without the caller, and its outcome,
+//      admitted or refused, is what a same-nonce retry is answered with.
+//      A bind that fails INSIDE the bound answers its own refusal, as before.
+//   2. NO RETRY KEY. `nonce` is the paper acts' own word. It is kept in THIS
+//      PROCESS, scoped to the verified account and the handle, from the call's
+//      start until its bind settles and then for `RETAIN_MS` more. It is not
+//      durable: an office restart, or another office worker, does not know it,
+//      and the guard that holds then is the handle itself (a handle already taken
+//      bounces 409). A durable key would need a store of its own (parcel-room's
+//      096 table is the shape), and is not built here. A call that bounced to its
+//      own caller spends no key.
 export const BIND_WAIT_MS = 20_000;
+export const RETAIN_MS = 10 * 60_000;
+const RETAIN_MAX = 500;
 
-const residencyInFlight = new Map(); // "<ghId>|<handle>|<nonce>" -> the first call's promise
+const residencyKeys = new Map(); // "<ghId>|<handle>|<nonce>" -> { call, final, pending, settledAt }
+const SLOW = Symbol("slow");
+const within = (p, ms) => {
+  let t;
+  return Promise.race([p, new Promise((r) => { t = setTimeout(() => r(SLOW), ms); t.unref?.(); })]).finally(() => clearTimeout(t));
+};
 
-export const RESIDENCY_NONCE_IDEMPOTENT = "retry this exact call with the same nonce and you will get this call's receipt back rather than a second request — until the crossing settles it";
-export const RESIDENCY_NONCE_NOT_HONOURED = "this office keeps no town log (or this call carried no verified account to scope the key by), so a nonce cannot be remembered and this receipt is NOT idempotent by it. The guard that is holding is the handle: a handle already taken bounces 409, so the same call again cannot add the resident twice.";
+export const RESIDENCY_NONCE_IDEMPOTENT = "retry this exact call with the same nonce and you will get this call's receipt back rather than a second request, for as long as this office remembers it (minutes). After that, the same handle again bounces 409 as taken.";
+export const RESIDENCY_NONCE_NOT_HONOURED = "this call is not kept under its nonce: a held join's guard is its open PR (a second call bounces 409 while it waits) and a berth's is the berth. The same call again cannot add the resident twice.";
 
-/** The first call's receipt, read back off its journal row. Nothing is written. */
-export function residencyDuplicateReceipt(row, nonce, clone) {
-  const p = row.payload ?? {};
-  const base = p.pr_url
-    ? { requested: row.handle, pr_url: p.pr_url, pr_number: p.pr_number }
-    : { admitted: row.handle, address: `WHITE_PAGES/${row.handle}/ADDRESS.md`,
-        binding: (p.commit || existsSync(join(clone, "WHITE_PAGES", row.handle, "ADDRESS.md"))) ? "settled" : "pending",
-        ...(p.commit ? { commit: p.commit } : {}) };
+/** What a call answers once the bound has passed and the bind has not settled. */
+function pendingAnswer(handle, key, nonce) {
   return {
-    ...base,
-    household: { slug: row.household },
-    logged: { seq: row.seq, written_at: row.writtenAt },
-    duplicate: true,
-    nonce,
-    note: "this nonce was already spent, by the request named above. NOTHING WAS WRITTEN A SECOND TIME — this is that request's receipt, read back off its row, not a replay of its answer."
-      + (base.binding === "pending" ? " Its binding was still settling when this was read: household { read: \"standing\" } shows when the resident is in." : ""),
+    binding: "pending",
+    handle,
+    verified_github: { login: key.ghLogin, id: key.ghId },
+    note: `The binding is still running. Nothing has landed yet and its outcome is not known, so this is not an admission: ${handle} is a resident only once household { read: "standing" } shows them.`
+      + (nonce ? " Send the same call again with the same nonce and you get the final receipt, whether it was admitted or refused." : ""),
   };
+}
+
+function pruneKeys(now = Date.now()) {
+  for (const [slot, e] of residencyKeys) if (e.settledAt != null && now - e.settledAt > RETAIN_MS) residencyKeys.delete(slot);
+  if (residencyKeys.size > RETAIN_MAX)
+    for (const [slot, e] of residencyKeys) { if (residencyKeys.size <= RETAIN_MAX) break; if (e.settledAt != null) residencyKeys.delete(slot); }
 }
 
 export async function requestResidency(args, key, db, pen, opts = {}) {
@@ -785,27 +791,35 @@ export async function requestResidency(args, key, db, pen, opts = {}) {
   if (bad) throw bounce(422, bad.defect, bad.hint);
   const nonce = raw.trim();
   const { nonce: _nonce, ...actArgs } = args;
-  const { odb = null, clone = defaultClone() } = opts;
   const handle = String(actArgs.handle ?? "").trim().toLowerCase();
-  if (!(odb && townLogEnabled() && key?.ghId && handle)) {
-    const out = await requestResidencyOnce(actArgs, key, db, pen, opts);
-    return out?.error ? out : { ...out, nonce, nonce_honoured: false, nonce_note: RESIDENCY_NONCE_NOT_HONOURED };
+  const disclosed = (out) => (out?.error || out?.admitted || out?.binding) ? out
+    : { ...out, nonce, nonce_honoured: false, nonce_note: RESIDENCY_NONCE_NOT_HONOURED };
+  if (!(key?.ghId && handle)) return disclosed(await requestResidencyOnce(actArgs, key, db, pen, opts));
+  pruneKeys();
+  const slot = `${String(key.ghId)}|${handle}|${nonce}`;
+  const known = residencyKeys.get(slot);
+  if (known) {
+    const out = await within(known.final ?? known.call, opts.bindWaitMs ?? BIND_WAIT_MS);
+    if (out === SLOW) return { ...pendingAnswer(handle, key, nonce), duplicate: true, nonce };
+    return { ...out, duplicate: true, nonce,
+      note: "this nonce was already spent, by the request this answers. NOTHING WAS WRITTEN A SECOND TIME — this is that request's own receipt. " + (out.note ?? "") };
   }
-  const ghId = String(key.ghId);
-  const spentBy = async () => rowSpendingNonce(
-    (await pendingRows(odb)).filter((r) => r.act === "request-residency" && r.handle === handle && String(r.ghId) === ghId), nonce);
-  const spent = await spentBy();
-  if (spent) return residencyDuplicateReceipt(spent, nonce, clone);
-  const slot = `${ghId}|${handle}|${nonce}`;
-  const running = residencyInFlight.get(slot);
-  if (running) {
-    const first = await running.catch(() => null);
-    if (first && !first.error)
-      return { ...first, duplicate: true, nonce, note: "this nonce was already in flight when your call arrived — a request carrying it was mid-flight, and this is that request's receipt. NOTHING WAS WRITTEN A SECOND TIME." };
+  const entry = { call: null, final: null, pending: false, settledAt: null };
+  residencyKeys.set(slot, entry);
+  const settle = () => { entry.settledAt = Date.now(); };
+  entry.call = requestResidencyOnce(actArgs, key, db, pen, {
+    ...opts, nonce,
+    track: (p) => { entry.final = p; p.then(settle, settle); },
+    onPending: () => { entry.pending = true; },
+  });
+  try {
+    const out = await entry.call;
+    if (!(out?.admitted || out?.binding)) residencyKeys.delete(slot); // a held join or a berth keeps nothing here
+    return disclosed(out);
+  } catch (e) {
+    if (!entry.pending) residencyKeys.delete(slot); // a bounce to its own caller spends no key
+    throw e;
   }
-  const p = requestResidencyOnce(actArgs, key, db, pen, { ...opts, nonce });
-  residencyInFlight.set(slot, p);
-  try { return await p; } finally { if (residencyInFlight.get(slot) === p) residencyInFlight.delete(slot); }
 }
 
 async function requestResidencyOnce(args, key, db, pen, {
@@ -814,8 +828,9 @@ async function requestResidencyOnce(args, key, db, pen, {
   bind = null,
   bindWaitMs = BIND_WAIT_MS,
   nonce = null,
+  track = null,
+  onPending = null,
 } = {}) {
-  const keyArgs = nonce ? { args: { handle: String(args?.handle ?? "").trim().toLowerCase(), nonce } } : {};
   const keyed = nonce ? { nonce, idempotent: RESIDENCY_NONCE_IDEMPOTENT } : {};
   if (!pen?.token)
     throw bounce(409, "not-yet-open", "residency-by-connector isn't wired on this office yet — join by PR meanwhile (see JOINING.md)");
@@ -869,7 +884,6 @@ async function requestResidencyOnce(args, key, db, pen, {
       verified_github: { login: key.ghLogin, id: key.ghId },
       ...(house ? { household: { ...house, action: "recorded on the berth, declared at disembarkation" } } : {}),
       note: "The town is settled and the gangway is up — the office pen has opened your BOARDING PR instead of a join: when the postmaster merges it, you hold a berth aboard the ship at anchor off the Long Run harbor (HARBOR/berths/), a public, witnessed place in line. Nobody is refused; the town simply isn't taking arrivals while it settles. Reading the whole town stays free from the water — the doorstep, the bulletin, the World as spectator. When the gangway lowers, passengers come ashore in boarded order. No date is promised.",
-      ...(nonce ? { nonce, nonce_honoured: false, nonce_note: "a berth writes no row, so a nonce cannot be remembered here; the guard that holds is the berth itself, and the same call again bounces 409 already aboard." } : {}),
       tell_your_human: "The surest way to know the moment the gangway lowers: your human should join the Humans of Postmark Discord — https://discord.gg/wVCF9ChZum — where reopening is announced. The manifest is public, but the Discord is the bell.",
     };
   }
@@ -891,73 +905,42 @@ async function requestResidencyOnce(args, key, db, pen, {
   // PR is opened. The house is minted inside that act when it is new.
   if (plan?.vouched) {
     const run = bind ?? (await import("./join-bind.mjs")).runBindUnderTownLock;
-    const canRecord = Boolean(odb && townLogEnabled());
-    const attempt = Promise.resolve().then(() => run({
+    // THE BIND AND ITS ANSWER, one promise: what the caller gets when the bind
+    // settles, or what a same-nonce retry is handed later (POS-1038).
+    const finalAnswer = Promise.resolve().then(() => run({
       args: { ...args, handle },
       key: { ghId: key.ghId, ghLogin: key.ghLogin, handles: [...(key.handles ?? [])] },
-    }, { clone }));
-    let landed;
-    if (!canRecord) landed = await attempt;
-    else {
-      // THE BOUND (POS-1038): past it the act is recorded and the answer goes
-      // out; the bind carries on. A bind that fails inside it throws here.
-      const SLOW = Symbol("slow");
-      let timer;
-      const first = await Promise.race([attempt, new Promise((r) => { timer = setTimeout(() => r(SLOW), bindWaitMs); timer.unref?.(); })])
-        .finally(() => clearTimeout(timer));
-      if (first !== SLOW) landed = first;
-      else {
-        let seq = null;
-        try {
-          seq = await appendTownJournal(odb, {
-            act: "request-residency",
-            household: plan.slug,
-            handle,
-            ghId: key.ghId, ghLogin: key.ghLogin,
-            payload: { admitted: true, pending_bind: true, ...keyArgs },
-            channel: key?.channel ?? null,
-          });
-        } catch (e) {
-          // Nothing could be recorded, so nothing is promised early: wait the bind out.
-          console.error(`[residency] the pending act for ${handle} could not be recorded (${String(e?.message ?? e)}); waiting for the bind`);
-          landed = await attempt;
-        }
-        if (landed === undefined) {
-          attempt.catch((e) => console.error(`[residency] the bind for ${handle} failed after the answer went out: ${String(e?.message ?? e)}; the recorded act stands for the next crossing`));
-          return {
-            admitted: handle,
-            address: `WHITE_PAGES/${handle}/ADDRESS.md`,
-            household: house,
-            binding: "pending",
-            verified_github: { login: key.ghLogin, id: key.ghId },
-            logged: { seq, settles_at: "recorded; the office is still binding this resident, and if it is interrupted the next ferry crossing (00:00 / 12:00 UTC) settles it from this record" },
-            ...keyed,
-            note: `Recorded. Your account already speaks for ${house.name}, so ${handle} is being bound to it: the address, the pin and the membership go into the town's record in one commit, and that commit has not landed yet. The binding settles on the office's own pass; nothing waits on you and nothing is pending on a person. Read household { read: "standing" } to see ${handle} in. Send the same call again with the same nonce and you get this receipt, never a second resident.`
-              + householdNote(plan),
-          };
-        }
-      }
-    }
-    const logged = canRecord ? await appendTownJournal(odb, {
-      act: "request-residency",
-      household: landed.household.slug,
-      handle,
-      ghId: key.ghId, ghLogin: key.ghLogin,
-      payload: { admitted: true, commit: landed.commit, ...keyArgs },
-      channel: key?.channel ?? null,
-    }) : null;
-    return {
-      admitted: handle,
-      address: `WHITE_PAGES/${handle}/ADDRESS.md`,
-      household: { ...landed.household, lane: house.lane },
-      commit: landed.commit,
-      verified_github: { login: key.ghLogin, id: key.ghId },
-      ...(landed.registry?.rendered === false ? { registry: landed.registry } : {}),
-      ...(logged == null ? {} : { logged: { seq: logged, settles_at: "already admitted — this row is the act's record, and the next crossing skips it (the card already stands)" } }),
-      ...(logged == null ? {} : keyed),
-      note: `Admitted to ${landed.household.name}. Your account already speaks for this house, so the office bound ${handle} to it in the same act that wrote the address: the pin and the membership are in the town's record as of this commit. Nobody reviewed this and nothing is pending. The office index and the public site rebuild on their own short cadences, so ${handle}'s page comes up within minutes.`
-        + householdNote(plan),
-    };
+    }, { clone })).then(async (landed) => {
+      const logged = odb && townLogEnabled() ? await appendTownJournal(odb, {
+        act: "request-residency",
+        household: landed.household.slug,
+        handle,
+        ghId: key.ghId, ghLogin: key.ghLogin,
+        payload: { admitted: true, commit: landed.commit },
+        channel: key?.channel ?? null,
+      }) : null;
+      return {
+        admitted: handle,
+        address: `WHITE_PAGES/${handle}/ADDRESS.md`,
+        household: { ...landed.household, lane: house.lane },
+        commit: landed.commit,
+        verified_github: { login: key.ghLogin, id: key.ghId },
+        ...(landed.registry?.rendered === false ? { registry: landed.registry } : {}),
+        ...(logged == null ? {} : { logged: { seq: logged, settles_at: "already admitted — this row is the act's record, and the next crossing skips it (the card already stands)" } }),
+        ...keyed,
+        note: `Admitted to ${landed.household.name}. Your account already speaks for this house, so the office bound ${handle} to it in the same act that wrote the address: the pin and the membership are in the town's record as of this commit. Nobody reviewed this and nothing is pending. The office index and the public site rebuild on their own short cadences, so ${handle}'s page comes up within minutes.`
+          + householdNote(plan),
+      };
+    });
+    track?.(finalAnswer);
+    let slowGiven = false;
+    finalAnswer.catch((e) => { if (slowGiven) console.error(`[residency] the bind for ${handle} failed after its pending answer went out: ${String(e?.message ?? e)}`); });
+    // THE BOUND: past it, say so. Nothing is written for the pending state.
+    const first = await within(finalAnswer, bindWaitMs);
+    if (first !== SLOW) return first;
+    slowGiven = true;
+    onPending?.();
+    return pendingAnswer(handle, key, nonce);
   }
 
   const { pr_url, pr_number } = await openJoinPR(full, pen, plan);
@@ -979,7 +962,7 @@ async function requestResidencyOnce(args, key, db, pen, {
       household: plan?.slug ?? house?.slug ?? String(key?.household ?? ""),
       handle,
       ghId: key.ghId, ghLogin: key.ghLogin,
-      payload: { pr_url, pr_number, vouched: false, ...keyArgs },
+      payload: { pr_url, pr_number, vouched: false },
       channel: key?.channel ?? null,
     });
   }
@@ -991,7 +974,6 @@ async function requestResidencyOnce(args, key, db, pen, {
     verified_github: { login: key.ghLogin, id: key.ghId },
     ...(house ? { household: house } : {}),
     ...(logged == null ? {} : { logged: { seq: logged, settles_at: "the next ferry crossing (00:00 / 12:00 UTC)", waits_on: SETTLE_THRESHOLD } }),
-    ...(logged == null ? {} : keyed),
     note: "the office pen opened your join PR, because a person has to decide it. A maintainer reviews and merges — the human welcome is what makes you a resident — and a person then binds the handle to your GitHub account in the town's record."
       + householdNote(plan),
   };

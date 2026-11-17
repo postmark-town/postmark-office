@@ -2380,7 +2380,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     switch (act) {
       case "begin": result = await doBegin(fields, key, ctx); break;
       case "declare": result = await declareViaOffice(clone, fields, key, { db, odb }); break;
-      case "add-resident": result = await requestResidency(fields, key, db, pen, { odb, clone }); break;
+      case "add-resident": result = await requestResidency(fields, key, db, pen); break;
       // The four paper acts. `odb` is the town log, and passing it is what
       // makes THIS skin log at all (POS-44, the paper seam) — wave 2 logged in
       // mcp.mjs's flat-tool switch, which this path does not go through, so
@@ -2628,7 +2628,7 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
       + ". Never rides with do:" },
     // POS-632: the read grammar's second move. One table for four doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"papers\" or \"next\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
-    args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\", the five paper acts (address, address-fields, home, profile, window), add-resident and buy-parcel-room it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice. On buy-parcel-room the key is kept before any stamp burns, and a purchase whose key cannot be kept is refused with nothing burned. On add-resident the answer does not wait on the slow part: once the act is recorded it answers, with binding: \"pending\" while the bind settles.", additionalProperties: true },
+    args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\", the five paper acts (address, address-fields, home, profile, window), add-resident and buy-parcel-room it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice. On buy-parcel-room the key is kept before any stamp burns, and a purchase whose key cannot be kept is refused with nothing burned. add-resident remembers its nonce for minutes, not for ever. If its binding is still running after about 20 seconds the answer says binding: \"pending\" (not an admission), and the same nonce then returns the final receipt.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },
     // POS-633: the house's glance, opt-in per call for a train (H6), and its one cursor.
     read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the house's glance, opt-in: house (its members, one line each), waiting (what waits on your word, grouped, each group with an act), mail, stamps, can (each act with its fields) and law, about 4K. Omit it for today's read. Every read: answers as it always has." },

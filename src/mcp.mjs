@@ -1022,7 +1022,7 @@ export async function callTool(name, args, ctx) {
       return id;
     }
     case "request_residency": {
-      try { return await requestResidency(args, key, db, pen, { odb, clone }); }
+      try { return await requestResidency(args, key, db, pen); }
       catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
     }
     // join-as-declaration (Keemin's ruling, 2026-08-14) — the first-class join
