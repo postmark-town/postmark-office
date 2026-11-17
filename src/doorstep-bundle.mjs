@@ -278,10 +278,12 @@ async function doorstepBundleOf(handle, ctx = {}) {
     // (`nextSettlement` calls `getUTCFullYear`), so the page's instant becomes
     // a Date here and nowhere else — see the `nowMs` note at the top.
     // `ctx.stakesReaders` is the stakes report's own reader seam (doorstep-stakes.mjs § stakesFor), for a test's invented world; the live doors pass none.
-    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, ...(ctx.stakesReaders ?? {}) });
+    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, allocationPage: key?.handles?.has?.(handle) === true ? { limit: DOORSTEP_STAKES } : false, ...(ctx.stakesReaders ?? {}) });
     const { rule: _rule, read_the_rest: _rest, later_stakes: _later, ...trimmed } = whole;
     // the segment IS the read at its `args` (the bundle law): a report that was cut is the read at `limit`; one that fit is the bare read, as it always was
-    const stakesArgs = "limit" in whole ? { handle, limit: DOORSTEP_STAKES } : { handle };
+    // POS-1100: the segment carries the read's own first page of everything the house has stamps behind (`allocation`, left out when nothing is staked), so
+    // when it is there the read at these args is the read at `limit`: the same page, and the marks part whole as it was (a list that fits is answered whole)
+    const stakesArgs = "limit" in whole || whole.allocation ? { handle, limit: DOORSTEP_STAKES } : { handle };
     d.stakes = slim
       ? { serves: "household.stakes", args: stakesArgs, ...trimmed, teach_at: STAKES_TEACH_POINTER,
           abridged: "the sweep's rule and the pointers to the portfolio and the stake door are the same sentences for every resident every day, so the connector skin drops `rule` and `read_the_rest` and names the door instead (`teach_at` above), and `later_stakes` with them. household { read: \"stakes\" } answers it whole. " + SNAPSHOT_LIMIT }
