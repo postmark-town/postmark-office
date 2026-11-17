@@ -174,7 +174,7 @@ test("a household's idea row carries what stands behind the post and the house's
 });
 
 /** A world store whose Think Tank holds these idea marks `[id, by, date]`, published as the office reads it; `done()` puts the env back. */
-async function publishTank(marks) {
+async function publishTank(marks, { declare = true } = {}) {
   const world = await import("./helpers/world-rows.mjs");
   const { DatabaseSync } = await import("node:sqlite");
   const { tempDir } = await import("./helpers/temp-dir.mjs");
@@ -183,7 +183,7 @@ async function publishTank(marks) {
   db.exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, subkind TEXT, tier TEXT, by TEXT, at_x REAL, at_y REAL, extent_w REAL, extent_h REAL, props TEXT);
            CREATE TABLE edges (seq INTEGER PRIMARY KEY AUTOINCREMENT, src TEXT, dst TEXT, type TEXT, props TEXT, born_at TEXT)`);
   db.prepare("INSERT INTO meta (key, value) VALUES ('hydration_status','OK')").run();
-  db.prepare(`INSERT INTO nodes (id, kind, subkind, tier, by, props) VALUES ('the-town/idea', 'mark', 'class', 'constitution', 'the-town', ?)`).run(JSON.stringify({ class: "idea", in_works: 1, body: "an idea" }));
+  if (declare) db.prepare(`INSERT INTO nodes (id, kind, subkind, tier, by, props) VALUES ('the-town/idea', 'mark', 'class', 'constitution', 'the-town', ?)`).run(JSON.stringify({ class: "idea", in_works: 1, body: "THE DECLARATION'S LAW SENTENCE" }));
   for (const [id, by, date] of marks) {
     db.prepare("INSERT INTO nodes (id, kind, subkind, tier, by, props) VALUES (?, 'mark', 'sited', 'market', ?, ?)").run(id, by, JSON.stringify({ class: "idea", body: `${id}.`, date }));
     db.prepare("INSERT INTO edges (src, dst, type) VALUES (?, 'the-town/idea', 'instance-of')").run(id);
@@ -301,4 +301,55 @@ test("read_ideas quotes the idea POST law, teaches posts with stakes, and no lon
   const { ideasTank } = await import("../src/world-classes.mjs");
   const done = await publishTank([]);   // a declaration and no idea mark
   try { assert.deepEqual(ideasTank().ideas, []); } finally { done(); }
+});
+
+// THE SEAM, through the door (Truey on 25cd34b0: two flips stayed green): read_ideas is CALLED over a world with no idea declaration, and over one with a converted mark.
+const readIdeas = async (env = {}) => {
+  const { callTool } = await import("../src/mcp.mjs");
+  const saved = process.env.IDEA_POSTS; process.env.IDEA_POSTS = "1";
+  try { return await callTool("read_ideas", {}, {}); } finally { if (saved === undefined) delete process.env.IDEA_POSTS; else process.env.IDEA_POSTS = saved; void env; }
+};
+
+test("read_ideas over a world with NO idea declaration answers the post law, no mark law, no throw", async () => {
+  setup();
+  seedIdea("ana/lantern-2", "ana", "hh:the-harbor");
+  const done = await publishTank([], { declare: false });
+  try {
+    const r = await readIdeas();
+    const { IDEA_POST_LAW } = await import("../src/ideas.mjs");
+    assert.equal(r.law, IDEA_POST_LAW(), "LAW (Rivet, POS-854): the reader stands on the post law, not on the declaration being retired");
+    assert.equal("mark_law" in r, false, "no declaration, no mark law");
+    assert.deepEqual(r.ideas, []); assert.equal(r.source, "store");
+    assert.deepEqual(r.posts.map((p) => p.id), ["ana/lantern-2"], "the post read still answers");
+  } finally { done(); }
+  const done2 = await publishTank([]);   // the declaration standing: it is quoted beside, never in place of, the post law
+  try {
+    const r = await readIdeas();
+    const { IDEA_POST_LAW } = await import("../src/ideas.mjs");
+    assert.equal(r.law, IDEA_POST_LAW()); assert.equal(r.mark_law, "THE DECLARATION'S LAW SENTENCE");
+  } finally { done2(); }
+});
+
+test("read_ideas lists a mark once: a mark that has become its author's post is the post, and a mark not yet carried across stays a mark", async () => {
+  setup();
+  seedIdea("ana/lantern-2", "ana", "hh:the-harbor", { fields: { origin: { mark: "ana/lantern", date: "2026-09-05T00:00:00.000Z" } } });
+  const done = await publishTank([["ana/lantern", "ana", "2026-09-05"], ["ana/kept-mark", "ana", "2026-09-06"]]);
+  try {
+    const r = await readIdeas();
+    assert.deepEqual(r.ideas.map((i) => i.id), ["ana/kept-mark"], "the carried mark is not read beside its post; the other mark stands");
+    assert.deepEqual(r.posts.map((p) => p.id), ["ana/lantern-2"]);
+  } finally { done(); }
+});
+
+test("a converted post carries its place (`at` or `on`) and takes an id from the mark's own slug when its title mints none", async () => {
+  setup();
+  const cjk = { mark: "ana/a-mark-of-ana", by: "ana", title: "镇上该有一份路程册", body: "镇上该有一份路程册：每一户门朝哪边。", id_base: "a-mark-of-ana", place: { x: 293, y: -183 },
+    origin: { mark: "ana/a-mark-of-ana", kind: "sited", date: "2026-10-05T00:00:00.000Z", author: "ana", at: { x: 293, y: -183 }, body_sha256: "cd".repeat(32) } };
+  const r = await conv(cjk, { planned: "ana/a-mark-of-ana-2" });
+  assert.equal(r.post, "ana/a-mark-of-ana-2", "the stub's mark table holds the bare id, so the base takes -2");
+  const row = t.posts.get("ana/a-mark-of-ana-2");
+  assert.deepEqual([row.place_x, row.place_y, row.title, row.body], [293, -183, cjk.title, cjk.body], "the place and the author's own words ride the post");
+  const on = { ...cjk, mark: "ana/pred", id_base: undefined, title: "A predicated idea", body: "A predicated idea. About a mark.", place: { mark: "the-town/the-parent" }, origin: { ...cjk.origin, mark: "ana/pred" } };
+  await conv(on, { planned: "ana/a-predicated-idea" });
+  assert.equal(t.posts.get("ana/a-predicated-idea").place_mark, "the-town/the-parent");
 });

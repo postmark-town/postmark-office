@@ -35,6 +35,7 @@ export const SOURCE_NOTE = "marks standing at the world clone's ref: every WORLD
 export const originOf = (m) => ({
   mark: m.mark, kind: m.kind, date: m.date ?? null, author: m.by,
   ...(m.of ? { of: m.of } : {}),
+  ...(m.at ? { at: m.at } : {}), ...(m.extent ? { extent: m.extent } : {}),   // where a sited idea stood
   body_sha256: createHash("sha256").update(m.body, "utf8").digest("hex"),
 });
 
@@ -45,7 +46,10 @@ export function parseMarkFile(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(String(text));
   if (!m) return null;
   const get = (k) => (new RegExp(`^${k}:[ \\t]*(.*)$`, "m").exec(m[1])?.[1] ?? "").trim();
-  return { class: get("class"), kind: get("kind"), by: get("by"), date: get("date"), body: m[2].replace(/^\s+|\s+$/g, "") };
+  const pair = (k, a, b) => { const x = new RegExp(`^${k}:[ \\t]*\\{[ \\t]*${a}:[ \\t]*(-?\\d+(?:\\.\\d+)?)[ \\t]*,[ \\t]*${b}:[ \\t]*(-?\\d+(?:\\.\\d+)?)[ \\t]*\\}`, "m").exec(m[1]); return x ? [Number(x[1]), Number(x[2])] : null; };
+  const at = pair("at", "x", "y"), extent = pair("extent", "w", "h");
+  return { class: get("class"), kind: get("kind"), by: get("by"), date: get("date"), body: m[2].replace(/^\s+|\s+$/g, ""),
+    ...(at ? { at: { x: at[0], y: at[1] } } : {}), ...(extent ? { extent: { w: extent[0], h: extent[1] } } : {}) };
 }
 
 /**
@@ -73,7 +77,8 @@ export function readIdeaMarks({ worldClone, ref = "HEAD" }) {
       const parent = shown.status === 0 ? parseMarkFile(shown.stdout) : null;
       of = parent?.by ? `${parent.by}/${parentDirs.at(-1)}` : `path:${parentDirs.join("/")}`;
     }
-    out.push({ mark: `${f.by}/${slug}`, by: f.by, kind: f.kind, date: f.date || null, body: f.body, path, ...(of ? { of } : {}) });
+    out.push({ mark: `${f.by}/${slug}`, by: f.by, kind: f.kind, date: f.date || null, body: f.body, path, ...(of ? { of } : {}),
+      ...(f.at ? { at: f.at } : {}), ...(f.extent ? { extent: f.extent } : {}) });
   }
   return out;
 }
@@ -98,8 +103,8 @@ export function titleFor(m) {
  * The id the pen would mint for this title, offline: `<author>/<slug>`, then `-2`, `-3` while `held` has it.
  * `held` is every id a post or a mark holds, as a Set. The step asks the store itself and must agree.
  */
-export function mintOffline(author, title, held) {
-  const base = slugFromTitle(title);
+export function mintOffline(author, title, held, idBase = null) {
+  const base = slugFromTitle(title) || idBase;
   if (!base) return null;
   if (!held.has(`${author}/${base}`)) return `${author}/${base}`;
   for (let n = 2; n < 1000; n++) if (!held.has(`${author}/${base}-${n}`)) return `${author}/${base}-${n}`;
@@ -136,8 +141,14 @@ export function planConversion({ marks, posts = new Map(), heldIds = new Set(), 
     if (!title) { why("no title can be drawn from the body"); continue; }
     let post = posts.get(m.mark) ?? null;
     const existing = post != null;
+    // A title with no letters or digits in the town's alphabet (a Chinese body, say) mints no slug: the id then
+    // takes the mark's OWN slug as its base (an explicit override, named on the item as `id_base`), and `-2` where
+    // that id is taken, which the mark itself holds until the world half withdraws it. The title and body stay the author's words.
+    const ownSlug = m.mark.split("/")[1];
+    const idBase = slugFromTitle(title) ? null : ownSlug;
     if (!post) {
-      post = mintOffline(m.by, title, held);
+      if (idBase) held.add(m.mark);
+      post = mintOffline(m.by, title, held, idBase);
       if (!post) { why("no id mints for this title"); continue; }
       held.add(post);
     }
@@ -147,7 +158,10 @@ export function planConversion({ marks, posts = new Map(), heldIds = new Set(), 
       if (k.slice(0, i) === m.mark) stakes.push({ handle: k.slice(i + 1), n });
     }
     stakes.sort((a, b) => a.handle.localeCompare(b.handle));
+    // Where it stood rides the post's own place: a sited idea's `at`, a predicated idea's mark (when the parent is a mark id, not a path).
+    const place = m.at ? { x: m.at.x, y: m.at.y } : (m.of && !m.of.startsWith("path:") ? { mark: m.of } : null);
     items.push({ mark: m.mark, by: m.by, kind: m.kind, date: m.date, ...(m.of ? { of: m.of } : {}), title, body: m.body, post,
+      ...(idBase ? { id_base: idBase } : {}), ...(place ? { place } : {}),
       state: existing ? "posted" : "new", origin: originOf(m), stakes });
   }
   // the carry is planned over every item that still has a stake on its mark, as one conservative whole
@@ -155,7 +169,7 @@ export function planConversion({ marks, posts = new Map(), heldIds = new Set(), 
   let carry = { lines: [], moves: [], proof: null };
   if (carryItems.length) {
     try { carry = planCarry(M, entries, carryItems, { date, via: CONVERSION_VIA }); }
-    catch (e) { problems.push({ mark: null, by: null, reason: `the carry is refused: ${e.defect ?? e.message} (${e.hint ?? ""})` }); }
+    catch (e) { problems.push({ mark: null, by: null, reason: `the carry is refused: ${e.defect ?? "it could not be planned"} (${e.hint ?? ""})` }); }
   }
   const totals = {
     marks_read: marks.length,
@@ -180,7 +194,7 @@ export function draftNotices(items) {
   return [...by].sort(([a], [b]) => a.localeCompare(b)).map(([to, mine]) => {
     const lines = mine.map((i) => {
       const staked = i.stakes.reduce((a, s) => a + s.n, 0);
-      return `- "${i.title}" (it stood as ${i.mark}${i.date ? `, put up ${String(i.date).slice(0, 10)}` : ""}) is now your idea post ${i.post}.${staked ? ` The ✦${staked} staked behind it moved with it, each staker's part as it was.` : ""}`;
+      return `- "${i.title}" (it stood as ${i.mark}${i.date ? `, put up ${String(i.date).slice(0, 10)}` : ""}) is now your idea post ${i.post}.${i.place ? " Where it stood is kept on the post." : ""}${staked ? ` The ✦${staked} staked behind it moved with it, each staker's part as it was.` : ""}`;
     });
     return { to, subject: mine.length === 1 ? "Your idea is now a post" : `Your ${mine.length} ideas are now posts`,
       body: [`The Think Tank's ideas are posts now, and an idea you put up as a mark is carried across to your own post, with where it came from kept on it (its mark id, its date, your words as you wrote them).`, "", ...lines, "",
@@ -190,6 +204,6 @@ export function draftNotices(items) {
 
 /** A stable digest of what a reviewer read: the apply refuses unless it recomputes the same one. */
 export function manifestSha(plan, { ledgerHead = null, ref = null } = {}) {
-  const core = { ledgerHead, ref, items: plan.items.map(({ mark, by, kind, date, of, title, post, stakes, origin }) => ({ mark, by, kind, date, of: of ?? null, title, post, stakes, body_sha256: origin.body_sha256 })), problems: plan.problems };
+  const core = { ledgerHead, ref, items: plan.items.map(({ mark, by, kind, date, of, title, post, stakes, origin, place, id_base }) => ({ mark, by, kind, date, of: of ?? null, title, post, stakes, place: place ?? null, id_base: id_base ?? null, body_sha256: origin.body_sha256 })), problems: plan.problems };
   return createHash("sha256").update(JSON.stringify(core), "utf8").digest("hex");
 }

@@ -173,11 +173,11 @@ test("a mark it cannot carry whole stays standing, named: a body over the limit,
   seed({ extra: [M.rulesV2Line("2026-10-01", [MEEP])] });
   const long = "x".repeat(601);
   const p = plan([mk(ANA, "long", long), mk(MEEP, "mine", "A meep's thought."), mk(ANA, "cjk", "镇上该有一份路程册"), mk(ANA, "ok", "A fine idea. With a second sentence.")]);
-  assert.deepEqual(p.items.map((i) => i.mark), ["sbx-ana/ok"], "only the one that can be carried whole is planned");
+  assert.deepEqual(p.items.map((i) => i.mark), ["sbx-ana/cjk", "sbx-ana/ok"], "only what can be carried whole is planned (a title with no letters takes its id from the mark's own slug, not a refusal)");
   const why = Object.fromEntries(p.problems.map((x) => [x.mark, x.reason]));
   assert.match(why["sbx-ana/long"], /601 characters.*not cut, not summarised/);
   assert.match(why["sbx-meep/mine"], /meep/);
-  assert.match(why["sbx-ana/cjk"], /no id mints/, "a title with no letters or digits in the town's alphabet mints no id: left standing for a person, not renamed");
+  assert.equal(why["sbx-ana/cjk"], undefined);
 });
 
 test("ids are collision-safe offline and a rerun finds its own post by the mark it came from", { skip }, () => {
@@ -233,6 +233,7 @@ const run = async (argv, deps = {}) => {
   return { code, text: out.join("\n"), err: errs.join("\n") };
 };
 const MARKS = () => [mk(ANA, "m1", "A lantern on the quay: dark after the ferry."), mk(ANA, "m2", "Ring a bell.")];
+const STORE = () => ({ posts: new Map(), held: new Set() });   // a posts store that was read and holds nothing
 const digestOf = (t) => /^digest: ([0-9a-f]{64})$/m.exec(t)[1];
 const dir = (p) => join(tempDir("pos854-out-"), p);
 
@@ -267,7 +268,7 @@ test("the tool refuses to run from the tick, and an apply with no digest, no key
 test("THE APPLY writes only the plan whose digest it was handed: a wrong digest writes nothing; the right one makes the posts, carries the stakes, lands, and leaves a receipt", { skip }, async () => {
   seed();
   const facts = await TOOL.townFacts(town);
-  const dry = await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: null, facts });
+  const dry = await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: STORE(), facts });
   const digest = digestOf(dry.text);
   const ledger = readFileSync(ledgerPath(), "utf8");
   const receipt = dir("receipt.json");
@@ -275,11 +276,11 @@ test("THE APPLY writes only the plan whose digest it was handed: a wrong digest 
   const convert = async (m, o) => { made.push([m.mark, m.title, o.planned, o.hand, m.origin.mark]); return { existed: false, post: o.planned, act_id: made.length }; };
   const args = (expect) => ["--town", town, "--world", "unused", "--date", DAY, "--apply", "--key", keyFile, "--expect", expect, "--receipt", receipt];
 
-  const wrong = await run(args("0".repeat(64)), { marks: MARKS(), store: null, facts, convert });
+  const wrong = await run(args("0".repeat(64)), { marks: MARKS(), store: STORE(), facts, convert });
   assert.equal(wrong.code, 1); assert.match(wrong.err, /not the plan that was reviewed/);
   assert.equal(made.length, 0, "a wrong digest made no post"); assert.equal(readFileSync(ledgerPath(), "utf8"), ledger, "…and moved no stamp"); assert.ok(!existsSync(receipt));
 
-  const ok = await run(args(digest), { marks: MARKS(), store: null, facts: await TOOL.townFacts(town), convert });
+  const ok = await run(args(digest), { marks: MARKS(), store: STORE(), facts: await TOOL.townFacts(town), convert });
   assert.equal(ok.code, 0, ok.err);
   assert.deepEqual(made.map((m) => [m[0], m[2], m[3], m[4]]), [["sbx-ana/m1", "sbx-ana/a-lantern-on-the-quay", "wright", "sbx-ana/m1"], ["sbx-ana/m2", "sbx-ana/ring-a-bell", "wright", "sbx-ana/m2"]],
     "each post is put up by the town's hand at the id the plan named, carrying the mark it was");
@@ -292,20 +293,78 @@ test("THE APPLY writes only the plan whose digest it was handed: a wrong digest 
   assert.equal(rec.digest, digest); assert.equal(rec.notices_sent, 0); assert.equal(rec.notices_drafted.length, 1);
   assert.deepEqual([rec.stakes.proof.carried, rec.stakes.moves.length], [6, 3]);
   // a second apply of the same digest: the receipt exists, and the digest would differ anyway (the stakes moved)
-  const again = await run(args(digest), { marks: MARKS(), store: null, facts: await TOOL.townFacts(town), convert });
+  const again = await run(args(digest), { marks: MARKS(), store: STORE(), facts: await TOOL.townFacts(town), convert });
   assert.equal(again.code, 1);
 });
 
 test("an apply whose carry is refused leaves the posts that stand and moves no stamp", { skip }, async () => {
   seed();
   const facts = await TOOL.townFacts(town);
-  const digest = digestOf((await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: null, facts })).text);
+  const digest = digestOf((await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: STORE(), facts })).text);
   const ledger = readFileSync(ledgerPath(), "utf8");
   const refusing = () => { throw Object.assign(new Error("x"), { code: 409, defect: "the stakes moved", hint: "again" }); };
   const r = await run(["--town", town, "--world", "unused", "--date", DAY, "--apply", "--key", keyFile, "--expect", digest, "--receipt", dir("r.json")],
-    { marks: MARKS(), store: null, facts: await TOOL.townFacts(town), convert: async (m, o) => ({ post: o.planned }), carry: refusing });
+    { marks: MARKS(), store: STORE(), facts: await TOOL.townFacts(town), convert: async (m, o) => ({ post: o.planned }), carry: refusing });
   assert.equal(r.code, 1); assert.match(r.err, /the stakes were refused: the stakes moved.*Posts stand; no stamp has moved/);
   assert.equal(readFileSync(ledgerPath(), "utf8"), ledger);
+});
+
+// ── review round (Truey on 25cd34b0) ────────────────────────────────────────
+
+test("THE GHOST PROBE: a post that already exists under another id than the plan's is never staked onto the plan's id; nothing moves", { skip }, async () => {
+  seed();
+  const facts = await TOOL.townFacts(town);
+  const digest = digestOf((await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: STORE(), facts })).text);
+  const ledger = readFileSync(ledgerPath(), "utf8");
+  // the real convertMarkToIdeaPost answers { existed: true, post: <the id it already holds> } for a mark that already has a post
+  const convert = async (m) => ({ existed: true, post: `${m.by}/${m.mark.split("/")[1]}-existing`, mark: m.mark });
+  const r = await run(["--town", town, "--world", "unused", "--date", DAY, "--apply", "--key", keyFile, "--expect", digest, "--receipt", dir("r.json")],
+    { marks: MARKS(), store: STORE(), facts: await TOOL.townFacts(town), convert });
+  assert.equal(r.code, 1, "the apply stops");
+  assert.match(r.err, /already has the post sbx-ana\/m1-existing, and the plan named sbx-ana\/a-lantern-on-the-quay: no stamp is carried onto an id that is not the post/);
+  assert.equal(readFileSync(ledgerPath(), "utf8"), ledger, "no stamp moved: nothing is escrowed on an id with no post row");
+  assert.equal(ENG.postStakeState(M, entries()).escrow.size, 0);
+});
+
+test("an apply with the posts store unread is refused, writing nothing", { skip }, async () => {
+  seed();
+  const facts = await TOOL.townFacts(town);
+  const digest = digestOf((await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: null, facts })).text);
+  const ledger = readFileSync(ledgerPath(), "utf8");
+  const made = [];
+  const r = await run(["--town", town, "--world", "unused", "--date", DAY, "--apply", "--key", keyFile, "--expect", digest, "--receipt", dir("r.json")],
+    { marks: MARKS(), store: null, facts: await TOOL.townFacts(town), convert: async (m, o) => { made.push(m.mark); return { post: o.planned }; } });
+  assert.equal(r.code, 1); assert.match(r.err, /--apply needs the posts store read/);
+  assert.deepEqual(made, [], "no post made"); assert.equal(readFileSync(ledgerPath(), "utf8"), ledger);
+});
+
+test("a title with no letters mints its id from the mark's own slug (-2 while the mark holds it), keeps the author's words, and carries the place", { skip }, () => {
+  seed();
+  const cjk = mk(ANA, "the-road-book", "镇上该有一份路程册：每一户门朝哪边、到渡口多少步。", { at: { x: 293, y: -183 }, extent: { w: 1, h: 1 } });
+  const pred = mk(BO, "a-claim", "A claim about the parent. More.", { kind: "predicated", of: "the-town/the-parent" });
+  const p = plan([cjk, pred, mk(ANA, "plain", "Plain. Words.")]);
+  assert.deepEqual(p.problems, [], "nothing is left standing");
+  const [a, b, c] = p.items;
+  assert.equal(a.post, "sbx-ana/the-road-book-2", "the mark's own slug is the base, and the mark holds the bare id");
+  assert.equal(a.id_base, "the-road-book"); assert.equal(a.body, cjk.body, "the original words, whole");
+  assert.deepEqual(a.place, { x: 293, y: -183 }); assert.deepEqual(a.origin.at, { x: 293, y: -183 }); assert.equal(a.origin.mark, "sbx-ana/the-road-book");
+  assert.deepEqual(b.place, { mark: "the-town/the-parent" }, "a predicated idea stands on the mark it is about");
+  assert.equal(c.place, undefined); assert.equal(c.id_base, undefined);
+  assert.match(p.notices[0].body, /Where it stood is kept on the post/);
+  const again = CONV.manifestSha(p, { ledgerHead: "h", ref: "r" });
+  assert.notEqual(again, CONV.manifestSha(plan([{ ...cjk, at: { x: 1, y: 1 } }, pred, mk(ANA, "plain", "Plain. Words.")]), { ledgerHead: "h", ref: "r" }), "the place is in the digest a reviewer read");
+});
+
+test("the dry run prints a TITLES list, mark → post title, before the apply", { skip }, async () => {
+  seed();
+  const r = await run(["--town", town, "--world", "unused", "--date", DAY], { marks: MARKS(), store: STORE(), facts: await TOOL.townFacts(town) });
+  const block = r.text.slice(r.text.indexOf("TITLES"), r.text.indexOf("PROBLEMS"));
+  assert.match(block, /sbx-ana\/m1 {2}→ {2}"A lantern on the quay"/); assert.match(block, /sbx-ana\/m2 {2}→ {2}"Ring a bell"/);
+});
+
+test("the reader takes a sited mark's place from its frontmatter", { skip }, () => {
+  const f = CONV.parseMarkFile("---\nkind: sited\nby: a\ndate: 2026-10-01\nat: { x: 297, y: -176 }\nextent: { w: 2, h: 3 }\nclass: idea\n---\n\nBody.\n");
+  assert.deepEqual([f.at, f.extent], [{ x: 297, y: -176 }, { w: 2, h: 3 }]);
 });
 
 after(() => { /* the scratch folders are tempDir's */ });

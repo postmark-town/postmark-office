@@ -90,7 +90,7 @@ async function mustIdea(client, id) {
  * A slug the caller chose is theirs or refused; one minted from the title takes
  * `-2`, `-3`, … while held.
  */
-async function mintIdeaId(client, author, { slug, title }) {
+async function mintIdeaId(client, author, { slug, title, base: given = null }) {
   const { rows: posts } = await client.query("SELECT id FROM posts WHERE id LIKE $1", [`${author}/%`]);
   const { rows: marks } = await client.query("SELECT slug FROM marks WHERE slug LIKE $1", [`${author}/%`]);
   const held = new Set([...posts.map((r) => r.id), ...marks.map((r) => r.slug)]);
@@ -99,7 +99,7 @@ async function mintIdeaId(client, author, { slug, title }) {
     if (held.has(id)) throw refuse(409, `"${id}" is taken`, "an id is never reused, and a Think Tank mark holds some — choose another slug, or leave slug off and the title names it", { field: "slug" });
     return id;
   }
-  const base = slugFromTitle(title);
+  const base = slugFromTitle(title) || given;   // `given`: the conversion's explicit base for a title with no letters (convertMarkToIdeaPost)
   if (!base) throw refuse(422, "the title mints no id", "an idea's id is <author>/<slug>, from the title's letters and digits — give the title at least one, or send slug", { field: "title" });
   if (!held.has(`${author}/${base}`)) return `${author}/${base}`;
   for (let n = 2; n < 1000; n++) if (!held.has(`${author}/${base}-${n}`)) return `${author}/${base}-${n}`;
@@ -159,9 +159,9 @@ export async function convertMarkToIdeaPost(m, { now = Date.now(), env = process
   return wrote(async (client) => {
     const { rows: had } = await client.query("SELECT id FROM posts WHERE class = $1 AND fields->'origin'->>'mark' = $2", [IDEA_CLASS, m.mark]);
     if (had.length) return { existed: true, post: had[0].id, mark: m.mark };
-    const id = await mintIdeaId(client, author, { title: t.title });
+    const id = await mintIdeaId(client, author, { title: t.title, base: m.id_base ?? null });
     if (planned && id !== planned) throw refuse(409, `the pen mints "${id}" for ${m.mark}, and the reviewed plan named "${planned}"`, "the store moved since the plan was read: run the dry run again and review it");
-    const payload = { post: id, class: IDEA_CLASS, title: t.title, body: t.body, state: STATE_POSTED, fields: { origin }, hand };
+    const payload = { post: id, class: IDEA_CLASS, title: t.title, body: t.body, state: STATE_POSTED, fields: { origin }, ...(m.place ? { place: m.place } : {}), hand };
     const actId = await insertAct(client, actRow({ action: ACT_POST, actor: author, object: id, payload, now }));
     const household = await householdKeyFor(client, author);
     const row = applyPostAct({ posts: new Map(), responses: new Map() },

@@ -112,6 +112,9 @@ export function renderPlan(plan, { date, ref, source, storeNote, ledgerHead }) {
     L.push(`  ${i.state === "posted" ? "have" : "make"}  ${i.mark}  →  ${i.post}  · ${i.kind}${i.of ? ` of ${i.of}` : ""} · ${i.date ?? "no date"} · "${i.title}"${st}`);
   }
   L.push("");
+  L.push("TITLES (mark → the title its post takes: the body's first clause, or the body cut at a word; read these before the apply. The body stays whole beside it)");
+  for (const i of plan.items) L.push(`  ${i.mark}  →  "${i.title}"${i.id_base ? `  [id from the mark's own slug: ${i.id_base}]` : ""}${i.place ? `  [place kept: ${i.place.mark ?? `${i.place.x}, ${i.place.y}`}]` : ""}`);
+  L.push("");
   L.push("PROBLEMS (stay standing, unwithdrawn, for a person)");
   if (!plan.problems.length) L.push("  none");
   for (const p of plan.problems) L.push(`  ${p.mark ?? "(the carry)"}${p.by ? ` (${p.by})` : ""}: ${p.reason}`);
@@ -176,6 +179,8 @@ export async function main(argv = process.argv.slice(2), { facts = null, marks =
     }
     if (expect !== digest)
       return { error: `convert-idea-marks: this is not the plan that was reviewed: --expect ${expect}, and the plan this run would write is ${digest}. Something changed since the dry run (a mark, a stake, a post, the ledger). Nothing written: run the dry run again and read it.` };
+    // an apply plans ids offline for every mark when the store was not read, so it could stake onto ids no post holds: refused
+    if (!known) return { error: "convert-idea-marks: --apply needs the posts store read (WORLD2_PG_URL or PG* set): with it unread every mark is planned as new at an offline id. Nothing written." };
     if (plan.problems.some((p) => p.mark == null)) return { error: "convert-idea-marks: the carry itself is refused, so nothing is written" };
 
     // 1. THE POSTS: one act and one row each, idempotent by the mark id on the row; the pen's own id mint must agree with the plan
@@ -183,7 +188,11 @@ export async function main(argv = process.argv.slice(2), { facts = null, marks =
     const made = [];
     for (const i of plan.items) {
       try {
-        const r = await conv({ mark: i.mark, by: i.by, title: i.title, body: i.body, origin: i.origin }, { hand: "wright", planned: i.post, roll: f.roll, env });
+        const r = await conv({ mark: i.mark, by: i.by, title: i.title, body: i.body, origin: i.origin, place: i.place, id_base: i.id_base }, { hand: "wright", planned: i.post, roll: f.roll, env });
+        // THE STAKES GO ONTO THE POST THAT EXISTS: a post under any other id than the plan's would have stamps escrowed on an id with no row
+        // (out of reach of unstake). Stop before the carry; posts made so far stand and are found again by their provenance.
+        if (r.post !== i.post)
+          return { error: `convert-idea-marks: ${i.mark} already has the post ${r.post}, and the plan named ${i.post}: no stamp is carried onto an id that is not the post. Nothing more written; run the dry run again with the store read.`, made };
         made.push({ mark: i.mark, post: r.post, existed: r.existed === true, act_id: r.act_id ?? null });
       } catch (e) {
         return { error: `convert-idea-marks: ${i.mark} → ${i.post} was refused: ${e.defect ?? e.message} (${e.hint ?? ""}). Posts made before it stand and are found again by their provenance on a rerun; no stamp has moved. Nothing more written.`, made };
