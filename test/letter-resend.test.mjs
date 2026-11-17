@@ -105,3 +105,31 @@ test("3 · a resend is no duplicate-id bypass: the same title on the same day me
     assert.equal((await rows(o)).length, 1);
   });
 });
+
+// POS-1057: resendsBy read the WHOLE town log to keep one sender's letter rows (71 MB on prod, 2026-11-17; one read took
+// 21 s). The log's read now takes `cls` and `handle` and narrows in the store.
+// FLIP: in letter-resend.mjs § resendsBy, call `readTownJournal(odb)` bare again → `handed` is every row, not wright's two.
+test("4 · the resend join asks the log for one sender's letter rows, and its answer is the one the whole log gave", async () => {
+  const { appendTownJournal } = await import("../src/town-journal.mjs");
+  const o = odb();
+  await flagOn(async () => {
+    const first = await send({ resend: LOST, nonce: "n-20" }, o);
+    await send({ title: "an ordinary letter", nonce: "n-21" }, o);
+    // rows that are not wright's letters: another sender's letter, and wright's own act of another class
+    await appendTownJournal(o, { cls: "letter", act: "send", household: "limen", handle: "limen", payload: { id: "limen-x", args: { resend: LOST } }, writtenAt: "2026-07-13T00:00:00Z" });
+    await appendTownJournal(o, { cls: "update", act: "post", household: "wright", handle: "wright", payload: { args: { resend: LOST } }, writtenAt: "2026-07-13T00:00:01Z" });
+
+    const whole = await readTownJournal(o);
+    const narrow = await readTownJournal(o, { cls: "letter", handle: "wright" });
+    assert.equal(whole.length, 4);
+    assert.deepEqual(narrow, whole.filter((r) => r.cls === "letter" && r.handle === "wright"), "the store's narrowing is the filter's");
+    assert.equal(narrow.length, 2);
+
+    // the join's answer, and what it was handed to make it
+    const handed = [];
+    const seen = { prepare: (sql) => { const st = o.prepare(sql); return { all: (...a) => { const got = st.all(...a); if (/FROM town_journal/.test(sql)) handed.push(got.length); return got; }, get: (...a) => st.get(...a), run: (...a) => st.run(...a) }; }, exec: (s) => o.exec(s) };
+    const joined = await resendsBy(seen, "wright");
+    assert.deepEqual([...joined], [[LOST, { letter_id: first.letter_id, seq: whole[0].seq, written_at: whole[0].writtenAt }]]);
+    assert.deepEqual(handed, [2], "the store handed over wright's two letter rows, not the log's four");
+  });
+});
