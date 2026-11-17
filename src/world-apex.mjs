@@ -4227,6 +4227,79 @@ export function lensRefusal(args = {}) {
     `call twice: world { lens: "${OUTSIDER_LENS}" } to see as a stranger, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } without it`);
 }
 
+// ── THE SPECTATOR LOOK (WLD-187; POS-844 call 4, Darko 2026-11-16) ──────────────────
+//
+// world { at: <mark | place | "x,y"> } answers the bare v2 read as NOBODY standing there:
+// `view`, `who`, `now` and `heard`. "It's invisible: not in who, nothing recorded, no can."
+//
+// It is the keyless spectator read (GET /world/apex?x=&y=, CONTRACT.md § the apex verb) reached
+// through the MCP door. The query is read with NO KEY, whoever's key made the call: the caller is
+// not standing at `at`, is not shown in `who`, is not marked present or listening, and is given
+// no `can` — a coordinate is never permission to act from there (the spectator decouple, below,
+// which still refuses a do: or read: from a point). `at` is the TOP-LEVEL word; an action's own
+// `args.at` (leave-mark, drop and the rest) is that act's field and is not read here.
+//
+// A name is resolved with `find:`'s own matcher (worldFind, keyless): one place answers; none or
+// several answer with the find's own hits and no guessed location.
+const SPECTATOR_AT_PAIR = /^\s*(-?\d+(?:\.\d+)?)\s*(?:,|\s)\s*(-?\d+(?:\.\d+)?)\s*$/;
+// every other part of a call: the look takes none (it is one question, asked of nobody)
+const SPECTATOR_AT_ALONE = ["do", "read", "args", "mark", "find", "find_offset", "find_limit", "investigate", "depth", "with_image",
+  "handle", "as", "beside", "lens", "cards", "telling", "diagnostics", "since", "since_crossing", "x", "y", "crossing"];
+const lc = (s) => String(s ?? "").trim().toLowerCase();
+
+/** The point `at` names, or a bounce: { x, y, by } (`by`: how it was read, and the mark when a place was named). */
+async function spectatorPoint(at) {
+  if (at && typeof at === "object" && !Array.isArray(at)) {
+    const x = Number(at.x), y = Number(at.y);
+    if (at.x == null || at.y == null || !Number.isFinite(x) || !Number.isFinite(y))
+      return bounce(422, "at: takes a mark or place name, or x,y — this object has no usable x and y", 'world { at: "the town centre" } or world { at: "220,95" } (or { x, y } numbers)');
+    return { x, y, by: "coordinates" };
+  }
+  const q = String(at ?? "").trim();
+  const pair = SPECTATOR_AT_PAIR.exec(q);
+  if (pair) return { x: Number(pair[1]), y: Number(pair[2]), by: "coordinates" };
+  const found = await worldFind({ q, limit: 10 }, null);
+  if (found?.error) return found;
+  const exact = (found.hits ?? []).filter((h) => lc(h.id) === lc(q) || lc(h.name) === lc(q));
+  const one = exact.length === 1 ? exact[0] : found.matches === 1 ? found.hits[0] : null;
+  if (!one) {
+    const none = !found.matches;
+    return { ...bounce(422, none ? `at: no place is named "${q}"` : `at: "${q}" names ${found.matches} places — a look is taken from one`,
+      none ? 'find it first: world { find: "…" } — or give x,y: world { at: "220,95" }' : 'name one by its id (<by>/<slug>), or give x,y; the hits below are find:\'s own'), found };
+  }
+  return { x: Number(one.at.x), y: Number(one.at.y), by: "place", mark: { id: one.id, name: one.name } };
+}
+
+/** world { at } — the spectator's look. Exported so the one rule is falsifiable beside its door. */
+export async function spectatorLook(args = {}, ctx = {}) {
+  const taken = SPECTATOR_AT_ALONE.filter((k) => args[k] != null && args[k] !== "");
+  if (taken.includes("do") || taken.includes("read"))
+    return bounce(422, "the apex speaks only to the embodied — a do: or read: cannot be taken from a place named by at:",
+      "at: is a look as nobody. To act or to read an action's shadow, stand somewhere: your resident's own position is the standpoint (leave at: out)");
+  if (taken.length)
+    return bounce(422, `at: stands alone — it is a look as nobody, and ${taken.map((k) => `${k}:`).join(", ")} ${taken.length === 1 ? "is" : "are"} asked of somebody`,
+      "call twice: world { at: … } to look from a place, and world { … } without at: for your own read");
+  if (args.read_shape != null && args.read_shape !== "" && args.read_shape !== "v2")
+    return bounce(422, "at: answers the v2 read (view, who, now, heard) — it takes no other shape", 'leave read_shape out, or send read_shape: "v2"');
+  const point = await spectatorPoint(args.at);
+  if (point?.error) return point;
+  // THE KEYLESS READ, whoever called: no key means nobody — never the caller's home, handle or standing.
+  const answer = await apexRead({ x: point.x, y: point.y, read_shape: "v2", telling: false }, null, { ...ctx, readShape: "v2" });
+  if (answer?.error) return answer;
+  return {
+    read_shape: "v2",
+    at: { query: typeof args.at === "string" ? args.at : { x: point.x, y: point.y }, x: point.x, y: point.y, ...(point.mark ? { mark: point.mark } : {}),
+      ...(answer.you?.here ? { here: answer.you.here } : {}),
+      as: "nobody — not in who, nothing recorded, no can" },
+    now: answer.now,
+    view: answer.view,
+    ...(answer.lit_unknown ? { lit_unknown: answer.lit_unknown } : {}),
+    who: answer.who,
+    heard: answer.heard,
+    reading_law: answer.reading_law,
+  };
+}
+
 async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
   // POS-632: explain: answers from the read grammar's one table, before anything
@@ -4242,6 +4315,8 @@ async function worldApexAnswer(args, key, ctx) {
   }
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
+  // WLD-187: at: is the look as nobody (spectatorLook, above); it never reaches an act, a shadow or the caller's own read.
+  if (args.at != null && args.at !== "") return spectatorLook(args, ctx);
 
   // ── THE SPECTATOR DECOUPLE (founder-ruled, the walk round) ────────────────
   //
@@ -4384,6 +4459,8 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     depth: { type: "number", description: "with mark: or investigate:, how far down to read (default 1, the look's own level). The levels below ride in `beneath`, under one cap on bodies; `descend` names the ids to look at next." },
     find_offset: { type: "number", description: "with find:, walk past the first hits — the previous answer's found.next_offset" },
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
+    // WLD-187 (POS-844 call 4): the spectator look. Not an act's own `args.at`; this is the call's own word.
+    at: { type: ["string", "object"], description: "LOOK FROM somewhere as nobody — a mark or place name (as find: takes it), or \"x,y\" in metres. The answer is the compact read there: now, view, who and heard. You are not standing there: you are not in who, nothing is recorded and there is no can, so it never acts and never reads an action. It stands alone (no do:, read:, mark:, find:…). A name that matches none or several answers with find:'s hits, never a guess." },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },
     handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
     // WLD-26 (ruled in Sitting B, 2026-10-19 17:48): the outsider lens.
