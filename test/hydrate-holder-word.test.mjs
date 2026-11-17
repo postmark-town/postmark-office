@@ -15,8 +15,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -35,7 +35,7 @@ const gitq = (dir, args) => execFileSync("git", ["-C", dir, ...args], {
 // The frontmatter is written as a FILE: the world's parser has no boolean case, so `holder: true`
 // reaches the hydrator as the STRING "true", the shape the playground's pouch had.
 function buildWorld() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-holder-word-"));
+  const dir = tempDir("pm-holder-word-");
   cpSync(join(WORLD_CLONE, "tools"), join(dir, "tools"), { recursive: true });
   const mark = (rel, front, body) => {
     mkdirSync(join(dir, "WORLD", "marks", rel), { recursive: true });
