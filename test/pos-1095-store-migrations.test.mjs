@@ -257,3 +257,61 @@ test("§ 2d the migration's up and re-run: 100 adds both columns, a re-run chang
   await store.probeRows(c);
   assert.ok(c.sql.includes(store.RESIDENT_GITHUB_SQL.stored));
 });
+
+// ── § 3  a NUL in an inbox must not fail the write, and must not blank the GitHub line ──
+//
+// LAW (Jetto, 2026-11-17 18:19Z, POS-1095): "the function must not answer NULL just because the text holds a NUL. The GitHub line is what sign-in
+// matches an unpinned resident's login against (`oauth.mjs § loginIndex`)". Tries "the plain cast", then "the cast of the text with its `\u0000`
+// escapes removed" (a doubled backslash is plain text), "only then NULL".
+
+const GH = { github: "ghnul", address: { data: { github: "addrnul" } } };
+const columnsOf = async (handle) => (await api.query("SELECT github_top, github_address FROM town_residents WHERE handle = $1", [handle])).rows[0];
+async function insertAs(handle, jsonText) {
+  const w = await s.connect("law_ingester"); // the ingest's own role, by named columns
+  try { await w.query("INSERT INTO town_residents (handle, json, digest) VALUES ($1, $2, 'd')", [handle, jsonText]); } finally { await w.end(); }
+}
+
+test("§ 3 a NUL escape in an inbox body: the INSERT succeeds through the ingest's role, and both columns equal a NUL-free copy's", async (t) => {
+  if (skip) return t.skip(skip);
+  await seedResidents();
+  const withNul = JSON.stringify({ handle: "n1", ...GH, inbox: [{ body: "Before the nul\u0000NULWORD after it." }] });
+  assert.ok(withNul.includes("\\u0000"), "control: the JSON text holds the escape that jsonb refuses");
+  await assert.rejects(() => api.query("SELECT $1::text::jsonb", [withNul]), /unsupported Unicode escape/, "control: the plain cast refuses it");
+  await insertAs("n1", withNul);
+  await insertAs("n1-clean", JSON.stringify({ handle: "n1", ...GH, inbox: [{ body: "Before the nul NULWORD after it." }] }));
+  const a = await columnsOf("n1"), b = await columnsOf("n1-clean");
+  assert.deepEqual(a, { github_top: "ghnul", github_address: "addrnul" }, "the GitHub line of the NUL row is not blanked");
+  assert.deepEqual(a, b, "and equals a NUL-free copy's");
+  // the probe reads it as it reads any resident
+  const login = (await store.probeRows(api)).logins.find((l) => l.handle === "n1");
+  assert.equal(login.github, "ghnul");
+});
+
+test("§ 3b a real \\u0000 escape beside a literal doubled-backslash one: only the escape is removed", async (t) => {
+  if (skip) return t.skip(skip);
+  await seedResidents();
+  // body: NUL, then the six characters \u0000 as plain text (JSON.stringify doubles the backslash)
+  const both = JSON.stringify({ handle: "n2", ...GH, inbox: [{ body: "a\u0000b", note: "literal \\u0000 text" }] });
+  assert.ok(both.includes("\\\\u0000") && both.includes("a\\u0000b"), "control: the text holds a doubled-backslash u0000 and a real escape");
+  await insertAs("n2", both);
+  assert.deepEqual(await columnsOf("n2"), { github_top: "ghnul", github_address: "addrnul" });
+  const doc = (await api.query("SELECT resident_json_doc(json) AS d FROM town_residents WHERE handle = 'n2'")).rows[0].d;
+  assert.equal(doc.inbox[0].body, "ab", "the NUL escape is gone");
+  assert.equal(doc.inbox[0].note, "literal \\u0000 text", "the plain-text backslash and its letters are kept");
+  // an escaped backslash then a real escape (three backslashes), and two escapes in a row
+  const odd = `{"github":"g3","address":{"data":{"github":"a3"}},"p":"x\\\\\\u0000y","q":"m\\u0000\\u0000n"}`;
+  await insertAs("n3", odd);
+  assert.deepEqual(await columnsOf("n3"), { github_top: "g3", github_address: "a3" });
+  const d3 = (await api.query("SELECT resident_json_doc(json) AS d FROM town_residents WHERE handle = 'n3'")).rows[0].d;
+  assert.equal(d3.p, "x\\y", "an escaped backslash is kept, the escape after it goes");
+  assert.equal(d3.q, "mn", "a run of escapes goes, not every other one");
+});
+
+test("§ 3c a row that will not cast at all: the INSERT succeeds and both columns are NULL", async (t) => {
+  if (skip) return t.skip(skip);
+  await seedResidents();
+  await insertAs("n4", `{"github":"cut off","address":{"data":{"github":"x"`);
+  assert.deepEqual(await columnsOf("n4"), { github_top: null, github_address: null });
+  await insertAs("n5", `{"github":"x\\u0000","inbox":[{"body":"a\\u0000b"}],"broken":`);
+  assert.deepEqual(await columnsOf("n5"), { github_top: null, github_address: null }, "a NUL escape in text that is cut off is still NULL, never a throw");
+});
