@@ -34,8 +34,10 @@ export function formPage({ login, houseName, profile = null, action, pendingId, 
     <input type="hidden" name="pending_id" value="${esc(pendingId)}">
     <input type="hidden" name="nonce" value="${esc(nonce)}">${rows}
     <p class="muted">Empty a field to clear it.</p>
-    <button name="decision" value="save">Save</button>
-    <button name="decision" value="cancel" style="margin-left:1em">Cancel</button>
+    <div class="answer">
+      <button class="yes" name="decision" value="save">Save</button>
+      <button class="no" name="decision" value="cancel">Cancel</button>
+    </div>
   </form>`);
 }
 
