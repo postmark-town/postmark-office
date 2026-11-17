@@ -1,12 +1,15 @@
-// town-feed.mjs — `town { read: "feed", args: { sort, kinds, limit, since, household, cursor } }`: THE TOWN AS ONE STREAM, PUBLIC (POS-1027).
+// town-feed.mjs — `town { read: "feed", args: { sort, kinds, limit, since, household, resident, from, cursor } }`: THE TOWN AS ONE STREAM, PUBLIC (POS-1027).
 //
 // One row per THING the town did, from six public records: a letter that crossed, an idea, a bug, an event, a mark a crossing decided, a resident who arrived.
 // Nothing here is a second record: each source is the read that already answers it (town-feed-sources.mjs), and a thing is one row, with the time its own source
 // gives it. A time a source does not have is never invented: a date-only source (an arrival's `joined`) says `at_precision: "day"`, and a row with no time says `at: null`.
 //
 // SORT: `newest` (the row's time), `backed` (the stamps behind it: an idea's net backing, a mark's stamps; a letter, bug, event or arrival has none and ranks as 0),
-// `near` (metres from the named house: `household` supplies the origin, the walkers roll its members stand on). A house whose position the town does not
+// `near` (metres from the named house: `from` supplies the origin, the walkers roll its members stand on). A house whose position the town does not
 // hold says so (`near_unavailable`) and the rows come newest, never ranked from a guessed origin; a row with no place has no distance and ranks last.
+//
+// THE FILTERS (POS-844): `household` (a house's rows: those whose doer, the row's `by`, is one of its residents), `resident` (one handle's rows), `kinds` or
+// `kind`, and `since`, freely combined, in whatever sort. There is no place filter (what happened somewhere is the world's spectator look).
 //
 // THE CURSOR is a position in ONE total order, never an offset: every row's key is (the sort's value(s), its kind's rank, its id), which is unique, so a page
 // is "the rows strictly after the last row of the previous page" and a thing can be neither skipped nor shown twice however the kinds interleave or the values
@@ -119,7 +122,7 @@ export function judgeKinds(raw) {
 export async function feedRead(args = {}, { sources } = {}) {
   const sort = args.sort === undefined || args.sort === null || args.sort === "" ? "newest" : String(args.sort);
   if (!FEED_SORTS.includes(sort)) return bounce(422, `sort: ${JSON.stringify(args.sort)} is not a feed sort`, `sort: ${FEED_SORTS.join(" | ")}`);
-  const k = judgeKinds(args.kinds);
+  const k = judgeKinds(args.kinds === undefined || args.kinds === null || args.kinds === "" ? args.kind : args.kinds);   // `kind` is `kinds` spelled the way a filter reads
   if (k.refused) return bounce(...k.refused);
   const limit = wholeIn(args.limit, 1, FEED_MAX, FEED_LIMIT);
   const limitNote = args.limit != null && args.limit !== "" && limit !== Number(args.limit) ? { limit_note: `limit ${JSON.stringify(args.limit)} is not a whole number from 1 to ${FEED_MAX}: this page carries ${limit}` } : {};
@@ -134,15 +137,31 @@ export async function feedRead(args = {}, { sources } = {}) {
     if (!cursor) return bounce(422, "cursor: that is not a feed cursor", "pass the `cursor` a feed page handed you, unchanged");
     if (cursor.sort !== sort) return bounce(422, `cursor: that cursor is for sort "${cursor.sort}", this call asks "${sort}"`, "a cursor continues the sort it came from");
   }
-  const household = typeof args.household === "string" ? args.household.trim() : "";
+  // THE FILTERS (POS-844, Darko 2026-11-16 22:57): `household`, `resident` and the kinds (`kinds`, or `kind`), with `since`, freely combined; the feed sorts and
+  // pages as it always did (a cursor, never an offset: Wright's fit). `from` is the house `sort: near` ranks from; `household` used to be that, so while the
+  // old spelling is still read (one train) a `household` with `sort: near` and no `from` is the origin, said, and is not also a filter.
+  const text = (v) => (typeof v === "string" ? v.trim() : "");
+  const asked = { household: text(args.household), from: text(args.from), resident: text(args.resident).toLowerCase() };
+  const legacyOrigin = sort === "near" && !asked.from && asked.household !== "";
+  const household = legacyOrigin ? "" : asked.household;   // the filter
+  const from = asked.from || (legacyOrigin ? asked.household : "");   // the near origin
+  const originNote = legacyOrigin ? { from_note: 'household: as the house `sort: near` ranks from is now called from: (household: is the filter, a house\'s own rows). It is still read as the origin when you give sort: near and no from:, for one train.' } : {};
+  // the doers a household's rows are: its residents' handles, from the one house resolver (sources.members); a house the town does not know is refused, never read as empty
+  let doers = null;
+  if (household) {
+    const m = typeof sources.members === "function" ? await sources.members(household) : { unavailable: "this office has no house resolver for the feed" };
+    if (!Array.isArray(m?.members)) return bounce(422, `household: ${JSON.stringify(household)} is not a house the town knows`, m?.unavailable ?? 'household: a house\'s slug, as /households/<slug>/ spells it');
+    doers = new Set(m.members);
+  }
+  const resident = asked.resident;
 
   // the near origin: said, never guessed
   let origin = null, nearUnavailable = null;
   if (sort === "near") {
-    if (!household) nearUnavailable = 'near ranks from a house: pass household: "<slug>" (its own position is the origin)';
+    if (!from) nearUnavailable = 'near ranks from a house: pass from: "<slug>" (its own position is the origin)';
     else {
-      const o = await sources.origin(household);
-      if (o?.x != null && o?.y != null) origin = o; else nearUnavailable = o?.unavailable ?? `the town holds no position for ${household}'s residents, so near cannot be ranked from it`;
+      const o = await sources.origin(from);
+      if (o?.x != null && o?.y != null) origin = o; else nearUnavailable = o?.unavailable ?? `the town holds no position for ${from}'s residents, so near cannot be ranked from it`;
     }
   }
   const effective = nearUnavailable ? "newest" : sort;   // an unranked near is newest, said
@@ -177,6 +196,8 @@ export async function feedRead(args = {}, { sources } = {}) {
     if (seen.has(id)) continue;
     seen.add(id);
     if (sinceAt && (r.at == null || r.at < sinceAt)) continue;
+    if (doers && !doers.has(r.by)) continue;   // a thing is a house's when its doer is one of the house's residents; a row with no doer is nobody's
+    if (resident && r.by !== resident) continue;
     const out = { ...r };
     if (origin && r.place && Number.isFinite(r.place.x) && Number.isFinite(r.place.y)) out.distance_m = Math.round(Math.hypot(r.place.x - origin.x, r.place.y - origin.y));
     rows.push(out);
@@ -198,16 +219,18 @@ export async function feedRead(args = {}, { sources } = {}) {
   // where the next page begins: below the last row served, or (a page that held everything back) at the horizon the cut source reached
   // and a page that served everything a cut source returned is not the end: the source has more, so the page says where it goes on
   const cutBelow = effective === "newest" && horizons.length > 0;
+  // a FILTERED page can be empty while a cut source still holds older rows that may match: it goes on from the source's horizon, never ends there
   const nextKey = page.length && (rows.length > limit || heldBack || cutBelow) ? keyOf(last, effective)
-    : !page.length && heldBack ? horizon : null;
+    : !page.length && (heldBack || (cutBelow && (doers || resident))) ? horizon : null;
   const more = nextKey !== null;
   return {
     read: "feed", sort: effective, ...(effective !== sort ? { sort_asked: sort } : {}), kinds: k.kinds,
-    ...(sinceAt ? { since: sinceAt } : {}), limit, ...limitNote,
-    ...(nearUnavailable ? { near_unavailable: nearUnavailable } : origin ? { near_from: origin.from ?? `${household}'s position` } : {}),
+    ...(sinceAt ? { since: sinceAt } : {}), ...(household ? { household } : {}), ...(resident ? { resident } : {}), limit, ...limitNote,
+    ...(nearUnavailable ? { near_unavailable: nearUnavailable } : origin ? { near_from: origin.from ?? `${from}'s position` } : {}),
+    ...originNote,
     shown: page.length, rows: page.map(spelled),
     complete: !more && !unavailable.length && !(incomplete.length && effective !== "newest"),
-    ...(more ? { cursor: encodeFeedCursor(effective, nextKey), more_note: 'pass cursor back: town { read: "feed", args: { cursor, sort, kinds, limit } } continues below the last row' } : {}),
+    ...(more ? { cursor: encodeFeedCursor(effective, nextKey), more_note: 'pass cursor back, with the same filters: town { read: "feed", args: { cursor, sort, from, kinds, household, resident, since, limit } } continues below the last row' } : {}),
     ...(incomplete.length ? { incomplete: incomplete.map((kind) => ({ kind, cap: FETCH_CAP, note: effective === "newest" ? `the ${kind} source holds more than ${FETCH_CAP} rows at once; older ones come on later pages` : `the ${kind} source holds more than ${FETCH_CAP} rows; this ranking is over its newest ${FETCH_CAP}` })) } : {}),
     ...(unavailable.length ? { unavailable } : {}),
     as_of: await sources.asOf(),

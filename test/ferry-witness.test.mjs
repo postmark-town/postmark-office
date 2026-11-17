@@ -163,7 +163,8 @@ const write = (root, files) => {
 // half ships, so those cases SKIP, saying so, unless POSTMARK_TOWN_WITNESS_TREE
 // names a town tree that has it.
 const TOWN_TREE = process.env.POSTMARK_TOWN_WITNESS_TREE || join(OFFICE, "town-clone");
-const REAL_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
+// the real witness's whole closure as the loader walks it: stamp-mint imports ./registry-source.mjs (a dynamic import, still walked)
+const REAL_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/registry-source.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
 const realSkip = !SH ? "no POSIX shell on this machine"
   : !existsSync(join(TOWN_TREE, "tools", "witness-chain.mjs")) ? `skipped until the town's witness ships: no tools/witness-chain.mjs in ${TOWN_TREE} (set POSTMARK_TOWN_WITNESS_TREE)` : false;
 

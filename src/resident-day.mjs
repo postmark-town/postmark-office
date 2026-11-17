@@ -14,6 +14,7 @@
 import { PUBLIC_HOUSE_VERBS, isPublicAct } from "./hearth-public.mjs";
 import { wentRows } from "./household-read-v2.mjs";
 import { recipientsOf } from "./town-index-store.mjs";
+import { sayReferenceOf } from "./circles.mjs"; // POS-1035: a say as a reference (id, reply_to), never its words
 
 const bounce = (code, defect, hint) => ({ error: "bounce", code, defect, hint });
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -154,6 +155,9 @@ export async function dayRead({ handle, date } = {}, { ix, nowMs = Date.now(), i
     read: "day", handle: h, date: day,
     sentences: quiet ? [`A quiet day: nothing public was recorded for ${h} on ${day}.`] : sentences,
     counts,
+    // POS-1035 (the close block's POS-1024 row): each say as a reference — its id and the say it answers — never its words. The
+    // sentences and counts keep their meanings; `null` when the acts could not be read (unavailable), [] when they held none
+    says: acts.read ? acts.rows.map(sayReferenceOf).filter(Boolean) : null,
     quiet,
     ...(blind ? { unavailable, unavailable_note: "a source that could not be read is not a quiet day: these sentences leave out what it would have said" } : {}),
     written_by: "rule, from the public record (letters, public acts, the stamp ledger), not by a model",

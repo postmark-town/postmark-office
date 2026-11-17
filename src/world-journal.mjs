@@ -74,7 +74,7 @@ import { singleLogEnabled } from "./dynamic-store.mjs";
 import { refShaFromDisk } from "./world-branches.mjs";
 import { mirrorAct, mirrorSettled, world2Enabled } from "./world2-acts.mjs";
 import { candleEnabled, claimEligible, claimHouseholdFor, claimTxFromJournal, docketSettled } from "./world2-claims.mjs";
-import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite } from "./world2-pen.mjs";
+import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite, insertAct } from "./world2-pen.mjs";
 
 /**
  * Is this row a PRIVATE compose, whose act must not reach the public `acts`
@@ -528,6 +528,27 @@ export async function appendActFlipped(db, entry = {}, { guard = null } = {}) {
   // record that does not hold it — the same small dishonesty `composed_at`
   // exists to avoid on the drafts read. Every other row is an act.
   return { seq: null, actId, flipped: true, record: draft ? "claims" : "acts", ...row };
+}
+
+// ── THE SAME WRITE, ON A CALLER'S TRANSACTION (POS-1035) ────────────────────
+//
+// appendActFlipped hands penWrite an act row and its docket half, and penWrite opens its own transaction for them. An act that
+// must commit WITH other writes or not at all — an event's completion: its spark's act and claim, the event's receipt and the
+// stamp ledger's landing (Rivet: "one atomic signed/pen boundary") — cannot nest that transaction (POS-370 refuses it). So the
+// same two writes are split at the transaction's edge: `prepareActFlipped` does everything appendActFlipped does BEFORE penWrite
+// (the row, the lane's refusal, the draft rule, the household read), and `writePreparedVia` makes exactly penWrite's two writes
+// (the act unless a private draft, then the claim) on the client it is handed. Nothing about the row or the claim differs.
+export async function prepareActFlipped(entry = {}) {
+  const row = normalizeRow(entry);
+  const lane = laneOf(row);
+  if (FLIP_REFUSED[lane]) throw new Error(`the "${lane}" lane's flip is not wired — ${FLIP_REFUSED[lane]}`);
+  const claim = claimEligible(row);
+  return { row, claim, draft: privateDraftAct(row), household: claim ? await claimHouseholdFor(row) : null };
+}
+export async function writePreparedVia(client, { row, claim, draft, household }) {
+  const actId = claim && draft ? null : await insertAct(client, row, null);
+  if (claim) await claimTxFromJournal(client, row, null, { household, actId });
+  return { actId };
 }
 
 /** Which pen a lane's call site should use — the one switch the doors read. */

@@ -6,8 +6,10 @@
 //
 //   you · now (happened always) · view · who · heard · happening_here · can · law
 //
-// Opt-in per call (`read_shape: "v2"`) for one train, then the default by
-// Darko's word. v1 is untouched: this module never sees a v1 read.
+// The MCP door's default read once the box sets WORLD_READ_SHAPE=v2 (POS-1094,
+// Darko 2026-11-16 22:09: "it's overdue"); `read_shape: "v2"` asks for it per
+// call at any time, and `read_shape: "v1"` still asks for the older read. v1 is
+// untouched: this module never sees a v1 read.
 //
 // ── WHAT IS NEW AND WHAT IS REUSED ──────────────────────────────────────────
 //
@@ -84,7 +86,12 @@ export const ACT_GROUPS = Object.freeze({
   self: ["note-to-self"],
 });
 
-const VIEW_HOW = 'landmark = stamps lift it above its size; image = there\'s a picture: mark: "<id>", with_image: true';
+// view.how names only the flags a row in this view carries (POS-1094, Kogane: "a key for a symbol that isn't on the map is a small itch")
+const HOW_LANDMARK = "landmark = stamps lift it above its size";
+const HOW_IMAGE = 'image = there\'s a picture: mark: "<id>", with_image: true';
+/** POS-1094 (Kogane): the engine's one "on the horizon" band spans 8 km to 137 km; the far end of it says so. */
+export const HORIZON_FAR_M = 50000;
+export const FAR_HORIZON_BAND = "far on the horizon";
 // the read grammar's backstop line (read-grammar.mjs § moreLine); the apex fills in the live cursor
 import { moreLine } from "./read-grammar.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
@@ -148,19 +155,58 @@ export function doingOf(r) {
 /** VIEW: the field of view's rows, in the engine's rank, grouped by bearing (a group sits at its best member's rank). */
 export function viewBlock(rows = []) {
   const view = {};
+  const landmarkOf = (r) => Boolean(r.lifted && (r.weight ?? 0) >= LANDMARK_WEIGHT_FLOOR);
+  const parcelUnder = parcelsUnderHouses(rows);
+  const seen = { landmark: false, image: false };
   for (const r of rows) {
+    if (parcelUnder.nested.has(r)) { view[r.bearing] ??= []; continue; } // POS-933: it rides under its house, below; its group keeps its place
+    const parcel = parcelUnder.of.get(r) ?? null;
+    const lit = parcel && parcel.lit !== undefined ? parcel.lit : r.lit;
     const row = {
       id: r.id, name: r.name ?? r.id, body: r.body ?? "",
+      ...(r.class ? { class: r.class } : {}), // POS-1094 (Domovoi): what kind of thing it is, when it is more than a plain place
       ...distanceOf(r.distM),
-      band: r.band,
-      // a house in view carries its porch light (WLD-29; v1's rule): true, false, or null when not known
-      ...(r.lit !== undefined ? { lit: r.lit } : {}),
+      band: r.band === "on the horizon" && r.distM >= HORIZON_FAR_M ? FAR_HORIZON_BAND : r.band,
+      // a house in view carries its porch light (WLD-29; v1's rule): true, false, or null when not known.
+      // The light is the house's, not its ground's (POS-933, Kogane): a parcel's own rides on the house it sits under.
+      ...(lit !== undefined ? { lit } : {}),
       ...(r.image ? { image: true } : {}),
-      ...(r.lifted && (r.weight ?? 0) >= LANDMARK_WEIGHT_FLOOR ? { landmark: true } : {}),
+      ...(landmarkOf(r) ? { landmark: true } : {}),
+      ...(parcel ? { parcel: { id: parcel.id, name: parcel.name ?? parcel.id, body: parcel.body ?? "",
+        ...(parcel.image ? { image: true } : {}), ...(landmarkOf(parcel) ? { landmark: true } : {}) } } : {}),
     };
+    if (row.landmark || row.parcel?.landmark) seen.landmark = true;
+    if (row.image || row.parcel?.image) seen.image = true;
     (view[r.bearing] ??= []).push(row);
   }
-  return { ...view, how: VIEW_HOW };
+  for (const b of Object.keys(view)) if (!view[b].length) delete view[b];
+  const how = [seen.landmark ? HOW_LANDMARK : null, seen.image ? HOW_IMAGE : null].filter(Boolean).join("; ");
+  return { ...view, ...(how ? { how } : {}) };
+}
+
+/**
+ * POS-933 (Kogane, 2026-11-06): "Every house shows up twice in `view`, the parcel and the house, at the same
+ * distance and bearing." A parcel row (it carries its `extent`) whose ground holds a place that is in view
+ * sits under that place: the house is the best-ranked row that is no parcel, names no class of its own (a
+ * thing set down on the ground is not the house) and stands within the parcel's extent. A parcel with no
+ * such row in view stays a row of its own. `nested` holds the parcel rows that move under a house; `of`
+ * maps each house row to its parcel row.
+ */
+export function parcelsUnderHouses(rows = []) {
+  const nested = new Set();
+  const of = new Map();
+  for (const p of rows) {
+    if (!p.extent || !p.at) continue;
+    const within = rows.filter((r) => r !== p && !r.extent && !r.class && r.at && !of.has(r) && r.bearing === p.bearing
+      && p.by && r.by === p.by // the maker's own: a stranger's gift on the ground is no house (27 of 171 parcels on the world repo hold one)
+      && Math.abs(r.at.x - p.at.x) <= p.extent.w / 2 && Math.abs(r.at.y - p.at.y) <= p.extent.h / 2);
+    // the mark standing at the parcel's own point is the house; else the best-ranked of its maker's (none: no nesting)
+    const house = within.find((r) => r.at.x === p.at.x && r.at.y === p.at.y) ?? within[0];
+    if (!house) continue;
+    of.set(house, p);
+    nested.add(p);
+  }
+  return { nested, of };
 }
 
 /** WHO: the crowd split by activity. `active` is handle → { action, at } (ms or ISO), public acts only. `whole` (read: "who") lists everyone, paged. */
@@ -321,7 +367,9 @@ export const SAID_MAX = 140;
 export function heardBlock(voices = []) {
   return voices.slice(-HEARD_CAP).map((v) => {
     const said = String(v.said ?? "");
-    return { from: v.handle, standing: standingOf(v.handle), said: said.length > SAID_MAX ? `${said.slice(0, SAID_MAX - 1).trimEnd()}…` : said, ago: v.ago };
+    // POS-1035 (call 24): a heard line may carry its say's id, so a glance can answer it (reply_to) or open its circle — optional, additive
+    return { from: v.handle, standing: standingOf(v.handle), said: said.length > SAID_MAX ? `${said.slice(0, SAID_MAX - 1).trimEnd()}…` : said, ago: v.ago,
+      ...(v.id != null ? { id: v.id } : {}) };
   });
 }
 
@@ -401,15 +449,24 @@ export function aboardBlock(f, whole) {
   return out;
 }
 
-/** to_you with each event's mark, carrier and thing said whole. */
+/**
+ * to_you with each event's mark and carrier said whole, and its thing said by name only.
+ * A thing is held in someone's hands: its words are not the glance's to print (POS-1094,
+ * blueprints discussion #66, 5.5: "our human had asked us to keep three mints unread until
+ * she opened them herself, and the glance printed all three"). `read_it` on the event is the
+ * one read that opens it.
+ */
 const toYouWhole = (t, whole) => !t?.events ? t : {
   ...t,
   events: t.events.map((e) => {
     const out = { ...e };
-    for (const k of EVENT_MARKS) if (typeof e[k] === "string" && e[k]) out[k] = whole(e[k]);
+    for (const k of EVENT_MARKS) if (typeof e[k] === "string" && e[k]) out[k] = k === "thing" ? byName(whole(e[k])) : whole(e[k]);
     return out;
   }),
 };
+
+/** A mark row without its body: { id, name }. */
+const byName = (row) => (row && typeof row === "object" ? { id: row.id, name: row.name } : row);
 
 /**
  * The v2 answer. `p` is what the apex already computed plus the three v2
@@ -434,7 +491,8 @@ export function shapeV2(p) {
     }),
     // your whole things by id, then what you hold by kind, a kind and a number each, never a unit
     // (the playground's QA of part 2, fail 5: counted kinds were left out of your own hands)
-    holding: [...(p.holdings ?? []), ...(p.heldKinds?.kinds ?? []).map(({ kind, count, shows }) => ({ kind, count, shows }))],
+    // POS-1094 (Kogane): one shape, an object each: a whole thing is { thing: <id> }, a counted kind is { kind, count, shows }
+    holding: [...(p.holdings ?? []).map((thing) => ({ thing })), ...(p.heldKinds?.kinds ?? []).map(({ kind, count, shows }) => ({ kind, count, shows }))],
     // both numbers for your hands (POS-679 D): "7 of 24 slots · 21 things in all"; the carry cap is judged on the slots
     ...(p.heldKinds?.hands ? { hands: p.heldKinds.hands } : {}),
     ...(p.stancesAwaiting ? { waiting_on_you: { stances: p.stancesAwaiting, read: 'household { read: "stances" }' } } : {}),

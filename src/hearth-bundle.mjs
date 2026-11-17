@@ -10,7 +10,7 @@
 //       closer:   { via: { door: "household", read: "closer",   args: { household, limit: 10 } },                 data },
 //       went:     { via: { door: "household", read: "stamps",   args: { household, view: "went", limit: 20 } },   data },
 //       happened: { via: { door: "household", read: "happened", args: { household, limit: 20 } },                 data },
-//       feed:     { via: { door: "town", read: "feed", args: { household, sort: "newest", limit: 20 } },          data },
+//       feed:     { via: { door: "town", read: "feed", args: { from: household, sort: "newest", limit: 20 } },       data },
 //       days:     [ { via: { door: "household", read: "day", args: { handle, date } }, data }, … ],   one per ashore member, in the house's order
 //       pairs:    [ { via: { door: "town", read: "pair", args: { a, b } }, data }, … ] } }           the pairs the closer page represents, sorted by (a, b)
 //
@@ -34,7 +34,9 @@ export const HEARTH_PARTS = Object.freeze({
   closer: (household) => ({ door: "household", read: "closer", args: { household, limit: 10 } }),
   went: (household) => ({ door: "household", read: "stamps", args: { household, view: "went", limit: 20 } }),
   happened: (household) => ({ door: "household", read: "happened", args: { household, limit: 20 } }),
-  feed: (household) => ({ door: "town", read: "feed", args: { household, sort: "newest", limit: 20 } }),
+  // `from`, not `household` (POS-844): the Hearth's town slot is the TOWN's stream, with the house as the origin its `near` sort ranks from. `household` is
+  // now the feed's filter (a house's own rows), which would change what this slot shows.
+  feed: (household) => ({ door: "town", read: "feed", args: { from: household, sort: "newest", limit: 20 } }),
   day: (handle, date) => ({ door: "household", read: "day", args: { handle, date } }),
   pair: (a, b) => ({ door: "town", read: "pair", args: { a, b } }),
 });
