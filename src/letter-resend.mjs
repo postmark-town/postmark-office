@@ -29,7 +29,9 @@ const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
  */
 export async function resendsBy(odb, handle) {
   if (!odb) return new Map();
-  const rows = (await readTownJournal(odb)).filter((r) => r.cls === "letter" && r.handle === handle);
+  // the store hands over this sender's letter rows only (POS-1057: this read took the whole log, 71 MB, to keep a few rows);
+  // the filter stays, so the rows folded are the ones it always kept
+  const rows = (await readTownJournal(odb, { cls: "letter", handle })).filter((r) => r.cls === "letter" && r.handle === handle);
   const standing = standingLetters(rows);
   const out = new Map();
   for (const r of standing) {
