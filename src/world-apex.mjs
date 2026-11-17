@@ -53,6 +53,7 @@ import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, 
 import { explainAnswer, explainPath, encodeCursor, decodeCursor, CURSOR_RENAMES_UNTIL, moreLine } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table; the one cursor; the more line
 import { entityKindOf, investigateResident, RECENT_SQL, RECENT_CAP } from "./world-investigate-entity.mjs"; // POS-632 PR-4: the entity read
 import { PUBLIC_ACTS as PUBLIC_ACTS_FOR_INVESTIGATE, ACTIVE_WINDOW_MS as ACTIVE_WINDOW_FOR_INVESTIGATE } from "./world-read-v2.mjs"; // POS-632 PR-4: the entity read's public acts and window
+import { SOURCE_ACT_READ, readSourceAct } from "./source-act.mjs"; // WLD-146: the Worldkeeper reads one source act
 import { join } from "node:path";
 
 import {
@@ -89,6 +90,7 @@ import {
   engineDescend, // WLD-83 P10: the engine's one descent, for an appearance tree
   isOutsiderLens, OUTSIDER_LENS, // WLD-26: the outsider lens, one switch on the owner rule
   lensNoteFor, // POS-823: the line a lens read carries when the lens changed nothing for the household
+  servedLedgerNow, // POS-1048: one enter-record scan for every ledger read of a burst of acts
 } from "./world.mjs";
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
@@ -107,7 +109,6 @@ import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOf
 // is the block now, and an import this file no longer reads would be a false
 // claim about what it reads.
 import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopDoorsNearest, stopsOfService, vesselIdOf } from "./world-ride.mjs";
-import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
 import { ACTION_STANCE, STANCE_TOOLS, declareStanceViaOffice, readNeverPerforms, stanceShadow, stancesBlock, withEdgeWords } from "./world-stance.mjs";
@@ -498,7 +499,7 @@ export function crossingDeps() {
     // folding occupancy out of a fossil — so a resident who entered a room and
     // entered again was adjudicated as though he had never been inside.
     // src/enter-exit-ledger.mjs is the one deriver; this is one of its readers.
-    ledger: async () => { try { return (await servedEnterExitLedger(WORLD_CLONE)).ledger; } catch { return ""; } },
+    ledger: async () => { try { return (await servedLedgerNow()).ledger; } catch { return ""; } },
     standpointOf: async (who) => standpointForCrossing(await residentStandpoint(who).catch(() => null), who),
     // ENTERING ENDS THE WALK (Keemin-ruled 2026-09-12; postmark-town/postmark #2685).
     // `walking` is the ONE reader of "where is this resident" (residentStandpoint:
@@ -3130,7 +3131,8 @@ async function apexRead(args, key, ctx = {}) {
     // answers only what came after it.
     shaped.cursor = encodeCursor({ crossing: oriented.crossing?.n ?? 0, ms: nowMs, hw: happened?._hw ?? args._cursor?.hw ?? null });
     if (args._cursor) shaped.now.happened = { ...shaped.now.happened, since: "your last read (the cursor)" };
-    shaped.more = moreLine(shaped.cursor); // PR-5: the backstop, with this read's own cursor
+    // PR-5: the backstop, with this read's own cursor; and, while v2 is the MCP door's default (WORLD_READ_SHAPE=v2), the line on it (POS-1094)
+    shaped.more = moreLine(shaped.cursor, { isDefault: ctx.readShape === "v2" });
     if (!deep) return shaped;
     // The deeper read answers the block whole, under its own name, and nothing else.
     const whole = deep.block === "happened" ? (happened ?? { unavailable: "the delta is not read at this office" })
@@ -3262,7 +3264,7 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`
+  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [], note: false }); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
   // no porch lights: this answer shows no houses (WLD-29)
   const seen = await worldEyes(args, key, { lights: false });
@@ -3785,7 +3787,7 @@ export const WORLD_READ_FIELDS = Object.freeze({
   say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
          since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, with the counts, and each list only when it changed (`unchanged` names the ones held back). Milliseconds, and NOT the top-level since_crossing: (a crossing number, which buys `happened`)." },
          // POS-226: the backward cursor, the mirror of `since`.
-         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as the last settlement. Milliseconds, like since:." },
+         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as `hearable_since` (the last settlement, or earlier for a room that carried across it). Milliseconds, like since:." },
          // POS-265: world_say's retry key guards a voice; a read speaks none, so
          // it is refused here by name rather than carried to a listen.
          nonce: { type: "string", description: "refused — a read speaks nothing, so a retry key has nothing to guard; pass it on do: \"say\" with your text" },
@@ -3992,6 +3994,10 @@ async function apexReadAction(args, key, ctx = {}) {
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope))) {
     return bounce(422, "`args` must be an object", `narrowing fields ride inside it — world { read: "${action}", args: { … } }`);
   }
+  // THE WORLDKEEPER'S SOURCE-ACT READ (WLD-146): the act behind one STATE/log
+  // seq, for the keeper's own hand only. Like find, it performs nothing and
+  // belongs to no ground, so it is answered before any standpoint is taken.
+  if (action === SOURCE_ACT_READ) return readSourceAct(envelope ?? {}, key, { handle: args.handle });
 
   // ── FIND: THE ONE READ WITH NO ACT BEHIND IT (2026-09-26) ──────────────────
   //
@@ -4222,6 +4228,79 @@ export function lensRefusal(args = {}) {
     `call twice: world { lens: "${OUTSIDER_LENS}" } to see as a stranger, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } without it`);
 }
 
+// ── THE SPECTATOR LOOK (WLD-187; POS-844 call 4, Darko 2026-11-16) ──────────────────
+//
+// world { at: <mark | place | "x,y"> } answers the bare v2 read as NOBODY standing there:
+// `view`, `who`, `now` and `heard`. "It's invisible: not in who, nothing recorded, no can."
+//
+// It is the keyless spectator read (GET /world/apex?x=&y=, CONTRACT.md § the apex verb) reached
+// through the MCP door. The query is read with NO KEY, whoever's key made the call: the caller is
+// not standing at `at`, is not shown in `who`, is not marked present or listening, and is given
+// no `can` — a coordinate is never permission to act from there (the spectator decouple, below,
+// which still refuses a do: or read: from a point). `at` is the TOP-LEVEL word; an action's own
+// `args.at` (leave-mark, drop and the rest) is that act's field and is not read here.
+//
+// A name is resolved with `find:`'s own matcher (worldFind, keyless): one place answers; none or
+// several answer with the find's own hits and no guessed location.
+const SPECTATOR_AT_PAIR = /^\s*(-?\d+(?:\.\d+)?)\s*(?:,|\s)\s*(-?\d+(?:\.\d+)?)\s*$/;
+// every other part of a call: the look takes none (it is one question, asked of nobody)
+const SPECTATOR_AT_ALONE = ["do", "read", "args", "mark", "find", "find_offset", "find_limit", "investigate", "depth", "with_image",
+  "handle", "as", "beside", "lens", "cards", "telling", "diagnostics", "since", "since_crossing", "x", "y", "crossing"];
+const lc = (s) => String(s ?? "").trim().toLowerCase();
+
+/** The point `at` names, or a bounce: { x, y, by } (`by`: how it was read, and the mark when a place was named). */
+async function spectatorPoint(at) {
+  if (at && typeof at === "object" && !Array.isArray(at)) {
+    const x = Number(at.x), y = Number(at.y);
+    if (at.x == null || at.y == null || !Number.isFinite(x) || !Number.isFinite(y))
+      return bounce(422, "at: takes a mark or place name, or x,y — this object has no usable x and y", 'world { at: "the town centre" } or world { at: "220,95" } (or { x, y } numbers)');
+    return { x, y, by: "coordinates" };
+  }
+  const q = String(at ?? "").trim();
+  const pair = SPECTATOR_AT_PAIR.exec(q);
+  if (pair) return { x: Number(pair[1]), y: Number(pair[2]), by: "coordinates" };
+  const found = await worldFind({ q, limit: 10 }, null);
+  if (found?.error) return found;
+  const exact = (found.hits ?? []).filter((h) => lc(h.id) === lc(q) || lc(h.name) === lc(q));
+  const one = exact.length === 1 ? exact[0] : found.matches === 1 ? found.hits[0] : null;
+  if (!one) {
+    const none = !found.matches;
+    return { ...bounce(422, none ? `at: no place is named "${q}"` : `at: "${q}" names ${found.matches} places — a look is taken from one`,
+      none ? 'find it first: world { find: "…" } — or give x,y: world { at: "220,95" }' : 'name one by its id (<by>/<slug>), or give x,y; the hits below are find:\'s own'), found };
+  }
+  return { x: Number(one.at.x), y: Number(one.at.y), by: "place", mark: { id: one.id, name: one.name } };
+}
+
+/** world { at } — the spectator's look. Exported so the one rule is falsifiable beside its door. */
+export async function spectatorLook(args = {}, ctx = {}) {
+  const taken = SPECTATOR_AT_ALONE.filter((k) => args[k] != null && args[k] !== "");
+  if (taken.includes("do") || taken.includes("read"))
+    return bounce(422, "the apex speaks only to the embodied — a do: or read: cannot be taken from a place named by at:",
+      "at: is a look as nobody. To act or to read an action's shadow, stand somewhere: your resident's own position is the standpoint (leave at: out)");
+  if (taken.length)
+    return bounce(422, `at: stands alone — it is a look as nobody, and ${taken.map((k) => `${k}:`).join(", ")} ${taken.length === 1 ? "is" : "are"} asked of somebody`,
+      "call twice: world { at: … } to look from a place, and world { … } without at: for your own read");
+  if (args.read_shape != null && args.read_shape !== "" && args.read_shape !== "v2")
+    return bounce(422, "at: answers the v2 read (view, who, now, heard) — it takes no other shape", 'leave read_shape out, or send read_shape: "v2"');
+  const point = await spectatorPoint(args.at);
+  if (point?.error) return point;
+  // THE KEYLESS READ, whoever called: no key means nobody — never the caller's home, handle or standing.
+  const answer = await apexRead({ x: point.x, y: point.y, read_shape: "v2", telling: false }, null, { ...ctx, readShape: "v2" });
+  if (answer?.error) return answer;
+  return {
+    read_shape: "v2",
+    at: { query: typeof args.at === "string" ? args.at : { x: point.x, y: point.y }, x: point.x, y: point.y, ...(point.mark ? { mark: point.mark } : {}),
+      ...(answer.you?.here ? { here: answer.you.here } : {}),
+      as: "nobody — not in who, nothing recorded, no can" },
+    now: answer.now,
+    view: answer.view,
+    ...(answer.lit_unknown ? { lit_unknown: answer.lit_unknown } : {}),
+    who: answer.who,
+    heard: answer.heard,
+    reading_law: answer.reading_law,
+  };
+}
+
 async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
   // POS-632: explain: answers from the read grammar's one table, before anything
@@ -4237,6 +4316,8 @@ async function worldApexAnswer(args, key, ctx) {
   }
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
+  // WLD-187: at: is the look as nobody (spectatorLook, above); it never reaches an act, a shadow or the caller's own read.
+  if (args.at != null && args.at !== "") return spectatorLook(args, ctx);
 
   // ── THE SPECTATOR DECOUPLE (founder-ruled, the walk round) ────────────────
   //
@@ -4305,7 +4386,7 @@ async function worldApexAnswer(args, key, ctx) {
   // card whole beside can, and "names" says can by name (world-read-v2.mjs).
   const v2Asked = (args.read_shape ?? ctx.readShape) === "v2";
   if (args.diagnostics != null && !v2Asked)
-    return bounce(422, "diagnostics: rides the v2 read", "world { read_shape: \"v2\", diagnostics: true } — the read you have today carries the engine's notes already");
+    return bounce(422, "diagnostics: rides the v2 read", "world { read_shape: \"v2\", diagnostics: true } — the v1 read carries the engine's notes already");
   if (v2Asked && args.telling === true)
     return bounce(422, "v2 tells no prose — it is the compact glance", "the telling rides the v1 read: world { read_shape: \"v1\", telling: true }");
   // ── THE TWO `since` CLOCKS, ONE WORD EACH (POS-70; office PR #48) ─────────
@@ -4379,6 +4460,8 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     depth: { type: "number", description: "with mark: or investigate:, how far down to read (default 1, the look's own level). The levels below ride in `beneath`, under one cap on bodies; `descend` names the ids to look at next." },
     find_offset: { type: "number", description: "with find:, walk past the first hits — the previous answer's found.next_offset" },
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
+    // WLD-187 (POS-844 call 4): the spectator look. Not an act's own `args.at`; this is the call's own word.
+    at: { type: ["string", "object"], description: "LOOK FROM somewhere as nobody — a mark or place name (as find: takes it), or \"x,y\" in metres. The answer is the compact read there: now, view, who and heard. You are not standing there: you are not in who, nothing is recorded and there is no can, so it never acts and never reads an action. It stands alone (no do:, read:, mark:, find:…). A name that matches none or several answers with find:'s hits, never a guess." },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },
     handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
     // WLD-26 (ruled in Sitting B, 2026-10-19 17:48): the outsider lens.
@@ -4389,13 +4472,13 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // before the seam can see it. The human class shipped behind a door that
     // refused to pass its own word through: found live on the dungeon stage,
     // the night the first embodied act was actually attempted.
-    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand, honoured only where the ground's class grants them feet (LOGOS/classes.md § The human class); the act records under the human's hand, never the resident's." },
+    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand: speaking only, for now, beside one of your household's residents and from that resident's standing; walking may come later (LOGOS/classes.md § The human class). The act records under the human's hand, never the resident's." },
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see, in the town's own words: a resident's mark is named there by its author and id, never quoted (its body is `nearby[].body`, or mark: \"<id>\"); omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. A class name climbs the class instead (POS-659): explain: \"thing\" answers the class's body, its extends chain, its properties (what it adds: tier, default, children), open (every slot left to the maker, inherited ones too, nested ones by dotted path, like appearance.form) with open_from naming the class each inherited one comes from, its afforded actions with their conditions, and makers; every instance read names its class in class_pointer. It answers docs, never data, and rides with no do: or read:." },
     // POS-632 (W1): the shape, per call. It wins over the office's default.
-    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the compact read, opt-in: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, at about half the size of the default read. Omit it for the older, fuller default." },
+    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the compact read, the default at this door: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, roughly 8k characters. read_shape: \"v1\" is the older, fuller read, roughly 16k (cards: \"full\" gives it every card whole)." },
     diagnostics: { type: "boolean", description: "with read_shape: \"v2\", also bring the engine's notes (the full law block, presence's disclosures). v1 always carries them." },
     cards: { type: "string", enum: ["names"], description: "cards: \"names\" shrinks `actions` to each act's name, one line, and how it reached you — for a repeat read by a caller who has already learnt the acts. Which acts are afforded is identical either way; only how much is said about each changes. Omit for the full cards, which is the default and carries the fields a caller needs to compose an act." },
   },

@@ -42,14 +42,14 @@
 // replays, and a row that carries no outcome at all (every row written before
 // this fix) replays exactly as it did.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -65,7 +65,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 const trash = [];
-const scratch = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const scratch = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 test.after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); });
 
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
@@ -87,6 +87,7 @@ function postmasterClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, "tools", "households.json"),
     JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git(dir, "init", "-q");
   git(dir, "add", "-A");
   git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid",
@@ -228,6 +229,7 @@ test("F2b · a committed clear is not re-imposed over the rewrite that supersede
   mkdirSync(join(clone, "tools"), { recursive: true });
   writeFileSync(join(clone, "tools", "households.json"),
     JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
+  stageEngine(clone); // POS-994: the clone carries the stand-in engine the pins vouch for
   git(clone, "init", "-q"); git(clone, "add", "-A");
   git(clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid",
     "commit", "-q", "-m", "fixture: a profile with a bio");

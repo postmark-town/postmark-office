@@ -211,17 +211,19 @@ let meepCache = null;
 // answer they had. A strict read is cached only when it read a law.
 export async function meepLawAtOffice(clone, { strict = false } = {}) {
   const { existsSync, readFileSync: rf } = await import("node:fs");
-  const { pathToFileURL } = await import("node:url");
+
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
-  const tool = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(ledger) || !existsSync(tool)) {
+  if (!existsSync(ledger) || !existsSync(join(clone, "tools", "stamp-mint.mjs"))) {
     if (strict) throw new Error(`the meep law is unreadable: no ${existsSync(ledger) ? "tools/stamp-mint.mjs" : "WHITE_PAGES/stamp-ledger.md"} in the town clone`);
     return () => false;
   }
   const st = statSync(ledger);
   const key = `${ledger}|${st.mtimeMs}|${st.size}`;
   if (meepCache?.key === key && (!strict || meepCache.read)) return meepCache.isMeep;
-  const engine = await import(pathToFileURL(tool).href);
+  // POS-994: the office's pinned copy, checked against the clone; a town change
+  // the office has not pinned throws TownPinMismatch by name (never "no meeps").
+  const { importTownTool } = await import("./town-tool.mjs");
+  const engine = await importTownTool(clone, "stamp-mint.mjs");
   const entries = engine.parseStampLedger(rf(ledger, "utf8"));
   const date = new Date().toISOString().slice(0, 10);
   if (strict) {

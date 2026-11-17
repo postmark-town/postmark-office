@@ -12,6 +12,12 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -174,7 +180,8 @@ test(`the hand's read shows each invitation's evidence and both sides, against t
   try {
     mkdirSync(join(repo, "tools"), { recursive: true });
     mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
-    copyFileSync(join(INVITE_TOWN, "tools", "stamp-mint.mjs"), join(repo, "tools", "stamp-mint.mjs"));
+    copyTownModule(INVITE_TOWN, repo, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(repo); // the hand's read runs the pinned copy of THIS town's mint
     writeFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "# stamp-ledger\n\n- 2026-06-12 · rules: stamps-v1 · sig: x\n- 2026-10-28 · MINT → dora · 5 · for: welcome:hh:keep · by: the-town · sig: x\n");
     const r = await invitesAtOffice({}, littleBird, { clone: repo, now: new Date("2026-11-01T00:00:00.000Z") });
     assert.equal(r.class, "invite");

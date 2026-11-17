@@ -35,11 +35,11 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-home-block-"));
+const repo = tempDir("postmark-home-block-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

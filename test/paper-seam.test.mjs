@@ -21,16 +21,16 @@
 // option. These falsifiers are therefore mostly PER-SKIN — the bug was never in
 // the logging rule, it was in how many places had to remember it.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -57,7 +57,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
 /** A town clone with the rooms the paper doors write into, under git. */
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-seam-"));
+  const dir = tempDir("pm-seam-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "HOME"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "WINDOW"), { recursive: true });
@@ -67,6 +67,7 @@ function townClone() {
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
   return dir;
@@ -74,7 +75,7 @@ function townClone() {
 
 const homes = [];
 function logHome() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-seam-odb-"));
+  const dir = tempDir("pm-seam-odb-");
   homes.push(dir);
   return join(dir, "oauth.db");
 }
@@ -101,7 +102,7 @@ const flagOn = async (fn) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("P1-P4 · EVERY SKIN LOGS: REST PATCH, household apex, flat tool — one row each", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "pm-seam-srv-"));
+  const tmp = tempDir("pm-seam-srv-");
   const clone = townClone();
   let child;
   try {

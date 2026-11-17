@@ -72,8 +72,8 @@ test("FALSIFIER: at the next settlement it is gone", async () => {
   await h.refresh();
   publish(S2);
   await h.refresh();
-  const r = await say(h, S2 + 60_000);
-  assert.deepEqual(heard(r), [], "the window opened again at the next sweep");
+  const r = await say(h, S2 + H + 60_000); // CORE-97: the room is carried for the hour after the sweep (room-carryover.test.mjs); with no say in it, it is gone at the hour
+  assert.deepEqual(heard(r), [], "the window opened again at the next sweep, and the grace after it ran out");
   assert.equal(r.body.hearable_since, iso(S2));
   assert.equal(r.body.total_in_the_air, 0);
 });

@@ -27,12 +27,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-proposed-world-"));
-const town = mkdtempSync(join(tmpdir(), "postmark-proposed-town-"));
+const repo = tempDir("postmark-proposed-world-");
+const town = tempDir("postmark-proposed-town-");
 after(() => { for (const d of [repo, town]) { try { rmSync(d, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } } });
 
 const put = (root, path, text) => {
@@ -191,6 +192,11 @@ const listing = (root) => {
 };
 
 // ── 1. forecast correctness ─────────────────────────────────────────────────
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("FALSIFIER 1 — `proposed` equals what the settlement's own code produces on that book", async () => {
   writeBook(PENDING_BOOK);
   const answer = await worldStakeRead({ mark: PEAK });

@@ -26,7 +26,7 @@ async function allPosts(cls, { postsAtOffice, nowMs }) {
   const out = [];
   let offset = 0;
   for (let guard = 0; guard < 50; guard++) {
-    const r = await postsAtOffice({ class: cls, limit: 200, offset }, { now: nowMs, pointer: false });
+    const r = await postsAtOffice({ class: cls, limit: 200, offset }, { now: nowMs, pointer: false, hold: false }); // POS-732: an internal reader of every post, not a connector answer, so no cap holds its pages
     out.push(...(r?.posts ?? []));
     if (r?.complete !== false || r?.next_offset == null) break;
     offset = r.next_offset;
@@ -109,6 +109,13 @@ export function realSources({ ix, clone, nowMs = Date.now(), readers = {} } = {}
       return bound(roster.filter((e) => e.joined && !e.is_office).map((e) => ({
         id: e.handle, kind: "arrival", ...instantOf(e.joined), href: apiUrl(`/residents/${e.handle}`), title: `${e.display ?? e.handle} arrived`, by: e.handle,
       })), { since, before, resume, cap });
+    },
+    // the household filter's doers: the handles of the house's residents, from the same resolver the near origin reads; a house the town does not know says so
+    async members(household) {
+      const hb = await import("./house-bundle.mjs");
+      const house = await hb.houseMembers({ household, clone });
+      if (house.refused) return { unavailable: `no house "${household}" is known here (${house.refused[1]})` };
+      return { slug: house.slug, members: [...house.members] };
     },
     // the near origin: where the house's residents stand on the walkers roll (house-bundle.mjs § standsOf), their centre; none placed, none guessed
     async origin(household) {

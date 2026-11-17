@@ -34,6 +34,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
+import { isPinStop, pinStopHint, townToolArgv } from "./town-tool.mjs"; // POS-994: the office's pinned copy of the town's mint runs, checked against the clone
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 import { lastLedgerLine } from "./stamp-tail.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -92,10 +93,23 @@ async function main() {
     return err(422, `"${rail}" is not a rail`, `a pot receipt rides one of ${RAILS.join(", ")} — the town's own grammar has no other`);
   if (!existsSync(KEY_PATH))
     return err(409, "not-yet-open", "the office has no pen key configured for the stamp-ledger");
-  const mint = join(CLONE, "tools", "stamp-mint.mjs");
-  const close = join(CLONE, "tools", "epoch-close.mjs");
-  if (!existsSync(mint) || !existsSync(close))
+  if (!existsSync(join(CLONE, "tools", "stamp-mint.mjs")) || !existsSync(join(CLONE, "tools", "epoch-close.mjs")))
     return err(409, "not-yet-open", "the office has no town clone with the funding seam");
+  // POS-994: the pinned copies, checked against the clone BEFORE anything is
+  // written; a town change the office has not pinned stops the receipt by name.
+  let mintArgv, closeArgv;
+  try {
+    mintArgv = townToolArgv(CLONE, "stamp-mint.mjs", ["--append", "--key", KEY_PATH, "--repo", CLONE]);
+    closeArgv = townToolArgv(CLONE, "epoch-close.mjs", [
+      "--receipt",
+      "--pot", String(pot), "--rail", String(rail), "--usd", String(usd),
+      "--from", String(from), "--ref", String(ref), "--date", String(date),
+      "--key", KEY_PATH, "--repo", CLONE,
+    ]);
+  } catch (e) {
+    if (isPinStop(e)) return err(503, "town-pin-mismatch", pinStopHint(e));
+    throw e;
+  }
 
   // WHOLE OR NOTHING (POS-296): a refused receipt leaves no catch-up rows and
   // no receipt line behind, and a push that cannot land leaves no commit. A
@@ -106,13 +120,8 @@ async function main() {
 
     try {
       // catch the ledger up so the receipt lands on a settled tail, then witness
-      execFileSync(process.execPath, [mint, "--append", "--key", KEY_PATH, "--repo", CLONE], { encoding: "utf8" });
-      execFileSync(process.execPath, [
-        close, "--receipt",
-        "--pot", String(pot), "--rail", String(rail), "--usd", String(usd),
-        "--from", String(from), "--ref", String(ref), "--date", String(date),
-        "--key", KEY_PATH, "--repo", CLONE,
-      ], { encoding: "utf8" });
+      execFileSync(process.execPath, mintArgv, { encoding: "utf8" });
+      execFileSync(process.execPath, closeArgv, { encoding: "utf8" });
     } catch (e) {
       const { code, defect, hint } = classifyFatal(e.stderr ?? e.message ?? e);
       return refusal(code, defect, hint);

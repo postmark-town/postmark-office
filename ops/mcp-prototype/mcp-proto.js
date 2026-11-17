@@ -768,6 +768,22 @@
   // one door to wear the other's word. Entries normalize to `.action` here so
   // everything downstream keeps reading one key.
 
+  // POS-1094 (CORE-116): the strip above reads an answer's `actions` / `acts` WITH their `fields`, which is
+  // the older read's shape. At the MCP door the bare read is the compact v2 glance by default (its `can`
+  // lines carry no fields), so a bare call on a tool that declares read_shape asks for the older read
+  // explicitly: read_shape "v1", and cards "full" where the tool takes it (the world's v1 gives each act one
+  // line unless asked for its whole card). Any call that already says what it wants is left as it is.
+  function bareReadArgs(tool, args) {
+    var props = (tool && tool.inputSchema && tool.inputSchema.properties) || {};
+    var a = args || {};
+    if (!props.read_shape) return a;
+    var says = ["do", "read", "explain", "since", "mark", "find", "investigate", "read_shape"];
+    for (var i = 0; i < says.length; i++) if (a[says[i]] !== undefined && a[says[i]] !== null) return a; // explain: "" says something too
+    var out = Object.assign({}, a, { read_shape: "v1" });
+    if (props.cards && a.cards === undefined && tool.name === "world") out.cards = "full";
+    return out;
+  }
+
   function collectActions(root) {
     var out = [], seen = {};
     function take(e, nameKey) {
@@ -925,7 +941,7 @@
       err.textContent = "";
       if (got.error) { err.textContent = got.error; return; }
       callBtn.disabled = true;
-      callTool(tool.name, got.args).then(function () { callBtn.disabled = false; },
+      callTool(tool.name, bareReadArgs(tool, got.args)).then(function () { callBtn.disabled = false; },
         function (e) { callBtn.disabled = false; err.textContent = String(e && e.message || e); });
     });
 
@@ -1260,7 +1276,7 @@
     // exposed for the offline harness, which asserts against the same units
     // the page runs on rather than a copy of them
     _internals: {
-      buildForm: buildForm, buildField: buildField, kindOf: kindOf, collectActions: collectActions,
+      buildForm: buildForm, buildField: buildField, kindOf: kindOf, collectActions: collectActions, bareReadArgs: bareReadArgs,
       apexEnvelope: apexEnvelope, fieldsSchema: fieldsSchema, jsonTree: jsonTree, state: state, ui: ui,
       discoverAS: discoverAS, officeBase: officeBase, parseCallback: parseCallback,
       completeCallback: completeCallback, tokenIsFresh: tokenIsFresh, credShape: credShape,

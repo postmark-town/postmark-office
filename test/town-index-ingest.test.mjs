@@ -20,11 +20,12 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ingest, readHead, SEAL_SUBJECT } from "../world2/tools/town-index-ingest.mjs";
@@ -34,7 +35,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
 const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSync(join(CLONE, "WHITE_PAGES", "stamp-ledger.md"));
 
-const tmp = mkdtempSync(join(tmpdir(), "town-index-ingest-"));
+const tmp = tempDir("town-index-ingest-");
 const town = join(tmp, "town");
 let store = null, skip = hasClone ? false : "no town-clone with tools/stamp-mint.mjs beside the office: the fixture copies the town's own tools from it";
 let c;
@@ -267,7 +268,12 @@ test("STAMP_LINES=store: the quest rows fold on the store's key base, and a stor
     const g2 = (...a) => execFileSync("git", ["-C", town2, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     g2("-c", "user.name=Postmark Pen", "-c", "user.email=pen@test.invalid", "commit", "-qam", "an engine from before #3540");
     const old = g2("rev-parse", "HEAD").trim();
-    await assert.rejects(ingest(c, { townRepo: town2, sha: old }), /takes no key base \(town #3540\): nothing was written/);
+    // POS-994: the ingest loads the town's engine through the office's loader; this older engine
+    // is pinned to itself for the one ingest, so it is the engine the refusal is about.
+    const pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinTown(town2);
+    try { await assert.rejects(ingest(c, { townRepo: town2, sha: old }), /takes no key base \(town #3540\): nothing was written/); }
+    finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
     assert.equal(await readHead(c), edit, "and the head did not move");
   } finally {
     if (was === undefined) delete process.env.STAMP_LINES; else process.env.STAMP_LINES = was;

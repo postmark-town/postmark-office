@@ -3,17 +3,17 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-world-scope-"));
+const repo = tempDir("postmark-world-scope-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 // the draft lanes lease worktrees out of a pool beside the clone (tier 1)
-const pool = mkdtempSync(join(tmpdir(), "postmark-world-scope-pool-"));
+const pool = tempDir("postmark-world-scope-pool-");
 process.env.WORLD_POOL_DIR = pool;
 after(() => rmSync(pool, { recursive: true, force: true }));
-const town = mkdtempSync(join(tmpdir(), "postmark-town-scope-"));
+const town = tempDir("postmark-town-scope-");
 after(() => rmSync(town, { recursive: true, force: true }));
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -161,6 +161,11 @@ const {
 
 const houseA = { household: "house-a", handles: new Set(["alpha"]) };
 const houseB = { household: "house-b", handles: new Set(["beta"]) };
+
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
 
 test("ruling 9 scopes reads by household and every write lands off main", async () => {
   // §1c: "the signed-in fold-on-read path (`stateForKey`'s draft arm) has no

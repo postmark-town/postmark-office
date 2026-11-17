@@ -41,6 +41,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { threadId } from "node:worker_threads";
+import { leaseStart } from "./read-timing.mjs"; // POS-1064/b: each pen lease's acquire wait and held time, under the request that took it (measurement only)
 
 export const ACQUIRE_MS_DEFAULT = 10_000;
 export const IDLE_TX_MS_DEFAULT = 30_000;
@@ -156,6 +157,42 @@ export function isStoreUnreachable(e, depth = 0) {
   return isStoreUnreachable(e.cause, depth + 1);
 }
 
+// ── ONE SCAN AT A TIME FOR A WHOLE BURST (POS-1048) ──────────────────────────
+//
+// La Cave's opening, 2026-11-14 20:10Z: about 70 residents acting at once, and
+// the office logged "timeout exceeded when trying to connect" 25 times. The
+// store was not out of connections. The ACTS pool is two, and every act door
+// read the enter/exit record on it up to six times (once per orient and per
+// eyes, each a `count(*)` over every passage ever made, then the whole table on
+// a changed mark): 70 acts queued some 400 scans on two connections, so a
+// request waited its 10 s in the pool's line and failed while Postgres sat idle
+// (test/crowd-store-connections.test.mjs measures it).
+//
+// `trailingFlight(fn)` is the fix's one shape: callers that arrive while a run
+// is in flight share ONE run that begins after the last of them arrived. A
+// caller therefore never takes an answer older than its own ask (a run already
+// in flight may have read the record before the act that came after it), and a
+// burst of any size costs two scans, not one per caller. Errors go to the
+// callers that shared the run; nothing is kept between bursts.
+export function trailingFlight(fn) {
+  let running = null;
+  let waiting = null;
+  const start = () => {
+    const p = (async () => fn())();
+    running = p;
+    const done = () => { if (running === p) running = null; };
+    p.then(done, done);
+    return p;
+  };
+  return () => {
+    if (!running) return start();
+    if (!waiting) {
+      waiting = running.then(() => {}, () => {}).then(() => { waiting = null; return start(); });
+    }
+    return waiting;
+  };
+}
+
 // ── ONE PEN CONNECTION PER CALL CHAIN ────────────────────────────────────────
 
 const holding = new AsyncLocalStorage();
@@ -201,7 +238,10 @@ export function refuseNested(asked) {
  */
 export async function onPenClient(pool, by, fn) {
   refuseNested(by);
-  const client = await acquire(pool, "pen");
+  const lease = leaseStart();   // POS-1064/b: timing only; inert outside a request, and it never changes what follows
+  let client;
+  try { client = await acquire(pool, "pen"); } catch (e) { lease.failed(); throw e; }
+  lease.got();
   const mark = { by, open: true };
   let discard = false;
   const heard = (e) => {
@@ -215,5 +255,6 @@ export async function onPenClient(pool, by, fn) {
     mark.open = false;
     client.removeListener?.("error", heard);
     client.release(discard ? true : undefined);
+    lease.released();
   }
 }

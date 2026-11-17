@@ -37,10 +37,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { generateKeyPairSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { NO_WORLD_DB, publishWorld } from "./helpers/world-rows.mjs";
@@ -246,7 +247,6 @@ const penDir = tempDir("idea-anywhere-pen-");
 const KEY = join(penDir, "stamp-key.pem");
 writeFileSync(KEY, privateKey.export({ type: "pkcs8", format: "pem" }));
 process.env.STAMP_KEY = KEY;
-if (TRAIN_ENGINE) process.env.STAMP_ENGINE_DIR = TRAIN_ENGINE;
 
 function foundedClone() {
   const clone = tempDir("idea-anywhere-town-");
@@ -261,6 +261,8 @@ function foundedClone() {
     "# ledger\n\n- 2026-06-12 · seed-1 · alden → rei · thread: new\n- 2026-06-13 · seed-2 · rei → alden · thread: new\n");
   writeFileSync(join(clone, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
   execFileSync(process.execPath, [join(TRAIN_ENGINE, "stamp-mint.mjs"), "--append", "--key", KEY, "--repo", clone], { encoding: "utf8" });
+  // POS-994: the clone carries the train engine's modules, pinned, as a box clone does
+  process.env.TOWN_PINS_DIR = pinTown(stageTownTools(clone, dirname(TRAIN_ENGINE)));
   return clone;
 }
 

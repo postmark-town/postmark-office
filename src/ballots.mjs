@@ -68,8 +68,13 @@ export const BALLOT_STATES = Object.freeze([STATE_SUBMISSIONS, STATE_STAKING, ST
 
 /** The town's own pen is every ballot's author, as it is every quest's. */
 export const BALLOT_AUTHOR = PEN_HANDLE;
-/** The hands that put a ballot up and move it (Wright, POS-349: "hand wright/keemin"). */
-export const BALLOT_HANDS = Object.freeze(["wright", "keemin"]);
+/**
+ * The hands that put a ballot up and move it (Wright, POS-349: "hand wright/keemin"), and Rei's own (Darko,
+ * CON-20, 2026-11-14 08:47 EST: "Add Rei's hand first"; POS-1039): she places every act on the Hearth ballot
+ * herself. A hand is still the credential's own (ballot-acts.mjs § judgeBallotHand, named-hand.mjs § holdsHand):
+ * this list widens who may move a ballot, never what a key may stand as, nor who may stake, the cap or the law.
+ */
+export const BALLOT_HANDS = Object.freeze(["wright", "keemin", "rei"]);
 
 /** A ballot topic as the town spells one (tools/ballot.mjs § readBallot). */
 export const TOPIC_RE = /^[a-z0-9-]+$/;

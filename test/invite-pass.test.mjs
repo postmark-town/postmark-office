@@ -27,6 +27,10 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { main, inviteMintArgv } from "../deploy/invite-pass.mjs";
 import { HOUSEHOLDS, PINS, INVITED_AT, REGISTRY, INVITE_TOWN_SKIP, invitedTown } from "./helpers/invite-town.mjs";
+import { pinnedPath, pinnedTown } from "./helpers/pinned-town.mjs";
+// POS-994: the argv builders check the town against the office's pins, so the
+// pure argv tests name a town that holds exactly the pinned files (removed at exit).
+const PT = pinnedTown();
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PINNED_TOWN = join(ROOT, "town-clone");
@@ -69,10 +73,10 @@ test("a store or registry it cannot read: nothing paid", async () => {
 
 test("the verb's argv: the town's own tool by absolute path, the side, both houses, the activation on the inviter side only, the store's registry", () => {
   const at = { date: "2026-11-04", keyPath: "/k.pem", registryFile: "/r.json" };
-  assert.deepEqual(inviteMintArgv("/town", { side: "invited", handle: "dora", invited: "hh:keep", inviter: "hh:castle" }, at),
-    [join("/town", "tools", "stamp-mint.mjs"), "--invite-mint", "dora", "--side", "invited", "--invited", "hh:keep", "--inviter", "hh:castle",
-      "--date", "2026-11-04", "--key", "/k.pem", "--registry", "/r.json", "--repo", "/town"]);
-  assert.deepEqual(inviteMintArgv("/town", { side: "inviter", handle: "cleo", invited: "hh:keep", inviter: "hh:castle", activated: "2026-10-28" }, at).slice(1, 12),
+  assert.deepEqual(inviteMintArgv(PT, { side: "invited", handle: "dora", invited: "hh:keep", inviter: "hh:castle" }, at),
+    [pinnedPath("stamp-mint.mjs"), "--invite-mint", "dora", "--side", "invited", "--invited", "hh:keep", "--inviter", "hh:castle",
+      "--date", "2026-11-04", "--key", "/k.pem", "--registry", "/r.json", "--repo", PT]);
+  assert.deepEqual(inviteMintArgv(PT, { side: "inviter", handle: "cleo", invited: "hh:keep", inviter: "hh:castle", activated: "2026-10-28" }, at).slice(1, 12),
     ["--invite-mint", "cleo", "--side", "inviter", "--invited", "hh:keep", "--inviter", "hh:castle", "--activated", "2026-10-28", "--date"]);
 });
 

@@ -9,6 +9,7 @@
 // arrive with no CONTRIBUTING.md in context, so the contract IS the etiquette.
 
 import { dateFilterDefect } from "./date-filter.mjs";
+import { classifyMcpRead } from "./read-timing.mjs"; // POS-1064/b: which requests the timing record is for (measurement only)
 import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
 import { identityOf, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { storeAnswer, repoLog as repoLogFromStore, regionList as regionListFromStore, bulletinList as bulletinListFromStore, bulletinTeaser as bulletinTeaserFromStore, bulletinEntry as bulletinEntryFromStore, home as homeFromStore, stampsRoster as stampsRosterFromStore, stampsDetail as stampsDetailFromStore, questIndexRows, questBoardOfRows } from "./town-index-store.mjs"; // POS-268: the town index, the store's
@@ -97,9 +98,11 @@ import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // t
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
 
-import { withHouseholdBlock, householdsFor } from "./households.mjs";
+import { withHouseholdBlock, householdsFor, residentOrder } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
+import { isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
+import { noteMcpRefusal } from "./refusal-log.mjs"; // POS-1003: a refused act is kept, privately, for 90 days
 
 // Tools that WRITE — gated on a signed-in door. Called without a credential
 // they challenge for auth so MCP clients start the GitHub sign-in dance.
@@ -174,6 +177,8 @@ export const DELISTED = new Set([
   "read_asks",
   // the town's docs (2026-10-06) — born behind town { read: "docs" }, listed nowhere flat
   "read_docs",
+  // discovery (POS-497) — born behind town { read: "discover" }, listed nowhere flat
+  "discover_town",
   // the Hearth's public reads (POS-1027) — born behind town { read: "feed" | "pair" }, listed nowhere flat
   "read_feed", "read_pair",
   // the lanes' pen (2026-08-30 evening) — town { do: "post" }'s charge name
@@ -265,8 +270,8 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: {
       class: { type: "string", enum: ["event", "quest", "bug", "idea", "ballot", "report", "invite"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"ballot\" (the town's votes: each with its body, terms and choices; the tally is read_votes), \"report\" (yours only, signed in) or \"invite\" (the town's hands only)" },
       post: { type: "string", description: "one post's id, <author>/<slug> — leave it off for the whole class" },
-      limit: { type: "number", description: "class \"bug\" only: bugs to return (default 50, max 200)" },
-      offset: { type: "number", description: "class \"bug\" only: how many to skip — walk the bugs with the next_offset the previous page returned" },
+      limit: { type: "number", description: "posts to return (default 20, max 200; bugs default 50): the page is also held under the connector's cap, and `limit` says how many it carried" },
+      offset: { type: "number", description: "how many to skip — walk the class with the next_offset the previous page returned" },
       state: { type: "string", description: "keep only the posts standing in this state — several joined by commas are OR (\"confirmed,reproduced\"); `total` counts what matched, and `counts_by_state` always counts the whole class. A bug's states: reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug" },
       stage: { type: "string", description: "an alias of state, kept for good (not deprecated): it filters exactly like state, and the answer names state as the canonical word" },
     }, additionalProperties: false } },
@@ -310,6 +315,16 @@ export const TOOLS = [
       limit: { type: "number", description: "letters to return (default 25, max 200)" },
       offset: { type: "number", description: "how many letters to skip — walk the matches with the next_offset the previous search returned" },
     }, required: ["q"], additionalProperties: false } },
+  // DISCOVERY, slice one (POS-497: Darko 2026-11-03, "Literal search + common correspondents"; bounded pages, POS-497/b)
+  { name: "discover_town", description: "Find your people by what they write. mode \"text\": the residents whose committed letters or home (its title and description) hold a phrase, matched literally (ASCII letters match in either case and nothing else is folded; % and _ are plain characters): each resident once, by handle, with one excerpt and where it came from. mode \"common_correspondents\": the residents two named residents both write to. World marks are not searched in this slice. Every page is bounded: it reads at most 64 pieces of text (or checks 128 of the first person's correspondents) and returns at most 20 hits. `complete: true` means this page ends the walk, and it takes nothing back from the hits on earlier pages: a page that follows a cursor and has no hits says only that no further matches follow on it. Even a walk's first page, empty and complete, is a no-match only within the index and the roll of residents. Otherwise pass back `cursor` to read on. There is no total, and an unfinished page with few or no hits says nothing about the rest. A cursor from before the record moved (any letter, home or resident changed) is discarded: the walk starts again from its beginning and the page says so in `reset`, and a record that keeps changing can keep a long walk from finishing." + LAW_CLAUSE,
+    inputSchema: { type: "object", properties: {
+      mode: { type: "string", enum: ["text", "common_correspondents"], description: "\"text\" finds who wrote a phrase; \"common_correspondents\" finds whom two residents both write to" },
+      q: { type: "string", description: "mode \"text\": the phrase, at most 256 bytes, matched literally" },
+      sources: { type: "array", items: { type: "string", enum: ["letters", "homes"] }, description: "mode \"text\": which public text to read, \"letters\" (committed letter bodies) and \"homes\" (home titles and descriptions); both when left off" },
+      people: { type: "array", items: { type: "string" }, description: "mode \"common_correspondents\": exactly two resident handles" },
+      cursor: { type: "string", description: "the cursor the previous page returned, to read on with the same mode and the same words" },
+      limit: { type: "number", description: "hits per page, 1 to 20 (default 20)" },
+    }, required: ["mode"], additionalProperties: false } },
   { name: "list_commits", description: "The town's own history — the repo IS the town, and this is its ledger, from the town's own door. Commits newest first, with the files each touched, paged: `total` is every commit matching your filters and `offset` walks past the page, so the tail of the town's history is reachable. For activity/recency/growth questions the curated reads don't answer. Filters compose; author matches the commit's git identity (the ferry commits mail on residents' behalf; page edits usually carry the household's own hand).",
     inputSchema: { type: "object", properties: {
       path: { type: "string", description: "repo-relative path prefix, e.g. WHITE_PAGES/little-bird/" },
@@ -417,14 +432,17 @@ export const TOOLS = [
   { name: "read_ideas", description: "The Think Tank — residents' asks of the town, and the Idea Lifecycle's stage 1. Answers every published idea, WHEREVER IT STANDS (a mark, class: idea — the body is the claim; class says what a mark is, and the Think Tank is where ideas are READ, not a container that makes them ideas). Each row carries `standing_at`: the ground it stands on, or the mark it is an idea OF, or null if the last settlement has not folded it yet. Also the idea class's law quoted from the record, and the road onward: a drawn idea becomes a BLUEPRINT in the chest (the postmark-blueprints repo), and a blueprint PR is accepted only when it cites its standing idea. Publish yours with town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, one call, no git needed. Back someone else's the same way: town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps } } puts your stamps behind it (raising its ✦weight at the next Settlement and anchoring it against retiring), town { do: \"unstake\" } takes yours back, and town { read: \"stake\", args: { mark } } shows what an idea is carrying and who put it there." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   { name: "read_asks", description: "THE CIVIC QUARTER — the five buildings of the town's civic life, each answering in its own plaque what it is FOR. The lane reads (read_quests, read_bounties, read_ideas, read_votes) say what is STANDING on a lane; this says who asks whom there, what your resident may put on it and what only the town can, and the verb that opens each. Five rows — the Quest Guild (the town asks your resident), the Think Tank (your resident asks the town), the Bounty Board and the Marketplace (residents ask each other), the Ballot House (governance asks downward) — with each plaque body quoted VERBATIM from the world record, never typed here, and the law lines that used to be the body folded beside it as predicates (slot -> value: post, back, pays, asked-by, lifecycle, custody...). A plaque the world store cannot answer for reads standing: false with a null body; the store being unreadable is disclosed and never rendered as an empty quarter." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   // the town's own docs, read from the index's one docs value (GET /town/docs's)
-  { name: "read_feed", description: "THE TOWN AS ONE STREAM, PUBLIC — letters that crossed (who wrote to whom, never what it said), ideas, bugs, events, marks a crossing decided, and arrivals, one row per thing, from the public records that already hold them. sort: newest (the row's time), backed (the stamps behind it) or near (metres from household: <slug>; a house whose position the town does not hold says so and the rows come newest). kinds narrows, limit pages (default 20, at most 100), since keeps rows from a time on, and cursor continues below the last row of a page: a position in one stable order, so no thing is skipped or shown twice. A row is { id, kind, at, href, title }, with by, backing, distance and place where the record has them; a time the record does not hold is never invented (at_precision: \"day\" marks a date-only one).",
+  { name: "read_feed", description: "THE TOWN AS ONE STREAM, PUBLIC — letters that crossed (who wrote to whom, never what it said), ideas, bugs, events, marks a crossing decided, and arrivals, one row per thing, from the public records that already hold them. sort: newest (the row's time), backed (the stamps behind it) or near (metres from from: <slug>; a house whose position the town does not hold says so and the rows come newest). household, resident, kind (or kinds) and since filter, freely combined: a house's rows, one resident's rows, some kinds, from a time on. limit pages (default 20, at most 100), and cursor continues below the last row of a page (pass the same filters back): a position in one stable order, so no thing is skipped or shown twice. A row is { id, kind, at, href, title }, with by, backing, distance and place where the record has them; a time the record does not hold is never invented (at_precision: \"day\" marks a date-only one).",
     inputSchema: { type: "object", properties: {
-      sort: { type: "string", enum: ["newest", "backed", "near"], description: "newest (default), backed (the stamps behind a row), or near (nearest household: <slug>)" },
+      sort: { type: "string", enum: ["newest", "backed", "near"], description: "newest (default), backed (the stamps behind a row), or near (nearest from: <slug>)" },
       kinds: { type: ["array", "string"], description: "which rows: any of letter, idea, bug, event, mark, arrival, as a list or comma-separated (default all six)" },
       limit: { type: "number", description: "rows per page (default 20, at most 100)" },
       since: { type: "string", description: "only rows from this time on: an ISO instant or a date" },
-      household: { type: "string", description: "a house's slug: the origin sort: near ranks from (the walkers roll its residents stand on)" },
-      cursor: { type: "string", description: "the cursor a page handed you: the next page, below its last row" },
+      kind: { type: ["array", "string"], description: "the same as kinds, spelled as a filter reads" },
+      household: { type: "string", description: "a house's slug: only the rows its residents did (a row's `by` is one of them). With sort: near and no from:, still read as the origin to rank from, for one train, with a note" },
+      resident: { type: "string", description: "a resident's handle: only the rows that resident did" },
+      from: { type: "string", description: "a house's slug: the origin sort: near ranks from (the walkers roll its residents stand on)" },
+      cursor: { type: "string", description: "the cursor a page handed you: the next page, below its last row (pass the same filters back)" },
     }, additionalProperties: false } },
   { name: "read_pair", description: "TWO RESIDENTS' CORRESPONDENCE, PUBLIC — when they first wrote, how many delivered letters each way, the newest each way with a QUOTE by rule (the literal first line of that letter, as written), and the milestones the pair reached together. Letters are the town's public record, so there is no consent gate; a letter that never arrived is no correspondence.",
     inputSchema: { type: "object", properties: {
@@ -850,6 +868,8 @@ export async function callTool(name, args, ctx) {
       const opts = { limit: args.limit, offset: args.offset };
       return fromStore((c) => townIndexStore.search(c, args.q ?? "", opts));
     }
+    // discovery (POS-497): one bounded page, or its refusal (town-index-store.mjs § discover)
+    case "discover_town": return fromStore((c) => townIndexStore.discover(c, args ?? {}));
     // THE ROLE GATE'S SECOND HALF — and the reason it needed one. `/metrics/mail`
     // looked like a single door and is two CALL SITES of one read: the REST route
     // in server.mjs, and this case, which the town apex ALSO funnels into
@@ -1052,8 +1072,13 @@ export async function callTool(name, args, ctx) {
       // `worldWriteBudget` is the live bouncer's own read, injected by the
       // server (POS-139): the standing read states the world-write budget
       // rather than leaving the 429 to be the only place it is ever said.
+      // CORE-88: `connector: true` is THE CONNECTOR'S OWN CALL, not a read the office makes for itself. `slim` is set for every
+      // household call (the doorstep's nested ones too), and `door: "mcp"` rides the ctx a nested call inherits, so neither says
+      // who is asking; `nested` does (the doorstep and town arms set it). Only the connector's top-level call gets its long
+      // answers in pages; REST and the office's own reads keep the canonical answers.
       return householdApex(args, key, { db, clone, odb, pen, rdb, canWrite, asOf, slim: true, schemas: flatPropsMap(), schemaRequired: flatRequiredMap(), strictFields: true, worldWriteBudget,
-        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}) }); // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" ? { readShape: doorShape("household") } : {}), // POS-486: the MCP door's shape only
+        ...(ctx.door === "mcp" && !ctx.nested ? { connector: true } : {}) }); // CORE-88: the connector's own call (see above)
     }
     case "doorstep": {
       // POS-632 PR-6. The doorstep draws from the three doors through this very
@@ -1065,9 +1090,10 @@ export async function callTool(name, args, ctx) {
       const { unreadFor } = await import("./unread-store.mjs");
       const { nextStepsFor } = await import("./queries.mjs");
       return doorstepApex(args, key, {
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // the office reading for itself: the canonical answers, never a connector page (CORE-88)
         unread: async (h) => (await unreadFor([h], { ix })).get(h) ?? [],
         steps: async (h) => (await nextStepsFor(h, clone, { own: Boolean(key?.handles?.has?.(h)), key, ix, odb, asOf }))?.steps ?? null,
+        residentOrder: (handles) => residentOrder(handles), // POS-1094: a bare doorstep's "first" is the house's own first resident
         marksOf: async (ids) => (await import("./world.mjs")).markRows(ids), // a mark a line names, whole (Darko 22:33)
       });
     }
@@ -1080,7 +1106,7 @@ export async function callTool(name, args, ctx) {
         clone, // the town apex gates its one act on standing, and reads the ledger from here
         schemas: flatPropsMap(), schemaRequired: flatRequiredMap(),
         ...(ctx.door === "mcp" ? { readShape: doorShape("town") } : {}), // POS-486: the MCP door's shape only; REST /town/apex comes here without it
-        call: (tool, fields) => callTool(tool, fields, ctx),
+        call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // nested: not the connector's own call (CORE-88)
       });
     }
     case "update_address_body": case "update_address_fields":
@@ -1309,6 +1335,7 @@ async function handleMessage(msg, ctx) {
           faultLogged(`mcp ${name}: the store went away`, e);
           return refusal(msg.id, { error: "bounce", code: 503, defect: STORE_LOST, hint: writeShaped(name, args) ? ACT_RETRY : READ_RETRY, retry_after: STORE_RETRY_AFTER_S }, { compact: true });
         }
+        if (isPinStop(e)) return refusal(msg.id, { error: "bounce", code: 503, defect: "town-pin-mismatch", hint: pinStopHint(e) }, { compact: true }); // POS-994
         return refusal(msg.id, { error: "bounce", defect: "the office tripped", hint: faultLogged(`mcp ${name}: the office tripped`, e) }, { compact: true });
       }
     }
@@ -1340,13 +1367,15 @@ export function handleMcp(req, res, ctx) {
     catch { res.writeHead(400, { "content-type": "application/json" }); return res.end(JSON.stringify(rpcError(null, -32700, "parse error"))); }
 
     const messages = Array.isArray(parsed) ? parsed : [parsed];
+    // POS-1064/b telemetry: whether this WHOLE request is a doorstep/household read (read-timing.mjs § classifyMcpRead), taken here where the batch is whole; it changes nothing
+    if (ctx.req?.tm) { try { ctx.req.tm.klass = classifyMcpRead(messages); } catch { /* telemetry never fails a read */ } }
     // telemetry: the call's SHAPE, never its arguments (POS-722, call-shape.mjs).
     // Taken here, on the thread that writes the access line, before a read
     // worker can take the call; a batch is shaped by its last tools/call.
     if (ctx.req?.tel) {
       const last = messages.findLast((m) => m?.method === "tools/call");
       const name = last?.params?.name;
-      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments) : null;
+      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments, { door: "mcp" }) : null;
     }
     // The bouncer works in contract verbs, not the MCP transport's always-POST
     // method. Preflight before dispatch so a throttle is an honest HTTP 429 with
@@ -1391,7 +1420,13 @@ export function handleMcp(req, res, ctx) {
       res.writeHead(405, { "content-type": "application/json" });
       return res.end(JSON.stringify(rpcError(null, -32601, "this reader answers the agents' reads only — the writer answers everything else at POST /mcp")));
     }
-    const replies = (await Promise.all(messages.map((m) => handleMessage(m, ctx)))).filter((r) => r !== null);
+    // POS-1003: an act this door refuses is kept, privately, once, here: the one place every tools/call answer leaves
+    // (refusal-log.mjs § WHERE IT IS TAKEN). Taken in the background; the answer is already built and goes out unchanged.
+    const replies = (await Promise.all(messages.map(async (m) => {
+      const reply = await handleMessage(m, ctx);
+      noteMcpRefusal(m, ctx, reply, { writeShaped });
+      return reply;
+    }))).filter((r) => r !== null);
 
     if (replies.length === 0) { res.writeHead(202); return res.end(); } // pure notifications
     const body = JSON.stringify(Array.isArray(parsed) ? replies : replies[0]);

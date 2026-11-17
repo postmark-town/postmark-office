@@ -8,13 +8,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { createHearingWindow, publishedSettlementAt, publishedSettlementsAt, blessedSettlementAt, hearable } from "../src/hearing-window.mjs";
 
 function world() {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-hearing-"));
+  const repo = tempDir("postmark-hearing-");
   const git = (args, date = null) => execFileSync("git", ["-C", repo, ...args], {
     encoding: "utf8",
     env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",

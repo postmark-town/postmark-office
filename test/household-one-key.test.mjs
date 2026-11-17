@@ -11,11 +11,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 
 import { appendTownJournal, ensureTownJournal, townDrainCursor } from "../src/town-journal.mjs";
@@ -52,7 +53,7 @@ const joinRow = (over = {}) => ({
 function sealedTown({ houses = {}, pins = {}, rooms = [], ledger = [] } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const dir = mkdtempSync(join(tmpdir(), "pm-onekey-"));
+  const dir = tempDir("pm-onekey-");
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify({ schema_version: 1, households: houses }, null, 2) + "\n");
@@ -95,7 +96,7 @@ const SPLIT_PRONE = () => ({
 async function drainOnce(town, rows, opts = {}) {
   const db = odb();
   for (const r of rows) await appendTownJournal(db, r);
-  return withEnv({ STAMP_KEY: town.keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools") }, () => withRecordFrom(town.dir, async () => {
+  return withEnv({ STAMP_KEY: town.keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(town.dir, TOWN)) }, () => withRecordFrom(town.dir, async () => {
     if (opts.run) return { db, report: await runTownDrain(db, { db, clone: town.dir, lockHeld: () => true, log: () => {}, ...opts.run }) };
     const plan = await planTownDrain(db, town.dir, { date: "2026-10-04" });
     await writeTownDrain(town.dir, plan, { date: "2026-10-04" });
@@ -211,7 +212,7 @@ test("a crossing whose first join stalls at the store appends the second join's 
       return seeded.query(text, params);
     },
   };
-  const touched = await withEnv({ STAMP_KEY: town.keyFile, STAMP_ENGINE_DIR: join(TOWN, "tools"), ...RECORD_ON }, async () => {
+  const touched = await withEnv({ STAMP_KEY: town.keyFile, TOWN_PINS_DIR: pinTown(stageTownTools(town.dir, TOWN)), ...RECORD_ON }, async () => {
     __setPoolForTest(refusesTheStalled);
     try {
       const plan = await planTownDrain(db, town.dir, { date: "2026-10-04" });

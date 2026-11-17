@@ -24,9 +24,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { stakesRowsFrom, stakesFor, doorstepStakes, stakeEnvelope, REGISTRY_PATH, SWEEP_RULE } from "../src/doorstep-stakes.mjs";
 import { pathAtRef } from "../src/world-branches.mjs";
@@ -342,7 +342,7 @@ test("postmark#3757 · the rule's words are the world's: Darko's plain sentence"
 });
 
 test("postmark#3757 · pathAtRef: in the tree, not in it, and a ref this clone cannot resolve", () => {
-  const repo = mkdtempSync(join(tmpdir(), "pm-path-at-ref-"));
+  const repo = tempDir("pm-path-at-ref-");
   try {
     const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     git("init", "-q", "-b", "main");

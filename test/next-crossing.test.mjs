@@ -17,9 +17,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
@@ -110,7 +110,7 @@ test("flag-off · enqueueLetter's receipt carries next_crossing beside expected_
 
 /** A town clone the envelope pre-flight can scan (the foyer suite's own shape). */
 function mailClone() {
-  const d = mkdtempSync(join(tmpdir(), "pm-next-crossing-town-"));
+  const d = tempDir("pm-next-crossing-town-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(d, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(d, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -156,7 +156,7 @@ test("flag-on · the town-log receipt carries next_crossing too, and the duplica
 // ── the doorstep header ─────────────────────────────────────────────────────
 
 test("the doorstep carries next_crossing right under as_of, on both skins — the same number the receipt will name", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-next-crossing-"));
+  const dir = tempDir("pm-next-crossing-");
   try {
     const asOf = "fixturesha000000000000000000000000000000";
     const ctx = { key: null, asOf, canWrite: false, clone: null, pen: null, odb: null };

@@ -247,6 +247,10 @@ test("the keep tick hands its town tools the store's registry", async () => {
   const { readFileSync: rf } = await import("node:fs");
   const sh = rf(new URL("../deploy/office-keep.sh", import.meta.url), "utf8");
   assert.match(sh, /node \/srv\/postmark-office\/deploy\/registry-file\.mjs "\$REGISTRY_FILE"/);
-  assert.equal((sh.match(/node tools\/stamp-verify\.mjs(?! --registry "\$REGISTRY_FILE")/g) ?? []).length, 0, "every stamp-verify the tick runs reads the store's registry");
-  assert.match(sh, /household-keys\.mjs" --json --repo "\$SNAP\/town" --registry "\$REGISTRY_FILE"/);
+  // POS-994: the tick runs the town's tools as the office's pinned copies (`src/town-tool.mjs run <tool> --clone … --`);
+  // the registry rides the tool's own args after `--`, exactly as before.
+  const verifies = sh.match(/^.*stamp-verify\.mjs.*$/gm) ?? [];
+  assert.ok(verifies.some((l) => /run stamp-verify\.mjs --clone "\$TOWN_CLONE" -- --registry "\$REGISTRY_FILE"/.test(l)), "the tick's verify runs through the loader with the store's registry");
+  assert.equal(verifies.filter((l) => /\bnode\b|town-tool\.mjs run/.test(l) && !/--registry "\$REGISTRY_FILE"/.test(l)).length, 0, "every stamp-verify the tick runs reads the store's registry");
+  assert.match(sh, /run household-keys\.mjs --clone "\$SNAP\/town" -- --json --repo "\$SNAP\/town" --registry "\$REGISTRY_FILE"/);
 });

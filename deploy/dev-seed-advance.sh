@@ -146,7 +146,8 @@ sudo -n grep -qE "^WORLD2_PG_URL=\"?postgres(ql)?://[^/?#[:space:]]*/$SANDBOX_DB
 store_read() { sudo -n -u postgres psql -d "$SANDBOX_DB" -XAt -v ON_ERROR_STOP=1 -c "$1"; }
 # systemd-run's --wait gives back the command's exit code.
 as_dev_office() {
-  sudo -n systemd-run --uid=meepo -p EnvironmentFile="$OFFICE_ENV" -p WorkingDirectory="$D" --pipe --wait "$@"
+  # POS-994: dev runs its own pinned town (the freshen writes $D/town-pins-dev), as the dev units name it
+  sudo -n systemd-run --uid=meepo -p EnvironmentFile="$OFFICE_ENV" -p Environment=TOWN_PINS_DIR="$D/town-pins-dev" -p WorkingDirectory="$D" --pipe --wait "$@"
 }
 # as_owner_once <plpgsql>: as the owner (the trim's idiom), one DO block, so one
 # transaction, which raises before the body runs unless the database is the sandbox.
@@ -209,13 +210,16 @@ chain_counts() {
     import { join } from "node:path";
     import { pathToFileURL } from "node:url";
     const clone = process.argv[1];
-    const { parseStampLedger } = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+    // POS-994: the pinned copy of the town mint (the office loader), checked against the clone, against
+    // the pins dev writes for its own re-signed town (the freshen, step 2 above).
+    const { importTownTool } = await import(pathToFileURL(join(process.argv[2], "src", "town-tool.mjs")).href);
+    const { parseStampLedger } = await importTownTool(clone, "stamp-mint.mjs", { root: join(process.argv[2], "town-pins-dev") });
     const ledger = parseStampLedger(readFileSync(join(clone, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
     const store = readFileSync(0, "utf8").split("\n").filter(Boolean);
     let k = 0;
     while (k < store.length && k < ledger.length && store[k] === ledger[k].sig) k++;
     console.log(k, ledger.length, store.length);
-  ' "$D/town-clone"
+  ' "$D/town-clone" "$D"
 }
 counts="$(chain_counts)" || stop "could not compare the store's chain with the clone's ledger"
 read -r KEEP LEDGER HELD <<<"$counts"

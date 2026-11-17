@@ -11,9 +11,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { markRecord, recordKindOf } from "../src/mark-record.mjs";
@@ -37,7 +37,7 @@ test("the door's law in predicated shape quotes a `predicated` node and a `predi
 
 const WORLD = worldClone();
 const skip = (!WORLD && NO_WORLD) || false;
-const repo = mkdtempSync(join(tmpdir(), "o2-predicate-forms-"));
+const repo = tempDir("o2-predicate-forms-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const HOUSE = "o2-fixture", BRANCH = `draft/${HOUSE}`;

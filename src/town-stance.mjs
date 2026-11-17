@@ -404,12 +404,47 @@ const before = (g, m) => (dateMs(g) !== dateMs(m) ? dateMs(g) < dateMs(m) : Stri
  * and the inbox both build their `elder` here, so the two read seniority one way.
  */
 export function elderByFirstLaid(firstLaid) {
-  const ageOf = (m) => {
+  const read = (m) => {
     const v = firstLaid?.get?.(String(m?.id));
     const at = typeof v === "number" ? v : Date.parse(String(v ?? ""));
     return Number.isFinite(at) ? at : dateMs(m);
   };
-  return (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+  // ONE READ PER MARK (POS-1057). The inbox asks this of every pair of marks, and a mark with no first-laid entry parsed its date
+  // twice at every ask. The age is kept beside the mark object, for as long as that object and this comparison live; a caller that
+  // hands a fresh object gets a fresh read.
+  const ages = new WeakMap();
+  const ageOf = (m) => {
+    if (m === null || typeof m !== "object") return read(m);
+    let at = ages.get(m);
+    if (at === undefined) ages.set(m, at = read(m));
+    return at;
+  };
+  return (g, m) => { const ag = ageOf(g), am = ageOf(m); return ag !== am ? ag < am : String(g?.id ?? "") < String(m?.id ?? ""); };
+}
+
+/**
+ * SENIORITY ON THE CELLS TWO MARKS SHARE, as the fold reads it (POS-571; world
+ * LOGOS conflict-matrix § Roles from seniority, RULED 2026-10-04: "per-cell
+ * (whoever first covered a cell is that cell's incumbent)", "an expansion is a
+ * newcomer on its new cells"). PURE. `firstCoverOrder` is the blessed engine's
+ * own (world tools/consent.mjs § firstCoverOrder), never a copy: it answers
+ * `{ grantorFirst }` where a footprint history decides, and null where the cells
+ * prove nothing. `recordOf(m)` is the mark as that engine reads it (its first-laid
+ * instant and footprints beside its shape). Where the engine has no per-cell
+ * answer, or predates one, `wholeMark` answers as it always has
+ * (`elderByFirstLaid`). Only the yes or no crosses into `awaitingOf`.
+ */
+export function elderByFirstCover({ firstCoverOrder = null, recordOf, wholeMark }) {
+  if (typeof firstCoverOrder !== "function") return wholeMark;
+  return (g, m) => {
+    // A PARCEL KEEPS ITS OWN LAW, whole-mark on both sides: it "speaks only on what
+    // came after it", by first-laid instant (world consent.mjs § cameAfter), and
+    // the engine's seniority at contact refuses a parcel on either side before any
+    // cell is read (§ seniorAtContact). So the cells are never asked of a parcel.
+    if (g?.kind === "parcel" || m?.kind === "parcel") return wholeMark(g, m);
+    const byCell = firstCoverOrder(recordOf(g), recordOf(m));
+    return byCell ? byCell.grantorFirst === true : wholeMark(g, m);
+  };
 }
 
 /** A handle's household, with the town's own ground and pen folded into the town. */
@@ -458,7 +493,10 @@ export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf
       if (!g?.id || g.id === mark.id || !g.at || !g.extent) continue;
       if (isThing && isThing(g)) continue;
       const hh = houseOf(householdOf, g.by);
-      if (hh === own || !elder(g, mark) || !overlaps(g, mark)) continue;
+      // OVERLAP FIRST (POS-1057). Both are yes-or-no questions with no effect, so the order changes no answer. Overlap is rectangle
+      // arithmetic and is false for nearly every pair; seniority reads footprints cell by cell since POS-571 and was asked of every
+      // pair, overlapping or not.
+      if (hh === own || !overlaps(g, mark) || !elder(g, mark)) continue;
       if (!grounds.has(hh)) grounds.set(hh, []);
       grounds.get(hh).push(g.id);
     }

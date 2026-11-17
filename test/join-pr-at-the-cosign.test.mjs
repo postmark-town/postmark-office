@@ -25,8 +25,8 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -130,7 +130,7 @@ test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 const clones = [];
 function town(registry, pins) {
-  const dir = mkdtempSync(join(tmpdir(), "join-bind-"));
+  const dir = tempDir("join-bind-");
   clones.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
@@ -457,7 +457,7 @@ test("a frozen gangway boards a household member and the berth names their house
   // new handle inside an existing credential household boards the ship like any
   // other arrival". A passenger is not a resident, so no register is touched;
   // the berth simply remembers which house it will come ashore into.
-  const dir = mkdtempSync(join(tmpdir(), "pos158-gangway-"));
+  const dir = tempDir("pos158-gangway-");
   mkdirSync(join(dir, "HARBOR"), { recursive: true });
   writeFileSync(join(dir, "HARBOR", "GANGWAY.md"), "state: frozen" + String.fromCharCode(10));
   const wasClone = process.env.TOWN_CLONE;
@@ -485,7 +485,7 @@ test("a frozen gangway boards a household member and the berth names their house
 test("a frozen gangway mints NOTHING, even for an account with no house at all", async () => {
   // SYBIL 1a (review 3/6): a FRESH account is what plans `created`, so it is the
   // one that exercises a mint running past the breaker.
-  const dir = mkdtempSync(join(tmpdir(), "pos158-gangway-fresh-"));
+  const dir = tempDir("pos158-gangway-fresh-");
   mkdirSync(join(dir, "HARBOR"), { recursive: true });
   writeFileSync(join(dir, "HARBOR", "GANGWAY.md"), "state: frozen" + String.fromCharCode(10));
   const wasClone = process.env.TOWN_CLONE;
@@ -595,7 +595,7 @@ const viaExec = (payload, { clone }) => penTransaction(clone, async () => {
 
 test("a push that did not land leaves the pin in the store; the same account's retry lands, another account is refused", async () => {
   const clone = town(REGISTRY(), PINS());
-  const origin = mkdtempSync(join(tmpdir(), "join-bind-origin-"));
+  const origin = tempDir("join-bind-origin-");
   clones.push(origin);
   execFileSync("git", ["init", "-q", "--bare", origin]);
   git(clone, "branch", "-M", "main");

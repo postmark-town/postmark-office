@@ -22,9 +22,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ancestryIn, pinMove } from "../world2/tools/law-ingest.mjs";
 
@@ -37,7 +37,7 @@ const skip = bashOk ? false : "bash is not on PATH here, so the shipped refresh 
 
 /** A world origin with a line of settlements: S1 ← c ← S2 ← c ← S3, tagged. */
 function origin(t) {
-  const dir = mkdtempSync(join(tmpdir(), "w2-blessed-"));
+  const dir = tempDir("w2-blessed-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const src = join(dir, "origin");
   const g = (...a) => execFileSync("git", ["-C", src, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" }).trim();

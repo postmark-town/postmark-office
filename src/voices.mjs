@@ -55,7 +55,7 @@ import { dialNode, dialNumber } from "./world-classes.mjs";
 // the say's nonce is bounded by the same number the send's is.
 import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
-import { hearable } from "./hearing-window.mjs";
+import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 
 // The class the dials hang on. Named once, beside the reader, for the same
@@ -153,8 +153,17 @@ export const SPEAK_EVERY_MS = dial("speak_every_s");
 export const TEXT_MAX = dial("text_max");
 export const PRESENCE_MS = dial("presence_min");
 
+/**
+ * THE SAY RECEIPT'S OWN WORDS ABOUT `since` (POS-951; little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew: 67 guests, ~50 says by one host, every receipt 10-15k
+ * tokens because the whole room rode back each time, while `since` had been on the card all along). `latest` is this receipt's own cursor and `since` takes it back as a
+ * number of milliseconds: the same stamp, the same type, so a reader can make the next call correctly from the receipt alone. Nothing here changes what a call without `since` returns.
+ */
+export const sinceNext = (latest, passed) => passed
+  ? `keep going the same way: pass since: ${latest} (this receipt's latest) on your next call, and you will hear only what is new`
+  : `next call: pass since: ${latest} (this receipt's latest, a number of milliseconds) and you hear only what is new. Without it every say sends you the whole room again, which in a crowded room is thousands of tokens a line`;
+
 /** The ear's window, in the words every surface says it in — one place. The instant rides each reply as `hearable_since`. */
-export const HEARING_WINDOW = "since the last settlement";
+export const HEARING_WINDOW = "since the last settlement, or in a room still talking across it";
 
 /**
  * Where the room's record is kept, in one line (POS-330, Kogane at Office Hours
@@ -229,16 +238,14 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
-  const epochOf = marks && ((at) => {
-    let lo = 0, hi = marks.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= at) lo = mid + 1; else hi = mid; }
-    return lo;
-  });
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      const over = epochOf ? epochOf(open[i].latest) !== epochOf(v.at) : v.at - open[i].latest > fadeMs;
+      // CORE-97: with settlements known a room is over only once its first settlement edge has passed AND the
+      // hour of grace after it ran out with no say belonging to it (a say in the hour carried it: its newest say
+      // is then past the edge). The same test applies again at the next settlement. No settlements: the lull rule.
+      const over = marks ? !roomOpen(open[i].latest, v.at, marks) : v.at - open[i].latest > fadeMs;
       if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
@@ -304,6 +311,27 @@ function threadOf(cluster, { live, voiceCap }) {
       x: Math.round(v.x),
       y: Math.round(v.y),
     })),
+  };
+}
+
+/**
+ * A thread as the keyless feed shows it, its voices PAGED BACK (POS-951; little-pica's second ask, "the keyless conversations feed can't page back"). `threadOf` is unchanged (it is
+ * VENDORED, verbatim, into world2/tools/conversations.mjs); this wraps it. `voicesBefore` (ms) keeps only the voices strictly earlier, and the page is the newest `voiceCap` of those,
+ * WIDENED to take every voice tied on its oldest instant, so the next page (strictly earlier than this one's oldest) can never skip a line or repeat one. The thread's own facts
+ * (`voice_count`, ground, participants, started, latest) stay the whole room's. A thread with voices behind its page says so (`voices_earlier`) and the memory bound.
+ */
+function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+  const meta = threadOf(cluster, { live, voiceCap: 1 });
+  const pool = Number.isFinite(voicesBefore) ? cluster.voices.filter((v) => v.at < voicesBefore) : cluster.voices;
+  let from = Math.max(0, pool.length - voiceCap);
+  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
+  const raw = pool.slice(from);
+  const voices = raw.length ? threadOf({ voices: raw }, { live, voiceCap: raw.length }).voices : [];
+  return {
+    ...meta,
+    ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ": this page is read from the record"}` } } : {}),
+    voices,
   };
 }
 
@@ -416,7 +444,7 @@ export function createVoices({
   // built (one derivation of what the town can hear at an instant), and the
   // three beneath it are the expensive reads a snapshot makes. The push's
   // falsifier reads these to show fifty waiters cost one room per voice.
-  const stats = { rooms: 0, heardFrom: 0, clusters: 0, nearby: 0 };
+  const stats = { rooms: 0, heardFrom: 0, clusters: 0, clustered: 0, nearby: 0 };
   // THE PRESENCE MAP is RAM (see lastPresent below): it records that a handle
   // spoke or listened here, and it is evicted by `presenceMs` below.
   //
@@ -433,11 +461,52 @@ export function createVoices({
   // the newest instant a trim dropped; a reply whose window opens before it
   // names the cut rather than passing a short page off as the whole window.
   let cutAt = null;
+  // A ROOM KEEPS ITS NAME, AND ITS MEMBERS, WHEN ITS FRONT LEAVES MEMORY (CORE-97). A room's id is its first say's (`t<at>-<handle>`), and a room that renews at every
+  // settlement outlives the memory's first say. So every voice names its room's ROOT at the moment it is spoken, on its own log line (`root`, and `merged` when
+  // the say joined two rooms that had different roots): the log is the road, hydrate reads the names back with no clustering, and an old line without one still reads.
+  // `parent` is a union-find over root ids (earlier root wins), only for the merges the log recorded; a bridge that has left memory leaves its two sides still one room.
+  const parent = new Map();
+  const rootAtOf = (id) => Number(/^t(\d+)-/.exec(id)?.[1]);
+  const ownId = (v) => `t${v.at}-${v.handle}`;
+  function findRoot(id) {
+    let r = id;
+    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r);
+    for (let c = id; c !== r;) { const n = parent.get(c); parent.set(c, r); c = n; }
+    return r;
+  }
+  function unionRoots(a, b) {
+    const ra = findRoot(a), rb = findRoot(b);
+    if (ra === rb) return ra;
+    const [lo, hi] = rootAtOf(ra) <= rootAtOf(rb) ? [ra, rb] : [rb, ra];
+    parent.set(hi, lo);
+    return lo;
+  }
+  const rootOfVoice = (v) => findRoot(v.root ?? ownId(v)); // an old line stands for itself, resolved through any join the log recorded for it
+  // a cluster's root: the earliest root among its voices (an old line without one stands for itself)
+  function clusterRoot(c) {
+    let best = null;
+    for (const v of c.voices) { const r = rootOfVoice(v); if (best == null || rootAtOf(r) < rootAtOf(best)) best = r; }
+    return best;
+  }
+  // The map only needs the joins a HELD voice still names: past twice the memory, resolve every held voice's root to its final root and keep just those.
+  function pruneRoots(held) {
+    if (parent.size <= 2 * memoryMax) return;
+    const keep = new Map();
+    for (const v of held) {
+      const id = v.root ?? ownId(v); // an old line's join is recorded against its own id
+      const r = findRoot(id);
+      if (r !== id) keep.set(id, r);
+    }
+    parent.clear();
+    for (const [k, r] of keep) parent.set(k, r);
+  }
   function trimmed(list) {
-    if (list.length <= memoryMax) return list;
+    if (list.length <= memoryMax) { pruneRoots(list); return list; }
     const cut = list.length - memoryMax;
     cutAt = list[cut - 1].at;
-    return list.slice(cut);
+    const kept = list.slice(cut);
+    pruneRoots(kept);
+    return kept;
   }
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
@@ -481,7 +550,8 @@ export function createVoices({
         const v = JSON.parse(line);
         const at = Date.parse(v.at);
         if (!v.handle || !Number.isFinite(at) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
-        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}) });
+        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}), ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}) });
+        if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
     voices.sort((a, b) => a.at - b.at);
@@ -493,6 +563,17 @@ export function createVoices({
     hydrate();
     voices.push(voice);
     voices = trimmed(voices);
+    // the room this say joins names it: the clusters are the ones the reply's snapshot is about to read (memoised, so no second walk)
+    const mine = (clusterByRoom(voices, boundariesAt(now())).get(voice.room ?? null) ?? []).find((c) => c.voices.includes(voice));
+    let merged = [];
+    if (mine) {
+      // the roots of the rooms this say joins are the OTHER voices' (its own fresh id is no join): none, and it founds a room under its own id
+      const roots = [...new Set(mine.voices.filter((v) => v !== voice).map(rootOfVoice))];
+      const lead = roots.length ? roots.reduce((a, b) => (rootAtOf(b) < rootAtOf(a) ? b : a), roots[0]) : ownId(voice);
+      for (const r of roots) if (r !== lead) unionRoots(lead, r);
+      merged = roots.filter((r) => r !== lead);
+      voice.root = lead;
+    }
     const file = pathOf();
     const line = `${JSON.stringify({
       at: new Date(voice.at).toISOString(),
@@ -503,6 +584,8 @@ export function createVoices({
       place: voice.place,
       aboard: voice.aboard,
       ...(voice.room ? { room: voice.room } : {}),
+      ...(voice.root ? { root: voice.root } : {}),
+      ...(merged.length ? { merged } : {}),
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -597,8 +680,13 @@ export function createVoices({
     // resolve was 52.6% of the office's thread (refStamp's statSyncs, the
     // endurance run's profile). This module never looks inside the room.
     const room = {};
+    // CORE-97: a room still open across the settlement edge is heard whole (its earlier says too), so the clusters
+    // come first; a voice is audible when it is in the window OR belongs to an open room that began before it.
+    const boundaries = boundariesAt(t);
+    const clusters = (wantClusters || window.since != null) ? clusterByRoom(hydrate(), boundaries) : null;
+    const carried = carriedVoices(clusters, t, window.since);
     for (const v of hydrate()) {
-      if (!hearable(v.at, t, window.since)) continue;
+      if (!hearable(v.at, t, window.since) && !(carried.has(v) && v.at <= t)) continue;
       if (structural) {
         let from = null;
         stats.heardFrom += 1;
@@ -611,10 +699,7 @@ export function createVoices({
       audible.push({ v, x: heard.x, y: heard.y, structural: false });
     }
     stats.clusters += 1;
-    // The ear alone needs no clusters (POS-632 W4's carried earshot skips them).
-    const boundaries = boundariesAt(t);
-    const clusters = wantClusters ? clusterByRoom(hydrate(), boundaries) : null;
-    return { t, audible, clusters, window, boundaries };
+    return { t, audible, clusters: wantClusters ? clusters : null, window, boundaries, carriedCut: carried.cut };
   }
 
   // THE RECORD, CLUSTERED ROOM BY ROOM (POS-886).
@@ -629,15 +714,57 @@ export function createVoices({
   // clusters. A Map keyed by the room, read once, from the same `hydrate()` the
   // snapshot is built on; `openConversationAt` takes the reader's own key and
   // never another's.
+  // The voices of every room that is still open at `t` and began before the window's edge: the room carried across it (CORE-97).
+  function carriedVoices(clusters, t, since) {
+    const out = new Set();
+    out.cut = new Set(); // voices of a carried room whose front is no longer in memory
+    if (!clusters || since == null) return out;
+    const marks = boundariesAt(t);
+    for (const list of clusters.values()) {
+      for (const c of list) {
+        const began = rootAtOf(c.root) ?? c.voices[0].at;
+        if (began >= since || !roomOpen(c.latest, t, marks)) continue;
+        const lost = began < c.voices[0].at; // the room began earlier than its first voice still held
+        for (const v of c.voices) { out.add(v); if (lost) out.cut.add(v.handle + "|" + v.at); }
+      }
+    }
+    return out;
+  }
+  let roomMemo = null;
   function clusterByRoom(list, boundaries) {
+    const key = list.length + ":" + (list[0]?.at ?? "") + ":" + (list.at(-1)?.at ?? "") + ":" + boundaries.join(",");
+    if (roomMemo && roomMemo.key === key && roomMemo.list === list) return roomMemo.clusters;
+    const clusters = clusterByRoomUncached(list, boundaries);
+    roomMemo = { key, list, clusters };
+    return clusters;
+  }
+  // Two memory clusters that name the same root are one room whose bridge has left memory: they stay one (membership, not only the id).
+  function mergedByRoot(cs) {
+    const by = new Map();
+    const out = [];
+    for (const c of cs) {
+      c.root = clusterRoot(c);
+      // only a root a voice RECORDED joins clusters: an old line's own id is no one else's name (two says can share an instant)
+      const host = c.voices.some((v) => v.root) ? by.get(c.root) : null;
+      if (host) { host.voices.push(...c.voices); host.voices.sort((a, b) => a.at - b.at); host.latest = Math.max(host.latest, c.latest); }
+      else { if (c.voices.some((v) => v.root)) by.set(c.root, c); out.push(c); }
+    }
+    return out.sort((a, b) => a.latest - b.latest);
+  }
+  function groupByRoom(list) {
     const byRoom = new Map();
     for (const v of list) {
       const key = v.room ?? null;
       if (!byRoom.has(key)) byRoom.set(key, []);
       byRoom.get(key).push(v);
     }
+    return byRoom;
+  }
+  function clusterByRoomUncached(list, boundaries) {
+    stats.clustered += 1; // walks of the held list: one per distinct list (the append's, which the reply's snapshot reads again)
+    const byRoom = groupByRoom(list);
     const clusters = new Map();
-    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, boundaries }));
+    for (const [key, spoken] of byRoom) clusters.set(key, mergedByRoot(clusterVoices(spoken, { earshotM, boundaries })));
     return clusters;
   }
 
@@ -734,13 +861,12 @@ export function createVoices({
   // page showed a twenty-voice thread; hearing was five minutes then, and a
   // conversation was longer than an ear). Chains exactly like the page: earshot or shared deck.
   function openConversationAt(here, t, clusters0, boundaries = boundariesAt(t)) {
-    const since = liveSince(boundaries);
     // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read.
     // POS-886: `clusters0` is the snapshot's record clustered room by room (`clusterByRoom`), so the reader takes their own room's
     // clusters, which were grouped from that room's voices alone. The filter after it cannot change them; it stays as the WLD-74 guard.
     const clusters = (clusters0?.get(here.room ?? null) ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
     const mine = clusters.find((c) =>
-      c.latest >= since &&
+      roomOpen(c.latest, t, boundaries) &&
       c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
     if (!mine) return null;
     const voices = mine.voices;
@@ -776,7 +902,8 @@ export function createVoices({
   async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
-    const heard = heardBy(here, snap).filter(fresh);
+    const everHeard = heardBy(here, snap);
+    const heard = everHeard.filter(fresh);
     const page = Number.isFinite(before) ? heard.filter((v) => v.at < before) : heard;
     const within = page.slice(-hearMax); // newest last
 
@@ -877,8 +1004,15 @@ export function createVoices({
     // is older still — pass it back as `before` for the previous page
     out.older = page.length > within.length ? within[0].at : null;
     // where the window opens, so a reader can see how far back `older` can go
-    out.hearable_since = snap.window?.since != null ? new Date(snap.window.since).toISOString() : null;
+    // CORE-97: a room carried across the settlement is heard from its own start, so where hearing reaches is the earliest voice this ear can
+    // be given (the window's edge when none is older); `conversations()`' `settlement_since` keeps naming the published edge itself.
+    const reach = everHeard.length && snap.window?.since != null ? Math.min(snap.window.since, everHeard[0].at) : snap.window?.since;
+    out.hearable_since = reach != null ? new Date(reach).toISOString() : null;
+    const carriedCut = everHeard.some((v) => snap.carriedCut?.has(v.handle + "|" + v.at));
     const told = [snap.window?.disclosure,
+      carriedCut
+        ? `a room carried across the settlement has lost its earliest voices from this office's memory (it keeps at most ${memoryMax}): hearing reaches back only to ${out.hearable_since} for it, and the conversations page keeps the rest`
+        : null,
       cutAt != null && snap.window?.since != null && cutAt >= snap.window.since
         ? `this office keeps at most ${memoryMax} voices in memory, and more than that have been said since the settlement — voices before ${new Date(cutAt).toISOString()} are no longer hearable (the conversations page keeps them)`
         : null].filter(Boolean);
@@ -886,8 +1020,11 @@ export function createVoices({
     if (out.voices.length === 0 && !Number.isFinite(since) && !Number.isFinite(before))
       out.note = convo
         ? `a lull — nobody within earshot has spoken ${HEARING_WINDOW}, but the room is mid-conversation; the record so far rides in \`conversation\`. Say something.`
-        : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
-    return delta(handle, out, { since, t, convo, present: Boolean(present) });
+        : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement, except a room still talking in the hour after it, which carries on; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
+    const done = delta(handle, out, { since, t, convo, present: Boolean(present) });
+    // POS-951 (little-pica, 2026-11-07: "Nothing in the say receipt mentions it"): a SAY says how to hear only what is new next time, with the real stamp to pass
+    if (spoke && Number.isFinite(done.latest)) done.since_next = sinceNext(done.latest, Number.isFinite(since));
+    return done;
   }
 
   // ── THE DELTA (POS-265, the Snug night) ─────────────────────────────────────
@@ -1115,17 +1252,17 @@ export function createVoices({
   // (ms) asks for the page of closed threads whose newest line is strictly earlier, with no live threads. A page keeps every thread
   // tied on its last line's instant, so a cursor never skips one. This is the office's MEMORY (the last memoryMax voices, a RAM fact
   // about a running process): `earlier.source` says so, and the store's read (world2/tools/conversations.mjs) is the record.
-  function conversations({ closedMax = 40, voiceCap = 80, before = null } = {}) {
+  function conversations({ closedMax = 40, voiceCap = 80, before = null, voicesBefore = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
-    // page draws a voice. `hearable_since` beside it is where an ear's window opens.
+    // page draws a voice. `hearable_since` beside it is where an ear's hearing reaches (the window's edge, or earlier for a room carried across it).
     const boundaries = boundariesAt(t);
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
-    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries });
+    const clusters = mergedByRoot(clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries }));
     const live = [];
     const closed = [];
-    for (const c of clusters) (c.latest >= since ? live : closed).push(c);
+    for (const c of clusters) (roomOpen(c.latest, t, boundaries) ? live : closed).push(c);
     const paged = Number.isFinite(before);
     const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
     let cut = Math.min(closedMax, older.length);
@@ -1137,11 +1274,14 @@ export function createVoices({
       fade_minutes: Math.round(fadeMs / 60000),
       hearable_since: ((w) => (w.since != null ? new Date(w.since).toISOString() : null))(windowOf(t)),
       close_minutes: null,
-      close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
+      close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-      closed: page.map((c) => threadOf(c, { live: false, voiceCap })),
+      // POS-951 (little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew): the two things a listener on this feed needs that nothing here said
+      place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.",
+      voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
+      closed: page.map((c) => ({ ...pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
@@ -1195,5 +1335,5 @@ export function createVoices({
     now,
   };
 
-  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _presence: presence };
+  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _aliases: () => parent.size, _presence: presence };
 }

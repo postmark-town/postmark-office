@@ -36,9 +36,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,7 +59,7 @@ const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }
 const WHY_SKIP = !has("true") ? "no POSIX sh"
   : !WORLD ? "no world checkout found (set POSTMARK_WORLD_CLONE)" : false;
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-shadow-source-"));
+const scratch = tempDir("postmark-shadow-source-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 // The two copies of neth's stone as they stood on 2026-09-25, less `class: thing`:

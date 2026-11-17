@@ -287,17 +287,40 @@ test("the block never throws — an unreadable handle costs the doorstep nothing
   } finally { town.meta.push(registryRow); await IX.reseed(); }
 });
 
-test("the town tool is imported once per process — one office, one checkout", async () => {
-  // questTools caches the imported module: the office serves exactly one town
-  // clone for its life, and re-resolving per request would be a filesystem hit
-  // on every doorstep. Worth pinning, because it also means the "checkout too
-  // old to carry the fold" degradation is decided at the FIRST import of the
-  // process and cannot be exercised after one has succeeded — the null path in
-  // nextStepsFor is a boot-time guarantee, not a per-call one.
+test("the town tool is evaluated once per process, and its pin is checked on every call", async () => {
+  // POS-994 (Wright, 2026-11-16): questTools no longer keeps a cache of its own.
+  // It loads the office's PINNED copy (src/town-tool.mjs § importTownTool), whose
+  // URL never changes within a process, so node's ESM loader evaluates the module
+  // once and hands back the same namespace on every later import. What runs on
+  // every call is only the pin check: the clone's copy hashed against the pin
+  // (cached on the file's size and mtime). So a clone that changes after the
+  // first load stops the next call, by name, rather than answering from a module
+  // the office no longer vouches for. (Until POS-994 a second call answered from a
+  // module cached across ANY clone, a bogus path included.)
+  const { importTownTool, TownPinMismatch } = await import("../src/town-tool.mjs");
+  const { copyTownModule } = await import("./helpers/pinned-town.mjs");
+  const { appendFileSync } = await import("node:fs");
+
+  // ONCE PER PROCESS: the same namespace object, call after call.
+  const first = await importTownTool(TOWN, "quest-progress.mjs");
   const a = await ixFor().questBoard("wright");
-  const b = await ixFor(join(TOWN, "no-such-checkout")).questBoard("wright");
-  assert.deepEqual(a.quests.map((q) => q.id), b.quests.map((q) => q.id),
-    "the second call answers from the cached module, not from the bogus path");
+  assert.ok(Array.isArray(a.quests), "the office's own path answers through the pinned module");
+  assert.equal(await importTownTool(TOWN, "quest-progress.mjs"), first, "evaluated once: the loader hands back the same module, not a second evaluation");
+
+  // A CLONE THAT CHANGES AFTER THE FIRST LOAD stops the next call by name.
+  const clone = mkdtempSync(join(tmpdir(), "next-steps-pin-"));
+  try {
+    copyTownModule(TOWN, clone, "quest-progress.mjs");
+    const ok = await ixFor(clone).questBoard("wright");
+    assert.deepEqual(ok.quests.map((q) => q.id), a.quests.map((q) => q.id), "an equal clone answers as the office's own");
+    appendFileSync(join(clone, "tools", "quest-progress.mjs"), "\n// a town change the office has not reviewed\n");
+    await assert.rejects(ixFor(clone).questBoard("wright"),
+      (e) => e instanceof TownPinMismatch && e.file === "tools/quest-progress.mjs",
+      "the changed clone stops the step, naming the file, with no answer from the earlier load");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+
+  // and a path with no town at all is no town, never the earlier load's answer
+  await assert.rejects(ixFor(join(TOWN, "no-such-checkout")).questBoard("wright"), TownPinMismatch);
 });
 
 // Guards the import wiring itself: the town module must be reachable from the
@@ -306,5 +329,40 @@ test("the town's quest-progress.mjs is importable from the clone the office serv
   const mod = await import(pathToFileURL(join(TOWN, "tools", "quest-progress.mjs")).href);
   for (const fn of ["composeNextSteps", "onboardingBoard", "onboardingFactsFor", "boardForHandle", "townDay"]) {
     assert.equal(typeof mod[fn], "function", `the town tool must export ${fn} — the office imports it live`);
+  }
+});
+
+// ── A PIN STOP IS SAID; ONLY A TOWN WITH NO QUEST TOOL HAS NO STEPS (POS-994) ──
+// Truey's review of #1065: a pin stop on next steps is a named unavailable, never
+// null. The one true absence is a town with no tools/quest-progress.mjs at all
+// (as an older checkout). Pins that hold no quest-progress while the town DOES
+// (TownToolUnpinned, an --out dev folder made without it) are a stop, not absence.
+test("next steps: pins without quest-progress over a town that has it is a named stop; a town without it at all has none", async () => {
+  const { pinnedTown, pinRootNow } = await import("./helpers/pinned-town.mjs");
+  const { cpSync, writeFileSync: write } = await import("node:fs");
+  const was = process.env.TOWN_PINS_DIR;
+  const base = mkdtempSync(join(tmpdir(), "next-steps-pins-"));
+  try {
+    // pins exactly the suite's, less quest-progress (its own entry, not its closure)
+    const pins = join(base, "pins");
+    cpSync(pinRootNow(), pins, { recursive: true });
+    const manifest = JSON.parse(readFileSync(join(pins, "PINS.json"), "utf8"));
+    delete manifest.files["tools/quest-progress.mjs"];
+    write(join(pins, "PINS.json"), JSON.stringify(manifest));
+    rmSync(join(pins, "tools", "quest-progress.mjs"));
+    const town = pinnedTown(join(base, "town"));      // copied while the suite's pins were in force: it HAS quest-progress
+    process.env.TOWN_PINS_DIR = pins;
+    const stop = await nextStepsFor("wright", town, { ix: {} });
+    assert.equal(stop?.unavailable?.defect, "town-pin-mismatch", `a named stop, not absence: ${JSON.stringify(stop)}`);
+    assert.deepEqual(stop.steps, []);
+    // the one true absence: the town holds no quest tool, the pins do
+    process.env.TOWN_PINS_DIR = was ?? "";
+    if (!process.env.TOWN_PINS_DIR) delete process.env.TOWN_PINS_DIR;
+    const bare = pinnedTown(join(base, "bare"));
+    rmSync(join(bare, "tools", "quest-progress.mjs"));
+    assert.equal(await nextStepsFor("wright", bare, { ix: {} }), null, "a town with no quest tool has no next steps");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = was;
+    rmSync(base, { recursive: true, force: true });
   }
 });
