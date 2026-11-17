@@ -125,7 +125,10 @@ async function rows() {
  * THE ONE ASSERTION (POS-896): every table in the key store and in the office's store holds exactly the counts it held
  * before the refused request. It is a function so the falsifier below drives the SAME assertion with a write the refusal
  * did not make. No table, action or actor is left out of it, and nothing waits for the office to settle: the office is
- * booted with no world and no town to read (below), so there is no unrelated producer for the counts to race.
+ * booted with no world and no town to read (below), so there is no unrelated producer for the counts to race, EXCEPT the
+ * refusal log (POS-1003): it writes refused_acts in the background after a signed-in write is refused. The one case that
+ * makes such a refusal (the media door's, at its cap) waits for its own row before the next case snapshots the counts.
+ * A 413 is never kept, so the cases below it write nothing.
  */
 async function unchanged(before, message) {
   assert.deepEqual(await rows(), before, message);
@@ -165,7 +168,20 @@ test("POST /residency and POST /letters (200 000 bytes): one byte over is a whol
 
 test("the media door keeps its own cap (3 000 000 bytes): over is 413, exactly the cap is read", async () => {
   bounce413(await send("/media", filler(3_000_001), { headers: auth }), "media");
-  assert.notEqual((await send("/media", filler(3_000_000), { headers: auth })).status, 413, "exactly 3 000 000 bytes is not refused for size");
+  const refusals = async () => {
+    const c = await ix.store.connect("world2_owner");
+    try { return (await c.query("SELECT act, code FROM refused_acts ORDER BY id")).rows; } finally { await c.end(); }
+  };
+  const had = (await refusals()).length;
+  const atCap = await send("/media", filler(3_000_000), { headers: auth });
+  assert.notEqual(atCap.status, 413, "exactly 3 000 000 bytes is not refused for size");
+  // POS-1003: this signed-in write at exactly the cap is refused by the media door (a 422, not a size refusal), and the refusal
+  // log keeps it in the background. The next case snapshots every table's count, refused_acts included, so the row is waited
+  // for and named HERE, where it is made, and never left to land inside the next case's window.
+  assert.equal(atCap.status, 422, `the media door's own refusal at the cap: ${atCap.text.slice(0, 200)}`);
+  let kept = [];
+  for (let i = 0; i < 200 && kept.length < had + 1; i++) { kept = await refusals(); if (kept.length < had + 1) await new Promise((r) => setTimeout(r, 40)); }
+  assert.deepEqual(kept.slice(had), [{ act: "POST /media", code: 422 }], "the refusal log kept exactly this refusal");
 });
 
 test("MCP (3 000 000 bytes): one byte over is a whole 413 carrying a JSON-RPC error, no tool run", async () => {
