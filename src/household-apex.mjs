@@ -2245,7 +2245,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
       // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
       // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset (default 20).
-      return doorstepStakes(named || null, { key, limit: f.limit ?? null, allocationPage: { limit: f.limit, offset: f.offset } });
+      return doorstepStakes(named || null, { key, limit: f.limit ?? null, allocationPage: (named ? held.includes(named) : held.length > 0) ? { limit: f.limit, offset: f.offset } : false });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and

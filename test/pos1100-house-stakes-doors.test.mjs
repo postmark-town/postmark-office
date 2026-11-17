@@ -179,7 +179,8 @@ test("household { read_shape: \"v2\" }: the glance's stamps block carries the ag
 
 test("the finished doorstep's stakes item carries the read's own first page on both skins, counting the post stakes, and IS the read at its args", { skip }, async () => {
   for (const slim of [false, true]) {
-    const d = await doorstepBundle(R0, { key: null, asOf: AS_OF, canWrite: false, clone: scratch, pen: null, odb: null, slim });
+    const holder = { household: HOUSE, handles: new Set([R0]) };
+    const d = await doorstepBundle(R0, { key: holder, asOf: AS_OF, canWrite: false, clone: scratch, pen: null, odb: null, slim });
     assert.equal(d.stakes.allocation?.unavailable, undefined, d.stakes.allocation?.unavailable);
     assert.equal(d.stakes.allocation.total, 4 + 5 + 7, `${slim ? "slim" : "full"}: r000's own stamps behind marks, posts and the pot`);
     assert.equal(d.stakes.allocation.count, 3);
@@ -188,4 +189,23 @@ test("the finished doorstep's stakes item carries the read's own first page on b
     const read = await householdApex({ read: "stakes", args: d.stakes.args }, { household: HOUSE, handles: new Set([R0]) }, ctx);
     assert.deepEqual(d.stakes.allocation, read.allocation, "the segment is the read at its args, the bundle's law");
   }
+});
+
+test("THE HOUSE'S OWN VIEW (Wright 2026-11-17): the doorstep carries allocation only when the key holds that handle; keyless, or another house's key, the segment is the marks only, and so is the read at its args", { skip }, async () => {
+  const ctxOf = (key, slim) => ({ key, asOf: AS_OF, canWrite: false, clone: scratch, pen: null, odb: null, slim });
+  const holder = { household: HOUSE, handles: new Set([R0]) };
+  const other = { household: "other", handles: new Set([STRANGER]) };
+  for (const slim of [false, true]) {
+    const mine = await doorstepBundle(R0, ctxOf(holder, slim));
+    assert.ok(mine.stakes.allocation, "the holder's doorstep carries it");
+    for (const [who, key] of [["keyless", null], ["another house's key", other]]) {
+      const d = await doorstepBundle(R0, ctxOf(key, slim));
+      assert.equal("allocation" in d.stakes, false, `${who}, ${slim ? "slim" : "full"}: no allocation on a public doorstep`);
+      assert.equal(JSON.stringify(d.stakes).includes("fixture-pot"), false, `${who}: no pot id`);
+      assert.equal(JSON.stringify(d.stakes).includes("fixture-topic"), false, `${who}: no ballot id`);
+    }
+  }
+  // and the read: a key that holds the handle gets it, a bare keyless read does not
+  const keyless = await householdApex({ read: "stakes", args: { handle: R0 } }, null, ctx);
+  assert.equal("allocation" in keyless, false, "the read at the keyless segment's args carries none either");
 });

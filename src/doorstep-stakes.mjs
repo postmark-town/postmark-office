@@ -232,7 +232,7 @@ export async function stakesFor(handles, {
   now = new Date(),
   limit = null,
   // POS-1100: everything the house has stamps behind, beside the marks above (household-stakes.mjs). `allocation` is the reader
-  // (a suite's seam); `allocationPage`, when given as { limit, offset }, answers the PAGED LIST (the stakes read) in place of the aggregate.
+  // (a suite's seam); `allocationPage`, when given as { limit, offset }, answers the PAGED LIST (the stakes read) in place of the aggregate, and `false` carries none.
   allocation: readAllocation = null,
   allocationPage = null,
 } = {}) {
@@ -302,6 +302,8 @@ export async function stakesFor(handles, {
  * of the number; this only asks. Never throws.
  */
 async function allocationOf(handles, { read = null, atRisk = null, page = null } = {}) {
+  // `page: false` is the keyless / not-your-resident door: the house's stakes list is the house's own view, so nothing of it rides (POS-1100, Wright 2026-11-17)
+  if (page === false) return undefined;
   try {
     const { houseStakes, aggregateOf, pageStakes, STAKES_KEY } = await import("./household-stakes.mjs");
     const stakes = await (read ?? houseStakes)(handles, { atRisk });
