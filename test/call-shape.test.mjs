@@ -92,6 +92,31 @@ test("AN UNKNOWN READ NAME LOGS AS \"other\"", () => {
   assert.equal(callShape("household", { read: 42 }).read, "other", "a number is no name");
 });
 
+// POS-1099: the shape SERVED, after the env default, not the read_shape the caller passed.
+test("THE SHAPE SERVED: the env default applies at the MCP door only, a per-call read_shape wins, a named read or an act has none", () => {
+  const asMcp = { door: "mcp" };
+  const withEnv = (vars, fn) => {
+    const old = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, vars);
+    try { return fn(); } finally { for (const [k, v] of Object.entries(old)) (v === undefined ? delete process.env[k] : (process.env[k] = v)); }
+  };
+  // the bare call passes no read_shape at all; what is recorded is what answers
+  assert.equal(withEnv({ WORLD_READ_SHAPE: "v2" }, () => callShape("world", {}, asMcp).shape), "v2", "a bare MCP world call after the v2 default");
+  assert.equal(withEnv({ WORLD_READ_SHAPE: "v2" }, () => callShape("world", { read_shape: "v1" }, asMcp).shape), "v1", "a per-call v1 beats the default");
+  assert.equal(withEnv({ WORLD_READ_SHAPE: "v2" }, () => callShape("world", {}).shape), "v0", "REST never takes the env default");
+  assert.equal(withEnv({ WORLD_READ_SHAPE: "" }, () => callShape("world", {}, asMcp).shape), "v0", "no default is v0");
+  assert.equal(withEnv({ WORLD_READ_SHAPE: "v2" }, () => callShape("world", { read_shape: SENTINEL }, asMcp).shape), "v2", "a read_shape that is no shape is ignored, as the apex ignores it, and the caller's text is never recorded");
+  assert.equal(withEnv({ HOUSEHOLD_READ_SHAPE: "v2" }, () => callShape("household", {}, asMcp).shape), "v2");
+  assert.equal(withEnv({ HOUSEHOLD_READ_SHAPE: "v2" }, () => callShape("household", { read_shape: "v1" }, asMcp).shape), "v1");
+  assert.equal(withEnv({ HOUSEHOLD_READ_SHAPE: "h1" }, () => callShape("household", {}, asMcp).shape), "v1", "a lean h-shape is today's read");
+  assert.equal(withEnv({ HOUSEHOLD_READ_SHAPE: "v2" }, () => callShape("household", {}).shape), "v1", "REST household is today's read");
+  assert.equal(withEnv({ TOWN_READ_SHAPE: "t1" }, () => callShape("town", {}, asMcp).shape), "t1");
+  assert.equal(callShape("town", {}).shape, "t0");
+  assert.equal(callShape("household", { read: "house" }, asMcp).shape, undefined, "a named read is no bare read");
+  assert.equal(callShape("household", { do: "send" }, asMcp).shape, undefined, "an act has no shape");
+  assert.equal(callShape("world_orient", {}, asMcp).shape, undefined, "a flat tool has none");
+});
+
 test("A HUGE PAYLOAD DOES NOT GROW THE LINE", () => {
   const small = lineOf(callShape("household", { do: "send", args: { from: "a", to: "b", title: "c", body: "d" } }));
   const huge = lineOf(callShape("household", { do: "send", args: { from: "a".repeat(1e5), to: "b".repeat(1e5), title: "c".repeat(1e5), body: "d".repeat(2e6) } }));
@@ -227,7 +252,7 @@ before(async () => {
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_DYNAMIC_DB: dynamicDb,
       VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "", WORLD_APEX: "1", WORLD_STORE_DB: join(tmp, "no-world.db"),
-      OFFICE_ACCESS_LOG_DIR: LOG_DIR, ...ix.env },
+      OFFICE_ACCESS_LOG_DIR: LOG_DIR, WORLD_READ_SHAPE: "v2", ...ix.env }, // POS-1099: the v2 default, so a bare call's served shape is the env's
     stdio: ["ignore", "pipe", "pipe"],
   }));
   office = booted.child;
@@ -278,7 +303,8 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
   // a bare world read, which a read worker answers (the pool is ready, above): the handed path is measured
   const bare = await mcp("world", {});
   const asked = [
-    { what: "a worker's bare world read", r: bare, mcp: "world", call: { tool: "world" } },
+    { what: "a worker's bare world read", r: bare, mcp: "world", call: { tool: "world", shape: "v2" } }, // POS-1099: no read_shape passed; the env default is what answered
+    { what: "POST /world/apex", r: await rest("POST", "/world/apex", {}), call: { tool: "world", shape: "v0" } }, // REST never takes the env default
     { what: "a worker's poisoned world read", r: await mcp("world", { read: SENTINEL, handle: SENTINEL, args: { mark: SENTINEL } }), mcp: "world", call: { tool: "world", read: "other" } },
     { what: "the household house read", r: await mcp("household", { read: "house", handle: SENTINEL }), mcp: "household", call: { tool: "household", read: "house" } },
     { what: "a poisoned letter", r: await mcp("household", { do: "send", args: { from: SENTINEL, to: SENTINEL, title: SENTINEL, body: SENTINEL.repeat(500), [SENTINEL]: 1, "jane-at-42-elm-st": 1 } }), mcp: "household", call: { tool: "household", do: "send" } },
@@ -305,7 +331,7 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
   assert.ok(bare.reader, `a read worker answered the bare read (the handed path is measured, not assumed); the office said: ${stderr.slice(-1500)}`);
   const records = parse(lines);
   assert.ok(methodLine(records, "tools/list") && methodLine(records, "other"), "a known method is named, an unknown one reads \"other\"");
-  const letter = lineFor(records, asked[3]);
+  const letter = lineFor(records, asked.find((a) => a.what === "a poisoned letter"));
   assert.equal(letter.call.keys_other, 2, "the letter's two undeclared field names are counted, not written");
   asked.forEach((a) => {
     const got = lineFor(records, a);

@@ -270,8 +270,8 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: {
       class: { type: "string", enum: ["event", "quest", "bug", "idea", "ballot", "report", "invite"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"ballot\" (the town's votes: each with its body, terms and choices; the tally is read_votes), \"report\" (yours only, signed in) or \"invite\" (the town's hands only)" },
       post: { type: "string", description: "one post's id, <author>/<slug> — leave it off for the whole class" },
-      limit: { type: "number", description: "class \"bug\" only: bugs to return (default 50, max 200)" },
-      offset: { type: "number", description: "class \"bug\" only: how many to skip — walk the bugs with the next_offset the previous page returned" },
+      limit: { type: "number", description: "posts to return (default 20, max 200; bugs default 50): the page is also held under the connector's cap, and `limit` says how many it carried" },
+      offset: { type: "number", description: "how many to skip — walk the class with the next_offset the previous page returned" },
       state: { type: "string", description: "keep only the posts standing in this state — several joined by commas are OR (\"confirmed,reproduced\"); `total` counts what matched, and `counts_by_state` always counts the whole class. A bug's states: reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug" },
       stage: { type: "string", description: "an alias of state, kept for good (not deprecated): it filters exactly like state, and the answer names state as the canonical word" },
     }, additionalProperties: false } },
@@ -1371,7 +1371,7 @@ export function handleMcp(req, res, ctx) {
     if (ctx.req?.tel) {
       const last = messages.findLast((m) => m?.method === "tools/call");
       const name = last?.params?.name;
-      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments) : null;
+      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments, { door: "mcp" }) : null;
     }
     // The bouncer works in contract verbs, not the MCP transport's always-POST
     // method. Preflight before dispatch so a throttle is an honest HTTP 429 with
