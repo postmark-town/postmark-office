@@ -60,7 +60,7 @@ export function readSwitchState(file, read = (f) => readFileSync(f, "utf8")) {
   try { text = read(file); }
   catch (e) {
     if (e?.code === "ENOENT") return { sw: null, state: "off", code: null };
-    return { sw: null, state: "unreadable", code: String(e?.code ?? e?.message ?? e).slice(0, 80) };
+    return { sw: null, state: "unreadable", code: String(e?.code ?? "no error code").slice(0, 80) };
   }
   const first = String(text).split(/\r?\n/, 1)[0].trim();
   const ms = first ? Date.parse(first) : NaN;
