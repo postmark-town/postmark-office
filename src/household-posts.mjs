@@ -347,10 +347,14 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
-    // POS-732: the deeper read (`page` given: its limit and offset, either may be undefined) walks each list in the one paging
-    // pattern, default POSTS_CAP; the doorstep's segment and the glance ask with no `page` and keep their bounded preview.
-    if (page) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
-    return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
+    // POS-732: a call that names `limit` or `offset` walks each list in the one paging pattern (default POSTS_CAP). A call that
+    // names neither keeps the bounded preview the doorstep's segment is (the segment IS this read's answer at the same args),
+    // and a cut preview now says how to go on: the same `next_offset` and `more_note`.
+    if (page && (page.limit != null || page.offset != null)) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
+    const shown = Math.min(all.length, POSTS_CAP);
+    const more = all.length - shown;
+    return { total: all.length, shown, rows: all.slice(0, POSTS_CAP).map(plain),
+      ...(more > 0 ? { next_offset: shown, more_note: `${more} further post${more === 1 ? "" : "s"} — call again with offset: ${shown}` } : {}) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)
   const gaps = halves.map((x, i) => (QUIET_WHEN_CLOSED[classes[i]]?.(env) ? null : x.unavailable));

@@ -373,7 +373,8 @@ test("7b · the idea list points at the Think Tank's marks, after its rows: thei
   assert.equal(empty.total, 0, "the posts table holds no idea post: the list is still empty, and says so");
   assert.deepEqual(empty.think_tank, { ideas: 2, read: 'town { read: "ideas" }',
     note: `the Think Tank's ideas are world marks, not posts, so they are not in this list: town { read: "ideas" } answers them` });
-  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "counts_by_state", "total", "posts", "think_tank"], "additive: the pointer rides after the rows");
+  // (until POS-732 this asserted no page fields: every class pages now, in the one pattern)
+  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "counts_by_state", "total", "shown", "limit", "offset", "complete", "posts", "think_tank"], "additive: the pointer rides after the rows");
   await post();
   const one = await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: TANK });
   assert.deepEqual([one.total, one.think_tank.ideas], [1, 2], "with an idea post, the rows are the posts and the pointer still counts the marks");

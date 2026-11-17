@@ -319,8 +319,23 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   await seedQuestPosts({ hand: "wright", registry: REGISTRY, now: NOW });
   await closeAtTown({ post: "postmark-pen/welcome-to-postmark" }, WRIGHT, { now: NOW });
   const before = pen.asked().length;
-  const r = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: TOWN });
+  const page1 = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: TOWN });
   const asked = pen.asked().slice(before).filter((q) => !/^(BEGIN|COMMIT|ROLLBACK)/.test(q) && !/set_config|statement_timeout|SET /i.test(q));
+  // POS-732: the list pages (20 a page, `next_offset` while there is more), so the whole class is the walk of its pages.
+  // Until then this read answered every quest in one answer.
+  assert.equal(page1.total, N_QUESTS);
+  assert.equal(page1.shown, Math.min(N_QUESTS, 20), "a page is 20 (default), or the whole class when it is smaller");
+  assert.equal(page1.limit, 20);
+  assert.equal(page1.complete, N_QUESTS <= 20);
+  assert.equal(page1.next_offset, N_QUESTS > 20 ? 20 : undefined, "`next_offset` while there is more, and `more_note` says how many");
+  assert.equal(typeof page1.more_note, N_QUESTS > 20 ? "string" : "undefined");
+  const walked = [...page1.posts];
+  for (let at = page1.next_offset; at != null;) {
+    const next = await postsAtOffice({ class: "quest", offset: at }, { now: NOW, townClone: TOWN });
+    walked.push(...next.posts);
+    at = next.next_offset;
+  }
+  const r = { ...page1, posts: walked };
   assert.deepEqual(asked.filter((q) => /FROM posts/.test(q)),
     ["SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = $1 ORDER BY id"],
     "the read asks the posts table exactly the one reader's question");

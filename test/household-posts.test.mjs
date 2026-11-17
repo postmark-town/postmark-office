@@ -303,6 +303,41 @@ test("7 · each list is cut at the cap and says the true total", async () => {
   }
 });
 
+// POS-732: the deeper read walks each list in the one paging pattern. A call that names neither `limit` nor `offset` is the bounded
+// preview (the doorstep's segment is that same answer), and a cut preview says how to go on.
+test("7c · a cut list says `next_offset`, and `limit`/`offset` walk it: every post once, the total never moving", async () => {
+  const extra = [];
+  for (let i = 0; i < POSTS_CAP + 5; i++) {
+    const id = `wright/walk-${String(i).padStart(2, "0")}`;
+    extra.push(id);
+    event(id, "wright", "hh:starforge", NOW + 3 * D + i * H, NOW + 3 * D + i * H + 30 * 60_000);
+  }
+  try {
+    const bare = await read("wright");
+    assert.equal(bare.put_up.next_offset, POSTS_CAP, "a cut preview names where it goes on");
+    assert.match(bare.put_up.more_note, /further posts? — call again with offset: 20$/);
+    assert.equal(bare.put_up.complete, undefined, "the bare shape is the doorstep segment's: no page fields beyond the cut's own pair");
+    const seen = [];
+    let walked = null;
+    for (let off = 0, guard = 0; off != null && guard < 20; guard++) {
+      walked = await householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY, page: { limit: 10, offset: off } });
+      assert.equal(walked.put_up.total, bare.put_up.total, "the total does not move as you walk");
+      assert.ok(walked.put_up.rows.length <= 10);
+      seen.push(...walked.put_up.rows.map((r) => r.id));
+      off = walked.put_up.next_offset;
+    }
+    assert.equal(walked.put_up.complete, true, "the walk ends complete");
+    assert.equal(seen.length, bare.put_up.total, "every post the house put up, reached by the walk");
+    assert.equal(new Set(seen).size, seen.length, "none served twice");
+    assert.equal(walked.taking_part.limit, 10, "each list pages by the same fields");
+    // CONTROL: with the page fields named but empty, the preview's own shape answers
+    const none = await householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY, page: { limit: undefined, offset: undefined } });
+    assert.deepEqual(none, bare);
+  } finally {
+    for (const id of extra) posts.delete(id);
+  }
+});
+
 test("8 · the order: open posts first (a span by its soonest start, then the rest by their newest act), then the ended and the called off, newest first", { skip: !haveEngine && `needs the town engine at ${REAL_TOWN}` }, async () => {
   const a = await read("wright");
   assert.deepEqual(a.put_up.rows.map((r) => r.id), [

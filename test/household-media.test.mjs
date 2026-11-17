@@ -572,6 +572,26 @@ test("the uploads list is bounded, and `count` is the whole ledger — not the p
   assert.equal(page.quota.used, rest.quota.used, "and the same on any page");
 });
 
+// POS-732: the answer says "call again with offset: N", and the door the caller stands at refused `offset` (a dead end:
+// the field list declared none, and the read dropped it). THE DOOR, not the function: household { read: "media", args: { offset } }.
+test("the media read at its door takes `limit` and `offset`, so the next_offset it hands out can be walked", async () => {
+  const db = odb();
+  const { ensureMediaTable } = await import("../src/media.mjs");
+  ensureMediaTable(db);
+  const ins = db.prepare("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)");
+  for (let i = 0; i < 30; i++) ins.run("testers", String(i).padStart(64, "b"), "png", 10, "tester", `2026-08-${String((i % 28) + 1).padStart(2, "0")}T00:00:00.000Z`);
+  const first = await householdApex({ read: "media" }, key(), { odb: db });
+  assert.equal(first.error, undefined, JSON.stringify(first));
+  assert.equal(first.next_offset, 20);
+  const second = await householdApex({ read: "media", offset: first.next_offset }, key(), { odb: db });
+  assert.equal(second.error, undefined, `the door refused the next_offset it handed out: ${JSON.stringify(second)}`);
+  assert.equal(second.offset, 20);
+  assert.equal(second.uploads.length, 10);
+  const small = await householdApex({ read: "media", args: { limit: 5, offset: 5 } }, key(), { odb: db });
+  assert.deepEqual([small.shown, small.offset, small.next_offset], [5, 5, 10]);
+  assert.deepEqual(new Set([...first.uploads, ...second.uploads].map((u) => u.url)).size, 30, "the walk reaches every upload once");
+});
+
 test("a ledger that fits inside the bound reports itself complete", async () => {
   const r = await mediaRead(key(), { odb: odb(), embedded: async () => ({ hits: new Set(), unreadable: [] }) });
   assert.equal(r.count, 0);

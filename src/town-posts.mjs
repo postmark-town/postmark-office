@@ -336,5 +336,5 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
   // The plain REST list (GET /posts) keeps its whole answer when it names neither, for the snapshot readers that make
   // one request and no continuation (site tools/lib/fetch-town-data.mjs); `limit` or `offset` on it pages.
   if (whole && fields.limit == null && fields.offset == null) return { ...listHead, total: posts.length, posts, ...tail };
-  return pageRows(posts, fields, { noun: cls, key: "posts", around: { ...listHead, ...tail } });
+  return { ...pageRows(posts, fields, { noun: cls, key: "posts", around: listHead }), ...tail };
 }
