@@ -52,13 +52,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 
-const repo = mkdtempSync(join(tmpdir(), "pos165-world-"));
-const pool = mkdtempSync(join(tmpdir(), "pos165-pool-"));
+const repo = tempDir("pos165-world-");
+const pool = tempDir("pos165-pool-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 after(() => rmSync(pool, { recursive: true, force: true }));
 

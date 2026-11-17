@@ -21,8 +21,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,7 +42,7 @@ const cls = (name, ext, extra = "") => town(`kind: class\n${name ? `class: ${nam
 const prop = (name, dflt, tier, of = null) => `kind: property\nby: the-town\ntier: ${tier}\ndate: 2026-10-17\nname: ${name}\n${of ? `of: ${of}\n` : ""}default: ${dflt}`;
 
 function buildWorld() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-o1-paths-"));
+  const dir = tempDir("pm-o1-paths-");
   cpSync(join(WORLD_CLONE, "tools"), join(dir, "tools"), { recursive: true });
   const mark = (rel, front, body = "x") => { mkdirSync(join(dir, "WORLD", "marks", rel), { recursive: true }); writeFileSync(join(dir, "WORLD", "marks", rel, "mark.md"), `---\n${front}\n---\n\n${body}\n`); };
   mark("let-there-be-light", "kind: sited\nby: the-town\ntier: constitution\ndate: 2026-07-22\nat: { x: 0, y: 0 }\nextent: { w: 320000, h: 320000 }\ncoords: relative", "Let there be light.");
@@ -226,7 +226,7 @@ test("THE CIVIC PREDICATES (world-classes § civicQuarter): a plaque's predicate
   const { twinnedStatements, graphDb } = await import("../src/world-graph-db.mjs");
   const sql = twinnedStatements().find((q) => q.includes("FROM edges AS e") && q.includes("ORDER BY json_extract(p.props, '$.slot')"));
   assert.ok(sql, "the civic predicates' statement is registered");
-  const dir = mkdtempSync(join(tmpdir(), "pm-o1-civic-"));
+  const dir = tempDir("pm-o1-civic-");
   try {
     writeFixtureDb(tables, join(dir, "civic.db"));
     const db = new DatabaseSync(join(dir, "civic.db"), { readOnly: true });
