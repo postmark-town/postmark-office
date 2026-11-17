@@ -747,10 +747,21 @@ test("A FREE EVENT (Darko 23:15/23:17 EST): each room's spark is made as its hos
 // The tests above hand the planner and roomsPlace in; this one runs completion through world.mjs § planSparkLeave (World's spark
 // class, its pre-check and journalLeaveMark { plan }) and § sparkRoomsPlace (the engine's tools/spark.mjs at the blessing), over
 // the suite's pinned world clone — the integration WLD-173's landing makes possible (Wright 22:18Z).
-test("S173 integration: two rooms complete through the REAL mark road and World's engine roomsPlace — two put-forward spark claims, each one room's strict `rooms`, placed by World", async () => {
+test("S173 integration: two rooms complete through the REAL mark road and World's engine roomsPlace — two put-forward spark claims, each one room's strict `rooms`, placed by World", async (t) => {
   const world = await import("../src/world.mjs");
   const place = await world.sparkRoomsPlace();
   assert.equal(typeof place, "function", "the pinned World engine carries tools/spark.mjs § roomsPlace (S173)");
+  // the store holds the law as the office does: the pinned blessing's law, derived by the law pen and written --blessed
+  // (law-classes-parity's road), so the spark class's own properties (spark-recounting, spark-rooms, …) are the law's
+  const { deriveLaw, writeLaw } = await import("../world2/tools/law-ingest.mjs");
+  const { materializeWorldAtSha } = await import("../src/world-store.mjs");
+  const law = await import("../src/law-snapshot.mjs");
+  const blessed = execFileSync("git", ["-C", world.WORLD_CLONE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const { rows: lawRows } = await deriveLaw({ lawRepo: materializeWorldAtSha(world.WORLD_CLONE, blessed, ["WORLD", "tools", "LOGOS"], join(bottle, "law")) });
+  await owner.query("INSERT INTO settlements (number, tag_sha, published_at) VALUES (173, $1, now()) ON CONFLICT (number) DO NOTHING", [blessed]);
+  await writeLaw(owner, { lawSha: blessed, rows: lawRows, blessed: true });
+  await law.reloadLawSnapshot({ query: (sql, params) => owner.query(sql, params), force: true });
+  t.after(() => law.resetLawSnapshot());
   const dir = townInABottle();
   const { row, after: now } = await endedEvent(dir, "Sorbet at the pin", { at: { x: 640, y: 980 } });
   const doors = Date.parse(row.fields.doors_open ?? row.starts);

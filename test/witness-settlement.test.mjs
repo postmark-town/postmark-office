@@ -250,7 +250,8 @@ const HAS_WITNESS = existsSync(join(TOWN_TREE, "tools", "witness-chain.mjs"));
 const SH_OK = spawnSync("sh", ["-c", "true"], { stdio: "ignore" }).status === 0;
 const crossingSkip = !SH_OK ? "no POSIX sh"
   : !HAS_WITNESS ? `skipped until the town's witness ships: no tools/witness-chain.mjs in ${TOWN_TREE} (set POSTMARK_TOWN_WITNESS_TREE to a town tree that has it)` : false;
-const WITNESS_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
+// the real witness's whole closure as the loader walks it: stamp-mint imports ./registry-source.mjs (a dynamic import, still walked)
+const WITNESS_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/registry-source.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
 
 function crossingFixture() {
   const root = dir("crossing");

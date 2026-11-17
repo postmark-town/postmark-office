@@ -36,7 +36,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import { mintInputsVia, writeMintInputs } from "../src/mint-inputs.mjs";
 import { stampLinesVia, syncStampLinesVia, verifyStampLinesVia } from "../src/stamp-lines.mjs";
-import { pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the fixture town, signed with its own key, pinned to itself
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the fixture town, signed with its own key, pinned to itself
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
@@ -58,6 +58,8 @@ before(async () => {
   // the fixture town
   cpSync(join(CLONE, "tools"), join(A, "tools"), { recursive: true });
   writeFileSync(join(A, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
+  // and the code a pinned module imports from outside tools/ (town e9cb5e87: witness-chain → ../PROJECTS/the-town-seal/seal.mjs)
+  copyTownModule(CLONE, A, "witness-chain.mjs");
   writeFileSync(keyFile, PRIV);
   for (const e of readdirSync(join(CLONE, "WHITE_PAGES"), { withFileTypes: true })) {
     if (!e.isDirectory()) continue;
