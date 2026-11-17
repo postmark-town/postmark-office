@@ -150,7 +150,7 @@ const HOUSEHOLD_CLASSES = {
   stances: ["cursor", "pages by size with a cursor (CORE-88)"],
   outcomes: ["debt", "`crossings` sets how far back, and every row of those crossings comes (audit item 6)"],
   rulings: ["bounded", "the old name of outcomes: a renamed pointer"],
-  stakes: ["debt", "bare is every row, ruled in POS-902; `limit` is the doorstep's newest-few preview and there is no offset"],
+  stakes: ["list"],   // until 2026-11-17 (POS-1102, Darko: "Page it at 20") a debt: bare was every row (POS-902); now limit/offset page both parts at 20
   address: ["bounded", "one card"], home: ["bounded", "one page"], standing: ["bounded", "one fixed block of numbers"],
   stamps: ["list"],
   quests: ["debt", "the board lists every pot, closed ones included (audit item 4)"],
