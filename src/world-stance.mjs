@@ -875,12 +875,31 @@ const FIRST_LAID_SELECT = `
 // read moves to the acts record (G2); until then the mirror + the photographs
 // ARE the record on 1.0.
 const PHOTO_CACHE = new Map(); // path → { key, rows }
+const PHOTO_NAMES = new Map(); // STATE/log's path → { stamp: the directory's mtime, names: its photographs }
+const PHOTO_SETTLE_MS = 2000;
 function photographStanceRows(worldClone) {
   const dir = join(worldClone, "STATE", "log");
   if (!existsSync(dir)) return [];
   const out = [];
+  // THE LISTING IS KEPT WHILE THE DIRECTORY STANDS (POS-1057). Every stance read listed this directory again (thousands of
+  // entries on prod; a tenth of a bulk doorstep page's CPU on 2026-11-17). A directory's own mtime moves when an entry is
+  // added, removed or renamed, so the names are kept on it; a photograph rewritten in place moves no directory, and is
+  // caught as before by its own size and mtime below.
+  //
+  // A listing taken within PHOTO_SETTLE_MS of the directory's last change is used once and not kept: a file system stamps
+  // mtimes on a coarse clock, so a second file written in the same tick as the first would leave the mtime where the
+  // listing found it, and a kept listing would never see that file (a drained stance missing from every read, #2454).
   let names;
-  try { names = readdirSync(dir).filter((n) => /^\d+\.journal\.jsonl$/.test(n)); } catch { return []; }
+  try {
+    const stamp = statSync(dir).mtimeMs;
+    const listed = PHOTO_NAMES.get(dir);
+    if (listed && listed.stamp === stamp) names = listed.names;
+    else {
+      const at = Date.now();
+      names = readdirSync(dir).filter((n) => /^\d+\.journal\.jsonl$/.test(n));
+      if (at - stamp > PHOTO_SETTLE_MS) PHOTO_NAMES.set(dir, { stamp, names }); else PHOTO_NAMES.delete(dir);
+    }
+  } catch { return []; }
   for (const name of names) {
     const path = join(dir, name);
     let st; try { st = statSync(path); } catch { continue; }
