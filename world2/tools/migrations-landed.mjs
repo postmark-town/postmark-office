@@ -154,6 +154,10 @@ export const LANDED = {
   "096_parcel_room_nonces.sql": { probe: `${rel("parcel_room_nonces")} AND has_table_privilege('office_api', 'parcel_room_nonces', 'INSERT') AND NOT has_table_privilege('snapshot_reader', 'parcel_room_nonces', 'SELECT')` },
   // 098 (POS-1003): the private record of a refused act, office_api's only (no UPDATE or DELETE), and its expiry function.
   "098_refused_acts.sql": { probe: `${rel("refused_acts")} AND ${col("refused_acts", "held")} AND has_table_privilege('office_api', 'refused_acts', 'INSERT') AND NOT has_table_privilege('office_api', 'refused_acts', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'refused_acts', 'SELECT') AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'refused_acts_prune' AND prosecdef)` },
+  // 099 (POS-1095 b): the partial index the enter/exit count reads (the file's only statement).
+  "099_acts_passage_idx.sql": { probe: rel("acts_passage_idx") },
+  // 100 (POS-1095 b): the residents' two GitHub fields, stored (generated, jsonb), read through resident_json_doc (a NUL in an inbox does not fail the write).
+  "100_town_residents_github.sql": { probe: `${col("town_residents", "github_top")} AND ${col("town_residents", "github_address")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'resident_json_doc' AND provolatile = 'i')` },
   // 097 (POS-497; was 088 until the train took it for letter_notes): discovery's two derived tables, their walk indexes, and the registry rows written last.
   "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
 };
