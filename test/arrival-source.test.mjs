@@ -24,8 +24,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -169,7 +169,7 @@ const PINS = () => ({ wick: { login: "lr-gh", id: 9101, pinned: "2026-08-01" } }
 await seedRegistry(IX.store, REGISTRY(), PINS());
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-source-town-"));
+  const dir = tempDir("pm-source-town-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });

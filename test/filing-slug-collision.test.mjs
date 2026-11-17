@@ -5,9 +5,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { filedPathOfAt, pathFor, resetPathIndex } from "../src/world-journal.mjs";
 
 function git(repo, ...args) {
@@ -15,7 +15,7 @@ function git(repo, ...args) {
 }
 
 function repoWith(...paths) {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-2723-"));
+  const repo = tempDir("postmark-2723-");
   git(repo, "init", "-q");
   git(repo, "config", "user.name", "fixture");
   git(repo, "config", "user.email", "fixture@example.invalid");

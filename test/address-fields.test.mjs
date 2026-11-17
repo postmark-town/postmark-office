@@ -6,9 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 
 import {
@@ -26,7 +26,7 @@ const CARD = [
 ].join("\n");
 
 function clone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-fields-"));
+  const dir = tempDir("pm-fields-");
   mkdirSync(join(dir, "WHITE_PAGES", "tester"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "tester", "ADDRESS.md"), CARD);
   execFileSync("git", ["-C", dir, "init", "-b", "main"], { stdio: "ignore" });

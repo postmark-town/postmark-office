@@ -15,12 +15,12 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 // An empty published world (no canon marks): every mark here is live, in the store.
-const clone = mkdtempSync(join(tmpdir(), "wld27-f1-world-"));
+const clone = tempDir("wld27-f1-world-");
 after(() => rmSync(clone, { recursive: true, force: true }));
 mkdirSync(join(clone, "WORLD"), { recursive: true });
 writeFileSync(join(clone, "WORLD", "world-state.json"), JSON.stringify({ tick: 0, dials: {}, marks: [] }));

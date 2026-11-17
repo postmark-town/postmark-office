@@ -14,16 +14,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { markRecord } from "../src/mark-record.mjs";
 
 const WORLD = worldClone();
 const skip = (!WORLD && NO_WORLD) || false;
-const repo = mkdtempSync(join(tmpdir(), "o2-holder-word-"));
+const repo = tempDir("o2-holder-word-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 if (!skip) {
   mkdirSync(join(repo, "tools"), { recursive: true });

@@ -30,9 +30,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { compareFileCopy } from "../tools/box-rollcall.mjs";
@@ -139,7 +139,7 @@ const missing = [["bash", ["-c", "true"]], ["flock", ["--version"]], ["git", ["-
   .filter(([c, a]) => !works(c, a)).map(([c]) => c);
 const skip = missing.length ? `needs ${missing.join(", ")} (the box has them)` : false;
 
-const scratch = mkdtempSync(join(tmpdir(), "ferry-ingest-"));
+const scratch = tempDir("ferry-ingest-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 const fwd = (p) => p.replace(/\\/g, "/");
 const GIT_ENV = {
