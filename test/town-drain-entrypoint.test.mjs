@@ -46,8 +46,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,7 +64,7 @@ const TOOL = join(ROOT, "tools", "town-drain-run.mjs");
 const temps = [];
 
 function townClone(handles = ["wright", "limen"]) {
-  const dir = mkdtempSync(join(tmpdir(), "pos158-entry-"));
+  const dir = tempDir("pos158-entry-");
   temps.push(dir);
   for (const h of handles) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
@@ -84,7 +85,7 @@ function townClone(handles = ["wright", "limen"]) {
 }
 
 async function seededDb(seed) {
-  const home = mkdtempSync(join(tmpdir(), "pos158-entry-odb-"));
+  const home = tempDir("pos158-entry-odb-");
   temps.push(home);
   const path = join(home, "oauth.db");
   const o = openOauthDb(path);

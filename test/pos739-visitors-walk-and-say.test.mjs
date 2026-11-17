@@ -28,13 +28,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "pos739-world-"));
-const pool = mkdtempSync(join(tmpdir(), "pos739-pool-"));
-const voicesDir = mkdtempSync(join(tmpdir(), "pos739-voices-"));
+const repo = tempDir("pos739-world-");
+const pool = tempDir("pos739-pool-");
+const voicesDir = tempDir("pos739-voices-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 after(() => rmSync(pool, { recursive: true, force: true }));
 after(() => rmSync(voicesDir, { recursive: true, force: true }));

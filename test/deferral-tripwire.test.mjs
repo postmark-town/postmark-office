@@ -46,10 +46,10 @@ import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -78,7 +78,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 const trash = [];
-const tmp = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const tmp = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 const dropAll = () => {
   for (const d of trash.splice(0)) {
     try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* the OS will */ }

@@ -133,7 +133,7 @@ export async function embeddedScan({ handles, clone, urls }) {
 // Uploads rendered per read. The household's quota bounds BYTES, never
 // rows: a household of thumbnails can hold hundreds of files inside it. ✎ A
 // proposal.
-const MEDIA_PAGE = 25;
+const MEDIA_PAGE = 20; // POS-732: the one paging pattern's default (was 25)
 
 export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limit, offset } = {}) {
   const store = openStore();

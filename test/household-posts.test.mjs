@@ -275,6 +275,13 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     assert.ok(segment.put_up.rows.some((r) => r.id === "wright/office-hours"), "the segment carries no rows, so equality would prove nothing");
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
+    // POS-732: the apex hands its `limit` and `offset` to the read, so each list pages (they reached the read nowhere before)
+    // (a CI office with no town engine holds fewer posts, so this holds for any total: the page shape and the named numbers, not a count)
+    const paged = await householdApex({ read: "posts", ...args, limit: 1, offset: 0 }, null, ctx);
+    assert.deepEqual([paged.put_up.limit, paged.put_up.offset, paged.put_up.shown, paged.put_up.complete],
+      [1, 0, Math.min(1, asked.put_up.total), asked.put_up.total <= 1], "the page the caller named, not the preview (which has no `limit` or `complete`)");
+    assert.equal(paged.put_up.total, asked.put_up.total, "and the total does not move");
+    assert.equal(paged.put_up.next_offset, asked.put_up.total > 1 ? 1 : undefined);
   } finally {
     Date.now = realNow;
     await restore();
@@ -298,6 +305,41 @@ test("7 · each list is cut at the cap and says the true total", async () => {
     assert.equal(a.put_up.shown, POSTS_CAP);
     assert.equal(a.put_up.rows.length, POSTS_CAP);
     assert.ok(a.put_up.total > a.put_up.shown, "the cut is said, not silent");
+  } finally {
+    for (const id of extra) posts.delete(id);
+  }
+});
+
+// POS-732: the deeper read walks each list in the one paging pattern. A call that names neither `limit` nor `offset` is the bounded
+// preview (the doorstep's segment is that same answer), and a cut preview says how to go on.
+test("7c · a cut list says `next_offset`, and `limit`/`offset` walk it: every post once, the total never moving", async () => {
+  const extra = [];
+  for (let i = 0; i < POSTS_CAP + 5; i++) {
+    const id = `wright/walk-${String(i).padStart(2, "0")}`;
+    extra.push(id);
+    event(id, "wright", "hh:starforge", NOW + 3 * D + i * H, NOW + 3 * D + i * H + 30 * 60_000);
+  }
+  try {
+    const bare = await read("wright");
+    assert.equal(bare.put_up.next_offset, POSTS_CAP, "a cut preview names where it goes on");
+    assert.match(bare.put_up.more_note, /further posts? — call again with offset: 20$/);
+    assert.equal(bare.put_up.complete, undefined, "the bare shape is the doorstep segment's: no page fields beyond the cut's own pair");
+    const seen = [];
+    let walked = null;
+    for (let off = 0, guard = 0; off != null && guard < 20; guard++) {
+      walked = await householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY, page: { limit: 10, offset: off } });
+      assert.equal(walked.put_up.total, bare.put_up.total, "the total does not move as you walk");
+      assert.ok(walked.put_up.rows.length <= 10);
+      seen.push(...walked.put_up.rows.map((r) => r.id));
+      off = walked.put_up.next_offset;
+    }
+    assert.equal(walked.put_up.complete, true, "the walk ends complete");
+    assert.equal(seen.length, bare.put_up.total, "every post the house put up, reached by the walk");
+    assert.equal(new Set(seen).size, seen.length, "none served twice");
+    assert.equal(walked.taking_part.limit, 10, "each list pages by the same fields");
+    // CONTROL: with the page fields named but empty, the preview's own shape answers
+    const none = await householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY, page: { limit: undefined, offset: undefined } });
+    assert.deepEqual(none, bare);
   } finally {
     for (const id of extra) posts.delete(id);
   }

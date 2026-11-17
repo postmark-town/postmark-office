@@ -21,9 +21,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { claimEffectsFrom, headlinesFrom } from "../src/claim-effects.mjs";
 import { toYou, townShelf, happenedBlock, latestSettlement } from "../src/world-happened.mjs";
@@ -184,7 +184,7 @@ test("`since:` says which crossing it counts, so three clocks stop wearing one w
 
 // ── latestSettlement reads a REF, not the pen's HEAD ───────────────────────
 
-const repo = mkdtempSync(join(tmpdir(), "pm-latest-settlement-"));
+const repo = tempDir("pm-latest-settlement-");
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
 const commit = (m) => git("-c", "user.name=f", "-c", "user.email=f@t.invalid", "commit", "-q", "-m", m);
@@ -222,7 +222,7 @@ test("latestSettlement reads the READ tier's ref, and names the S-NUMBER", () =>
 });
 
 test("a repo with no settlement tag gets a commit and no invented number", () => {
-  const bare = mkdtempSync(join(tmpdir(), "pm-untagged-"));
+  const bare = tempDir("pm-untagged-");
   try {
     execFileSync("git", ["-C", bare, "init", "-q", "-b", "main"]);
     writeFileSync(join(bare, "x"), "x");

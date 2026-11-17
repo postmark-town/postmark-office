@@ -83,6 +83,13 @@ export function accessLine(entry) {
   // readable; a torn one is not, and neither is its neighbour.
   line = JSON.stringify({ ...capped, path: "", path_dropped: true });
   if (Buffer.byteLength(line, "utf8") + 1 <= LINE_MAX) return line;
+  // POS-1064/b: a record's `timing` (read-timing.mjs) is the measurement this line exists to carry on the doorstep and household doors, and it is small and bounded, so
+  // the next thing to give up is the call's shape (named as dropped, as the path is), and only the last resort drops the timing, SAYING SO (`timing_dropped`): a line
+  // with no `timing` and no `timing_dropped` is a request that was not measured, never one whose measurement was cut.
+  if (capped.timing) {
+    line = JSON.stringify({ ...capped, path: "", path_dropped: true, call: null, call_dropped: true });
+    if (Buffer.byteLength(line, "utf8") + 1 <= LINE_MAX) return line;
+  }
   // `call` rides the first two stages: it is bounded at call-shape.mjs §
   // CALL_MAX, so it is never what made the line long. Only this resort drops it.
   // The last resort keeps only what the three readers actually consume — AND
@@ -95,6 +102,7 @@ export function accessLine(entry) {
     ts: cap(capped.ts, 32),
     household: cap(capped.household, 128),
     mcp: cap(capped.mcp, 128),
+    ...(capped.timing ? { timing_dropped: true } : {}),
     truncated: true,
   });
 }

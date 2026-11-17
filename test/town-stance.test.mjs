@@ -28,9 +28,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
@@ -41,7 +41,7 @@ import {
 } from "../src/town-stance.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-town-stance-"));
+const scratch = tempDir("postmark-town-stance-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────
@@ -753,4 +753,42 @@ test("stancesCountAt: the cutover is a settlement NUMBER; below it nothing count
   assert.match(below.why, /^S10 is below the cutover S11/);
   assert.equal(stancesCountAt(null, { TOWN_STANCE_CUTOVER: "S11" }).counts, false, "a number nobody can read is not known to be after it");
   assert.throws(() => stancesCountAt(11, { TOWN_STANCE_CUTOVER: "yes" }), /names no settlement/, "a cutover is a number, never a yes");
+});
+
+// ── POS-1057 · the inbox's pair work: overlap first, one read per mark, the words by their mark ──
+//
+// Why: from w47 a doorstep cost about 2.7 times more (POS-1064's table, 2026-11-17). The stance inbox weighs every mark against
+// the house's ground, and POS-571 made the seniority question a cell-by-cell read that was asked before the overlap question, of
+// every pair. None of these change an answer; each test holds the answer and the work.
+// FLIPS: (a) put `!elder(g, mark)` back before `!overlaps(g, mark)` in awaitingOf → `asked` holds all three marks;
+// (b) drop the WeakMap in elderByFirstLaid → `reads` counts a read per comparison, not per mark;
+// (c) hand awaitingOf every word again in candidatesFrom → still green (the answer is the same), so (c) is pinned by its two answers only.
+
+test("POS-1057 · seniority is asked only of ground that overlaps, each mark's date is read once, and a word is found by its mark", () => {
+  const box = (id, by, x, date) => ({ id, by, kind: "structure", at: { x, y: 0 }, extent: { w: 2, h: 2 }, date });
+  const touches = (a, b) => Math.abs(a.at.x - b.at.x) < 2;
+  const incoming = box("new/arrival", "new", 0, "2026-11-10");
+  const under = box("old/under-it", "old", 1, "2026-09-01");
+  const marks = [under, box("far/away", "far", 50, "2026-09-01"), box("far2/away", "far2", 90, "2026-09-01")];
+
+  // (a) overlap first
+  const asked = [];
+  const elder = (g, m) => { asked.push(g.id); return Date.parse(g.date) < Date.parse(m.date); };
+  assert.deepEqual(awaitingOf(incoming, { marks, overlaps: touches, elder }), [{ who: "old", ground: ["old/under-it"] }], "the answer the old order gave");
+  assert.deepEqual(asked, ["old/under-it"], "the two marks that touch nothing are never weighed for seniority");
+
+  // (b) one read per mark, however many pairs ask
+  let reads = 0;
+  const dated = (id, date) => ({ id, get date() { reads += 1; return date; } });
+  const a = dated("a/one", "2026-09-01"), b = dated("b/two", "2026-10-01");
+  const byDate = elderByFirstLaid(new Map());
+  for (let i = 0; i < 5; i += 1) { assert.equal(byDate(a, b), true); assert.equal(byDate(b, a), false); }
+  assert.equal(reads, 2, "each mark's date is read once for the life of the comparison");
+  assert.equal(byDate({ id: "a/one", date: "2026-11-01" }, b), false, "a fresh object is read fresh: the same id with a later date is the younger one");
+
+  // (c) the words by their mark: a word on another mark clears nothing, a word on this one clears the house
+  const ask = (words) => candidatesFrom({ mine: [under], all: [incoming, ...marks], overlaps: touches, words }).map((c) => c.mark);
+  assert.deepEqual(ask([]), ["new/arrival"]);
+  assert.deepEqual(ask([{ on: "far/away", by: "old", stance: "neutral" }]), ["new/arrival"], "a word spoken on another mark is not a word on this one");
+  assert.deepEqual(ask([{ on: "new/arrival", by: "old", stance: "neutral" }]), [], "the house's word on this mark takes it off the list");
 });

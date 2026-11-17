@@ -22,9 +22,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 
@@ -34,9 +34,9 @@ const haveEngine = !!(SOURCE_ENGINE && existsSync(SOURCE_ENGINE));
 const skip = !haveEngine && "no WORLD_CLONE (the World engine is copied from it)";
 
 // Bottles are left in the OS temp dir: this file deletes nothing.
-const repo = mkdtempSync(join(tmpdir(), "wld38-world-"));
-const noEngine = mkdtempSync(join(tmpdir(), "wld38-no-engine-"));
-const scratch = mkdtempSync(join(tmpdir(), "wld38-db-"));
+const repo = tempDir("wld38-world-");
+const noEngine = tempDir("wld38-no-engine-");
+const scratch = tempDir("wld38-db-");
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const put = (path, text) => { const f = join(repo, path); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, text); };
 

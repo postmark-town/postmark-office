@@ -17,8 +17,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -30,7 +31,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // A tiny town: a module, its closure, and the office's pins of it.
 function fixture(files) {
-  const base = mkdtempSync(join(tmpdir(), "town-tool-"));
+  const base = tempDir("town-tool-");
   const clone = join(base, "clone"), pins = join(base, "pins");
   const write = (dir, p, text) => { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), text); };
   for (const [p, text] of Object.entries(files)) { write(clone, p, text); write(pins, p, text); }
@@ -227,7 +228,7 @@ test("the two snapshot replays reach the town engine only through importTownTool
 // loads the checkout's own module or goes through the pins.
 
 function gitTown() {
-  const base = mkdtempSync(join(tmpdir(), "town-tool-at-"));
+  const base = tempDir("town-tool-at-");
   const repo = join(base, "town");
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
   mkdirSync(join(repo, "tools"), { recursive: true });
@@ -311,7 +312,7 @@ test("AT: past the pin but equal to it, the PINNED copy loads (as importTownTool
 // ── THE SANDBOX'S CONDITION (stamp-sandbox.mjs § stampKeyRefusal) ───────────
 
 test("the stamp sandbox refuses to run where a stamp key is present, and runs where none is", () => {
-  const base = mkdtempSync(join(tmpdir(), "sandbox-key-"));
+  const base = tempDir("sandbox-key-");
   try {
     const key = join(base, "stamp-key.pem");
     assert.equal(stampKeyRefusal([key, join(base, "nor-this.pem")], { storeUrl: "" }), null, "no key, no store, no refusal");
@@ -338,7 +339,7 @@ test("the stamp sandbox refuses to run where a stamp key is present, and runs wh
 // "re-sign" commit changes stamp-verify.
 
 function devTown() {
-  const base = mkdtempSync(join(tmpdir(), "town-tool-dev-"));
+  const base = tempDir("town-tool-dev-");
   const repo = join(base, "town-clone");
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
   mkdirSync(join(repo, "tools"), { recursive: true });
@@ -589,7 +590,7 @@ test("DOOR: anything else it refuses exits 2, never 3: no pins to read, a foreig
 test("CLONE-FREE: the witness's owe-open and owe-incomplete run from the pinned copy with NO clone at all, and nothing else may", () => {
   // The real pinned witness chain (src/town-pins), its owed queue in a scratch folder,
   // and a --clone that does not exist: if either verb read the clone, it could not run.
-  const base = mkdtempSync(join(tmpdir(), "town-tool-clonefree-"));
+  const base = tempDir("town-tool-clonefree-");
   try {
     const owed = join(base, "owed");
     const noClone = join(base, "there-is-no-clone");
@@ -616,7 +617,7 @@ test("HOLDER: an owe-open through the door is held by the door's CALLER, not the
   // its default (process.ppid), owe-open would name the door, which exits at once, and
   // the next publisher would read the crossing as dead while it still ran. Here the
   // test process is the caller, so the open entry must name process.pid.
-  const base = mkdtempSync(join(tmpdir(), "town-tool-holder-"));
+  const base = tempDir("town-tool-holder-");
   try {
     const noClone = join(base, "there-is-no-clone");
     const env = { TOWN_PINS_DIR: PIN_ROOT };

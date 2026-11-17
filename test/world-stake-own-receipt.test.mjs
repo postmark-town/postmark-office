@@ -21,9 +21,9 @@ import assert from "node:assert/strict";
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
@@ -32,7 +32,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 const TOWN = townClone();
 const litter = [];
 after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force: true }); } catch { /* litter */ } } });
-const scratch = (p) => { const d = mkdtempSync(join(tmpdir(), p)); litter.push(d); return d; };
+const scratch = (p) => { const d = tempDir(p); litter.push(d); return d; };
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 const world = scratch("pos922-world-");

@@ -545,17 +545,17 @@ test("the uploads list is bounded, and `count` is the whole ledger — not the p
   const none = async () => ({ hits: new Set(), unreadable: [] });
 
   const page = await mediaRead(key(), { odb: db, embedded: none });
-  assert.equal(page.uploads.length, 25, "the page");
+  assert.equal(page.uploads.length, 20, "the page (until POS-732 this asserted 25: the one paging pattern's default is 20)");
   assert.equal(page.count, 30, "the whole ledger");
   assert.notEqual(page.count, page.uploads.length,
     "THE FALSIFIER: a count that cannot disagree with its own list is the list length wearing a total's name");
-  assert.equal(page.shown, 25);
+  assert.equal(page.shown, 20);
   assert.equal(page.complete, false);
-  assert.equal(page.next_offset, 25);
+  assert.equal(page.next_offset, 20);
   assert.match(page.more_note, /measured in BYTES/, "the quota counts every file, listed or not");
 
-  const rest = await mediaRead(key(), { odb: db, embedded: none, offset: 25 });
-  assert.equal(rest.uploads.length, 5);
+  const rest = await mediaRead(key(), { odb: db, embedded: none, offset: 20 });
+  assert.equal(rest.uploads.length, 10);
   assert.equal(rest.complete, true);
   assert.equal(rest.next_offset, undefined);
   assert.equal(rest.count, 30, "the total does not shrink as you walk");
@@ -570,6 +570,26 @@ test("the uploads list is bounded, and `count` is the whole ledger — not the p
   // household it had room it does not have.
   assert.equal(page.quota.used, 300, "30 files x 10 bytes, all of them");
   assert.equal(page.quota.used, rest.quota.used, "and the same on any page");
+});
+
+// POS-732: the answer says "call again with offset: N", and the door the caller stands at refused `offset` (a dead end:
+// the field list declared none, and the read dropped it). THE DOOR, not the function: household { read: "media", args: { offset } }.
+test("the media read at its door takes `limit` and `offset`, so the next_offset it hands out can be walked", async () => {
+  const db = odb();
+  const { ensureMediaTable } = await import("../src/media.mjs");
+  ensureMediaTable(db);
+  const ins = db.prepare("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)");
+  for (let i = 0; i < 30; i++) ins.run("testers", String(i).padStart(64, "b"), "png", 10, "tester", `2026-08-${String((i % 28) + 1).padStart(2, "0")}T00:00:00.000Z`);
+  const first = await householdApex({ read: "media" }, key(), { odb: db });
+  assert.equal(first.error, undefined, JSON.stringify(first));
+  assert.equal(first.next_offset, 20);
+  const second = await householdApex({ read: "media", offset: first.next_offset }, key(), { odb: db });
+  assert.equal(second.error, undefined, `the door refused the next_offset it handed out: ${JSON.stringify(second)}`);
+  assert.equal(second.offset, 20);
+  assert.equal(second.uploads.length, 10);
+  const small = await householdApex({ read: "media", args: { limit: 5, offset: 5 } }, key(), { odb: db });
+  assert.deepEqual([small.shown, small.offset, small.next_offset], [5, 5, 10]);
+  assert.deepEqual(new Set([...first.uploads, ...second.uploads].map((u) => u.url)).size, 30, "the walk reaches every upload once");
 });
 
 test("a ledger that fits inside the bound reports itself complete", async () => {

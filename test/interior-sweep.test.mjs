@@ -15,6 +15,7 @@ import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -369,10 +370,9 @@ test("the keyless routes themselves: /world2/present, /world2/positions and the 
 // ── hearing stops at a dungeon room's walls, both ways ───────────────────────
 
 test("one say traced end to end: spoken inside a room it is heard only in that room, its record and its log line say so, an outside say is not heard inside", async () => {
-  const { mkdtempSync, readFileSync: readF } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
+  const { readFileSync: readF } = await import("node:fs");
   const { createVoices, EARSHOT_M } = await import("../src/voices.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "postmark-interior-say-"));
+  const dir = tempDir("postmark-interior-say-");
   const T0 = Date.UTC(2026, 9, 26, 17, 0, 0);
   const clock = { t: T0 };
   const where = { ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 }, bo: { x: 2000, y: 2001 } }; // all at the same spot: bo only stands on it

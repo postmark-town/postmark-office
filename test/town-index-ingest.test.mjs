@@ -22,10 +22,10 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ingest, readHead, SEAL_SUBJECT } from "../world2/tools/town-index-ingest.mjs";
@@ -35,7 +35,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
 const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSync(join(CLONE, "WHITE_PAGES", "stamp-ledger.md"));
 
-const tmp = mkdtempSync(join(tmpdir(), "town-index-ingest-"));
+const tmp = tempDir("town-index-ingest-");
 const town = join(tmp, "town");
 let store = null, skip = hasClone ? false : "no town-clone with tools/stamp-mint.mjs beside the office: the fixture copies the town's own tools from it";
 let c;
