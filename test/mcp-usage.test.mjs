@@ -67,10 +67,41 @@ test("the plain report says the same, in lines", () => {
 });
 
 test("the tally alone, and its refusals", () => {
-  assert.deepEqual(tally([]), { lines: 0, shaped: 0, tools: [], acts: [], reads: [] });
+  assert.deepEqual(tally([]), { lines: 0, shaped: 0, tools: [], acts: [], reads: [], days: [] });
   const none = spawnSync(process.execPath, [join(ROOT, "tools", "mcp-usage.mjs")], { encoding: "utf8" });
   assert.equal(none.status, 2);
   assert.match(none.stderr, /usage: mcp-usage\.mjs --since <YYYY-MM-DD>/);
   const bad = spawnSync(process.execPath, [join(ROOT, "tools", "mcp-usage.mjs"), "--since", "yesterday", "--dir", dir], { encoding: "utf8" });
   assert.equal(bad.status, 2, "a date that is not YYYY-MM-DD is refused, never compared as text");
+});
+
+// POS-1099: the per-day view, each read and the shape SERVED, calls and distinct households.
+test("by day: each read and shape, how many calls, how many distinct households (a count, never a name)", () => {
+  const at = (ts, household, call) => ({ ts, household, mcp: "world", call });
+  const t = tally([
+    at("2026-11-17T09:00:00Z", "alpha-house", { tool: "world", shape: "v1", out_bytes: 10 }),
+    at("2026-11-17T09:01:00Z", "alpha-house", { tool: "world", shape: "v1", out_bytes: 10 }),
+    at("2026-11-17T09:02:00Z", "beta-house", { tool: "world", shape: "v1", out_bytes: 10 }),
+    at("2026-11-17T09:03:00Z", "beta-house", { tool: "world", shape: "v2", out_bytes: 10 }),
+    at("2026-11-17T09:04:00Z", null, { tool: "world", shape: "v2", out_bytes: 10 }),
+    at("2026-11-17T09:05:00Z", "alpha-house", { tool: "household", read: "house", out_bytes: 10 }), // a line that recorded no shape
+    at("2026-11-17T09:06:00Z", "alpha-house", { tool: "household", do: "send", out_bytes: 10 }),    // an act is not a read
+    at("2026-11-18T09:00:00Z", "gamma-house", { tool: "world", shape: "v2", out_bytes: 10 }),
+  ]);
+  assert.deepEqual(t.days, [
+    { day: "2026-11-17", reads: [
+      { read: "world (bare)", shape: "v1", calls: 3, households: 2 },
+      { read: "world (bare)", shape: "v2", calls: 2, households: 1 },
+      { read: "household read:house", shape: null, calls: 1, households: 1 },
+    ] },
+    { day: "2026-11-18", reads: [{ read: "world (bare)", shape: "v2", calls: 1, households: 1 }] },
+  ]);
+  assert.ok(!JSON.stringify(t).includes("alpha-house"), "no household's name leaves the tally, only counts");
+});
+
+test("the plain report carries the by-day lines", () => {
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "mcp-usage.mjs"), "--since", "2026-10-19", "--dir", dir], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /\nby day \(/);
+  assert.match(r.stdout, /\n  2026-10-20\n\s+2\s+1 hh\s+household read:house\s+-\n  2026-10-21\n/, "the cold day's two house reads, one household");
 });
