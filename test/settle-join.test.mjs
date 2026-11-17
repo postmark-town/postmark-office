@@ -26,6 +26,7 @@ import { settlePass } from "../deploy/settle-pass.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the clone carries the town's modules, pinned; there is no engine-folder switch any more
 
 // THE PORT IS ASKED FOR, NEVER CHOSEN (join-pr-at-the-cosign.test.mjs § the
 // port). This was 43947, "checked against every port literal in test/", and
@@ -139,12 +140,17 @@ function town({ households = HOUSEHOLDS(), pins = PINS(), cards = { wildcat: "ho
     writeFileSync(join(dir, "WHITE_PAGES", h, "ADDRESS.md"), card(h, c.house, c.github));
   }
   if (ledger) writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), ledger);
+  // A fake town engine (withEngine below), when a test names one: its modules are IN the clone's tools/, committed with the seed (so the clone reads clean),
+  // and pinned (the office runs only the town code it pinned: src/town-tool.mjs). The pin guard stays on for every other clone in this file.
+  if (ENGINE) for (const [name, text] of Object.entries(ENGINE.files)) writeFileSync(join(dir, "tools", name), text);
   git(dir, "init", "-q");
   git(dir, "config", "core.autocrlf", "false");
   git(dir, "add", "-A");
   git(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seed");
+  if (ENGINE) process.env.TOWN_PINS_DIR = pinTown(dir);
   return dir;
 }
+let ENGINE = null;   // the fake engine the next clones carry (withEngine)
 
 const REGISTRAR = { household: "keeminlee", handles: new Set(["registrar", "wright"]), ghId: 67605380, ghLogin: "keeminlee" };
 const RESIDENT = { household: "commander-and-chief", handles: new Set(["kinofire"]), ghId: 334016343, ghLogin: "commander-and-chief" };
@@ -805,26 +811,27 @@ test("POS-1033 · through the apex, the authorization negatives hold and the lis
 // ── POS-1033 FIX (Truey's F1 at deef9c3d): AHEAD and SPLIT, the house-key judgments the lock makes BEFORE it looks for the pen's key ──
 //
 // Both are durable in the pass (settle-pass.mjs treats only NO_RECORD, GITHUB and TODAY as weather), so a hand join the tick will refuse for either must never be
-// told "nothing to do". They are read from the clone and the town's engine with no key. The engine here is a FAKE one, in a temp dir named by STAMP_ENGINE_DIR (the
-// override house-key.mjs itself reads): it answers the town's two predicates from a switch, and RECORDS the exact plan it was asked about, so that the door's plan
+// told "nothing to do". They are read from the clone and the town's engine with no key. The engine here is a FAKE one, carried IN the clone's tools/ and pinned (POS-994 took the STAMP_ENGINE_DIR switch away: the office loads only the town code it
+// pinned, and a clone whose copy is not the pinned one is refused): it answers the town's two predicates from a switch, and RECORDS the exact plan it was asked about, so that the door's plan
 // (the house, its residents with the joiner, the accounts of a house about to be founded) is compared with the one the lock makes. The ledger tail and the
 // date are not faked: AHEAD is house-key.mjs's own comparison.
 function fakeEngine({ splits = false } = {}) {
   const dir = tempDir("fake-engine-");
   const record = join(dir, "asked.jsonl");
-  writeFileSync(join(dir, "stamp-mint.mjs"), `export const currentHouseholds = () => new Map();\n`);
-  writeFileSync(join(dir, "household-keys.mjs"), [
+  const files = {};
+  files["stamp-mint.mjs"] = `export const currentHouseholds = () => new Map();\n`;
+  files["household-keys.mjs"] = [
     `import { appendFileSync } from "node:fs";`,
     `export const rollWith = (roll, lines) => ({ roll, lines });`,
     `export const householdKeySplits = ({ roll, houses }) => { appendFileSync(${JSON.stringify(record)}, JSON.stringify({ lines: roll.lines, houses }) + "\\n"); return { split: ${splits} ? [{ house: "house-of-many-doors" }, { house: "a-fresh-hearth" }] : [], shared: [] }; };`,
     `export const describe = (r) => r.split.map((s) => "house " + s.house + " would sit on two keys");`,
-  ].join("\n") + "\n");
-  return { dir, asked: () => { try { return readFileSync(record, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } } };
+  ].join("\n") + "\n";
+  return { dir, files, asked: () => { try { return readFileSync(record, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } } };
 }
 const withEngine = async (eng, fn) => {
-  const was = { e: process.env.STAMP_ENGINE_DIR, tz: process.env.TOWN_TZ };
-  process.env.STAMP_ENGINE_DIR = eng.dir; delete process.env.TOWN_TZ;
-  try { return await fn(); } finally { for (const [k, v] of [["STAMP_ENGINE_DIR", was.e], ["TOWN_TZ", was.tz]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  const was = { pins: process.env.TOWN_PINS_DIR, tz: process.env.TOWN_TZ };
+  ENGINE = eng; delete process.env.TOWN_TZ;
+  try { return await fn(); } finally { ENGINE = null; for (const [k, v] of [["TOWN_PINS_DIR", was.pins], ["TOWN_TZ", was.tz]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
 };
 const LEDGER_TAIL = (d) => `- ${d} · registry: kinofire = hh:house-of-many-doors\n`;
 
@@ -885,14 +892,30 @@ test("POS-1033 FIX · no ledger, or an engine the door cannot run, is not a prom
   // no ledger in the clone: nothing to key, the lock plans no house-key lines either (the existing pending test is this control)
   const a = handWorld();
   assert.equal((await settleHand(a, { cursorPath: cursorFile(BEFORE) })).out?.pending, true);
-  // a ledger and no engine at all: the read throws, which is doubt, so today's refusal
-  const was = process.env.STAMP_ENGINE_DIR; process.env.STAMP_ENGINE_DIR = join(tempDir("no-engine-"), "tools");
-  try {
-    const b = handWorld({ ledger: LEDGER_TAIL("2026-09-01") });
-    const { out, err } = await settleHand(b, { cursorPath: cursorFile(BEFORE) });
-    assert.equal(out, undefined);
-    assert.equal(err?.hint, `no PR from residency/vesper — ${SETTLE_REFUSALS.NO_PR.hint}`);
-  } finally { if (was === undefined) delete process.env.STAMP_ENGINE_DIR; else process.env.STAMP_ENGINE_DIR = was; }
+  // a ledger and no engine in the clone at all: the pin check finds no copy to compare, the read throws, which is doubt, so today's refusal
+  const b = handWorld({ ledger: LEDGER_TAIL("2026-09-01") });
+  const { out, err } = await settleHand(b, { cursorPath: cursorFile(BEFORE) });
+  assert.equal(out, undefined);
+  assert.equal(err?.hint, `no PR from residency/vesper — ${SETTLE_REFUSALS.NO_PR.hint}`);
+});
+
+test("POS-1033 FIX · THE PIN GUARD STAYS ON: a town tool in the clone that is not the copy the office pinned is refused, never read as 'nothing to do'", async () => {
+  const eng = fakeEngine();
+  await withEngine(eng, async () => {
+    const clone = handWorld({ ledger: LEDGER_TAIL("2026-09-01") });
+    // control: the pinned engine reads, nothing refuses, so pending
+    const ok = await settleHand(clone, { cursorPath: cursorFile(BEFORE) });
+    assert.equal(ok.out?.pending, true, "the pinned copy is read");
+    // the town's file is changed after the pins were taken: the copy is no longer the reviewed one
+    writeFileSync(join(clone, "tools", "household-keys.mjs"), eng.files["household-keys.mjs"] + "// a change the office never reviewed\n");
+    const { out, err } = await settleHand(clone, { cursorPath: cursorFile(BEFORE) });
+    assert.equal(out, undefined, "a mismatched town tool is not told pending");
+    assert.equal(err?.hint, `no PR from residency/vesper — ${SETTLE_REFUSALS.NO_PR.hint}`, "today's refusal, exactly");
+    // and the lock, which loads the same tool, stops by name rather than signing
+    const { judgeHouseKey } = await import("../src/house-key.mjs");
+    const lines = [{ seq: null, handle: "vesper", key: "hh:house-of-many-doors", line: "- 2026-09-29 · registry: vesper = hh:house-of-many-doors" }];
+    assert.throws(() => judgeHouseKey(clone, { lines }, { date: "2026-09-29", registry: { households: { "house-of-many-doors": { name: "x", residents: ["kinofire", "vesper"] } } } }), /not the copy the office pinned/);
+  });
 });
 
 test("POS-1033 FIX · the extraction leaves the lock's judgment equivalent: judgeHouseKey still refuses AHEAD then SPLIT, ahead of the pen's key", async () => {
