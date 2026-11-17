@@ -499,6 +499,8 @@ async function housePageOf({ household = null, limit = null, offset = null } = {
       serves: "household.stakes", scope: ashore,
       published: stakes.count ?? (stakes.rows ?? []).length,
       at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
+      // POS-1100: everything the house has stamps behind (marks, ideas, bounties, pots, votes), as the aggregate; the list is the read below
+      ...(stakes.allocation ? { allocation: stakes.allocation } : {}),
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
       read: 'household { read: "stakes" } for your own house; handle: narrows to one resident. ' + SNAPSHOT_LIMIT,

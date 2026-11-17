@@ -158,7 +158,9 @@ test("a quiet page says so, and an empty one points at the portfolio", async () 
 // ruling and does not carry it; the existing optional prose does, and no field is added.
 const FRAME = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
 const KNOWN_KEYS = new Set(["next_settlement", "clock", "rule", "unavailable", "registry_unavailable", "escrow_at_town_sha", "escrow_ingested_at",
-  "catches_up_at", "later_stakes", "count", "at_risk", "note", "read_the_rest", "rows"]);
+  "catches_up_at", "later_stakes", "count", "at_risk", "note", "read_the_rest", "rows",
+  // until POS-1100 (2026-11-17) this segment had no `allocation`: it is everything the house has stamps behind, the one new field, beside the marks
+  "allocation"]);
 
 test("WLD-51 · the at-risk segment states its frame in existing prose, with the at-risk row, the quiet note and the unmeasured read alike", async () => {
   const risky = await stakesFor(["berthillon"], readers());
@@ -237,8 +239,9 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
   assert.equal(DOORSTEP_SEGMENTS.at(8), "stakes");
   assert.ok(HOUSEHOLD_READABLE.includes("stakes"), "the door accepts it");
   assert.ok(HOUSEHOLD_READ_ENUM.includes("stakes"), "and the tool schema advertises it");
-  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.stakes), ["limit"], "it takes a preview size (POS-902) and no other field but the standpoint handle");
-  assert.match(HOUSEHOLD_READS.stakes, /Not the pot stake/, "the gloss keeps it apart from do: \"stake\" and read: \"stamps\"");
+  // until POS-1100 (2026-11-17) this asserted `["limit"]` alone: `offset` pages `allocation`, everything the house has stamps behind
+  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.stakes), ["limit", "offset"], "it takes a preview size (POS-902), the allocation's page start (POS-1100) and no other field but the standpoint handle");
+  assert.match(HOUSEHOLD_READS.stakes, /everything your house has stamps behind/, "the gloss says the read lists everything the house has stamps behind (POS-844 call 7), apart from do: \"stake\" and read: \"stamps\"");
   assert.equal(REGISTRY_PATH, "WORLD/settlement-publications.json", "the sweep's own file");
 });
 

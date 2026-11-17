@@ -478,7 +478,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   // under the foyer's 8 KiB bound; it goes when w41 ships.
   rulings: "renamed: outcomes",
   // POS-633 part 2: shortened by Plumb to make room for closer and happened under the foyer's 8 KiB bound (F5c).
-  stakes: "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident",
+  stakes: "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes; limit/offset page it), and the escrow behind your own published marks, the ones the next settlement would sweep first; bare it is your whole house, handle: narrows",
   address: "your address card, as the white pages hold it",
   home: "your home page",
   // POS-543: "papers" names its three checks (paperGapRows: HOME page, window,
@@ -572,7 +572,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
              part: { type: "string", description: "connector only: one list of a paged answer instead of the marks: set_downs | takes | standing | ground (cursor walks it) | teach (one block, no cursor)" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
-  stakes: { limit: { type: "number", description: "the newest N rows (the doorstep shows a few); omit for every row" } },
+  stakes: { limit: { type: "number", description: "the newest N of your own marks' rows (the doorstep shows a few; omit for every one), and the page size of `allocation`, everything your house has stamps behind (default 20)" },
+            offset: { type: "number", description: "where `allocation`'s next page starts: the `next_offset` its last page handed you" } },
   address: {},
   home: {},
   standing: {},
@@ -1417,7 +1418,16 @@ async function householdGlance(args, key, ctx) {
     }),
     soft(() => householdPosts(you ?? ashore[0], { clone, now: nowMs })),
   ]);
+  // POS-1100: everything the house has stamps behind, as its AGGREGATE only (the list is household { read: "stakes" }). At risk is needs-you's own set.
+  const stakeRows = needs?.stakes_at_risk?.rows ?? null;
+  const stakes = ashore.length
+    ? await soft(async () => {
+      const { houseStakes, aggregateOf } = await import("./household-stakes.mjs");
+      return aggregateOf(await houseStakes(ashore, { atRisk: stakeRows ? new Set(stakeRows.map((r) => r.mark)) : null }));
+    })
+    : null;
   return v2.glanceV2({
+    stakes,
     marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
@@ -2231,7 +2241,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
         return bounce(422, "whose marks?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has published");
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
       // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
-      return doorstepStakes(named || null, { key, limit: f.limit ?? null });
+      // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset (default 20).
+      return doorstepStakes(named || null, { key, limit: f.limit ?? null, allocationPage: { limit: f.limit, offset: f.offset } });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and

@@ -231,6 +231,10 @@ export async function stakesFor(handles, {
   pathAt = defaultPathAt,
   now = new Date(),
   limit = null,
+  // POS-1100: everything the house has stamps behind, beside the marks above (household-stakes.mjs). `allocation` is the reader
+  // (a suite's seam); `allocationPage`, when given as { limit, offset }, answers the PAGED LIST (the stakes read) in place of the aggregate.
+  allocation: readAllocation = null,
+  allocationPage = null,
 } = {}) {
   const scope = [...new Set((handles ?? []).filter(Boolean))];
   const at = nextSettlement(now);
@@ -265,6 +269,9 @@ export async function stakesFor(handles, {
   const measured = escrowRead && !ruleNote;
   const atRisk = measured ? rows.filter((r) => r.at_risk === true).length : null;
   const unjudged = rows.filter((r) => r.at_risk === null).length;
+  // POS-1100: what the house has stamps behind, marks AND posts AND pots AND ballots, from the ledger. Never throws: an unread
+  // ledger is `unavailable`, said, never a zero. At-risk is the sweep's verdict above (null while it was not measured).
+  const allocation = await allocationOf(scope, { read: readAllocation, atRisk: measured ? new Set(rows.filter((r) => r.at_risk === true).map((r) => r.mark)) : null, page: allocationPage });
   return {
     ...base,
     ...(escrowRead ? {} : { unavailable: esc?.reason ?? "the escrow projection did not answer — what stands behind these marks is unknown, not zero" }),
@@ -284,8 +291,30 @@ export async function stakesFor(handles, {
       ? { note: "nothing of yours is at risk as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
+    ...(allocation ? { allocation } : {}),
     rows: page.rows,
   };
+}
+
+/**
+ * THE HOUSE'S STAKES, AS THE SEGMENT CARRIES THEM (POS-1100): the aggregate (total, count, a count per kind, at risk), or,
+ * when `page` is `{ limit, offset }`, the paged list with its key. The stakes read in household-stakes.mjs is the one owner
+ * of the number; this only asks. Never throws.
+ */
+async function allocationOf(handles, { read = null, atRisk = null, page = null } = {}) {
+  try {
+    const { houseStakes, aggregateOf, pageStakes, STAKES_KEY } = await import("./household-stakes.mjs");
+    const stakes = await (read ?? houseStakes)(handles, { atRisk });
+    if (!page) {
+      const a = aggregateOf(stakes);
+      // The morning page does not fatten (foyer-shrink F7c5): a house with nothing staked, or whose ledger could not be read, says nothing here.
+      // The stakes read (`household { read: "stakes" }`) says the unreadable ledger in words, and the glance says it short; this item is not where.
+      return a.count > 0 ? a : undefined;
+    }
+    return { ...pageStakes(stakes, page), ...(stakes?.unavailable ? {} : { key: STAKES_KEY }) };
+  } catch (e) {
+    return { unavailable: `what your house has stamps behind could not be read (${plainReason(e, "record", "the house's stakes")})` };
+  }
 }
 
 /** The doorstep's own reader: one person when a handle is named, else the
