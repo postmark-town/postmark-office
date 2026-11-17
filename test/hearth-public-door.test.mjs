@@ -208,6 +208,23 @@ test("5c · the SQL does the work, not only the fixture's filter: excluded rows 
   assert.ok(mine.rows.every((x) => !String(x.object).includes(DRAFT)));
 });
 
+// POS-844: the feed's household and resident filters, through the real door over the real sources (the house resolver and the letter index), not a stub.
+test("5d · the town feed filters by household and by resident through the real sources", async () => {
+  const feed = async (args) => standalone({ door: "town", read: "feed", args: { limit: 100, ...args } });
+  const all = await feed({});
+  assert.equal(all.error, undefined, JSON.stringify(all));
+  assert.ok(all.rows.some((x) => x.by === "r-stranger") && all.rows.some((x) => x.by === "r000"), "the unfiltered feed holds the house's rows and the outsider's");
+  const house = await feed({ household: HOUSE });
+  assert.equal(house.household, HOUSE);
+  assert.ok(house.rows.length > 0 && house.rows.every((x) => MEMBERS.includes(x.by)), `only the house's residents' rows: ${JSON.stringify(house.rows.map((x) => [x.id, x.by]))}`);
+  assert.ok(house.rows.length < all.rows.length, "and fewer than the whole stream");
+  const stranger = await feed({ resident: "r-stranger" });
+  assert.ok(stranger.rows.length > 0 && stranger.rows.every((x) => x.by === "r-stranger"));
+  assert.deepEqual((await feed({ household: HOUSE, resident: "r-stranger" })).rows, [], "a resident outside the house, within the house: nothing");
+  const unknown = await feed({ household: "no-such-house" });
+  assert.deepEqual([unknown.error, unknown.code], ["bounce", 422]);
+});
+
 test("6 · an unknown house is refused, not bundled empty", async () => {
   const r = await anon({ read: "hearth", household: "no-such-house" });
   assert.equal(r.error, "bounce");
