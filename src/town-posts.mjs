@@ -137,7 +137,24 @@ export const CLASS_STATES = Object.freeze({
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
-export const POSTS_PARAMS = Object.freeze(["class", "state", "stage", "limit", "offset"]);
+export const POSTS_PARAMS = Object.freeze(["class", "state", "stage", "limit", "offset", "sort"]);
+
+/** The sorts the posts list takes (POS-854, Darko 2026-11-16 22:51 EST: "by recency or by like most stamps staked … keep it simple"). */
+export const POST_SORTS = Object.freeze(["recent", "staked"]);
+/** The classes that take a stake, so that `sort: "staked"` has something to sort by. A bug takes none (bugs.mjs § NO STAKE). */
+export const STAKED_CLASSES = Object.freeze([IDEA_CLASS]);
+
+/** `sort`: absent keeps the class's own order; otherwise recent or staked, and anything else is a 422 naming both. */
+function judgeSort(fields) {
+  const v = fields?.sort;
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string" || !POST_SORTS.includes(v))
+    throw refuse(422, `sort is one of ${POST_SORTS.join(" or ")}`, 'sort: "recent" (newest activity first) or "staked" (most stamps standing behind it first)', { field: "sort" });
+  return v;
+}
+
+const activeAt = (p) => String(p.latest?.at ?? "");
+const byRecent = (a, b) => activeAt(b).localeCompare(activeAt(a)) || a.id.localeCompare(b.id);
 
 const editDistance = (a, b) => {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -242,9 +259,10 @@ export { NO_CHAIN };
  * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
  * @param {{ now?: number, env?: object, townClone?: string }} ctx
  */
-export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true } = {}) {
+export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true, backing = null } = {}) {
   const cls = judgePostsClass(fields);
   const wanted = judgeStateFilter(fields, cls);
+  const sortAsked = judgeSort(fields);
   const one = String(fields?.post ?? "").trim();
   let rows;
   let history = null;
@@ -285,9 +303,25 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     // An idea (POS-290) carries its body, its own fields (links, of), its
     // history, the awards recorded on it (and what the chain shows each paid),
     // its backing and its sign-ups.
-    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
-      history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
-      ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
+    // What stands behind an idea is the stamp ledger's (post-stake.mjs § postBackingOf), the one owner of a
+    // post's escrow: `stake` is the total and `backing` the same in the grammar's own words (a post's stake
+    // is for it; the door offers no against). A ledger that cannot be read leaves `stake` null and says so.
+    let ledger = null;
+    if (rows.length) {   // no idea post, nothing to back: the ledger is not asked
+      try { ledger = backing ? await backing(townClone) : await (await import("./post-stake.mjs")).postBackingOf(townClone); }   // `backing` is a suite's seam
+      catch { unavailable = [unavailable, "the stakes behind the ideas could not be read from the stamp ledger, so each idea's stake is null"].filter(Boolean).join("; "); }
+    }
+    posts = [...rows].sort(postOrder).map((r) => {
+      const held = ledger?.holders.get(r.id) ?? [];
+      const sum = (side) => held.filter((h) => (h.side === "against") === (side === "against")).reduce((a, h) => a + h.n, 0);
+      const { sign_ups } = ideaResponsesOf(extras.responses.get(r.id) ?? []);
+      return { ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
+        history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
+        stake: ledger ? (ledger.escrow.get(r.id) ?? 0) : null,
+        backing: { for: sum("for"), against: sum("against"), net: sum("for") - sum("against"), stakers: held.length },
+        ...(one && r.id === one ? { stakes: held.map((h) => ({ handle: h.handle, stamps: h.n })).sort((a, b) => b.stamps - a.stamps || a.handle.localeCompare(b.handle)) } : {}),
+        sign_ups };
+    });
   } else if (cls === BALLOT_CLASS) {
     // A ballot (POS-983) carries its body (what is being decided, how and when),
     // its terms and each choice in its own words, in the file's order. The
@@ -317,9 +351,22 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = posts.filter((p) => wanted.states.includes(p.state));
     if (wanted.alias) filterNote = ALIAS_NOTE;
   }
+  // THE SORT (POS-854). `staked` has something to sort by only where a class takes a stake; elsewhere it says so
+  // and answers newest first, never a refusal (Wright's settlement of Darko's 22:51 word, POS-844).
+  let sortUsed = null;
+  let sortNote = null;
+  if (sortAsked && !one) {
+    sortUsed = sortAsked;
+    if (sortAsked === "staked" && !STAKED_CLASSES.includes(cls)) {
+      sortUsed = "recent";
+      sortNote = `a ${cls} takes no stake, so there is nothing to sort by: this list is newest first (sort: "staked" applies to ${STAKED_CLASSES.join(", ")})`;
+    }
+    posts = [...posts].sort(sortUsed === "staked" ? (a, b) => (Number(b.stake) || 0) - (Number(a.stake) || 0) || byRecent(a, b) : byRecent);
+  }
   const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...READ_CLASSES[cls].finished],
     ...(unavailable ? { unavailable } : {}) };
   const listHead = { ...head, ...(wanted.states && !one ? { state: wanted.states } : {}), counts_by_state,
+    ...(sortUsed ? { sort: sortUsed } : {}), ...(sortNote ? { sort_note: sortNote } : {}),
     ...(filterNote ? { note: filterNote } : {}) };
   if (one) {
     const hit = posts.find((p) => p.id === one);

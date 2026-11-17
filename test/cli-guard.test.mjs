@@ -159,6 +159,7 @@ const ROSTER = {
   "tools/ops-awareness.mjs": { args: ["--by-hand", join(ROOT, "tools", "ops-awareness.mjs")], env: { AWARENESS_OFFLINE: "1", OPS_ROOT: NOWHERE }, code: 2, needle: "is not JSON" },
   "tools/capture-doorstep-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/capture-household-golden.mjs": { args: [], code: 0, needle: "{" },
+  "tools/convert-idea-marks.mjs": { args: [], env: { OFFICE_KEEP: undefined, INVOCATION_ID: undefined }, code: 1, needle: "--town <town-clone> is required" }, // POS-854: bare, it asks for the town clone and reads nothing
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
