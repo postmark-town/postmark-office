@@ -30,6 +30,7 @@ import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
 import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
+import { sayReferenceOf } from "./circles.mjs"; // POS-1035: a say's id and the say it answers, as references
 
 /**
  * How many groups of what waits the glance shows: the largest first, ties
@@ -684,7 +685,15 @@ export function happenedRow(a, { houseName = null } = {}) {
     object: a.object ?? null,
     place: a.at_anchor ?? null,
     ...(by ? { by } : {}),
+    // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, as references — never words
+    ...sayReference(a),
   };
+}
+
+/** `{ say: { id, reply_to? } }` for a say act row whose id is an act number, else nothing (additive, after every existing field). */
+export function sayReference(a) {
+  const ref = sayReferenceOf(a);
+  return ref ? { say: ref } : {};
 }
 
 /**

@@ -16,8 +16,9 @@
 //   import { copyTownTools } from "./helpers/town-tools.mjs";
 //   copyTownTools(townClone(), repo);   // <repo>/tools/ now has the town's code
 
-import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { relativeImports } from "../../src/town-tool.mjs";
 
 /** The town's own modules in `<town>/tools`: every `*.mjs` but its tests, sorted. */
 export function townToolModules(town) {
@@ -26,11 +27,31 @@ export function townToolModules(town) {
     .sort();
 }
 
-/** Copy the town's modules into `<repo>/tools` (made if missing). Answers the names copied. */
+/**
+ * Copy the town's modules into `<repo>/tools` (made if missing). Answers the names copied.
+ *
+ * AND THE CODE THEY IMPORT FROM OUTSIDE tools/ (POS-1035, at town e9cb5e87): a module may import by a relative path out of
+ * tools/ — witness-chain.mjs reads ../PROJECTS/the-town-seal/seal.mjs — and the office's loader and a fixture's own pins
+ * (pinned-town.mjs § pinTown) read a module's whole closure, so a fixture holding the module without it fails. Each copied
+ * module's relative-import closure is walked (src/town-tool.mjs § relativeImports, as pinned-town.mjs § copyTownModule walks it)
+ * and the code files it names are copied at their town paths. Only code (`.mjs`/`.js`) travels: the town's data stays the live
+ * town's, and a fixture's own (its key, its rolls) is never overwritten.
+ */
 export function copyTownTools(town, repo) {
   const to = join(repo, "tools");
   mkdirSync(to, { recursive: true });
   const names = townToolModules(town);
   for (const f of names) copyFileSync(join(town, "tools", f), join(to, f));
+  const seen = new Set(names.map((f) => `tools/${f}`));
+  const walk = (p) => {
+    for (const d of relativeImports(p, readFileSync(join(town, p), "utf8"))) {
+      if (seen.has(d) || !/\.m?js$/.test(d) || !existsSync(join(town, d))) continue;
+      seen.add(d);
+      mkdirSync(dirname(join(repo, d)), { recursive: true });
+      copyFileSync(join(town, d), join(repo, d));
+      walk(d);
+    }
+  };
+  for (const f of names) walk(`tools/${f}`);
   return names;
 }

@@ -345,6 +345,12 @@ test("happened · D4: hand and for from what the record knows; a route never rec
     assert.ok(!JSON.stringify(r).includes("unknown"));
   }
   assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, after every existing field — never words
+  const reply = happenedRow({ id: "70002", at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay", reply_to: "70001" }, { houseName: "Starforge" });
+  assert.deepEqual(Object.keys(reply), ["at", "hand", "for", "verb", "object", "place", "by", "say"], "the existing fields in their order, then say");
+  assert.deepEqual(reply.say, { id: 70002, reply_to: 70001 });
+  assert.deepEqual(happenedRow({ id: "70003", actor: "rei", action: "say" }).say, { id: 70003 }, "a top say (or old talk): no parent invented");
+  assert.equal("say" in happenedRow({ id: "70004", actor: "rei", action: "walk", reply_to: "70001" }), false, "only a say carries one");
   assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
 });
 
