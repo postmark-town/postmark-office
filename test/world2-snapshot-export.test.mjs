@@ -24,8 +24,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import {
@@ -71,7 +71,7 @@ const MARK = {
 };
 
 function repo() {
-  const dir = mkdtempSync(join(tmpdir(), "w2notary-test-"));
+  const dir = tempDir("w2notary-test-");
   execFileSync("git", ["-C", dir, "init", "-q", "-b", "main"]);
   execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t",
     "commit", "-q", "--allow-empty", "-m", "root"]);
@@ -378,7 +378,7 @@ test("--dry-run writes nothing at all", () => {
 test("the pen refuses a target it would have to CREATE", () => {
   // The stateless contract (gold § 3): the caller supplies the checkout. A pen
   // that made one would be the long-lived clone the whole migration deletes.
-  const dir = mkdtempSync(join(tmpdir(), "w2notary-bare-"));
+  const dir = tempDir("w2notary-bare-");
   try {
     assert.throws(() => assertUsableTarget(dir, { allowDetached: true }), Cannot);
     assert.throws(() => assertUsableTarget(join(dir, "nope"), { allowDetached: true }), /not a directory/);

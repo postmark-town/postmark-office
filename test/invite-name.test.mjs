@@ -29,8 +29,9 @@ import { beforeEach as beforeEachPins } from "node:test";
 // starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
 const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -193,7 +194,7 @@ function sealedLedger(lines) {
   return "# the stamp ledger\n\n" + lines.map((l, i) => `${l} · sig: ${sign(null, Buffer.from(seals[i], "utf8"), LAW_KEYS.privateKey).toString("base64url")}`).join("\n") + "\n";
 }
 function townClone({ law = true, registry = REGISTRY() } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-name-"));
+  const dir = tempDir("pm-invite-name-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (law) {

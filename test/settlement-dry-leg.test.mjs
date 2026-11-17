@@ -31,8 +31,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { OFFICE, SH_OK, scratch, g, bottle, cross } from "./helpers/settlement-bottle.mjs";
 
 const skip = !SH_OK && "no POSIX sh";
@@ -212,7 +213,7 @@ test("R4 · an unrecognised SETTLEMENT_DRY refuses rather than guessing", { skip
 // ── the real retire tool's dry run, on its own ground ───────────────────────
 
 test("T1 · the REAL retire-unpublished --dry-run names its marks and opens no connection", () => {
-  const dir = mkdtempSync(join(scratch, "retire-"));
+  const dir = tempDir("retire-");
   const sweepPath = join(dir, "sweep.json");
   writeFileSync(sweepPath, JSON.stringify({ unpublished: [{ id: "alpha/old" }, { id: "beta/gone" }] }));
   // Nothing listens on port 1: a tool that connected would fail, not print.

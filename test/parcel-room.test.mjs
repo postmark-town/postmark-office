@@ -31,10 +31,10 @@ import { beforeEach as beforeEachPins } from "node:test";
 // starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
 const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, roomPastResidentsHeadsUp, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
 import { foldHouseholds } from "../src/world-snapshot.mjs";
@@ -107,7 +107,7 @@ const registerRows = () => Object.entries(registry.households).map(([slug, rec],
 }));
 /** A town checkout with a ledger and the engine that reads it (the stand-in classifier above). */
 function townWith(lines, { engine = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "parcel-room-town-"));
+  const dir = tempDir("parcel-room-town-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   if (engine) writeFileSync(join(dir, "tools", "stamp-mint.mjs"),
@@ -359,7 +359,7 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
   const { generateKeyPairSync } = await import("node:crypto");
   const { execFileSync } = await import("node:child_process");
   const { copyTownTools } = await import("./helpers/town-tools.mjs");
-  const repo = mkdtempSync(join(tmpdir(), "parcel-room-exec-"));
+  const repo = tempDir("parcel-room-exec-");
   const env = { STAMP_KEY: process.env.STAMP_KEY, BOT_NAME: process.env.BOT_NAME, BOT_EMAIL: process.env.BOT_EMAIL, TOWN_PUSH: process.env.TOWN_PUSH };
   try {
     copyTownTools(ENGINE_TOWN, repo);
@@ -409,7 +409,7 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
 // (TEST-DESIGN: give the store an answer between the check and the write).
 const RACE = "PARCEL_ROOM_TEST_RACE_LINE";
 function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {}) {
-  const town = mkdtempSync(join(tmpdir(), "parcel-room-retry-"));
+  const town = tempDir("parcel-room-retry-");
   mkdirSync(join(town, "tools"), { recursive: true });
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(residents)));
@@ -466,7 +466,7 @@ const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.m
   .filter((l) => l.includes("for: parcel:")).map((l) => l.replace(/ · sig: \S+$/, ""));
 /** Run `fn` with the exec's env set (the stand-in key, a lock file outside the town, no push), restoring it after. */
 async function withExecEnv(town, extra, fn) {
-  const lockDir = mkdtempSync(join(tmpdir(), "parcel-room-lock-"));
+  const lockDir = tempDir("parcel-room-lock-");
   const set = { STAMP_KEY: join(town, "stamp-key.pem"), BOT_NAME: "t", BOT_EMAIL: "t@t", TOWN_PUSH: undefined, TOWN_LOCK: join(lockDir, "town.lock"), ...extra };
   const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
   for (const [k, v] of Object.entries(set)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -480,7 +480,7 @@ const KEY3 = { household: "the-rowan", handles: new Set(["ash"]) };
 
 test("10 · a double click burns once: the first click lands while the second waits, and the second answers the first's receipt", async () => {
   const town = standInTown();
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const first = "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan";
     const second = await withExecEnv(town, { [RACE]: first, [`${RACE}_MARK`]: join(markDir, "landed") },
@@ -547,7 +547,7 @@ test("10 · control: a call made after the first purchase is a new purchase, and
 // disk and before its commit, until the second click's entry has read the ledger.
 test("11 · F1's window: a second click entering after the first click's line is on disk, before it answers, burns nothing", async () => {
   const town = standInTown();
-  const pause = mkdtempSync(join(tmpdir(), "parcel-room-pause-"));
+  const pause = tempDir("parcel-room-pause-");
   try {
     await withExecEnv(town, { [`${RACE}_PAUSE_DIR`]: pause }, async () => {
       const a = buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" });
@@ -573,7 +573,7 @@ test("11 · F1's window: a second click entering after the first click's line is
 // the engine at the newest blessing carries `parcelRoomOf`, read through the seam
 // the leave-mark note already reads (world-branches.mjs § importEngineAt).
 function worldRepo(steps) {
-  const repo = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  const repo = tempDir("parcel-room-world-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
   g("init", "-q", "-b", "main");
@@ -642,7 +642,7 @@ test("11 · N1: no settlement tag, the law on main: the gate refuses rather than
 test("11 · N1: a blessing whose engine can't be materialised refuses rather than read the working tree", async () => {
   // settlement/S1 blesses a commit with no tools/ at all (materializeAtRef throws
   // "no files under tools"); the working tree, at main, carries the law
-  const world = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  const world = tempDir("parcel-room-world-");
   const g = (...a) => execFileSync("git", a, { cwd: world, encoding: "utf8" });
   try {
     g("init", "-q", "-b", "main");
@@ -685,7 +685,7 @@ test("12 · control: a house with a resident for the room buys it with no heads-
 
 test("12 · a double click past the residents burns once, and the click that answers the receipt still carries the heads-up", async () => {
   const town = standInTown({ residents: ["ash"] });
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
       () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
@@ -698,7 +698,7 @@ test("12 · a double click past the residents burns once, and the click that ans
 
 test("12 · control: the same double click for a house with a resident each answers a receipt with no heads-up", async () => {
   const town = standInTown();
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
       () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));

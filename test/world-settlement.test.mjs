@@ -13,8 +13,8 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { foldOfSnapshot, canonicalJson } from "../src/world-snapshot.mjs";
@@ -153,7 +153,7 @@ test("a later word revises an earlier one: latest wins, and a welcomed takes not
 
 test("the town's opposed word reaches the engine as its own `townWords`; an engine older than world#146 is disclosed, never pretended", { skip }, async () => {
   // A stand-in engine at a law sha of its own: it returns whatever the town opposes.
-  const repo = mkdtempSync(join(tmpdir(), "settlement-engine-"));
+  const repo = tempDir("settlement-engine-");
   try {
     mkdirSync(join(repo, "tools"));
     writeFileSync(join(repo, "tools", "consent.mjs"), 'export const TOWN_WORDS = new Set(["neutral", "opposed"]);\n');
@@ -449,7 +449,7 @@ test("--verify derives a settlement carrying stance_through: the seal's words, a
 });
 
 test("the town's word at the seal reaches the engine as `townWords`, and the asked settlement serves it", { skip }, async () => {
-  const repo = mkdtempSync(join(tmpdir(), "settlement-engine-"));
+  const repo = tempDir("settlement-engine-");
   try {
     mkdirSync(join(repo, "tools"));
     writeFileSync(join(repo, "tools", "consent.mjs"), 'export const TOWN_WORDS = new Set(["neutral", "opposed"]);\n');

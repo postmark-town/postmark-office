@@ -3,17 +3,17 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-world-scope-"));
+const repo = tempDir("postmark-world-scope-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 // the draft lanes lease worktrees out of a pool beside the clone (tier 1)
-const pool = mkdtempSync(join(tmpdir(), "postmark-world-scope-pool-"));
+const pool = tempDir("postmark-world-scope-pool-");
 process.env.WORLD_POOL_DIR = pool;
 after(() => rmSync(pool, { recursive: true, force: true }));
-const town = mkdtempSync(join(tmpdir(), "postmark-town-scope-"));
+const town = tempDir("postmark-town-scope-");
 after(() => rmSync(town, { recursive: true, force: true }));
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],

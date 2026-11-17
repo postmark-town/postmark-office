@@ -59,15 +59,15 @@ const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { execFileSync, spawnSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(OFFICE, "deploy", "settlement-auto.sh");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-suitered-"));
+const scratch = tempDir("postmark-suitered-");
 
 const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }); return true; } catch { return false; } };
 // POSIX-shell shaped, like the harness it is drawn from. Where `sh` is not a

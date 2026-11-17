@@ -19,8 +19,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -146,7 +146,7 @@ test("the printed plan reads back to the plan, and a changed row is caught", () 
 });
 
 test("the letters come from the mail ledger's deliveries to the postmaster, with their bodies from the inbox", () => {
-  const town = mkdtempSync(join(tmpdir(), "quest-letters-"));
+  const town = tempDir("quest-letters-");
   mkdirSync(join(town, "WHITE_PAGES", "postmaster", "inbox", "bob-2026-10-16-v2-feedback"), { recursive: true });
   writeFileSync(join(town, "WHITE_PAGES", "mail-ledger.md"), [
     "# Mail ledger", "",
@@ -167,7 +167,7 @@ test("the letters come from the mail ledger's deliveries to the postmaster, with
 // ── review-quest F1–F4 (2026-10-15) ─────────────────────────────────────────
 
 test("F3: a marked letter the ledger delivered but the inbox does not hold pays nothing, and says why", () => {
-  const town = mkdtempSync(join(tmpdir(), "quest-letters-"));
+  const town = tempDir("quest-letters-");
   mkdirSync(join(town, "WHITE_PAGES", "postmaster", "inbox"), { recursive: true });
   writeFileSync(join(town, "WHITE_PAGES", "mail-ledger.md"), "- 2026-10-16 · dana-2026-10-16-to-postmaster-v2-feedback · dana → postmaster · thread: new\n");
   const parse = (text) => text.split("\n").map((l) => /^- (\S+) · (\S+) · (\S+) → (\S+)/.exec(l)).filter(Boolean).map((m) => ({ kind: "delivery", date: m[1], id: m[2], from: m[3], to: m[4] }));
@@ -425,7 +425,7 @@ test("hearth: an unbound or ambiguous row names the later commit that changed th
 // takes one entry by a merge commit and one by a direct commit, plus the
 // infrastructure folder, a folder with no hearth.html and an uncommitted one.
 function hearthTown() {
-  const dir = mkdtempSync(join(tmpdir(), "quest-hearth-"));
+  const dir = tempDir("quest-hearth-");
   const g = (args, at) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-C", dir, ...args],
     { encoding: "utf8", env: { ...process.env, ...(at ? { GIT_AUTHOR_DATE: at, GIT_COMMITTER_DATE: at } : {}) } });
   const put = (path, text) => { mkdirSync(join(dir, path, ".."), { recursive: true }); writeFileSync(join(dir, path), text); };

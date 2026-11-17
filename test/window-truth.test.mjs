@@ -35,9 +35,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown, probeOfTown } from "./fixture.mjs";
 import { windowRead } from "../src/town-index-store.mjs";
@@ -63,7 +64,7 @@ test.after(async () => { await api.end(); await IX.stop(); });
 
 /** A town checkout with a real pen behind it, so a commit sha is a real sha. */
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-wintruth-"));
+  const dir = tempDir("pm-wintruth-");
   trash.push(dir);
   mkdirSync(join(dir, "WHITE_PAGES", "wright", "WINDOW"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "wright", "ADDRESS.md"),

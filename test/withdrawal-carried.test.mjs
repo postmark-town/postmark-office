@@ -30,7 +30,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -52,7 +52,7 @@ const WHY_SKIP = WORLD ? false : "no world checkout found (set POSTMARK_WORLD_CL
 const store = await startStore({ db: "withdrawal_carried_test" });
 after(() => store.stop());
 const skip = store.skip ?? WHY_SKIP;
-const scratch = mkdtempSync(join(tmpdir(), "withdrawal-carried-"));
+const scratch = tempDir("withdrawal-carried-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 const TOWN_SHA = "t".repeat(40);
