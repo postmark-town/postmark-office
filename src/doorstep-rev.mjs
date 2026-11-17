@@ -29,6 +29,31 @@ export const GLOBAL_LEAVES = Object.freeze([
   "pending_outbox_freshness.settled_as_of",
 ]);
 
+/**
+ * THE TOWN-WIDE BLOCKS (POS-1086, global-blocks): top-level keys of the doorstep body that are the same for every
+ * resident at one moment, and that move when the TOWN moves (a letter anywhere, a crossing, a posting), not when
+ * the resident's own page does. Left in the hash they changed every resident's rev at once, and a pass over a town
+ * that had moved carried over nobody (prod 2026-11-17 21:40Z: "0 carried over, 393 fetched whole").
+ * Each reads no resident input, from the code (town-index-store.mjs § doorstepFromRows, doorstep-bundle.mjs):
+ *   copy           ix.copy() and the timetable: copyBlock(await ix.copy(), as_of, nowMs); no handle.
+ *   next_crossing  nextCrossingForDoorstep(nowMs): a pure function of the clock.
+ *   bulletin       bulletinTeaserOf(bulletinListingsKept(rows.bulletin)): rows.bulletin = bulletinRows(q), the whole board.
+ *   town_pulse     metricsPulseKept(rows.pulse): rows.pulse = metricsMailRows(q), the whole ledger; no handle.
+ *   psa            psaFoldOf(rows.psa, { now }): rows.psa = psaRow(q), the one posting; the clock.
+ *   town           rows.town: the resident count, delivery count and last delivery of the whole ledger, and the five newest arrivals.
+ * What is NOT here: the keys that are constants of the build (the_bundle, segments, clocks, moved, doorstep_version,
+ * civic, rulings). They move only with a deploy, and they stay in the hash so that a deploy moves every rev.
+ * Order is the body's own and is not significant here: each is taken out by key.
+ */
+export const TOWN_WIDE_BLOCKS = Object.freeze(["copy", "next_crossing", "bulletin", "town_pulse", "psa", "town"]);
+
+/**
+ * The version of the `global` part (and of the rev scheme). A caller says it understands it with `&global=2`;
+ * the office answers `unchanged` only to such a caller, so a reader that cannot patch the blocks is never told
+ * "unchanged" about a body whose blocks it does not hold.
+ */
+export const GLOBAL_VERSION = 2;
+
 /** A rev is 16 lowercase hex characters (64 bits of sha-256). */
 export const REV_RE = /^[0-9a-f]{16}$/;
 
@@ -58,12 +83,23 @@ export function splitGlobal(doorstep) {
   if (body.copy && typeof body.copy === "object") { delete body.copy.newest_change_at; delete body.copy.sentence; }
   if (body.window?.freshness && typeof body.window.freshness === "object") delete body.window.freshness.settled_as_of;
   if (body.pending_outbox_freshness && typeof body.pending_outbox_freshness === "object") delete body.pending_outbox_freshness.settled_as_of;
+  // the town-wide blocks: handed back once, whole (copy too, so its two leaves above are repeated inside it and the block wins)
+  const townWide = {};
+  const doorstepCopy = JSON.parse(JSON.stringify(doorstep));
+  for (const k of TOWN_WIDE_BLOCKS) {
+    if (!(k in body)) continue;
+    townWide[k] = doorstepCopy[k];
+    delete body[k];
+  }
+  global.version = GLOBAL_VERSION;
+  global.town_wide = townWide;
   return { rest: body, global };
 }
 
-/** The content revision of a doorstep body. */
+/** The content revision of a doorstep body: the hash of the page without the five leaves and without the town-wide blocks (which blocks it held is hashed, so a page missing one is another page). */
 export function revOf(doorstep) {
-  return createHash("sha256").update(canonical(splitGlobal(doorstep).rest)).digest("hex").slice(0, 16);
+  const { rest, global } = splitGlobal(doorstep);
+  return createHash("sha256").update(canonical({ rest, town_wide_keys: Object.keys(global.town_wide).sort() })).digest("hex").slice(0, 16);
 }
 
 /** The body with its `rev` appended as the last key; null stays null (a 404's row). */

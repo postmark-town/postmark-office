@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
-import { GLOBAL_LEAVES, REV_RE, revOf, splitGlobal, withRev, parseKnown } from "../src/doorstep-rev.mjs";
+import { GLOBAL_LEAVES, GLOBAL_VERSION, TOWN_WIDE_BLOCKS, REV_RE, revOf, splitGlobal, withRev, parseKnown } from "../src/doorstep-rev.mjs";
 
 delete process.env.TOWN_PUSH;
 const IX = await indexStore(fixtureTown(), { db: "pos1086_rev" });
@@ -78,8 +78,7 @@ test("LAW: the revision is the content: two copies of the record, one rev; one c
     ["stances", (d) => { d.stances.stances_awaiting = (d.stances.stances_awaiting ?? 0) + 1; }],
     ["stakes", (d) => { d.stakes.count = (d.stakes.count ?? 0) + 1; }],
     ["counts", (d) => { d.counts.received += 1; }],
-    ["copy.caught_up", (d) => { d.copy.caught_up = !d.copy.caught_up; }],
-    ["next_crossing", (d) => { d.next_crossing.crossing += 1; }],
+    ["the build's constants (a deploy)", (d) => { d.doorstep_version += "!"; }],
   ]) {
     const z = JSON.parse(JSON.stringify(x));
     mutate(z);
@@ -112,18 +111,60 @@ test("splitGlobal hands back the five leaves' values and a body without them, le
   assert.equal(global.window_settled_as_of, A, "the window's freshness stamp is the same as_of");
   assert.equal(global.outbox_settled_as_of, A, "the outbox tense's stamp is the same as_of");
   assert.equal("as_of" in rest, false);
-  assert.equal("newest_change_at" in rest.copy || "sentence" in rest.copy, false);
+  assert.equal("copy" in rest, false, "copy is a town-wide block, taken out whole");
   assert.equal("settled_as_of" in rest.window.freshness, false);
   assert.equal("settled_as_of" in rest.pending_outbox_freshness, false);
-  // patching the leaves back reproduces the body, byte for byte: what a site does with a carried-over file
+  // patching the leaves and the blocks back reproduces the body, byte for byte: what a site does with a carried-over file
   const patched = JSON.parse(JSON.stringify(rest));
   patched.as_of = global.as_of;
-  patched.copy.newest_change_at = global.copy.newest_change_at;
-  patched.copy.sentence = global.copy.sentence;
   patched.window.freshness.settled_as_of = global.window_settled_as_of;
   patched.pending_outbox_freshness.settled_as_of = global.outbox_settled_as_of;
+  for (const k of TOWN_WIDE_BLOCKS) patched[k] = global.town_wide[k];
   assert.equal(revOf(patched), revOf(x));
   assert.deepEqual(differing(patched, x), []);
+});
+
+// ── GLOBAL-BLOCKS: the town-wide blocks are out of the rev and ride `global` ──────────────────────────────────────────────
+
+test("global carries a version and every town-wide block whole, and each block is the page's own", async () => {
+  const x = await doorstepAt("wright", A, "2026-07-12T09:00:00.000Z");
+  const { global } = splitGlobal(x);
+  assert.equal(global.version, GLOBAL_VERSION);
+  assert.deepEqual(Object.keys(global.town_wide), [...TOWN_WIDE_BLOCKS].sort((a, b) => Object.keys(x).indexOf(a) - Object.keys(x).indexOf(b)), "every block, in the page's order");
+  for (const k of TOWN_WIDE_BLOCKS) assert.deepEqual(global.town_wide[k], x[k], `${k} is carried exactly as the page holds it`);
+  assert.ok(Object.keys(x.bulletin).length && Object.keys(x.town_pulse).length, "the bulletin and the pulse are real blocks, not empty");
+});
+
+test("every town-wide block is the same for two residents, and every other moving top-level key is not asserted here", async () => {
+  // FLIP: add a resident-dependent key (e.g. "counts" or "mail") to TOWN_WIDE_BLOCKS and this goes red.
+  const x = await doorstepAt("wright", A, "2026-07-12T09:00:00.000Z");
+  const y = await doorstepAt("limen", A, "2026-07-12T09:00:00.000Z");
+  for (const k of TOWN_WIDE_BLOCKS) assert.deepEqual(y[k], x[k], `${k} reads no resident input`);
+  for (const k of ["mail", "awaiting", "stamps", "window", "counts"]) assert.notDeepEqual(y[k], x[k], `${k} is the resident's own, so it stays in the rev`);
+});
+
+test("the revision does not move when only a town-wide block moves; it moves when the resident's own content does", async () => {
+  // FLIP: delete `delete body[k]` for the blocks in splitGlobal (src/doorstep-rev.mjs) and every block's case below goes red.
+  const x = await doorstepAt("wright", A, "2026-07-12T09:00:00.000Z");
+  for (const [k, mutate] of [
+    ["copy", (d) => { d.copy.caught_up = !d.copy.caught_up; d.copy.last_crossing_by_timetable += 1; }],
+    ["next_crossing", (d) => { d.next_crossing.crossing += 1; }],
+    ["bulletin", (d) => { d.bulletin.total = (d.bulletin.total ?? 0) + 1; }],
+    ["town_pulse", (d) => { d.town_pulse = { ...d.town_pulse, moved: true }; }],
+    ["psa", (d) => { d.psa.entries = []; d.psa.note = "moved"; }],
+    ["town", (d) => { d.town.deliveries += 1; }],
+  ]) {
+    const z = JSON.parse(JSON.stringify(x));
+    mutate(z);
+    assert.notDeepEqual(z[k], x[k], `${k} was really changed`);
+    assert.equal(revOf(z), revOf(x), `a moved ${k} block does not move the revision`);
+  }
+  const own = JSON.parse(JSON.stringify(x));
+  own.mail.box = `${own.mail.box}!`;
+  assert.notEqual(revOf(own), revOf(x), "the resident's own content still does");
+  const gone = JSON.parse(JSON.stringify(x));
+  delete gone.psa;
+  assert.notEqual(revOf(gone), revOf(x), "a page missing a block is another page, not the same revision");
 });
 
 test("parseKnown takes handle:rev pairs and names the first bad one", () => {
