@@ -209,9 +209,11 @@ async function alertsOf(handles, { nowMs, readers = {} }) {
   catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the house's alerts")})` }] }; }
 }
 
-async function stakesOf(handles, { nowMs, readers = {} }) {
+async function stakesOf(handles, { nowMs, readers = {}, holds = true }) {
   const { stakesFor } = readers.stakesFor ? { stakesFor: readers.stakesFor } : await import("./doorstep-stakes.mjs");
-  return stakesFor(handles, { now: new Date(nowMs) });
+  // POS-1100 (Wright 2026-11-17): everything the house has stamps behind is the house's own view. This read's public half, for any house, carries
+  // the marks only (as before this PR); the aggregate rides only a key that holds one of the house's residents.
+  return stakesFor(handles, { now: new Date(nowMs), ...(holds ? {} : { allocationPage: false }) });
 }
 
 /** The REST skin's inbox bound: the house read has no connector abridgement. */
@@ -279,7 +281,7 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(ashore, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
@@ -437,7 +439,7 @@ async function housePageOf({ household = null, limit = null, offset = null } = {
   // walkers roll is read once, for the page.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(page, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });

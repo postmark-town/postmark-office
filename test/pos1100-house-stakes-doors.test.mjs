@@ -209,3 +209,21 @@ test("THE HOUSE'S OWN VIEW (Wright 2026-11-17): the doorstep carries allocation 
   const keyless = await householdApex({ read: "stakes", args: { handle: R0 } }, null, ctx);
   assert.equal("allocation" in keyless, false, "the read at the keyless segment's args carries none either");
 });
+
+test("household { read: \"house\" } is public for any house: its stakes block carries `allocation` only on a key that holds one of its residents (Wright 2026-11-17)", { skip }, async () => {
+  const holder = { household: HOUSE, handles: new Set([R0]) };
+  const other = { household: "other", handles: new Set([STRANGER]) };
+  for (const full of [false, true]) {
+    const ask = (key) => householdApex({ read: "house", args: { household: HOUSE, ...(full ? { full: true } : {}) } }, key, ctx);
+    const mine = await ask(holder);
+    const stakesOf = (r) => r.stakes;
+    assert.ok(stakesOf(mine)?.allocation, `${full ? "full" : "page"}: the house's own key carries it: ${JSON.stringify(stakesOf(mine))?.slice(0, 200)}`);
+    assert.equal(stakesOf(mine).allocation.total, HOUSE_STAKED);
+    for (const [who, key] of [["keyless", null], ["another house's key", other]]) {
+      const r = await ask(key);
+      assert.ok(r.stakes && "count" in r.stakes || r.stakes, `${who}: the house read answered`);
+      assert.equal("allocation" in r.stakes, false, `${who}, ${full ? "full" : "page"}: no allocation on the public half of a house`);
+      for (const id of ["fixture-pot", "fixture-topic", "their-idea", "own-mark"]) assert.equal(JSON.stringify(r.stakes).includes(id), false, `${who}: ${id} must not ride`);
+    }
+  }
+});
