@@ -230,6 +230,36 @@ test("the debt can only shrink: a read in debt that now takes `limit` and `offse
   assert.deepEqual(paid, [], paid.join("\n"));
 });
 
+// A DOOR HONOURS WHAT IT DECLARES (review of #1085). Declaring `limit` and `offset` in a table proves the table; media declared nothing and said "call again
+// with offset", which is a different failure, and a read can declare both and drop them. So each door is driven with the fields: the town apex hands each
+// list read's fields to its tool (a spy at the dispatcher, after the real validator), and the household apex's own validator is asked and must not refuse
+// either by name. The grammar's behaviour past the door is held where the read is built (page-rows.test.mjs, household-media, household-posts, quest-posts, idea-post 7f).
+import { townApex } from "../src/town-apex.mjs";
+import { householdApex } from "../src/household-apex.mjs";
+
+test("every `list` read's door honours `limit` and `offset`: the town apex delivers them to the read, the household apex does not refuse them", async () => {
+  const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema.properties]));
+  const wrong = [];
+  let checked = 0;
+  for (const [read, [kind]] of Object.entries(TOWN_CLASSES)) {
+    if (kind !== "list") continue;
+    const got = [];
+    const args = { ...(read === "posts" ? { class: "bug" } : {}), limit: 3, offset: 2 };
+    const r = await townApex({ read, args }, null, { schemas, call: async (tool, fields) => { got.push(fields); return { ok: true }; } });
+    checked++;
+    if (r?.error) wrong.push(`town { read: "${read}" } refused limit and offset: ${r.defect}`);
+    else if (got.length !== 1 || got[0].limit !== 3 || got[0].offset !== 2) wrong.push(`town { read: "${read}" } did not deliver limit and offset to its read: ${JSON.stringify(got)}`);
+  }
+  for (const [read, [kind]] of Object.entries(HOUSEHOLD_CLASSES)) {
+    if (kind !== "list") continue;
+    const r = await householdApex({ read, args: { limit: 3, offset: 2 } }, null, { key: null, clone: null, odb: null }).catch((e) => ({ thrown: String(e?.message ?? e) }));
+    checked++;
+    if (/unknown argument "(limit|offset)"/.test(JSON.stringify(r))) wrong.push(`household { read: "${read}" } refused limit or offset by name: ${r.defect}`);
+  }
+  assert.ok(checked >= 20, `the check ran over the door's list reads (${checked})`);
+  assert.deepEqual(wrong, [], wrong.join("\n"));
+});
+
 test("the probe can fail: a list read missing `limit` is found, and the pagers' own fields are read, not assumed", () => {
   // CONTROLS. A table that could not name a bad read would pass by being unable to fail.
   assert.ok(!FIELDS_OF.household("closer").includes("nonesuch") && FIELDS_OF.household("closer").includes("limit"),

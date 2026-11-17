@@ -1437,7 +1437,7 @@ async function householdGlance(args, key, ctx) {
 }
 
 /** The ids of the idea posts, for a stake's kind (an idea is backed through the same ledger target as a mark); `note` says so when the posts could not be read. */
-async function ideaIdSet() {
+export async function ideaIdSet() {
   try {
     const { postsAtOffice } = await import("./town-posts.mjs");
     const ideas = await postsAtOffice({ class: "idea" }, { pointer: false, whole: true }); // POS-732: an internal reader of every idea, not a page of them

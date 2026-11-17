@@ -275,6 +275,11 @@ test("6 · the doorstep segment deep-equals household { read: \"posts\" } at the
     assert.ok(segment.put_up.rows.some((r) => r.id === "wright/office-hours"), "the segment carries no rows, so equality would prove nothing");
     const asked = await householdApex({ read: "posts", ...args }, null, ctx);
     assert.deepEqual(segment, asked, "the segment drifted from the read its `serves` names");
+    // POS-732: the apex hands its `limit` and `offset` to the read, so each list pages (they reached the read nowhere before)
+    const paged = await householdApex({ read: "posts", ...args, limit: 1, offset: 1 }, null, ctx);
+    assert.deepEqual([paged.put_up.limit, paged.put_up.offset, paged.put_up.shown], [1, 1, 1], "the page the caller named, not the preview");
+    assert.equal(paged.put_up.total, asked.put_up.total, "and the total does not move");
+    assert.notDeepEqual(paged.put_up.rows.map((r) => r.id), asked.put_up.rows.slice(0, 1).map((r) => r.id), "offset 1 is the second post, not the first");
   } finally {
     Date.now = realNow;
     await restore();
