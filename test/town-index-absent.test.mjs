@@ -303,6 +303,13 @@ test("every index door answers as the unswitched office did: status, body and as
   for (const [door, headers] of REST) {
     const asked = currentCrossing();
     const b = await rest("absent", door, headers);
+    // POS-1086: a REST doorstep now carries `rev` (src/doorstep-rev.mjs), a key the recorded twin predates. Held to be a rev, then set aside; every other byte is still compared.
+    if (door.startsWith("/doorstep/") && b.status === 200) {
+      const body = JSON.parse(b.body);
+      assert.match(body.rev, /^[0-9a-f]{16}$/, `${door} carries its rev`);
+      delete body.rev;
+      b.body = JSON.stringify(body);
+    }
     const what = `${door}${headers ? " (keyed)" : ""}`;
     same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b, asked);
   }

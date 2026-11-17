@@ -208,7 +208,16 @@ test("every moved REST door answers as the unswitched office did", async (t) => 
   if (skip) return t.skip(skip);
   for (const door of DOORS) {
     const b = await fetch(offices.switched.base + door);
-    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
+    let text = await b.text();
+    // POS-1086: a REST doorstep now carries `rev` (src/doorstep-rev.mjs), a key the unswitched office's golden predates.
+    // It is held here to be present and a rev, then set aside; every other byte is still compared to the golden.
+    if (door.startsWith("/doorstep/") && b.status === 200) {
+      const body = JSON.parse(text);
+      assert.match(body.rev, /^[0-9a-f]{16}$/, `${door} carries its rev`);
+      delete body.rev;
+      text = JSON.stringify(body);
+    }
+    const got = steady({ status: b.status, body: steady(text) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
     if (got !== was) assert.fail(`${door}: ${firstDiff(JSON.parse(got), JSON.parse(was))}`);
   }
 });

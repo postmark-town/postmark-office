@@ -53,6 +53,7 @@ import * as townIndexStore from "./town-index-store.mjs"; // the town index, the
 import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index (POS-268)
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
+import { withRev, revOf, splitGlobal, parseKnown } from "./doorstep-rev.mjs"; // POS-1086: a doorstep's content revision, REST doors only
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
@@ -2210,12 +2211,35 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const handles = listParam(url.searchParams, "handles");
         if (!handles.length || handles.length > DOORSTEPS_PER_READ || handles.some((h) => !/^[a-z0-9-]+$/.test(h)))
           return bounce(res, 400, `name 1 to ${DOORSTEPS_PER_READ} handles`, `GET /doorsteps?handles=a,b,c (lowercase-hyphenated, at most ${DOORSTEPS_PER_READ})`);
+        // POS-1086: each doorstep carries `rev`, its content's hash (doorstep-rev.mjs).
+        // `?known=handle:rev,…` answers `{ handle, unchanged: true, rev }` for a handle whose
+        // rev still matches, in place of its body, and adds `global` (the five as_of-derived
+        // leaves, once) to the response. Without `known` the response is what it was, plus `rev`.
+        let known = null;
+        if (url.searchParams.has("known")) {
+          const p = parseKnown(listParam(url.searchParams, "known"));
+          if (p.refused !== undefined)
+            return bounce(res, 400, `known takes handle:rev pairs, not "${p.refused}"`, "GET /doorsteps?handles=a,b&known=a:0123456789abcdef,b:fedcba9876543210 (a rev is 16 lowercase hex characters, as each doorstep's `rev` says)");
+          known = p.known;
+        }
         const ix = townIndexStore.storeIndexPooled(TOWN_CLONE);
-        return mapLanes(handles, async (handle) => ({
-          handle,
-          doorstep: (await doorstepBundle(handle, { key: null, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix, conversationsOffset: 0 })) ?? null,
-        }))
-          .then((doorsteps) => j(res, 200, { doorsteps }))
+        return mapLanes(handles, async (handle) => {
+          const d = (await doorstepBundle(handle, { key: null, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix, conversationsOffset: 0 })) ?? null;
+          return { handle, doorstep: d };
+        })
+          .then((rows) => {
+            if (!known) return j(res, 200, { doorsteps: rows.map((r) => ({ handle: r.handle, doorstep: withRev(r.doorstep) })) });
+            const first = rows.find((r) => r.doorstep);
+            return j(res, 200, {
+              doorsteps: rows.map(({ handle, doorstep }) => {
+                const rev = doorstep ? revOf(doorstep) : null;
+                return doorstep && known.get(handle) === rev
+                  ? { handle, unchanged: true, rev }
+                  : { handle, doorstep: doorstep && { ...doorstep, rev } };
+              }),
+              global: first ? splitGlobal(first.doorstep).global : null,
+            });
+          })
           .catch((e) => e instanceof townIndexStore.TownIndexUnreachable
             ? bounce(res, 503, e.refused.defect, e.refused.hint)
             : bounceFault(res, "the doorsteps tripped", e));
@@ -2235,7 +2259,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         return doorstepBundle(handle, { key, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix,
           conversationsOffset: url.searchParams.get("correspondence-offset") ?? 0 })
           .then((d) => d
-            ? j(res, 200, d)
+            ? j(res, 200, withRev(d))
             : bounce(res, 404, `no resident "${handle}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/"))
           .catch((e) => e instanceof townIndexStore.TownIndexUnreachable
             ? bounce(res, 503, e.refused.defect, e.refused.hint)
