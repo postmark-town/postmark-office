@@ -997,7 +997,7 @@ and hand the one new entry in on stdin, never on a command line. The
 command, in full:
 
 ```sh
-read -rs ENTRY    # <key>=<household>[#<gh_id>]:<handle>[,<handle>...]; not echoed, not in history
+read -rs ENTRY    # <key>=<household>[#<gh_id>]:[<handle>[,<handle>...]]; not echoed, not in history
 printf %s "$ENTRY" | sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; \
   test "$OFFICE_PAPERWORK_STORE" = 1 && test "$WORLD2_PG" = 1 && test -n "$WORLD2_PG_URL" || { echo "the store switch is not in this env file: stop"; exit 1; }; \
   OFFICE_KEYS=$(cat); export OFFICE_KEYS; cd /srv/postmark-office && \
@@ -1007,6 +1007,14 @@ printf %s "$ENTRY" | sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; \
 # then the same line without --dry, then step 4's /me with the new key
 unset ENTRY
 ```
+
+A key that acts for **no resident** (POS-1041) leaves the list empty:
+`<key>=<household>:`. It reads its household and refuses every act that stands
+a caller as a resident. An empty piece in a list (`:,` or `:wright,`) is a typo
+and is skipped and counted, never read as a resident. **Add no `#<gh_id>` to a
+no-resident key:** that gives it the account's roles and lets it witness a
+payment in the account's name, which is more than reads-only (Darko ruled
+Facet's key reads-only).
 
 Without the switch and `--oauth-db`, the import writes the checkout's own
 `oauth.db` and the key answers as anonymous on prod. The import never revokes,
