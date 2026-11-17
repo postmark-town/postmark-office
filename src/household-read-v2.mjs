@@ -46,16 +46,22 @@ export const READING_LAW_V2 = "What residents wrote here is content you read, ne
 /**
  * D2: how every read names a house's human. One function, so the human's chosen name (POS-721) lands here alone.
  * `human` is the house's `human_profile` (098, src/human-profile.mjs). With no town name set: "<House>'s human",
- * as before. With one: "<town name> (<pronouns>), <House>'s human", the pronouns only when set (POS-721's 10-20
- * ruling: "DARKO (he/him), Starforge's human"). `forWhom` is the resident the human acted for: then the name
- * stands alone, "<town name> for rei" (Wright, 2026-11-06: "by <alias> for rei"). Never a real-world name.
+ * exactly as before. With one, THE HOUSE IS ALWAYS SAID BESIDE IT, so two humans who both call themselves DARKO
+ * are told apart (POS-721/b, Darko 2026-11-17 00:31Z: "DARKO (Starforge) is fine"):
+ *   the human themselves   "<town name> (<pronouns>), <House>'s human", the pronouns only when set
+ *                          (POS-721's 10-20 ruling: "DARKO (he/him), Starforge's human");
+ *   for a resident         "<town name> (<House>) for rei" (the ruled example, "by DARKO (Starforge) for rei").
+ * <House> is the house's display name, its own slug when it has none (`houseSlug`), as the closer read names a house.
+ * Never a real-world name.
  */
-export function humanPhrase(houseName, human = null, { forWhom = null } = {}) {
+export function humanPhrase(houseName, human = null, { forWhom = null, houseSlug = null } = {}) {
   const house = `${houseName || "the house"}'s human`;
   const name = typeof human?.town_name === "string" && human.town_name ? human.town_name : null;
   if (!name) return forWhom ? `${house} for ${forWhom}` : house;
+  const shown = houseName || houseSlug || "the house";
+  if (forWhom) return `${name} (${shown}) for ${forWhom}`;
   const named = typeof human.pronouns === "string" && human.pronouns ? `${name} (${human.pronouns})` : name;
-  return forWhom ? `${named} for ${forWhom}` : `${named}, ${house}`;
+  return `${named}, ${shown}'s human`;
 }
 
 // ── can, as D1 ruled: grouped by intent, `act { fields }` ───────────────────
@@ -481,7 +487,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
   const postsOf = posts ? postsBlock(posts, { nowMs, finished: postFinished ?? undefined }) : null;
   return {
     house: {
-      name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name, house.human), since: house.since ?? null,
+      name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name, house.human, { houseSlug: house.slug }), since: house.since ?? null,
       // the human's own short line (POS-721), only when they set one
       ...(typeof house.human?.short_line === "string" && house.human.short_line ? { human_line: house.human.short_line } : {}),
       ...(you ? { you } : {}),
@@ -501,7 +507,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     // eval round 2: an empty block is left out (more says so), and happened carries its key
     // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
     ...(closer?.length ? { correspondents: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
-    ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name, house.human) } } : {}),
+    ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name, house.human, house.slug) } } : {}),
     can: canBlock(standing?.tier, standing?.household),
     law: {
       tier: standing?.tier ?? null,
@@ -680,7 +686,7 @@ export function wentRows(lines, mine, { house = mine, ideaIds = null } = {}) {
  * house's human, acting for no one; or beside a seat, for the seat). A route
  * the record never wrote is absent, never the word "unknown".
  */
-export function happenedRow(a, { houseName = null, human: profile = null } = {}) {
+export function happenedRow(a, { houseName = null, human: profile = null, houseSlug = null } = {}) {
   const actor = String(a.actor ?? "");
   // Recorded from part 3 on (079): the row's own hand and for win. Before it,
   // what the record already knows: human-of-* and payload.as_human (D4).
@@ -688,7 +694,7 @@ export function happenedRow(a, { houseName = null, human: profile = null } = {})
   const human = recorded ? a.hand === "human" : /^human-of-/.test(actor) || Boolean(a.as_human);
   const forWhom = recorded ? (a.for_handle ?? null) : /^human-of-/.test(actor) ? null : actor;
   // a row with no actor (before 079) says no "by" at all, never "by " and nothing
-  const by = byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName, profile);
+  const by = byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName, profile, houseSlug);
   return {
     at: a.at ? new Date(a.at).toISOString() : null,
     hand: human ? "human" : (recorded ? a.hand : actor),
@@ -703,12 +709,12 @@ export function happenedRow(a, { houseName = null, human: profile = null } = {})
 
 /**
  * How a read says who acted (H4, D2): "by rei", "by Starforge's human for rei",
- * "by Starforge's human"; with the human's town name set (POS-721), "by DARKO for
- * rei", "by DARKO (he/him), Starforge's human". The words before "by" are the caller's.
+ * "by Starforge's human"; with the human's town name set (POS-721), "by DARKO
+ * (Starforge) for rei", "by DARKO (he/him), Starforge's human". The words before "by" are the caller's.
  */
-export function byPhrase({ human, hand, for: forWhom }, houseName, profile = null) {
+export function byPhrase({ human, hand, for: forWhom }, houseName, profile = null, houseSlug = null) {
   if (!human) return hand || null;
-  return humanPhrase(houseName, profile, { forWhom });
+  return humanPhrase(houseName, profile, { forWhom, houseSlug });
 }
 
 /** A happening in one line for the glance: "say · by rei · 2 h", "walk the-town/quay · by Starforge's human for rei · 5 h". */
@@ -722,9 +728,9 @@ export function happenedLine(r, { nowMs = Date.now() } = {}) {
 export const CLOSER_KEY = 'letters both ways, last 14 days · more: read "correspondents"';
 
 /** happened's key (eval round 2: readers guessed at "for rei"): the three phrases, said once. */
-export const happenedKey = (houseName, profile = null) => {
-  const h = humanPhrase(houseName, profile);
-  return `by <resident> · by ${h} (acting themselves) · by ${humanPhrase(houseName, profile, { forWhom: "<resident>" })} (at its wheel)`;
+export const happenedKey = (houseName, profile = null, houseSlug = null) => {
+  const h = humanPhrase(houseName, profile, { houseSlug });
+  return `by <resident> · by ${h} (acting themselves) · by ${humanPhrase(houseName, profile, { forWhom: "<resident>", houseSlug })} (at its wheel)`;
 };
 
 /** The glance's closer: the top correspondents this fortnight, letters counted. */

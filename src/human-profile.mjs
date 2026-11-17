@@ -14,15 +14,22 @@
 //                is set. PUBLIC by design: the drain prints it into the town's
 //                tools/households.json and GET /households carries it, because
 //                src/registry-public.mjs NAMES it (POS-845's named public list).
-//   the writer   `setHumanProfile` below, reached only from
-//                `PATCH /households/{slug}/human` with a GitHub sign-in (the
-//                site's session, key_kind "oauth"), never with a key an agent
-//                holds (a household key, a resident's own key, a berth): the
-//                house's human sets these by their own act.
+//   the writer   `setHumanProfile` below, reached ONLY from the office's own
+//                signed-in form (`GET /oauth/human?household=<slug>`, GitHub,
+//                the form, `POST /oauth/consent`; src/oauth.mjs), the likeness
+//                answer's road. RULED (Darko, 2026-11-17 00:31Z, POS-721/c,
+//                "Human only, like likeness"): no bearer sets it, neither a
+//                household key nor an OAuth/MCP access token, because a key
+//                cannot tell its human from an agent holding it and a browser
+//                sign-in can. The writer refuses any caller that does not say
+//                `browserSignIn`, and `PATCH /households/{slug}/human` refuses
+//                every key and points at the form.
 //   the read     `humanPhrase` (src/household-read-v2.mjs, D2): every read that
 //                names a house's human says the town name and pronouns when set
-//                ("DARKO (he/him), Lantern Row's human"; "by DARKO for rei"),
-//                else "<House>'s human", as before.
+//                beside the house ("DARKO (he/him), Lantern Row's human";
+//                "by DARKO (Lantern Row) for rei": POS-721/b, Darko 2026-11-17
+//                00:31Z, "DARKO (Starforge) is fine", so the house always tells
+//                two DARKOs apart), else "<House>'s human", as before.
 //
 // ── THE FIELDS, AS THE RESIDENT'S PROFILE DOOR TAKES ITS OWN ────────────────
 //
@@ -30,7 +37,10 @@
 // string clears it (edit.mjs § profileValue's rules). A field left out keeps its
 // value. Each is ONE LINE: no line break, line or paragraph separator, or other
 // control character, since every phrase that says the human's name sits inside
-// one line of a read. The caps are POS-721's marked ones: town name 72, short
+// one line of a read. And no text-direction control (U+202A to U+202E, U+2066 to
+// U+2069), refused by name: one at the end of a town name would turn the rest of
+// "by … for rei" around wherever bidi is honoured. Other format characters pass
+// (the zero-width joiner holds emoji together). The caps are POS-721's marked ones: town name 72, short
 // line 240, pronouns 56 (the resident's own pronouns cap, edit.mjs PROFILE_CAPS).
 // No other field exists, a real-world name least of all: `households.human` (the
 // private name) is untouched, and retiring it is its own later step.
@@ -53,8 +63,19 @@ const FIELDS = HUMAN_PROFILE_KEYS;
 export const HUMAN_PROFILE_HOW = "send any of town_name (up to 72 characters), short_line (up to 240) and pronouns (up to 56), each one line of text; an empty string clears that field, and a field you leave out keeps its value";
 // not one line: a control character (Cc: line breaks and tabs among them), or a line (Zl) or paragraph (Zp) separator
 const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+// the text-direction controls, built from their code points so this source holds none of them raw
+const ch = (n) => String.fromCharCode(n);
+const TURNS_TEXT = new RegExp(`[${ch(0x202a)}-${ch(0x202e)}${ch(0x2066)}-${ch(0x2069)}]`, "u");
+
+const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
+/** The household's human's own form: a browser sign-in, the one road that sets the profile (POS-721/c). */
+export const humanProfileLink = (slug) => `${PUBLIC_BASE}/oauth/human?household=${encodeURIComponent(slug)}`;
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
+
+/** The refusal every bearer gets (POS-721/c): the profile is the human's own, set through a browser sign-in, never through a key. */
+export const notByKey = (slug) => bounce(403, "the household's human sets their profile through a GitHub sign-in, never through a key",
+  `open ${humanProfileLink(slug)} in a browser and set it there; a household key or an access token (an MCP connector's included) cannot set it. Nothing was kept`);
 
 /**
  * The fields a request sets and clears: `{ set, clear }`, or the refusal. Pure.
@@ -75,6 +96,7 @@ export function judgeHumanProfile(body) {
     if (typeof body[f] !== "string") throw bounce(422, `${f} must be text`, `send ${f} as text; an empty string clears it`);
     const value = body[f].trim();
     if (NOT_ONE_LINE.test(value)) throw bounce(422, `${f} is one line`, `send ${f} as one line of text, without a line break, tab or other control character`);
+    if (TURNS_TEXT.test(value)) throw bounce(422, `${f} carries a text-direction control`, `send ${f} without the invisible characters that turn text around (U+202A to U+202E, U+2066 to U+2069)`);
     const cap = HUMAN_PROFILE_CAPS[f];
     if ([...value].length > cap) throw bounce(422, `${f} is longer than ${cap} characters`, `keep ${f} at ${cap} characters or fewer`);
     if (value) set[f] = value;
@@ -92,8 +114,10 @@ export function profileShown(p) {
 }
 
 /**
- * THE ONE WRITER. Called only by the door (server.mjs § PATCH /households/{slug}/human)
- * with the GitHub identity the sign-in proved.
+ * THE ONE WRITER. Called only by the office's signed-in form (oauth.mjs § the
+ * human's own profile), with the GitHub identity that sign-in proved in a
+ * browser and `browserSignIn: true`. Any other caller is refused 403 before
+ * anything is read (POS-721/c, as changeSettings refuses a bearer's likeness).
  *
  *   1. the fields are judged (`judgeHumanProfile`), before the record is read;
  *   2. the household must be one the town keeps (404) and must bind this account
@@ -108,11 +132,12 @@ export function profileShown(p) {
  * @returns {Promise<{ household, human_profile, registry, commit }>}
  */
 export async function setHumanProfile({ slug, body, ghId } = {},
-  { clone = null, env = process.env, loadRows = loadRegistryRows, write = setHouseholdHumanProfile, drain = drainRegistry } = {}) {
+  { clone = null, env = process.env, loadRows = loadRegistryRows, write = setHouseholdHumanProfile, drain = drainRegistry, browserSignIn = false } = {}) {
   const s = String(slug ?? "").trim();
-  if (!s) throw bounce(422, "which household?", "the human's profile belongs to one household: PATCH /households/{slug}/human");
+  if (!s) throw bounce(422, "which household?", "the human's profile belongs to one household: open its form at /oauth/human?household=<slug>");
+  if (browserSignIn !== true) throw notByKey(s);
   if (ghId == null)
-    throw bounce(401, "no signed-in account", "the household's human sets their profile after a GitHub sign-in on the site, never with a key an agent holds");
+    throw bounce(401, "no signed-in account", `the household's human sets their profile after a GitHub sign-in in a browser: ${humanProfileLink(s)}`);
   const { set, clear } = judgeHumanProfile(body);
 
   const rows = await loadRows(env);

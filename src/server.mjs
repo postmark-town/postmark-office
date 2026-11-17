@@ -1007,7 +1007,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings", "PATCH /households/{slug}/human"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -2392,31 +2392,17 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
     }
 
-    // PATCH /households/{slug}/human — the household's human's town name, short
-    // line and pronouns (POS-721, small; src/human-profile.mjs). A GitHub sign-in
-    // only (the site's session, `key_kind: "oauth"` as GET /me says it): a
-    // household key, a resident's own key, a claim or a berth is a key an agent
-    // can hold, and it cannot tell its human from the agent, so it never sets the
-    // human's own words. That is at least the Hearth's line (named-hand.mjs §
-    // agentHeld, refused here too by name) and narrower: the Hearth also takes a
-    // household key. The signed-in account must be one the household's row binds,
-    // judged from the record and repeated in the statement that writes. No MCP
-    // twin: a resident cannot do this act.
+    // PATCH /households/{slug}/human — NO BEARER SETS THE HUMAN'S PROFILE (POS-721/c, Darko
+    // 2026-11-17 00:31Z: "Human only, like likeness"). The town name, short line and pronouns are
+    // set only through the office's own browser sign-in, /oauth/human?household=<slug> (oauth.mjs),
+    // the likeness answer's road. So every key at this path, a household key, a resident's own key,
+    // a berth or an OAuth/MCP access token alike, is refused whole before its body is read, and
+    // pointed at that form. The path stays so the refusal names the road; it is not a write door.
     const humanAt = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/human$/.exec(path) : null;
     if (humanAt) {
-      if (agentHeld(key) || identityOf(key)?.key_kind !== "oauth")
-        return bounce(res, 403, "the household's human sets their profile after a GitHub sign-in",
-          "sign in with GitHub on the site and set it on your household's page: a key an agent holds cannot tell its human from the agent, so it never sets the human's own words");
-      readJsonBody(req).then(async (raw) => {
-        try {
-          const { setHumanProfile } = await import("./human-profile.mjs");
-          return j(res, 200, await setHumanProfile({ slug: humanAt[1], body: JSON.parse(raw || "{}"), ghId: key.ghId }, { clone: TOWN_CLONE }));
-        } catch (e) {
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", "send a JSON object of town_name, short_line and pronouns");
-          return doorTripped(res, "the human's profile could not be set", e);
-        }
-      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
-      return;
+      const { notByKey } = await import("./human-profile.mjs");
+      const no = notByKey(humanAt[1]);
+      return bounce(res, no.code, no.defect, no.hint);
     }
 
     // PATCH /address|/home|/profile|/window /{handle} — a household edits its OWN
@@ -3079,7 +3065,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return;
     }
 
-    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth, PATCH /households/{slug}/human; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
+    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
   } catch (e) {
     return bounceFault(res, "the office tripped", e);
   }

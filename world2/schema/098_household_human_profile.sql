@@ -20,9 +20,10 @@
 -- ── WHO WRITES IT ───────────────────────────────────────────────────────────
 --
 -- ONE writer, `src/human-profile.mjs § setHumanProfile` (the store write is
--- `src/registry-store.mjs § setHouseholdHumanProfile`), reached only by a
--- GitHub sign-in of an account the row binds (`PATCH /households/{slug}/human`,
--- the site's signed-in session; no agent-held key). Not in registry-store.mjs's
+-- `src/registry-store.mjs § setHouseholdHumanProfile`), reached only by the
+-- office's own browser sign-in of an account the row binds (`/oauth/human`,
+-- the likeness answer's road; POS-721/c, Darko 2026-11-17: "Human only, like
+-- likeness"). No key sets it, an OAuth/MCP access token included. Not in registry-store.mjs's
 -- `COLUMNS`, for 050's and 081's reason: a ceremony's upsert rebuilds a row from
 -- what it knew and would erase the profile.
 --
@@ -52,8 +53,9 @@
 --   node tools/registry-drain.mjs --check                                 -- still byte-equal
 --
 -- This was 091 on its branch; 092–097 reached the train first, so it is 098,
--- the next number free on the train and in every open office PR (095 is #1022's,
--- 090 is #906's).
+-- the next number free on the train. Open office PRs hold 090 (#906) and 095
+-- (#1022), and #1074 (POS-1003) also adds a 098: whichever of the two merges
+-- second renumbers to 099, with its LANDED key and this header.
 --
 -- No new grants: `office_api` already holds UPDATE on `households` (019).
 

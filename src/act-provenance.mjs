@@ -13,8 +13,8 @@
 // | the human acts as the human   | human | —    | site  | "by Starforge's human"            |
 //
 // The reads' words are household-read-v2.mjs § humanPhrase's. Once the human
-// sets a town name (POS-721, src/human-profile.mjs) they say it instead:
-// "by DARKO for rei", "by DARKO (he/him), Starforge's human". The record's
+// sets a town name (POS-721, src/human-profile.mjs) they say it, with the house
+// beside it: "by DARKO (Starforge) for rei", "by DARKO (he/him), Starforge's human". The record's
 // triple is the same either way: the name is read at the read, never stored.
 //
 // THE ROUTE IS THE DOOR'S, set once where the transport is known (server.mjs §

@@ -123,9 +123,8 @@ function firstDiff(a, b) {
 // the bare ask (RECORDED_AS). The read's line on the bare menu says so.
 const CHANGED = {
   // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
-  // POS-721: and the household's human's own profile door, after the settings door.
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
-    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings","PATCH /households/{slug}/human"]'],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings"]'],
     // WLD-28: the manifest's reads list gains the household's settings read (GET /households/{slug}/settings), after /household
     ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="'],
     // and it names the read among the keyed ones: it answers 401 without a key (test/manifest-keyed-reads.test.mjs)

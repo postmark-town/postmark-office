@@ -1345,7 +1345,7 @@ async function householdGlance(args, key, ctx) {
   const lookback = new Date(nowMs - v2.LOOKBACK_MS).toISOString();
   const actors = [...ashore, `human-of-${house.slug}`];
   const acts = await soft(() => ix.houseActs(houseKey, { actors, ...(since?.hw ? { afterId: since.hw } : { sinceIso: since ? new Date(since.ms).toISOString() : lookback }) }));
-  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null })) : null;
+  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null, houseSlug: house.slug })) : null;
   const mine = new Set(ashore);
   const lines = await soft(() => ix.stampLinesSince(since ? new Date(since.ms).toISOString() : lookback));
   const went = lines ? v2.wentRows(lines.rows, mine, { house: house.members }) : null;
@@ -1508,7 +1508,7 @@ async function householdDeep(what, f, args, key, ctx) {
     const acts = await ix.houseActs(`hh:${house.slug}`, { actors, beforeId: f.before ?? null, ...(named ? { verbs: hp.PUBLIC_HOUSE_VERBS } : {}), ...(since?.hw ? { afterId: since.hw } : { sinceIso: after }) });
     // a public read keeps only the public verbs: asked of the store above, and held again here, so a store that ignored the ask still cannot leak a private act
     const visible = named ? acts.rows.filter((a) => hp.PUBLIC_VERB_SET.has(String(a.action)) && hp.isPublicAct(a)) : acts.rows;
-    const rows = hp.byHand(visible.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null })), judgedHand.hand);
+    const rows = hp.byHand(visible.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null, houseSlug: house.slug })), judgedHand.hand);
     const next = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: acts.hw });
     const out = { read: "happened", household: house.slug, ...(named ? { public: true } : {}), ...(judgedHand.hand ? { hand: judgedHand.hand } : {}), ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor: next };
     out.complete = out.complete && !acts.cut;
