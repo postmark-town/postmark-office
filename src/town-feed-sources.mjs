@@ -26,7 +26,7 @@ async function allPosts(cls, { postsAtOffice, nowMs }) {
   const out = [];
   let offset = 0;
   for (let guard = 0; guard < 50; guard++) {
-    const r = await postsAtOffice({ class: cls, limit: 200, offset }, { now: nowMs, pointer: false });
+    const r = await postsAtOffice({ class: cls, limit: 200, offset }, { now: nowMs, pointer: false, hold: false }); // POS-732: an internal reader of every post, not a connector answer, so no cap holds its pages
     out.push(...(r?.posts ?? []));
     if (r?.complete !== false || r?.next_offset == null) break;
     offset = r.next_offset;

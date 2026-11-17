@@ -124,3 +124,35 @@ test("household h0 end to end: through the MCP dispatcher, unset and h0 are byte
   assert.equal(JSON.stringify(h0), JSON.stringify(unset));
   assert.ok(!JSON.stringify(unset).includes("read_shape"));
 });
+
+// ── POS-1094: v2 is the MCP door's default once the box sets it; REST stays the full read ──
+//
+// Until 2026-11-16 these held "unset is today's read" and nothing set v2 at the door. The box's switches
+// (WORLD_READ_SHAPE=v2, HOUSEHOLD_READ_SHAPE=v2) are the ship's step; what a PR can hold is that, set, the
+// MCP door answers v2 and says it is the default, a call can still ask for v1, and REST is untouched.
+
+test("world: with WORLD_READ_SHAPE=v2 the MCP door's bare call is the v2 glance and says it is the default; read_shape: v1 is the older read; REST is the v0 read", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { DEFAULT_LINE } = await import("../src/read-grammar.mjs");
+  const full = await worldApex({ handle: WHO }, KEY, { roll: [] });
+  const rest = await under("WORLD_READ_SHAPE", "v2", () => worldApex({ handle: WHO }, KEY, { roll: [] }));
+  assert.equal(JSON.stringify(rest), JSON.stringify(full), "REST answers the v0 read whole, whatever the box sets");
+  const mcp = await under("WORLD_READ_SHAPE", "v2", () => callTool("world", { handle: WHO }, { key: KEY, door: "mcp" }));
+  assert.equal(mcp.read_shape, "v2", "the MCP door's bare call is the glance");
+  assert.ok(mcp.more.includes(DEFAULT_LINE), `the glance says it is the default: ${mcp.more}`);
+  const older = await under("WORLD_READ_SHAPE", "v2", () => callTool("world", { handle: WHO, read_shape: "v1" }, { key: KEY, door: "mcp" }));
+  assert.equal(older.read_shape, "v1", "read_shape: v1 asks for the older read");
+  const unset = await callTool("world", { handle: WHO, read_shape: "v2" }, { key: KEY, door: "mcp" });
+  assert.ok(!unset.more.includes(DEFAULT_LINE), "asked for per call with no default set, it claims no default");
+});
+
+test("household: with HOUSEHOLD_READ_SHAPE=v2 GET /household's ctx answers the older read whole, and the MCP door's call is the glance (or the glance's own refusal)", async () => {
+  const ctx = { worldBlock, slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED };
+  const full = await householdApex({}, HKEY, ctx);
+  const rest = await under("HOUSEHOLD_READ_SHAPE", "v2", () => householdApex({}, HKEY, ctx));
+  assert.equal(JSON.stringify(rest), JSON.stringify(full), "REST answers the older read whole under v2");
+  const older = await under("HOUSEHOLD_READ_SHAPE", "v2", () => callTool("household", { read_shape: "v1" }, { key: HKEY, door: "mcp" }));
+  assert.equal(older.read_shape, undefined, "read_shape: v1 is the older read");
+  assert.ok(Array.isArray(older.acts), "with its acts");
+  const mcp = await under("HOUSEHOLD_READ_SHAPE", "v2", () => callTool("household", {}, { key: HKEY, door: "mcp" }));
+  assert.notEqual(JSON.stringify(mcp), JSON.stringify(older), "the MCP door's bare call is no longer the older read");
+});
