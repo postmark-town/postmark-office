@@ -159,6 +159,26 @@ export async function bundleSpan(fn) {
   finally { try { const d = nowMs() - t; tm.bundle.n += 1; tm.bundle.sum += d; if (d > tm.bundle.max) tm.bundle.max = d; } catch { /* */ } }
 }
 
+/**
+ * POS-1086 step 1: time one SEGMENT of a bundle's composition under the current request (the doorstep's core, stances, rulings, ...), into
+ * `bundle.seg[name] = { n, sum, max }`. Measurement only: the callback's result or exception is returned or thrown untouched; inert with no request in scope.
+ * `name` is chosen from a fixed set by the caller (never from a request). A segment inside a nested bundle call counts under the same request.
+ */
+export async function segSpan(name, fn) {
+  const tm = currentTiming();
+  if (!tm) return fn();
+  const t = nowMs();
+  try { return await fn(); }
+  finally {
+    try {
+      const d = nowMs() - t;
+      const seg = (tm.bundle.seg ??= {});
+      const s = (seg[name] ??= { n: 0, sum: 0, max: 0 });
+      s.n += 1; s.sum += d; if (d > s.max) s.max = d;
+    } catch { /* */ }
+  }
+}
+
 // ── THE SUMMARIES ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A lease group as the record states it. */
@@ -166,7 +186,8 @@ function leaseGroup(g) {
   if (!g) return null;
   return { n: g.n, failed: g.failed, acquire_ms: { sum: round(g.acquire_sum), max: round(g.acquire_max) }, held_ms: { sum: round(g.held_sum), max: round(g.held_max) }, failed_wait_ms: round(g.failed_wait) };
 }
-const bundleGroup = (b) => (b && b.n ? { n: b.n, sum_ms: round(b.sum), max_ms: round(b.max) } : null);
+const segGroup = (seg) => Object.fromEntries(Object.entries(seg).map(([k, s]) => [k, { n: s.n, sum_ms: round(s.sum), max_ms: round(s.max) }]));
+const bundleGroup = (b) => (b && b.n ? { n: b.n, sum_ms: round(b.sum), max_ms: round(b.max), ...(b.seg ? { seg: segGroup(b.seg) } : {}) } : null);
 
 /**
  * What a WORKER reports back with its answer (bounded numbers, no labels): the take and done instants, the bundle and the leases it took. `taken` and `done`
