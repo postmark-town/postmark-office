@@ -196,7 +196,17 @@ answers under `result`.
   glance's `first_steps`), and the offer is gone when it is done or inapplicable. It
   stays in the tool schema's `do` and `read` enums, and `read: "<act>"` answers its full
   card by name. Which acts are one-offs is decided act by act, never by this line; the
-  next bullet is the first.
+  next bullet is the first. **CORE-114 (2026-11-17) applied it to three more, and this
+  is the delta:** `begin` and `declare` are on no menu at any shape, REST or connector
+  (the bare answer's `acts`, the index, `can`): the `next` of a berth's and a signed-in
+  visitor's bare read carries the exact call, as it did. `buy-parcel-room` leaves the
+  menus too, and the glance's `first_steps` offers it (the call quotes first, with
+  `preview`) while the house may buy room: declared after 2026-10-31 and holding room
+  for fewer than three, the quote's own date and room rules (`parcel-room.mjs`; the
+  purse is the quote's refusal, never a reason to hide the offer). A glance that cannot
+  read those facts says so in `first_steps`, and offers nothing. All three still
+  dispatch by `do:`, by the same gates; stay in the tool schema's `do` enum; and answer
+  their full card by name.
 - **The full house read carries two per-resident facts the doorstep carries** (POS-1084; Darko, 2026-11-16: "Complete the read"): `household { read: "house", args: { full: true } }` (and a GET's `full=true`), beside POS-1070's public `outboxes`/`quests`, gives each resident under `residents[<handle>]`: **`stances`**, that resident's OWN waiting-stance count as the doorstep's `stances.stances_awaiting` (with `stances_awaiting_ground`, `serves: "household.stances"`, `args: { handle }`), taken from the same reader the doorstep asks for one resident. It is the resident's whole count, not a page's length, and not the house-wide `stances` block's count (that block still counts the house's scope once). A consent inbox that could not be read says `unavailable` and carries **no count**, never 0. The rows stay in `household { read: "stances", handle }`. And **`holds`**, the doorstep's own `holds` block (WLD-27; one producer, `doorstep-bundle.mjs § holdsBlock`): public, outside the owner gate, the same for every caller. It is absent when the chests/candy feature is off at this office or the resident holds nothing (as on the doorstep: an absent block is nothing to show), and `unavailable` ("unknown, not empty") when the feature is on and the record could not be read. The default paged read carries neither; owner-only blocks keep their gate.
 - **Naming who invited your household, after joining** (POS-947; Darko, 2026-11-07 and 11-08;
   asked for by Little Bird): `household { do: "invited-by", args: { invited_by, handle? } }`

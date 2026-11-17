@@ -2221,8 +2221,14 @@ export function injectedComplete(handle, { house = null } = {}) {
  * say "you have not published an idea" on the strength of a hydration blip,
  * and it is the row that PAYS.
  */
-export function firstIdeaStanding(handle, { house = null } = {}) {
+export function firstIdeaStanding(handle, { house = null, posts } = {}) {
   try {
+    // THE IDEAS ARE POSTS NOW (POS-854): `posts` is the household's idea posts as `[{ by, date }]`, read at the
+    // caller's async edge (idea-store.mjs § ideaPostDatesBy), because this function is synchronous. A post that
+    // was a mark carries the mark's own date, so converting a mark never moves the day the quest was met.
+    // `false` is "the posts could not be read": null, never a quiet "you have not published an idea" on the strength
+    // of a hiccup, which is the failure the paragraph above exists to refuse. `undefined` is a caller that did not ask.
+    if (posts === false) return null;
     const tank = ideasTank();
     if (tank.source !== "store") return null;
     // `house` is the household's residents, which the caller reads from the
@@ -2234,7 +2240,10 @@ export function firstIdeaStanding(handle, { house = null } = {}) {
     // with `[handle]` left the suite green. A branch a mutation can delete
     // silently is a branch nothing was testing.
     const residents = house ?? [handle];
-    const ours = tank.ideas.filter((i) => residents.includes(i.by));
+    // marks then posts, each ordered by date (a missing date first, as the tank orders it), merged the same way
+    const dated = (a, b) => String(a.date ?? "").localeCompare(String(b.date ?? ""));
+    const ours = [...tank.ideas.filter((i) => residents.includes(i.by)),
+      ...(posts ?? []).filter((p) => residents.includes(p.by))].sort(dated);
     // `ideasTank` orders by the mark's own date then id, so the first match is
     // the household's earliest — the quest is "once per household, ever", so
     // the day it was met is the day the FIRST one stood, not the newest.
@@ -2630,7 +2639,10 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   // boolean and the standing join wants the date beside it.
   // The household's residents from the store's registry (POS-342), read here at
   // the async edge and handed down: `firstIdeaStanding` is synchronous.
-  const idea = firstIdeaStanding(handle, { house: (await householdOf(handle))?.residents ?? null });
+  const ideaHouse = (await householdOf(handle))?.residents ?? null;
+  // the household's idea POSTS (POS-854), `false` when the store cannot say
+  const ideaPosts = await import("./idea-store.mjs").then((m) => m.ideaPostDatesBy(ideaHouse ?? [handle])).catch(() => false);
+  const idea = firstIdeaStanding(handle, { house: ideaHouse, posts: ideaPosts });
   // ── AND ONE WORLD READ FOR THE `walk-the-world` ROW (#2773) ───────────────
   //
   // `worldSitedFor` is the three-way the disclosure guard asks for — true,
