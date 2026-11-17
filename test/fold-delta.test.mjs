@@ -33,8 +33,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -505,7 +505,7 @@ test("REGISTRY REFRESH · HEAD one commit past worldSha still CARRIES, and stamp
   // way the CLI builds it, at `worldSha`, while HEAD sits one households-only
   // commit ahead. Before the repair this reds with `canon-register-sha-mismatch`
   // and the crossing publishes nothing.
-  const dir = mkdtempSync(join(tmpdir(), "fold-carry-world-"));
+  const dir = tempDir("fold-carry-world-");
   try {
     mkdirSync(join(dir, "tools"), { recursive: true });
     mkdirSync(join(dir, "WORLD", "marks", "someone", "else-entirely"), { recursive: true });

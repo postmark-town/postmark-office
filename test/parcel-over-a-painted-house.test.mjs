@@ -43,17 +43,17 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXEC = join(ROOT, "src", "leave-exec.mjs");
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-3025-repo-"));
-const scratch = mkdtempSync(join(tmpdir(), "postmark-3025-db-"));
+const repo = tempDir("postmark-3025-repo-");
+const scratch = tempDir("postmark-3025-db-");
 after(() => { sweep(repo); sweep(scratch); });
 
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

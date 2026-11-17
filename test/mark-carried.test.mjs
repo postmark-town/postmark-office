@@ -23,8 +23,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -35,7 +35,7 @@ import { twinReceipt, receiptTreeOnly } from "../src/world2-serve.mjs";
 
 // ── the world ────────────────────────────────────────────────────────────────
 
-const world = mkdtempSync(join(tmpdir(), "postmark-mark-carried-"));
+const world = tempDir("postmark-mark-carried-");
 after(() => rmSync(world, { recursive: true, force: true }));
 let clock = Date.parse("2026-09-20T06:00:00Z");
 const git = (...a) => execFileSync("git", ["-C", world, ...a], {

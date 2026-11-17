@@ -12,8 +12,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -172,7 +172,7 @@ const NO_S93 = existsSync(WORLD_CLONE) && has(WORLD_CLONE, "settlement/S93") && 
   ? false : "needs the world clone with settlement/S93 and the town clone with 8124b1dc";
 
 test("S93 back-fills from its tag: the town sha its message names, the register at that sha, and a fold equal to the committed one", { skip: NO_S93, timeout: 600000 }, async () => {
-  const scratch = mkdtempSync(join(tmpdir(), "backfill-s93-"));
+  const scratch = tempDir("backfill-s93-");
   const W = join(scratch, "w"), T = join(scratch, "t");
   const clone = (src, dst) => execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "clone", "-q", "--shared", "--no-checkout",
     "-c", "core.autocrlf=false", "-c", "core.longpaths=true", src, dst], { stdio: "ignore" });

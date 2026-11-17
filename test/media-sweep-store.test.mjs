@@ -8,8 +8,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, dirname } from "node:path";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -31,7 +31,7 @@ const dirs = [];
 test.after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
 function repo(files) {
-  const dir = mkdtempSync(join(tmpdir(), "media-sweep-store-repo-"));
+  const dir = tempDir("media-sweep-store-repo-");
   dirs.push(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: ["ignore", "pipe", "pipe"] });
   for (const [p, body] of Object.entries(files)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), body); }

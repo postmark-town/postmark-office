@@ -15,11 +15,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const tmp = mkdtempSync(join(tmpdir(), "pos1057-parse-"));
+const tmp = tempDir("pos1057-parse-");
 const repo = join(tmp, "world");
 const git = (...a) => execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", ...a], { encoding: "utf8" });
 mkdirSync(join(repo, "WORLD"), { recursive: true });
