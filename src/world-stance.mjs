@@ -679,9 +679,84 @@ function stanceCandidateOf(row) {
 // that answered `[]` instead would tell a resident nothing awaits their word
 // while a sketch sat on their ground, which is the exact failure the-late-welcome
 // exists to prevent.
+//
+// ── THE SLOW HALF IS KEPT UNTIL ITS INPUTS MOVE (POS-1057) ───────────────────
+//
+// Darko, 2026-11-17 09:44 EST: "instead of cell by cell, could we just sacrifice big O space instead of time by having
+// everything precomputed? like each settlement it's very clear which marks are new". Every doorstep read this whole world
+// again: canon's marks copied, every locked claim fetched with its geometry (732 KB a read on 2026-11-17), every footprint
+// rasterized. A bulk /doorsteps page did it 25 times.
+//
+// What is kept, per office thread, in memory: canon's mark objects, the first-laid instants and claim chains, and each
+// canon mark's footprint record. The marks' rectangles and ages hang off those same objects (`RECTS` below,
+// town-stance.mjs § elderByFirstLaid), so keeping the objects keeps those too.
+//
+// What it is keyed on, so a kept answer is never an old one:
+//   - the published state object (one per blessed commit: world-branches.mjs § readJsonAtRef);
+//   - the ids of the live claims, which with canon's ids are the slugs the first-laid read names;
+//   - LOCKED_PRINT, read from the store on EVERY call: how many locked claims there are, the newest decision, and the sum
+//     of their row versions (`xmin`, which Postgres moves on every write to a row). So a claim locked outside a
+//     settlement moves it (19 of 183 locks from 11-10 to 11-17 were), and so does a locked row changed in place.
+//
+// What is never kept: the live claims (the-late-welcome needs each read's own) and the stance words.
+//
+// A store, or a test's stub, that cannot answer LOCKED_PRINT gets no memo: the read builds everything, as it always did.
+const LOCKED_PRINT = `
+  SELECT count(*)::int AS n,
+         max(decided_at) AS newest,
+         sum(xmin::text::bigint)::text AS writes
+    FROM claims
+   WHERE status = 'locked'`;
+
+async function lockedPrint(env) {
+  const r = await stanceQuery(LOCKED_PRINT, [], env);
+  const row = r?.rows?.length === 1 ? r.rows[0] : null;
+  if (!row || !Number.isInteger(row.n) || (row.n > 0 && (row.writes === null || row.writes === undefined))) return null;
+  const newest = row.newest instanceof Date ? row.newest.toISOString() : String(row.newest ?? "");
+  return `${row.n}|${newest}|${row.writes ?? ""}`;
+}
+
+const KEPT = new Map(); // repo → { built, loading }, each { state, liveKey, print, … }
+const RECTS = new WeakMap(); // the engine's geometry module → (a mark object → its rectangle); read in stanceInbox
+/** Tests only: forget the kept stance world. */
+export function __forgetStanceWorldForTest() { KEPT.clear(); }
+
+/** The slow half, built: canon's marks as every reader sees them (published, and frozen, since reads share them), and the locked claims folded. */
+async function buildStanceWorld({ state, liveKey, print, ids, env }) {
+  const laid = await stanceQuery(FIRST_LAID_SELECT, [ids], env);
+  if (laid.unreachable) return { unreachable: laid.unreachable };
+  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
+  const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
+  for (const r of laid.rows ?? []) {
+    if (!r?.slug) continue;
+    const id = String(r.slug);
+    if (!chainOf.has(id)) chainOf.set(id, []);
+    chainOf.get(id).push({ id: r.id, geometry: r.geometry ?? null, decided_at: r.decided_at ?? null });
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (!firstLaid.has(id) || at < firstLaid.get(id)) { firstLaid.set(id, at); originOf.set(id, r.id); }
+  }
+  const canon = (state?.marks ?? []).filter((m) => m?.id).map((m) => Object.freeze({ ...m, published: true }));
+  return { state, liveKey, print, canon, isCanon: new WeakSet(canon), firstLaid, originOf, chainOf,
+    wholeMark: elderByFirstLaid(firstLaid), canonRecords: new WeakMap() };
+}
+
+/** The slow half for this read: the kept one when its three keys all stand, else a build, shared by the reads that arrive while it runs. */
+function stanceWorldFor(repo, want) {
+  if (want.print === null) return buildStanceWorld(want);   // nothing says the locked claims stood still, so nothing is kept
+  const is = (k) => Boolean(k) && k.state === want.state && k.liveKey === want.liveKey && k.print === want.print;
+  const slot = KEPT.get(repo) ?? {};
+  if (is(slot.built)) return slot.built;
+  if (is(slot.loading)) return slot.loading.promise;
+  const loading = { state: want.state, liveKey: want.liveKey, print: want.print, promise: null };
+  const settle = (built) => { if (KEPT.get(repo)?.loading === loading) KEPT.set(repo, built && !built.unreachable ? { built } : { built: slot.built }); };
+  loading.promise = buildStanceWorld(want).then((built) => { settle(built); return built; }, (e) => { settle(null); throw e; });
+  KEPT.set(repo, { built: slot.built, loading });
+  return loading.promise;
+}
+
 export async function worldForStances(repo, { dbPath: _dbPath = null, env = process.env } = {}) {
   const state = publishedState(repo).state;
-  const canon = state?.marks ?? [];
   // The fold's own handle → household map (WORLD/households.json, carried into
   // the state since world#150). Stances group by HOUSEHOLD (POS-361, Q6); a
   // handle the map does not name is its own household.
@@ -694,11 +769,18 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
     .map(stanceCandidateOf)
     .filter((m) => m && m.at && m.extent);
 
+  // THE SLOW HALF (POS-1057, the header above): kept while the published state, the live ids and the locked claims stand.
+  // The slugs the first-laid read names are the live claims' and canon's, in the order the marks below take.
+  const ids = [...new Set([...live.map((m) => String(m.id)), ...(state?.marks ?? []).filter((m) => m?.id).map((m) => String(m.id))])];
+  const print = state && typeof state === "object" ? await lockedPrint(env) : null;
+  const kept = await stanceWorldFor(repo, { state, liveKey: live.map((m) => m.id).join("\n"), print, ids, env });
+  if (kept.unreachable) return { unreachable: kept.unreachable };
+
   // Canon wins an id collision: a drained draft is in both, and the published
   // copy is the one everybody else can see.
   const byId = new Map();
   for (const m of live) byId.set(m.id, m);
-  for (const m of canon) if (m?.id) byId.set(m.id, { ...m, published: true });
+  for (const m of kept.canon) byId.set(m.id, m);
   const marks = [...byId.values()];
 
   // SENIORITY IS THE FIRST-LAID DATE (postmark#4450; POS-449, "an amend does not
@@ -714,19 +796,9 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // `firstClaimedBySlug` dates one (mark-render.mjs § firstClaimInstant): its
   // record date, else its submitted_at. A slug with no locked claim (a draft
   // not yet cleared) keeps its own date, as before.
-  const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
-  if (laid.unreachable) return { unreachable: laid.unreachable };
-  const { firstClaimInstant, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
-  const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
-  for (const r of laid.rows ?? []) {
-    if (!r?.slug) continue;
-    const id = String(r.slug);
-    if (!chainOf.has(id)) chainOf.set(id, []);
-    chainOf.get(id).push({ id: r.id, geometry: r.geometry ?? null, decided_at: r.decided_at ?? null });
-    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
-    if (!Number.isFinite(at)) continue;
-    if (!firstLaid.has(id) || at < firstLaid.get(id)) { firstLaid.set(id, at); originOf.set(id, r.id); }
-  }
+  // The read and its fold are `buildStanceWorld`'s, above.
+  const { firstLaid, originOf, chainOf } = kept;
+  const { footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
   // AND ON THE CELLS TWO MARKS SHARE (POS-571). The fold reads seniority cell by
   // cell wherever a mark's footprints say which of its cells are new (world
   // consent.mjs § seniorAtContact: "an expansion is a newcomer on its new
@@ -745,15 +817,21 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   const recordOf = (m) => {
     const id = String(m?.id ?? "");
     if (records.has(id)) return records.get(id);
-    const at = firstLaid.get(id);
-    const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
-    const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
-    const rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
-      date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
+    // a canon mark's record is built once for the kept world; every other mark's (a live claim's) for this read only
+    const canonMark = m !== null && typeof m === "object" && kept.isCanon.has(m);
+    let rec = canonMark ? kept.canonRecords.get(m) : undefined;
+    if (!rec) {
+      const at = firstLaid.get(id);
+      const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
+      const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
+      rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
+        date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
+      if (canonMark) kept.canonRecords.set(m, rec);
+    }
     records.set(id, rec);
     return rec;
   };
-  const elder = elderByFirstCover({ firstCoverOrder, recordOf, wholeMark: elderByFirstLaid(firstLaid) });
+  const elder = elderByFirstCover({ firstCoverOrder, recordOf, wholeMark: kept.wholeMark });
 
   // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
   // own test, the same one world.mjs uses for an act's anchor (held.mjs §
@@ -971,9 +1049,11 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   if (!mineHandles.size) return { candidates: [], standing: [], mine: [] };
   const geom = await stanceGeometry(repo);
   if (!geom) return { candidates: [], standing: [], mine: [], unavailable: "the world's own geometry could not be read — overlap is the engine's answer, never this door's" };
-  // ONE RECTANGLE PER MARK, for this read (POS-1057): the engine's own `rect`, asked once of each mark and kept beside the mark
-  // object, where every pair used to ask it again of both sides.
-  const rects = new WeakMap();
+  // ONE RECTANGLE PER MARK (POS-1057): the engine's own `rect`, asked once of each mark and kept beside the mark object, where
+  // every pair used to ask it again of both sides. Kept per engine module, so canon's marks (the same objects from read to
+  // read while `worldForStances` keeps them) are asked once, and a live claim's fresh object is asked once a read.
+  let rects = RECTS.get(geom);
+  if (!rects) RECTS.set(geom, rects = new WeakMap());
   const rectOf = (m) => {
     if (m === null || typeof m !== "object") return geom.rect(m);
     let r = rects.get(m);
