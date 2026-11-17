@@ -26,8 +26,9 @@
 //   · An ACT: a write-shaped call (mcp.mjs § writeShaped) or a plain-HTTP write
 //     (POST, PUT, PATCH, DELETE). A refused read is not an act.
 //   · A REFUSAL: a bounce. A 5xx is the office's own fault, not a refusal of the
-//     act, and a 429 is the rate limit, charged before the act is looked at; neither is
-//     recorded. A bounce that names no code is recorded with none.
+//     act, a 429 is the rate limit, charged before the act is looked at, and a 413 is a
+//     body refused unread, so no act was seen; none of the three is recorded. A bounce
+//     that names no code is recorded with none.
 //   · A KNOWN HOUSEHOLD: a call whose key resolves to no household has no one to
 //     read it back to, so nothing is kept.
 //   · "ON WHAT" is the call's identifying fields only (TARGET_FIELDS), each cut to
@@ -96,7 +97,8 @@ export function targetOf(args) {
 export function isKept(code) {
   if (code == null) return true;
   if (!isHttpStatus(code)) return false;
-  return code >= 400 && code < 500 && code !== 429;
+  // 413: the body was refused unread, so no act was ever seen to name (body-limits-loopback holds that a too-large body changes no table)
+  return code >= 400 && code < 500 && code !== 429 && code !== 413;
 }
 
 /** The refusal a JSON-RPC answer carries, `{ code, defect, hint }`, or null when it does not refuse as a tool result. */
@@ -236,7 +238,7 @@ export async function readOwnRefusals(key, { limit, offset, handle } = {}, { env
         ORDER BY at DESC, id DESC LIMIT $4 OFFSET $5`, [mine, RETENTION_DAYS, named, lim + 1, off])).rows, { env, household: mine });
     const more = rows.length > lim;
     return { household: mine, refusals: rows.slice(0, lim).map(refusalRow), count: Math.min(rows.length, lim),
-      ...(more ? { more: true, next_offset: off + lim } : {}), kept_days: RETENTION_DAYS, note: REFUSALS_NOTE };
+      ...(more ? { more: true, next_offset: off + lim, more_note: `more refusals stand — call again with offset: ${off + lim}` } : {}), kept_days: RETENTION_DAYS, note: REFUSALS_NOTE };
   } catch (e) {
     // unknown, never zero: the read says it could not look
     if (isMissingTable(e) || e?.name === "NoRecordError")

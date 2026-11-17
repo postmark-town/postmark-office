@@ -119,7 +119,7 @@ test("on what: the identifying fields only, cut; a body, a text, a note or an un
 
 test("which refusals are kept: a 4xx, or a bounce with no code; not a 5xx fault, not the rate limit, not a status that is no refusal", () => {
   for (const c of [400, 403, 404, 409, 422, null, undefined]) assert.equal(isKept(c), true, String(c));
-  for (const c of [429, 500, 503, 200, 302, 99, 600, "409", 0]) assert.equal(isKept(c), false, String(c));
+  for (const c of [429, 413, 500, 503, 200, 302, 99, 600, "409", 0]) assert.equal(isKept(c), false, String(c));
 });
 
 test("the refusal in a JSON-RPC answer: a tool's bounce, with its code and words cut; nothing else", () => {
@@ -214,6 +214,8 @@ test("a household reads its own refusals, newest first, and nobody else's; `hand
   // paging: limit and offset walk it, and `more` says there is more
   const page = await readOwnRefusals(keyA, { limit: 1 });
   assert.equal(page.count, 1); assert.equal(page.more, true); assert.equal(page.next_offset, 1);
+  assert.match(page.more_note, /offset: 1/, "the walk-on sentence names the offset (paged-reads-one-grammar)");
+  assert.equal((await readOwnRefusals(keyA, { limit: 2 })).more, undefined, "a page that holds them all says no more");
   assert.deepEqual((await readOwnRefusals(keyA, { limit: 1, offset: 1 })).refusals.map((x) => x.target.letter), ["first-try"]);
   // and the door reads it: household { read: "refusals" } answers the same rows
   const viaDoor = await mcpCall("household", { read: "refusals" }, keyA);
