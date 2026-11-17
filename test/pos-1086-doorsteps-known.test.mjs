@@ -19,7 +19,7 @@ import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort, freePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
-import { REV_RE, revOf, splitGlobal, GLOBAL_LEAVES } from "../src/doorstep-rev.mjs";
+import { REV_RE, revOf, splitGlobal, GLOBAL_LEAVES, GLOBAL_VERSION, TOWN_WIDE_BLOCKS } from "../src/doorstep-rev.mjs";
 
 const STORES = [];
 const storeFor = async (town) => { const x = await indexStore(town, { db: "pos1086_known" }); STORES.push(x); return x.env; };
@@ -78,7 +78,7 @@ test("known=: a matching rev answers unchanged with no body, a stale one the who
   const rev = Object.fromEntries(full.filter((r) => r.doorstep).map((r) => [r.handle, r.doorstep.rev]));
   const stale = "0".repeat(16);
   assert.notEqual(rev[b], stale);
-  const r = await get(`/doorsteps?handles=${a},${b},${c},nobody-lives-here&known=${a}:${rev[a]},${b}:${stale},nobody-lives-here:${stale}`);
+  const r = await get(`/doorsteps?handles=${a},${b},${c},nobody-lives-here&known=${a}:${rev[a]},${b}:${stale},nobody-lives-here:${stale}&global=2`);
   assert.equal(r.status, 200);
   const rows = r.body.doorsteps;
   assert.deepEqual(rows.map((x) => x.handle), [a, b, c, "nobody-lives-here"], "in the order named");
@@ -91,17 +91,58 @@ test("known=: a matching rev answers unchanged with no body, a stale one the who
 test("known= hands the five global leaves back once, and they are the ones a doorstep carries", async () => {
   const [a, b] = await roll();
   const full = (await get(`/doorsteps?handles=${a},${b}`)).body.doorsteps;
-  const r = (await get(`/doorsteps?handles=${a},${b}&known=${a}:${full[0].doorstep.rev},${b}:${full[1].doorstep.rev}`)).body;
+  const r = (await get(`/doorsteps?handles=${a},${b}&known=${a}:${full[0].doorstep.rev},${b}:${full[1].doorstep.rev}&global=2`)).body;
   assert.deepEqual(Object.keys(r), ["doorsteps", "global"]);
   assert.deepEqual(r.global, splitGlobal(full[0].doorstep).global);
   assert.deepEqual(r.global, splitGlobal(full[1].doorstep).global, "one value for the town, whichever resident it is read from");
-  assert.equal(Object.keys(r.global).length + 1, GLOBAL_LEAVES.length, "as_of, copy{2}, the window stamp, the outbox stamp: the five");
+  const { version, town_wide, ...leaves } = r.global;
+  assert.equal(Object.keys(leaves).length + 1, GLOBAL_LEAVES.length, "as_of, copy{2}, the window stamp, the outbox stamp: the five");
+  assert.equal(version, GLOBAL_VERSION);
+  // GLOBAL-BLOCKS: the town-wide blocks ride `global`, once, and they are the ones every doorstep carries.
+  // FLIP: drop `global.town_wide = townWide` in splitGlobal (src/doorstep-rev.mjs) and this goes red.
+  assert.deepEqual(Object.keys(town_wide).sort(), [...TOWN_WIDE_BLOCKS].sort());
+  for (const k of TOWN_WIDE_BLOCKS) {
+    assert.deepEqual(town_wide[k], full[0].doorstep[k], `${k}: the block a full read of ${a} carries`);
+    assert.deepEqual(town_wide[k], full[1].doorstep[k], `${k}: the block a full read of ${b} carries`);
+  }
   // an empty known list is still a known read: nothing matches, the global rides
-  const none = (await get(`/doorsteps?handles=${a}&known=`)).body;
+  const none = (await get(`/doorsteps?handles=${a}&known=&global=2`)).body;
   assert.equal(none.doorsteps[0].doorstep.rev, full[0].doorstep.rev);
   assert.deepEqual(none.global, r.global);
   // all 404: no global to hand back
-  assert.equal((await get(`/doorsteps?handles=nobody-lives-here&known=`)).body.global, null);
+  assert.equal((await get(`/doorsteps?handles=nobody-lives-here&known=&global=2`)).body.global, null);
+});
+
+test("known= without global=2 is read whole: a caller that cannot patch the town-wide blocks is never told unchanged", async () => {
+  // FLIP: delete the `known = null` gate on `global` in the /doorsteps route (src/server.mjs) and this goes red.
+  const [a, b] = await roll();
+  const full = (await get(`/doorsteps?handles=${a},${b}`)).body.doorsteps;
+  const k = `${a}:${full[0].doorstep.rev},${b}:${full[1].doorstep.rev}`;
+  for (const q of [`known=${k}`, `known=${k}&global=1`, `known=${k}&global=3`]) {
+    const r = (await get(`/doorsteps?handles=${a},${b}&${q}`)).body;
+    assert.deepEqual(r, { doorsteps: full }, `${q}: the whole bodies, no unchanged, no global`);
+  }
+});
+
+test("CONDITION A: a single doorstep read answers its body in the page's own order, every town-wide block in place, rev last", async () => {
+  // The agent-facing doors (REST /doorstep/<h>, household{read:"doorstep"}, the MCP doorstep) are not touched: they
+  // compose the doorstep with doorstepBundle and (REST only) append `rev`. The bulk door composes the same way.
+  // FLIP: remove any town-wide block from the single doorstep body (e.g. delete it in doorstep-bundle.mjs or in withRev)
+  // and the key list below, or the equality with the bulk door's body, goes red.
+  const [a] = await roll();
+  const single = await raw(`/doorstep/${a}`);
+  const body = JSON.parse(single.text);
+  const bulk = (await get(`/doorsteps?handles=${a}`)).body.doorsteps[0].doorstep;
+  assert.deepEqual(body, bulk, "the bulk door's body for the same resident (the single door only indents it)");
+  assert.equal(single.text, JSON.stringify(body, null, 1), "and the single door's bytes are its body, indented as they always were");
+  const keys = Object.keys(body);
+  for (const k of TOWN_WIDE_BLOCKS) assert.ok(keys.includes(k), `${k} is still on the single doorstep`);
+  assert.deepEqual(keys, [
+    "handle", "as_of", "copy", "next_crossing", "the_bundle", "segments", "mail", "awaiting", "stamps", "bulletin", "town_pulse", "window",
+    "clocks", "psa", "pending_outbox", "counts", "town", "moved", "doorstep_version", "stances", "outcomes", "rulings", "stakes", "alerts",
+    "posts", "pending_outbox_freshness", "civic", "rev",
+  ], "the page's keys, in the order they were before this change");
+  assert.equal(body.rev, revOf(body));
 });
 
 test("known= is refused loudly when a pair is not handle:rev, and the existing refusals stand", async () => {
@@ -128,7 +169,7 @@ test("MEASURED: the size of a known= answer for every unchanged resident against
   const handles = (await roll()).slice(0, 25);
   const full = await get(`/doorsteps?handles=${handles.join(",")}`);
   const known = handles.map((h, i) => `${h}:${full.body.doorsteps[i].doorstep.rev}`).join(",");
-  const r = await get(`/doorsteps?handles=${handles.join(",")}&known=${known}`);
+  const r = await get(`/doorsteps?handles=${handles.join(",")}&known=${known}&global=2`);
   assert.ok(r.body.doorsteps.every((x) => x.unchanged === true && !("doorstep" in x)), "all unchanged");
   assert.ok(r.bytes < full.bytes / 4, `${r.bytes} bytes against ${full.bytes}`);
   console.log(`# measured on the fixture town: ${handles.length} residents, full ${full.bytes} bytes, all-unchanged known= ${r.bytes} bytes`);
