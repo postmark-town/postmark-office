@@ -999,8 +999,10 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   return { candidates: candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, words, isThing, elder }), standing, mine: mine.map((m) => m.id), scope,
     // Carried for the set-down group (`stanceShadow`'s `setDowns`), which needs
     // the same world and the same stance rows — never a second read of either.
-    // Nothing renders these two keys; the shadow names every field it answers.
-    marks: all, stanceRows: rows,
+    // Nothing renders these keys; the shadow names every field it answers.
+    // `householdOf` and `groundHolders` (the handles that author the ground this
+    // read counted) let `stanceCountsForHandles` serve every resident of one house from this one pass.
+    marks: all, stanceRows: rows, householdOf, groundHolders: [...new Set(mine.map((m) => m.by))],
     // The teaching block's one mark body, taken off the set this read already
     // holds — never a second read of the world for one sentence.
     lateWelcome: all.find((m) => m.id === LATE_WELCOME_MARK)?.body?.trim() || null };
@@ -1268,6 +1270,52 @@ export async function stancesForHandles(handles, { cursor = null, limit = PAGE_S
       awaiting: [], standing: [],
     };
   }
+}
+
+/**
+ * EVERY RESIDENT'S OWN WAITING-STANCE COUNT, ONE PASS PER HOUSE (POS-1084).
+ *
+ * `stanceInbox` weighs the ground of the caller's whole world-household (`myHouses`), so every resident of one
+ * world-household gets the same candidate list: their `stances_awaiting` is the same number. Only the ground label
+ * differs (`scope`: "resident:<handle>" while every mark the pass counted is theirs, else "household"). So the
+ * house is asked once, for its first resident, and each member's count and label are taken from that one pass,
+ * the label by the very rule `stanceInbox` applies to a one-handle key. A house of ten costs one pass, not ten.
+ *
+ * Answers a Map, handle → `{ stances_awaiting, stances_awaiting_ground }`, or `{ unavailable }` and NO count (an
+ * unreadable inbox is unknown, never 0), the words `stancesForHandles` uses. A pass that is unavailable leaves
+ * each remaining resident to ask for themselves (its cause may be one house's), so a failure costs what it did.
+ * Never throws. `inbox` stands in for `stanceInbox` in a falsifier.
+ */
+export async function stanceCountsForHandles(handles, { repo = null, dbPath = null, inbox: inboxOf = stanceInbox } = {}) {
+  const out = new Map();
+  const todo = [...new Set([...(handles ?? [])].filter(Boolean))];
+  while (todo.length) {
+    const first = todo.shift();
+    let inbox;
+    try {
+      inbox = await inboxOf(repo ?? WORLD_CLONE, { handles: new Set([first]) }, { dbPath });
+    } catch (e) {
+      out.set(first, { unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the consent inbox")})` });
+      continue;
+    }
+    if (inbox.unavailable || !Array.isArray(inbox.candidates)) {
+      out.set(first, { unavailable: inbox.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" });
+      continue;
+    }
+    const householdOf = inbox.householdOf ?? ((h) => h);
+    const house = houseOf(householdOf, first);
+    const holders = inbox.groundHolders ?? [];
+    const stances_awaiting = inbox.candidates.length;
+    // the one-handle key's own rule: the ground is theirs only while every mark counted is theirs (no marks: theirs)
+    const scopeOf = (h) => inbox.scope !== undefined && h === first ? inbox.scope : (holders.every((by) => by === h) ? stancesGround([h]) : "household");
+    out.set(first, { stances_awaiting, stances_awaiting_ground: scopeOf(first) });
+    for (let i = todo.length - 1; i >= 0; i--) {
+      if (houseOf(householdOf, todo[i]) !== house) continue;
+      const [member] = todo.splice(i, 1);
+      out.set(member, { stances_awaiting, stances_awaiting_ground: scopeOf(member) });
+    }
+  }
+  return out;
 }
 
 /**
