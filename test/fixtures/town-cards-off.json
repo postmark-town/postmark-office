@@ -43,6 +43,18 @@
      ],
      "description": "a focused read — town, bulletin, metrics, residents, resident, home, votes, stamps, regions, letters, letter, commits, search, discover, marks, quests, bounties, ideas, calendar, event, posts, quest, asks, feed, pair, docs; any act name (post, amend, close, advance, reveal, stake, unstake) reads back its own card. Never rides with do:"
     },
+    "read_shape": {
+     "type": "string",
+     "enum": [
+      "v1",
+      "v2"
+     ],
+     "description": "read_shape: \"v2\" is the town's glance: town (the crossing, who lives here), posts (counts by class, then the 25 most recently active, at most 5 per class), events, votes, bulletin, happened, can (the acts by what they do, each card behind read: \"<act>\"), law, cursor, more. read_shape: \"v1\" is today's fuller read, with every act's card. A bare read only."
+    },
+    "since": {
+     "type": "string",
+     "description": "with the glance (read_shape: \"v2\"), the cursor your last glance handed you: only what changed since (posts with a newer act, the town's newest public acts, a newer bulletin posting). For read: \"feed\" it is the feed's own time (an ISO instant or a date)."
+    },
     "do": {
      "type": "string",
      "enum": [

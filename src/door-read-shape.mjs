@@ -3,7 +3,8 @@
 // each with its own suite"). The world door's switch is world-read-shape.mjs;
 // this is the same switch at the other two doors.
 //
-//   TOWN_READ_SHAPE=t0|t1|t2           unset (or t0): today's bare read, byte for byte
+//   TOWN_READ_SHAPE=t0|t1|t2|v2        unset (or t0): today's bare read, byte for byte;
+//                                      v2: the town's glance (POS-733) is the MCP door's default bare read
 //   HOUSEHOLD_READ_SHAPE=h0|h1|h2|v2   unset (or h0): today's bare read, byte for byte;
 //                                      v2: the house's glance (POS-633) is the MCP door's default bare read
 //
@@ -28,7 +29,9 @@
 // In every shape, `cards: "full"` gives today's acts back. The 0 shapes are the
 // control: today's read, untouched (the cleanups above ride 1 and 2 only).
 
-const SHAPES = { town: ["t0", "t1", "t2"], household: ["h0", "h1", "h2", "v2"] };
+const SHAPES = { town: ["t0", "t1", "t2", "v2"], household: ["h0", "h1", "h2", "v2"] };
+/** The t-shape a town answer takes when the glance is not what was asked: v2 is a read of its own, so its v1 is t0 (POS-733). */
+export const townLeanShape = (shape) => (/^t\d$/.test(String(shape ?? "")) ? shape : "t0");
 /** The h-shape a household answer takes when the glance is not what was asked: v2 is a read of its own, so its v1 is h0. */
 export const householdLeanShape = (shape) => (shape === "v2" ? "h0" : shape ?? "h0");
 const VAR = { town: "TOWN_READ_SHAPE", household: "HOUSEHOLD_READ_SHAPE" };
