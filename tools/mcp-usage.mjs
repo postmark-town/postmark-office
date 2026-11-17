@@ -51,6 +51,9 @@ const pct = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, M
 /** The counts, one access-line record at a time (a week of the log is never held whole: the box has 1.9 GB). */
 export function tallier() {
   const tools = new Map(), acts = new Map(), reads = new Map(), bounced = new Map(), sizes = new Map();
+  // POS-1099: day -> "<read>\t<shape>" -> { calls, households: Set }. The set holds the access line's own
+  // `household` field and is only ever counted: no handle leaves this function.
+  const perDay = new Map();
   let lines = 0, shaped = 0;
   const add = (r) => {
     lines++;
@@ -68,6 +71,14 @@ export function tallier() {
       const read = call.read != null ? `${name} read:${call.read}` : `${name} (bare)`;
       bump(reads, read);
       if (Number.isFinite(call.out_bytes)) (sizes.get(read) ?? sizes.set(read, []).get(read)).push(call.out_bytes);
+      const day = typeof r?.ts === "string" && DAY_RE.test(r.ts.slice(0, 10)) ? r.ts.slice(0, 10) : null;
+      if (day) {
+        const rows = perDay.get(day) ?? perDay.set(day, new Map()).get(day);
+        const key = `${read}\t${typeof call.shape === "string" ? call.shape : "-"}`;
+        const row = rows.get(key) ?? rows.set(key, { calls: 0, households: new Set() }).get(key);
+        row.calls++;
+        if (typeof r.household === "string" && r.household) row.households.add(r.household);
+      }
     }
   };
   const byCount = (m) => [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -79,6 +90,12 @@ export function tallier() {
       const s = (sizes.get(read) ?? []).sort((a, b) => a - b);
       return { read, calls: n, out_bytes_p50: pct(s, 50), out_bytes_p95: pct(s, 95) };
     }),
+    // each day, oldest first: each read and the shape it was served, calls, and how many distinct households (a count, never the names)
+    days: [...perDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, rows]) => ({
+      day,
+      reads: [...rows.entries()].map(([key, v]) => { const [read, shape] = key.split("\t"); return { read, shape: shape === "-" ? null : shape, calls: v.calls, households: v.households.size }; })
+        .sort((a, b) => b.calls - a.calls || a.read.localeCompare(b.read) || String(a.shape).localeCompare(String(b.shape))),
+    })),
   });
   return { add, result };
 }
@@ -93,6 +110,11 @@ export function render(t, since) {
   for (const a of t.acts) out.push(`  ${String(a.calls).padStart(8)}  ${(100 * a.bounce_rate).toFixed(1).padStart(5)}%  ${a.act}`);
   out.push("", "by read (calls, out_bytes p50 / p95)");
   for (const r of t.reads) out.push(`  ${String(r.calls).padStart(8)}  ${String(r.out_bytes_p50 ?? "-").padStart(8)} / ${String(r.out_bytes_p95 ?? "-").padStart(8)}  ${r.read}`);
+  out.push("", "by day (calls, distinct households; shape is the one served, - when the line did not record it)");
+  for (const d of t.days) {
+    out.push(`  ${d.day}`);
+    for (const r of d.reads) out.push(`    ${String(r.calls).padStart(8)}  ${String(r.households).padStart(5)} hh  ${r.read}  ${r.shape ?? "-"}`);
+  }
   return out.join("\n");
 }
 
