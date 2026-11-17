@@ -301,16 +301,17 @@ export async function stakesFor(handles, {
   });
   const dateOf = (id) => dates.get(id);
   if (!pager) return make(previewOf(rows, { limit, offset, dateOf }), undefined);
-  if (!allocationPage || limit == null) return make(previewOf(rows, { limit, offset, dateOf }), pager.aggregate());
+  if (!allocationPage) return make(previewOf(rows, { limit, offset, dateOf }), pager.aggregate());
   // POS-1102 (Darko, 2026-11-17 09:09 EST, "Page it at 20"): the stakes read pages like every other list. ONE limit/offset pair pages BOTH parts, the marks
   // and `allocation`, in step, so `next_offset` is the same number on each and one `offset` walks the whole read. The answer is held under the page cap as a
   // whole: when the two parts together run past it, the page takes fewer rows of each (both say the smaller `limit`), never one part's more and the other's fewer.
   const { textBytes, PAGE_BYTES } = await import("./household-read-page.mjs");
-  let n = Math.max(Math.floor(Number(limit)) || 0, 1);
+  let n = Math.max(Math.floor(Number(limit ?? allocationPage.limit)) || 20, 1);
+  const start = offset || allocationPage.offset || 0;
   for (;;) {
-    const allocation = pager.page({ limit: n, offset });
+    const allocation = pager.page({ limit: n, offset: start });
     if (allocation?.limit != null && allocation.limit < n) { n = Math.max(allocation.limit, 1); continue; }   // its own byte trim: both parts take the smaller
-    const out = make(previewOf(rows, { limit: n, offset, dateOf }), allocation);
+    const out = make(previewOf(rows, { limit: n, offset: start, dateOf }), allocation);
     if (n <= 1 || textBytes(out) <= PAGE_BYTES) return out;
     n -= 1;
   }
