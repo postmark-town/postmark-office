@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import { explainAnswer, explainPath } from "./read-grammar.mjs";
 import { withRefused } from "./one-contract.mjs";
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bare doorstep's composition, timed (measurement only)
 import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states
 
 // Raised from 2500 (Darko, 2026-11-06 12:37 EDT, POS-822/b: "Raise the budget to ~2,600"), to make room for the first-day line's "N of 7 left".
@@ -154,7 +155,7 @@ export function townPart({ quests, calendar, votes, bulletin, markOf = () => nul
  * unreadFor, queries.mjs § nextStepsFor), injected so this module reads no index itself.
  */
 export async function doorstepApex(args = {}, key = null, ctx = {}) {
-  return withRefused(await doorstepAnswer(args, key, ctx));
+  return bundleSpan(async () => withRefused(await doorstepAnswer(args, key, ctx)));
 }
 
 async function doorstepAnswer(args, key, ctx) {

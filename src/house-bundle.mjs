@@ -57,6 +57,7 @@ import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { houseCompanions } from "./house-companions.mjs"; // POS-1070: each declared member's public outbox and quest board
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
 import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
@@ -276,7 +277,9 @@ export const ashoreVia = async (ix, handles) => {
  * are per-person cuts it does not take. Returns the answer or
  * `{ refused: [code, defect, hint] }`.
  */
-export async function houseBundle({ household = null } = {}, ctx = {}) {
+// POS-1064/b: the call is timed under its request (read-timing.mjs § bundleSpan); the answer is the body's own, unchanged.
+export async function houseBundle(ask = {}, ctx = {}) { return bundleSpan(() => houseBundleOf(ask, ctx)); }
+async function houseBundleOf({ household = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -446,7 +449,8 @@ export function pageBounds(limit, offset) {
  * The house, paged: the default answer of household { read: "house" }. Same
  * `ctx` as houseBundle. Returns the answer or `{ refused: [code, defect, hint] }`.
  */
-export async function housePage({ household = null, limit = null, offset = null } = {}, ctx = {}) {
+export async function housePage(ask = {}, ctx = {}) { return bundleSpan(() => housePageOf(ask, ctx)); }
+async function housePageOf({ household = null, limit = null, offset = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
