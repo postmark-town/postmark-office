@@ -429,7 +429,7 @@ export const stampsKey = ({ went = false } = {}) =>
  * misled, as the house spends no pot), what is staked, what has been earned,
  * what went in the last 12 hours, and today's quests when there are any.
  */
-export function stampsBlock(details = [], { quests = [], went = null, you = null } = {}) {
+export function stampsBlock(details = [], { quests = [], went = null, you = null, stakes = null } = {}) {
   const known = details.filter((d) => d.tenses);
   const sum = (f) => known.reduce((n, d) => n + (Number(d.tenses[f]) || 0), 0);
   // eval round 3: the reader's own spendable balance, when the glance knows who is reading
@@ -438,12 +438,23 @@ export function stampsBlock(details = [], { quests = [], went = null, you = null
     ...(mine ? { yours: Number(mine.tenses.liquid) || 0 } : {}),
     residents_total: sum("liquid"),
     staked: sum("staked"),
+    // POS-1100 (Darko 2026-11-16 22:30: "we shouldn't allow households to bloat their own household apex read"): the AGGREGATE of everything
+    // the house has stamps behind and never the list, so this stays one size however many things a house stakes on
+    // (a house with nothing staked says nothing here: `staked: 0` is the whole answer, and an empty block is left out like every other)
+    ...(stakes && (stakes.unavailable || stakes.count > 0) ? { stakes: stakesAggregate(stakes) } : {}),
     earned_total: sum("minted"),
     ...(went != null ? { went_12h: went } : {}),
     ...(quests.length ? { quests } : {}),
     ...(known.length < details.length ? { unread: details.filter((d) => !d.tenses).map((d) => d.handle) } : {}),
     key: stampsKey({ went: went != null }),
   };
+}
+
+/** The stakes aggregate as the glance says it (household-stakes.mjs § aggregateOf): at risk first, the total, the count, a count per kind, and the read that lists them. */
+export const STAKES_LIST = 'household { read: "stakes" }';
+export function stakesAggregate(a) {
+  if (a?.unavailable) return { unavailable: "the ledger could not be read, so this is unknown, not zero", list: STAKES_LIST };
+  return { at_risk: a.at_risk ?? null, total: a.total ?? 0, count: a.count ?? 0, by_kind: a.by_kind ?? {}, ...(a.kind_note ? { kind_note: a.kind_note } : {}), list: STAKES_LIST };
 }
 
 /** Today's household quests, one line each: "Reach out 2/5 today". */
@@ -469,7 +480,7 @@ export const glanceMore = (cursor, { isDefault = false } = {}) => `${moreLine(cu
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, isDefault = false } = parts;
+  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, stakes = null, isDefault = false } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   const steps = firstSteps(gaps, { naming, room });
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
@@ -491,7 +502,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     ...(marksOf ? { marks: marksOf } : {}),
     ...(postsOf ? { posts: postsOf } : {}),
     mail: mailBlock({ ...mail, bounced: needs ? (needs.unplaced_bounces?.rows?.length ?? 0) : null }),
-    stamps: stampsBlock(details, { quests, went: went ? went.length : null, you }),
+    stamps: stampsBlock(details, { quests, went: went ? went.length : null, you, stakes }),
     // eval round 1: plainly letters, the window in the name (Darko 2026-10-20), with its key
     // eval round 2: an empty block is left out (more says so), and happened carries its key
     // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
@@ -636,6 +647,7 @@ export function mintsByLetter(lines, mine) {
  * What a stamp that went was spent on (POS-1027: a design groups the rows by it), from the ledger line's own target and reason:
  *   mark    stake:world-mark/<id>      a stake behind a mark
  *   idea    stake:world-mark/<id>      …when `ideaIds` (the idea posts' ids) holds that id: an idea is backed through the same target
+ *   idea    stake:post/<author>/<slug> a stake on an idea post (POS-854), whatever ids the posts list holds
  *   ballot  stake:vote/…               a stake on a ballot's choice
  *   pot     stake:pot/…                a stake on a funding pot
  *   gift    <handle> · for: gift       stamps given to a resident outside the house
@@ -646,6 +658,8 @@ export function mintsByLetter(lines, mine) {
 export function wentKind(to, why, ideaIds = null) {
   const target = String(to ?? "");
   if (target.startsWith("stake:world-mark/")) return ideaIds?.has?.(target.slice("stake:world-mark/".length)) ? "idea" : "mark";
+  // POS-1100: an idea is a POST now (POS-854), backed through `stake:post/<author>/<slug>`; the idea class is the only post class that takes a stake (post-stake.mjs § STAKE_POST_CLASSES)
+  if (target.startsWith("stake:post/")) return "idea";
   if (target.startsWith("stake:vote/")) return "ballot";
   if (target.startsWith("stake:pot/")) return "pot";
   if (target === "BURN") return "burn";

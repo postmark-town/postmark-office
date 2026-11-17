@@ -169,6 +169,8 @@ export const EXPLAIN = Object.freeze({
     "stamps.pool": row("the house's stamps to spend: every resident's stamps added up", 'household { read: "stamps" }', "live",
       "A pool the house holds of its own is not ruled yet; until it is, this is the residents' own stamps, summed."),
     "stamps.*": row("one part of the house's stamps", 'household { read: "stamps" }', "live"),
+    "stamps.stakes": row("everything your house has stamps behind, as one aggregate: what is at risk first, the total, the count, and a count per kind (idea, bounty, mark, pot, ballot); never the list", 'household { read: "stakes" }', "live",
+      "The list is paged under allocation: limit and offset, each row naming what it is, how much of it is your house's, and whether the next settlement would take it. The total is the stamp ledger's own staked figure for your residents, and a read that cannot agree with the ledger shows no number."),
     "stamps.went": row("how many times stamps left your house in the last 12 hours (or since your cursor): a stake, a gift, a burn", 'household { read: "stamps", view: "went" }', "live"),
     "correspondents.*": row("one part of the correspondents block: its rows (with, of, letters) or its key", 'household { read: "correspondents" }', "live"),
     correspondents: row("who your house writes with most in the last 14 days: each correspondent, their house, and the letters between you", 'household { read: "correspondents" }', "live",

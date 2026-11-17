@@ -179,6 +179,10 @@ CHANGED["MCP household {}"].push(
   [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
+// POS-1100 / POS-1102: the stakes read now lists everything the house has stamps behind (`allocation`), and limit/offset page both of its parts.
+CHANGED["MCP household {}"].push(
+  ["your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident",
+    "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes), and the escrow behind your own published marks, the ones the next settlement would sweep first; limit/offset page both, 20 a page, next_offset walks on; bare it is your whole house, handle: narrows"]);
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 // AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
@@ -315,6 +319,13 @@ test("every index door answers as the unswitched office did: status, body and as
   for (const [door, headers] of REST) {
     const asked = currentCrossing();
     const b = await rest("absent", door, headers);
+    // POS-1086: a REST doorstep now carries `rev` (src/doorstep-rev.mjs), a key the recorded twin predates. Held to be a rev, then set aside; every other byte is still compared.
+    if (door.startsWith("/doorstep/") && b.status === 200) {
+      const body = JSON.parse(b.body);
+      assert.match(body.rev, /^[0-9a-f]{16}$/, `${door} carries its rev`);
+      delete body.rev;
+      b.body = JSON.stringify(body);
+    }
     const what = `${door}${headers ? " (keyed)" : ""}`;
     same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b, asked);
   }
