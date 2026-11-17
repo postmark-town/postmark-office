@@ -44,8 +44,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,7 +66,7 @@ const MIGRATION = join(OFFICE, "world2", "schema", "075_amend_carried.sql");
 
 // ── the world ────────────────────────────────────────────────────────────────
 
-const world = mkdtempSync(join(tmpdir(), "postmark-amend-carried-"));
+const world = tempDir("postmark-amend-carried-");
 after(() => rmSync(world, { recursive: true, force: true }));
 let clock = Date.parse("2026-09-20T06:00:00Z");
 const git = (...a) => execFileSync("git", ["-C", world, ...a], {
