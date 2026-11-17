@@ -139,7 +139,8 @@ test("do: and read: never ride together; an unknown act names the real ones", as
   const both = await householdApex({ do: "begin", read: "standing" }, null, {});
   assert.match(both.defect, /one call does one thing/);
   const unknown = await householdApex({ do: "conjure" }, null, {});
-  assert.match(unknown.hint, /begin, declare, add-resident/);
+  assert.match(unknown.hint, /the acts: add-resident, address, home/);
+  assert.doesNotMatch(unknown.hint, /begin|declare,/, "CORE-114: the arrival acts are offered by next, not listed as the acts");
 });
 
 test("the envelope: unknown fields bounce by name against the target's schema", async () => {

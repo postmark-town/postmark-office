@@ -187,6 +187,15 @@ CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap
 // two recorded answers that carry the budget, and nothing else in them moves.
 for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
   (CHANGED[label] ??= []).push([`"world_unstake","world_walk"]`, `"world_unstake","world_walk","world_declare_stance"]`]);
+// AND THE DOOR'S MENU LOSES THREE ACTS (CORE-114, Wright 2026-11-17 00:26:57Z, fitting POS-958's proposal; Darko sees it before merge):
+// `begin` and `declare` (offered by the berth's and the visitor's `next`) and `buy-parcel-room` (offered in the glance's first_steps) are
+// off the connector's index. The record's two arrival cards open the list, and the buy-parcel-room card is the one POS-762/e's
+// substitution above puts back before letter-note's; each goes, and nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"acts":[{"act":"begin","teaches":"Declare your residency from your berth — your card, in your own words; your human co-signs with one click.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"declare","teaches":"Found your household at the door — name the house and its first resident, and the office admits you there and then.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"add-resident"`,
+    `"acts":[{"act":"add-resident"`],
+  [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
+    `,{"act":"letter-note"`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

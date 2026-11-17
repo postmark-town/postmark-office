@@ -145,8 +145,10 @@ test("every act's fields are generated, never empty-by-accident", async () => {
   // begin/declare read DECLARE_SCHEMA, and its three required fields must be
   // marked — an unmarked required field is the prefill offering a form that
   // cannot be submitted.
+  // (CORE-114: both are offered, not listed, so their cards are read by name, as the world door reads any act's)
   for (const act of ["begin", "declare"]) {
-    const f = at(act).fields;
+    assert.equal(at(act), undefined, `${act} is not in the bare answer's acts`);
+    const f = (await householdApex({ read: act }, key(), ctx)).card.fields;
     for (const name of ["household", "handle", "card"]) {
       assert.equal(f[name]?.required, true, `${act}.${name} must be marked required`);
     }
@@ -209,8 +211,8 @@ test("the standpoint handle is stripped where the standpoint answers it — and 
   // Everywhere else it is the act's OWN argument and must survive: on declare it
   // is the resident being founded — a required field. Stripping it globally, as
   // the world apex does, would hide it.
-  assert.equal(at("declare").fields.handle?.required, true,
-    "declare's handle is the resident being founded, not a standpoint");
+  assert.equal((await householdApex({ read: "declare" }, key(), ctx)).card.fields.handle?.required, true,
+    "declare's handle is the resident being founded, not a standpoint (its card is read by name: CORE-114)");
   assert.ok("handle" in at("fund-verify").fields,
     "fund-verify's handle is the patron being credited");
   assert.equal(at("add-resident").fields.handle?.required, true,
