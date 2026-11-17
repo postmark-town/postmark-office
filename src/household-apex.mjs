@@ -57,6 +57,7 @@ import { asPaper } from "./paperwork.mjs"; // POS-271: the berth card is paperwo
 import { caughtBounce, faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { explainAnswer, explainPath } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bare glance's composition, timed (measurement only)
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 
@@ -1645,7 +1646,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   // Opt-in per call (H6), exactly as the world door's read_shape is (W1). Only
   // the bare read changes shape; every read: answers as it always has.
   // and the MCP door's default when HOUSEHOLD_READ_SHAPE=v2 (as WORLD_READ_SHAPE is the world's); read_shape: "v1" asks for today's read
-  if (!doing && !reading && (args.read_shape ?? (ctx.readShape === "v2" ? "v2" : null)) === "v2") return householdGlance(args, key, ctx);
+  if (!doing && !reading && (args.read_shape ?? (ctx.readShape === "v2" ? "v2" : null)) === "v2") return bundleSpan(() => householdGlance(args, key, ctx));
   if (!doing && !reading && args.read_shape != null && args.read_shape !== "v1")
     return bounce(422, `read_shape: "${args.read_shape}" is not a household shape`, `household { read_shape: "v2" } is the house's glance; omit read_shape for today's read`);
 

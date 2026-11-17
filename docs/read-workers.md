@@ -108,3 +108,47 @@ fresh as the main thread:
 - **git.** Each worker's refresher asks its own questions when refs move.
 - **Memory.** Each worker holds its own folded world, its own projection and
   its own engine imports.
+
+## Where a doorstep or household read's time goes (POS-1064/b)
+
+Measurement only (`src/read-timing.mjs`; nothing about routing, pools, transactions or answers changes). The doorstep and household doors (REST
+`/doorstep/<h>`, `/doorsteps`, `/household`; MCP `household`, `doorstep`, flat `read_doorstep`) put a `timing` object on their ONE access line
+(`telemetry/access-YYYY-MM-DD.jsonl`, written by the main thread on finish; a worker writes no line, it reports back with its answer). Every other path's line is
+unchanged. Units are milliseconds to 0.1.
+
+Boundaries in time order: `t0` (handleRequest begins, before the credential is resolved) → `routed` (credential resolved, admitted, the door about to run here or
+be handed over) → `sent` (posted to the chosen worker) → `taken` (the worker's message handler) → `done` (the worker's answer posted) → `received` (the main thread's
+handler) → `finish` (the line's `ms` ends). Fields: `routed_ms` (t0→routed), `admit_ms` (t0→routed on the main route, t0→first send on a handover),
+`retry_ms` (first send→the send that was taken, only after a worker stopped before answering), `queue_ms` (sent→taken: the worker's queue and busy loop),
+`exec_ms` (taken→done on the worker; routed→finish on the main thread), `return_ms` (done→received: the way back to the main thread's loop), `total_ms`.
+`bundle` is `{ n, sum_ms, max_ms }` over the houseBundle / housePage / doorstepBundle / bare-doorstep / bare-glance calls on the executing thread (a bundle called from
+inside another is part of the outer one). `leases` is `{ main, worker }`: each pen lease (`store-pool.mjs § onPenClient`, every `officeRead`/`officeWrite`) as
+`{ n, failed, acquire_ms: { sum, max }, held_ms: { sum, max }, failed_wait_ms }`: `acquire_ms` is the wait for a connection, `held_ms` is acquired→released (SQL and
+the JavaScript between statements alike). `rid` joins the two threads' records for one request, across a retry, and is random, never derived from the request;
+`route`, `worker` (slot), `tries`, `door`, `read` (the household read's own fixed name), `status`/`ok` say what ran and how it ended.
+
+**Reads only, classified from the whole request.** A REST read is a GET (a GET `/household` that names `do`, `explain` or `read=letter` is not one; `POST /household` never is). An
+MCP request carries `timing` only when EVERY message in it is a `tools/call` to a household or doorstep read (no `do`, no `explain`, not `read: "letter"`, which clears a
+letter and is a write): a request holding an act, an explain, a letter opening, any other tool or any non-call message has no `timing`, whichever tool is last, so an act
+can never be made to look like a read by a read after it. A batch of reads is one request: its line has `batch` (the number of calls) and no single `read`, its
+`bundle`/`leases` cover the whole request. A line with no `timing` is a request this record does not cover (and, unless `timing_dropped` says otherwise, never one whose
+measurement was cut).
+
+**Do not add these up as wall time.** `bundle` and `leases` are measured inside `exec_ms`, overlap it and each other, and are sums of durations. A bundle's
+time is not SQL time and is never lease time. **`null` is "not measured here"** (no worker ran it: `queue_ms`, `return_ms` and `leases.worker` are null; no bundle ran:
+`bundle` is null), **`0` is a measurement that found zero** (`leases.main.n: 0` on a handed-over read), and **`failed` counts acquisitions that did not produce a
+connection** (the acquire timeout), apart from `n`. **Coverage is the pen pool only** (`cov: "pen"`): the acts, claims and serve pools are not measured. A line that
+had to be shortened (telemetry.mjs, 4,000 bytes) gives up `call` first, named `call_dropped`; only the last resort drops `timing`, and then says `timing_dropped: true`:
+a line with neither is a request this record does not cover.
+
+Reading it back (the operator's recipes, on the box's `telemetry/`):
+
+    # the ten slowest doorstep/household reads today, and which phase the time was in
+    jq -s -c '[.[]|select(.timing)]|sort_by(-.ms)|.[:10][]|{ms,door:.timing.door,read:.timing.read,route:.timing.route,worker:.timing.worker,admit:.timing.admit_ms,queue:.timing.queue_ms,exec:.timing.exec_ms,ret:.timing.return_ms,bundle:.timing.bundle.sum_ms,w_acq:.timing.leases.worker.acquire_ms.sum,w_held:.timing.leases.worker.held_ms.sum,m_acq:.timing.leases.main.acquire_ms.sum,m_held:.timing.leases.main.held_ms.sum}' access-$(date -u +%F).jsonl
+    # the worker queue wait against the lease acquire wait (busy hour): is it the worker's loop, or the pool?
+    jq -s '[.[]|select(.timing.route=="worker")] | {n:length, queue_p95:(map(.timing.queue_ms)|sort|.[(length*0.95|floor)]), acquire_p95:(map(.timing.leases.worker.acquire_ms.max)|sort|.[(length*0.95|floor)]), held_p95:(map(.timing.leases.worker.held_ms.max)|sort|.[(length*0.95|floor)])}' access-$(date -u +%F).jsonl
+    # lines whose measurement was cut
+    jq -c 'select(.timing_dropped or .call_dropped)|{ts,path,timing_dropped,call_dropped}' access-$(date -u +%F).jsonl | head
+
+To join this to a busy-hour sampler's window, use `ts` (the request's t0, ISO) and `ms`. A timing deploy alone is not recovered performance: this is what the next
+busy-hour sample reads.
