@@ -11,16 +11,22 @@
 // "unchanged", and the office has no per-resident one.
 //
 // THE REVISION IS THE CONTENT. `rev` is a hash of the composed body with those
-// five global leaves taken out. It cannot serve stale content, because it is
+// five as_of leaves and the six town-wide blocks (TOWN_WIDE_BLOCKS) taken out.
+// It cannot serve stale content, because it is
 // computed from the same body the reader would otherwise get: a caller that
 // holds a doorstep's `rev` and is told it is unchanged holds the same bytes,
-// modulo the five leaves, which the response hands back ONCE (`global`) so a
-// caller can patch a carried-over file. It saves the reader's transfer and
+// modulo the five leaves and the six blocks, which the response hands back
+// ONCE (`global`, version 2, on the bulk door) so a caller can patch a
+// carried-over file. It saves the reader's transfer and
 // write, not the office's compose; the compose is what a later change can cut.
 
 import { createHash } from "node:crypto";
 
-/** The five `as_of`-derived leaves, by path. The only places a doorstep's body moves with the office's copy alone. */
+/**
+ * The five `as_of`-derived leaves, by path. The only places a doorstep's body moves with the office's copy alone.
+ * The rev is the body without these five leaves AND without the six town-wide blocks (TOWN_WIDE_BLOCKS below),
+ * all handed back in `global` (version 2) on the bulk door.
+ */
 export const GLOBAL_LEAVES = Object.freeze([
   "as_of",
   "copy.newest_change_at",
@@ -73,6 +79,9 @@ function canonical(v) {
  */
 export function splitGlobal(doorstep) {
   const { rev: _rev, ...body } = JSON.parse(JSON.stringify(doorstep));
+  // the town-wide blocks, taken before the leaf deletions below (copy loses two leaves from `body`, but is handed back whole): clone only these
+  const townWide = {};
+  for (const k of TOWN_WIDE_BLOCKS) if (k in body) townWide[k] = JSON.parse(JSON.stringify(body[k]));
   const global = {
     as_of: body.as_of ?? null,
     copy: { newest_change_at: body.copy?.newest_change_at ?? null, sentence: body.copy?.sentence ?? null },
@@ -83,14 +92,8 @@ export function splitGlobal(doorstep) {
   if (body.copy && typeof body.copy === "object") { delete body.copy.newest_change_at; delete body.copy.sentence; }
   if (body.window?.freshness && typeof body.window.freshness === "object") delete body.window.freshness.settled_as_of;
   if (body.pending_outbox_freshness && typeof body.pending_outbox_freshness === "object") delete body.pending_outbox_freshness.settled_as_of;
-  // the town-wide blocks: handed back once, whole (copy too, so its two leaves above are repeated inside it and the block wins)
-  const townWide = {};
-  const doorstepCopy = JSON.parse(JSON.stringify(doorstep));
-  for (const k of TOWN_WIDE_BLOCKS) {
-    if (!(k in body)) continue;
-    townWide[k] = doorstepCopy[k];
-    delete body[k];
-  }
+  // the town-wide blocks leave `rest` (handed back once, whole, in `global.town_wide`; copy too, so its two leaves above are repeated inside it and the block wins)
+  for (const k of TOWN_WIDE_BLOCKS) delete body[k];
   global.version = GLOBAL_VERSION;
   global.town_wide = townWide;
   return { rest: body, global };

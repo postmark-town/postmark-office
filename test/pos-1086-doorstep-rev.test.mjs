@@ -124,6 +124,29 @@ test("splitGlobal hands back the five leaves' values and a body without them, le
   assert.deepEqual(differing(patched, x), []);
 });
 
+test("splitGlobal's whole output equals the one-pass reference (a whole second clone of the page was the old way)", async () => {
+  const x = await doorstepAt("wright", A, "2026-07-12T09:00:00.000Z");
+  // the reference: delete the five leaves from a clone, then take the blocks out of that body and out of a SECOND whole clone of the page
+  const clone = () => JSON.parse(JSON.stringify(x));
+  const { rev: _rev, ...body } = clone();
+  const global = {
+    as_of: body.as_of ?? null,
+    copy: { newest_change_at: body.copy?.newest_change_at ?? null, sentence: body.copy?.sentence ?? null },
+    window_settled_as_of: body.window?.freshness?.settled_as_of ?? null,
+    outbox_settled_as_of: body.pending_outbox_freshness?.settled_as_of ?? null,
+  };
+  delete body.as_of; delete body.copy.newest_change_at; delete body.copy.sentence;
+  delete body.window.freshness.settled_as_of; delete body.pending_outbox_freshness.settled_as_of;
+  const second = clone();
+  const townWide = {};
+  for (const k of TOWN_WIDE_BLOCKS) if (k in body) { townWide[k] = second[k]; delete body[k]; }
+  global.version = GLOBAL_VERSION;
+  global.town_wide = townWide;
+  const got = splitGlobal(x);
+  assert.equal(JSON.stringify(got), JSON.stringify({ rest: body, global }), "rest and global, key order and all, as before");
+  assert.equal(JSON.stringify(splitGlobal(withRev(x))), JSON.stringify(got), "a body carrying rev splits the same");
+});
+
 // ── GLOBAL-BLOCKS: the town-wide blocks are out of the rev and ride `global` ──────────────────────────────────────────────
 
 test("global carries a version and every town-wide block whole, and each block is the page's own", async () => {
