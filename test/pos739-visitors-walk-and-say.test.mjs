@@ -250,7 +250,7 @@ test("FALSIFIER: every heard say carries its speaker's standing, as a value", as
   assert.deepEqual(byHandle(reply.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the say's voices");
   const heard = await store.heardAt({ x: 0, y: 0 });
   assert.deepEqual(byHandle(heard), { "berth-newcomer": "visitor", rei: "resident" }, "heardAt");
-  assert.deepEqual(byHandle(reply.conversation.record), { "berth-newcomer": "visitor", rei: "resident" }, "the room's record");
+  assert.deepEqual(byHandle(reply.conversation.circles.timeline), { "berth-newcomer": "visitor", rei: "resident" }, "the room's circles (POS-1035; unthreaded here)");
   const [thread] = (await store.conversations()).live;
   assert.deepEqual(byHandle(thread.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the conversations page");
   assert.deepEqual(heardBlock(heard).map((h) => h.standing), ["visitor", "resident"], "the v2 glance's heard");

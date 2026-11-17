@@ -405,8 +405,10 @@ test("QA fail 5 · the v2 read's you.holding carries what you hold by kind, besi
     const v2 = await worldApex({ read_shape: "v2" }, KEY);
     const holding = v2.you?.holding;
     assert.ok(Array.isArray(holding), JSON.stringify(v2).slice(0, 400));
-    assert.ok(holding.includes(BAG), `the whole bag: ${JSON.stringify(holding)}`);
-    const kinds = holding.filter((h) => typeof h === "object");
+    // POS-1094 (Kogane): one shape, an object each; a whole thing is { thing }, a counted kind { kind, count, shows }
+    assert.ok(holding.every((h) => h && typeof h === "object"), `one shape: ${JSON.stringify(holding)}`);
+    assert.ok(holding.some((h) => h.thing === BAG), `the whole bag: ${JSON.stringify(holding)}`);
+    const kinds = holding.filter((h) => "kind" in h);
     assert.deepEqual(kinds.map((k) => [k.kind, k.count]), [["pocket-comet", 3]], `the three pocket comets, a kind and a number: ${JSON.stringify(holding)}`);
     assert.equal(kinds[0].shows, "3 pocket-comets");
   });

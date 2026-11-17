@@ -110,6 +110,13 @@ export function realSources({ ix, clone, nowMs = Date.now(), readers = {} } = {}
         id: e.handle, kind: "arrival", ...instantOf(e.joined), href: apiUrl(`/residents/${e.handle}`), title: `${e.display ?? e.handle} arrived`, by: e.handle,
       })), { since, before, resume, cap });
     },
+    // the household filter's doers: the handles of the house's residents, from the same resolver the near origin reads; a house the town does not know says so
+    async members(household) {
+      const hb = await import("./house-bundle.mjs");
+      const house = await hb.houseMembers({ household, clone });
+      if (house.refused) return { unavailable: `no house "${household}" is known here (${house.refused[1]})` };
+      return { slug: house.slug, members: [...house.members] };
+    },
     // the near origin: where the house's residents stand on the walkers roll (house-bundle.mjs § standsOf), their centre; none placed, none guessed
     async origin(household) {
       const hb = await import("./house-bundle.mjs");
