@@ -55,6 +55,37 @@ test("M1 · the flag file: absent is off; present is on, with an end time only w
   for (const code of ["EACCES", "EISDIR", "ENOTDIR"]) assert.equal(readSwitch("x", () => { throw err(code); }), null, `${code}: off`);
 });
 
+test("M1b · a state change is logged once, not per request: an unreadable flag (EACCES) logs its code once and the doors still serve", () => {
+  let t = 5_000_000, mode = "absent";
+  const lines = [];
+  const read = () => {
+    if (mode === "absent") throw err("ENOENT");
+    if (mode === "eacces") throw err("EACCES");
+    return "";
+  };
+  const m = makeMaintenance({ file: "x", clock: () => t, read, log: (s) => lines.push(s) });
+  const tick = () => { t += 1000; return m.refuses("GET", "/town"); };
+  for (let i = 0; i < 3; i++) assert.equal(tick(), null, "absent: off");
+  assert.deepEqual(lines, [], "absent (ENOENT) is the normal off: nothing logged");
+  mode = "eacces";
+  for (let i = 0; i < 5; i++) assert.equal(tick(), null, "EACCES: still serves normally (fails open)");
+  assert.equal(lines.length, 1, `EACCES logs exactly once across five reads, got: ${JSON.stringify(lines)}`);
+  assert.match(lines[0], /EACCES/, "the line names the error code");
+  mode = "on";
+  assert.ok(tick(), "readable again and present: on");
+  assert.ok(tick(), "still on");
+  assert.equal(lines.length, 2, "unreadable to on: one more line");
+  assert.match(lines[1], /switch ON/);
+  mode = "absent";
+  assert.equal(tick(), null);
+  assert.equal(tick(), null);
+  assert.equal(lines.length, 3, "on to off: one more line");
+  assert.match(lines[2], /switch OFF/);
+  mode = "on"; tick(); mode = "eacces"; tick(); tick();
+  assert.equal(lines.length, 5, "off to on, then on to unreadable: one line each");
+  assert.match(lines[4], /EACCES/);
+});
+
 test("M2 · Retry-After: the seconds to the end time, bounded; a few minutes' worth when there is none or it has passed", () => {
   const now = Date.parse("2026-11-18T03:00:00Z");
   assert.equal(retryAfterSeconds({ ends_at: "2026-11-18T03:05:00.000Z" }, now), 300);

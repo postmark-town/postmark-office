@@ -47,16 +47,24 @@ const STAYS_UP = new Set(["/", "/release", "/ops/loop-lag", "/ops/store-txn"]);
  * off: the switch fails open, because an unreadable flag must never take the town down.
  */
 export function readSwitch(file, read = (f) => readFileSync(f, "utf8")) {
+  return readSwitchState(file, read).sw;
+}
+
+/**
+ * The same reading with its state named, so a caller can log a CHANGE: `{ sw, state, code }`,
+ * where state is "off" (no file), "on", or "unreadable" (any read failure but ENOENT; `code` is
+ * the error's code). An unreadable flag still reads as off (`sw` null): failing open stays.
+ */
+export function readSwitchState(file, read = (f) => readFileSync(f, "utf8")) {
   let text;
   try { text = read(file); }
   catch (e) {
-    if (e?.code !== "ENOENT" && e?.code !== "EACCES" && e?.code !== "EISDIR" && e?.code !== "ENOTDIR")
-      console.error(`[maintenance] the flag file could not be read (${String(e?.code ?? e?.message ?? e).slice(0, 80)}): treated as off`);
-    return null;
+    if (e?.code === "ENOENT") return { sw: null, state: "off", code: null };
+    return { sw: null, state: "unreadable", code: String(e?.code ?? e?.message ?? e).slice(0, 80) };
   }
   const first = String(text).split(/\r?\n/, 1)[0].trim();
   const ms = first ? Date.parse(first) : NaN;
-  return { ends_at: Number.isFinite(ms) ? new Date(ms).toISOString() : null };
+  return { sw: { ends_at: Number.isFinite(ms) ? new Date(ms).toISOString() : null }, state: "on", code: null };
 }
 
 /** Seconds to put in Retry-After for a switch reading at `nowMs`. */
@@ -82,13 +90,27 @@ export const maintenanceNote = (sw) => (sw ? { on: true, ends_at: sw.ends_at ?? 
 /**
  * The switch as the office reads it: `check()` answers the reading now (null when off),
  * from a one-second memory so a busy door does not read a file per request.
- * `file` and `clock`/`read` are injectable for a test.
+ * `file` and `clock`/`read` are injectable for a test, and so is `log` (default console.error).
+ * One log line each time the switch's state CHANGES (off to on, on to off, readable to
+ * unreadable with the error code), never one per request or per read; the first reading
+ * counts as a change from "off", so a flag that is unreadable at boot is said once.
  */
-export function makeMaintenance({ file = () => process.env.OFFICE_MAINTENANCE_FILE || MAINTENANCE_DEFAULT_FILE, clock = Date.now, read } = {}) {
-  let at = -Infinity, held = null;
+export function makeMaintenance({ file = () => process.env.OFFICE_MAINTENANCE_FILE || MAINTENANCE_DEFAULT_FILE, clock = Date.now, read, log = (m) => console.error(m) } = {}) {
+  let at = -Infinity, held = null, lastState = "off", lastCode = null;
   const check = () => {
     const t = clock();
-    if (t - at >= CACHE_MS || t < at) { held = readSwitch(typeof file === "function" ? file() : file, read); at = t; }
+    if (t - at >= CACHE_MS || t < at) {
+      const r = readSwitchState(typeof file === "function" ? file() : file, read);
+      held = r.sw; at = t;
+      if (r.state !== lastState || r.code !== lastCode) {
+        lastState = r.state; lastCode = r.code;
+        try {
+          if (r.state === "on") log(`[maintenance] switch ON${r.sw.ends_at ? ` (expected end ${r.sw.ends_at})` : ""}: every door answers 503`);
+          else if (r.state === "off") log("[maintenance] switch OFF: doors answer normally");
+          else log(`[maintenance] the flag file could not be read (${r.code}): treated as off, the town stays up`);
+        } catch { /* a logger must never take a request down */ }
+      }
+    }
     return held;
   };
   /** True when this request is answered by the maintenance 503 (the switch is on and the door is not one that stays up). */
