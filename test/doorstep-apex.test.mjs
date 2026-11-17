@@ -157,16 +157,32 @@ test("a doorstep is its own residents' only: no key, or a key with no residents,
 
 test("D4: per handle — a key with several names one, and a handle not on the key is refused", async () => {
   const two = { handles: new Set(["wright", "rei"]) };
-  // POS-1094: bare, it answers for the key's first resident and names the others; it was a 422 until then
-  const bare = await doorstepApex({}, two, doors().ctx);
-  assert.equal(bare.code, undefined, JSON.stringify(bare).slice(0, 200));
-  assert.equal(bare.doorstep, "wright", "the key's first resident");
-  assert.match(bare.others, /holds 2 residents; this is wright's.*<rei>/, "and the others are named");
+  // POS-1094: bare, it answers for the HOUSE's first-joined resident on the key and names the others (it was a 422 until then).
+  // The key's own set is in the order the handles were added to it, and a harbor handle can come first there.
+  const harborFirst = { handles: new Set(["rei", "wright"]) };
+  const c = doors().ctx;
+  const unordered = await doorstepApex({}, harborFirst, c);
+  assert.equal(unordered.code, undefined, JSON.stringify(unordered).slice(0, 200));
+  assert.equal(unordered.doorstep, "rei", "with no register to ask, the key's own order");
+  const ordered = await doorstepApex({}, harborFirst, { ...c, residentOrder: async (hs) => [...hs].sort().reverse() });
+  assert.equal(ordered.doorstep, "wright", "the house's first-joined comes first, whatever the key's order");
+  assert.match(ordered.others, /holds 2 residents; this is wright's, the house's first joined.*<rei>/, "and the line says so, naming the others");
+  const failed = await doorstepApex({}, harborFirst, { ...c, residentOrder: async () => { throw new Error("registry down"); } });
+  assert.equal(failed.doorstep, "rei", "an order that cannot be read keeps the key's own");
   const second = await doorstepApex({ handle: "rei" }, two, doors().ctx);
   assert.equal(second.doorstep, "rei");
   assert.equal(second.others, undefined, "naming a handle says nothing of the others");
   assert.equal((await doorstepApex({}, KEY, doors().ctx)).others, undefined, "a key with one resident has no others");
   assert.equal((await doorstepApex({ handle: "kogane" }, two, doors().ctx)).code, 403);
+});
+
+test("POS-1094: residentOrderOf puts a key's handles in their household's own order, the unlisted after", async () => {
+  const { residentOrderOf } = await import("../src/households.mjs");
+  const registry = { households: { "wright-house": { residents: ["wright", "rei", "mari"] } } };
+  const pins = {};
+  assert.deepEqual(residentOrderOf(registry, pins, ["mari", "wright"]), ["wright", "mari"]);
+  assert.deepEqual(residentOrderOf(registry, pins, ["harbor-guest", "rei", "wright"]), ["wright", "rei", "harbor-guest"], "a handle the house does not list goes last");
+  assert.deepEqual(residentOrderOf(registry, pins, ["stray-b", "stray-a"]), ["stray-b", "stray-a"], "no house: the key's own order");
 });
 
 test("a door that cannot answer drops its lines, and the world says so in one line", async () => {

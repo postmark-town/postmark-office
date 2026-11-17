@@ -202,7 +202,7 @@ export const EXPLAIN = Object.freeze({
   }),
 
   doorstep: Object.freeze({
-    doorstep: row("whose doorstep this is: the handle you named, else your key's first resident", 'household { }', "live"),
+    doorstep: row("whose doorstep this is: the handle you named, else your house's first-joined resident on the key", 'household { }', "live"),
     others: row("said when your key holds several residents and you named none: this doorstep is the first's, and these are the others, each one doorstep { handle } away", 'doorstep { handle: "<handle>" }', "live"),
     you: row("what needs you (the house's), your unread mail, your quests' progress: one line each, each naming its door", 'each line\'s from: names its door', "live"),
     here: row("where you stand, who is active near you, what is happening here, from the world read", 'world { read_shape: "v2" }', "live"),

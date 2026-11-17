@@ -197,8 +197,11 @@ export function parcelsUnderHouses(rows = []) {
   const of = new Map();
   for (const p of rows) {
     if (!p.extent || !p.at) continue;
-    const house = rows.find((r) => r !== p && !r.extent && !r.class && r.at && !of.has(r) && r.bearing === p.bearing
+    const within = rows.filter((r) => r !== p && !r.extent && !r.class && r.at && !of.has(r) && r.bearing === p.bearing
+      && p.by && r.by === p.by // the maker's own: a stranger's gift on the ground is no house (27 of 171 parcels on the world repo hold one)
       && Math.abs(r.at.x - p.at.x) <= p.extent.w / 2 && Math.abs(r.at.y - p.at.y) <= p.extent.h / 2);
+    // the mark standing at the parcel's own point is the house; else the best-ranked of its maker's (none: no nesting)
+    const house = within.find((r) => r.at.x === p.at.x && r.at.y === p.at.y) ?? within[0];
     if (!house) continue;
     of.set(house, p);
     nested.add(p);

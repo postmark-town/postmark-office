@@ -3083,6 +3083,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
       // POS-1094: what a row needs to say its class (Domovoi) and to sit a parcel under its house (POS-933, Kogane):
       // the class a mark names (none for a plain place), and the parcel's own point and extent
       ...(markClassOf(mark) ? { class: markClassOf(mark) } : {}),
+      ...(mark?.by ? { by: mark.by } : {}), // a parcel's house is its own maker's (POS-933 review)
       ...(mark?.at ? { at: { x: mark.at.x, y: mark.at.y } } : {}),
       ...(mark?.kind === "parcel" && mark.extent ? { extent: { w: mark.extent.w, h: mark.extent.h } } : {}),
       ...(o.lifted ? { lifted: true } : {}), ...(typeof mark?.image === "string" ? { image: true } : {}) };

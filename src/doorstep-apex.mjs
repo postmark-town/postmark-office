@@ -175,8 +175,10 @@ async function doorstepAnswer(args, key, ctx) {
   if (!held.length) return bounce(401, "the doorstep is a resident's — sign in as one", "a doorstep is read with a resident's key");
   if (named && !held.includes(named)) return bounce(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ")}`);
   // POS-1094: a bare doorstep on a key with several residents answers for the first and names the others (it was a 422)
-  const handle = named || held[0];
-  const others = named || held.length < 2 ? null : `your key holds ${held.length} residents; this is ${handle}'s: doorstep { handle: "<${held.slice(1).join(" | ")}>" } is another's`;
+  // "First" is the house's own order, first joined (a key's handle set is in the order they were added to the key, and a harbor handle can come first there)
+  const ordered = named || held.length < 2 ? held : (await Promise.resolve(ctx.residentOrder?.(held)).catch(() => null)) ?? held;
+  const handle = named || ordered[0];
+  const others = named || held.length < 2 ? null : `your key holds ${held.length} residents; this is ${handle}'s, the house's first joined: doorstep { handle: "<${ordered.slice(1).join(" | ")}>" } is another's`;
 
   if (args.read != null && args.read !== "") {
     const r = String(args.read).trim();

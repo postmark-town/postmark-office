@@ -138,6 +138,9 @@ const MARKS = [
 
   // a plain resident mark — the `quoted` lane's subject
   { id: "alpha/quiet-parcel", by: "alpha", kind: "parcel", tier: "market", at: { x: -950, y: -800 }, extent: { w: 25, h: 25 }, body: "alpha's ground, quietly held." },
+  // POS-933: alpha's own house on that ground (a stranger's mark in it is the next one down)
+  { id: "alpha/the-quiet-house", by: "alpha", kind: "sited", tier: "market", at: { x: -950, y: -800 }, extent: { w: 6, h: 5 }, body: "A quiet house on quiet ground." },
+  { id: "stranger/a-loaf", by: "stranger", kind: "sited", tier: "market", at: { x: -948, y: -799 }, extent: { w: 2, h: 2 }, body: "A loaf somebody left on alpha's ground." },
 
   // 4,200 characters of prose on the ground you stand on — the griefing shape
   { id: "alpha/verbose", by: "alpha", kind: "sited", tier: "market", at: { x: -850, y: -700 }, extent: { w: 20, h: 20 }, body: LOUD },
@@ -2191,7 +2194,7 @@ const HOUSE_AT = { x: -950, y: -800 };   // alpha/quiet-parcel's own centre (the
 const v2Lits = (r) => Object.fromEntries([
   ...(r.you?.within ?? []),
   ...Object.entries(r.view ?? {}).filter(([k]) => k !== "how").flatMap(([, rows]) => rows),
-].filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
+].filter((o) => "lit" in o).map((o) => [o.parcel?.id ?? o.id, o.lit])); // POS-933: a parcel under its house is lit by that house's light
 
 test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you stand within carries it too; unknown is null with one lit_unknown; a v2 read showing no house asks nothing", async () => {
   on();
@@ -2225,10 +2228,10 @@ test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you 
   // ⚑ THE FLIP: drop `lit` from viewBlock (or v2's lightsFor) → red.
 });
 
-// POS-933 (Kogane, 2026-11-06), THROUGH THE REAL READ: the nesting is world-read-v2.mjs's (pure, held in test/world-read-v2.test.mjs); what it
-// needs is each v2 row's point and a parcel's extent, which only the eyes' own rows can carry. A row that stops carrying them reds here,
-// and so does a view that shows the fixture's parcel twice or drops its light.
-test("POS-933 · the eyes' v2 rows carry each place's point and a parcel's extent, and the v2 view carries the parcel once, lit", async () => {
+// POS-933 (Kogane, 2026-11-06), THROUGH THE REAL READ: a house standing on its parcel shows once, the parcel under it, the light on the house.
+// The fixture's alpha/the-quiet-house is alpha's own, on alpha/quiet-parcel; stranger/a-loaf is a stranger's classless mark on the same ground,
+// ranked and placed so it would take the parcel if the maker were not checked (review of #1088: 27 of 171 parcels on the world repo hold one).
+test("POS-933 · a house through worldEyes and the v2 view: the maker's house takes the parcel and its light; a stranger's mark does not", async () => {
   on();
   const { worldEyes } = await import("../src/world.mjs");
   await withSpyStore(async () => {
@@ -2238,13 +2241,19 @@ test("POS-933 · the eyes' v2 rows carry each place's point and a parcel's exten
     assert.ok(parcel, `the parcel is in view: ${JSON.stringify(rows.map((o) => o.id))}`);
     assert.deepEqual(parcel.at, HOUSE_AT, "the parcel row carries its point");
     assert.deepEqual(parcel.extent, { w: 25, h: 25 }, "and its extent");
-    assert.equal(parcel.class, "parcel", "and its class");
-    for (const o of rows) assert.ok(o.at && Number.isFinite(o.at.x), `${o.id} carries its point`);
-    assert.ok(rows.filter((o) => o.id !== HOUSE).every((o) => !o.extent), "a place that is no parcel carries no extent: it can be a house");
+    assert.equal(parcel.class, "parcel");
+    assert.equal(parcel.by, "alpha", "and its maker");
+    const house = rows.find((o) => o.id === "alpha/the-quiet-house");
+    assert.ok(house, "the house is a row of the eyes");
+    assert.deepEqual([house.by, house.at], ["alpha", HOUSE_AT], "carrying its maker and point");
     const r = await worldApex({ ...A, read_shape: "v2" }, null);
     const shown = Object.entries(r.view).filter(([k]) => k !== "how").flatMap(([, v]) => v);
-    assert.equal(shown.filter((o) => o.id === HOUSE || o.parcel?.id === HOUSE).length, 1, "the parcel shows once");
-    assert.equal(shown.find((o) => o.id === HOUSE)?.lit, true, "with its light, as no house of its own stands in view");
+    const h = shown.find((o) => o.id === "alpha/the-quiet-house");
+    assert.ok(h, `the house shows: ${JSON.stringify(shown.map((o) => o.id))}`);
+    assert.equal(h.parcel?.id, HOUSE, "the parcel rides under it");
+    assert.equal(h.lit, true, "the light is the house's");
+    assert.ok(!shown.some((o) => o.id === HOUSE), "the parcel is no row of its own");
+    assert.ok(!(shown.find((o) => o.id === "stranger/a-loaf")?.parcel), "a stranger's mark never carries the parcel");
   });
 });
 

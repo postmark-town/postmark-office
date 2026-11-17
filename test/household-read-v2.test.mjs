@@ -751,3 +751,14 @@ test("POS-947/c · the naming is offered in first_steps only while the house nam
   for (const g of [sf, one, full]) assert.equal(offer1(g), NAMING_STEP);
 });
 const offer1 = (g) => g.house.first_steps.find((s) => s.startsWith("invited-by: "));
+
+// POS-1094 (review of #1088; Darko's call-2 ceiling): the default's line is one sentence on one line, and the widest glance with it is inside 10,000.
+// FULL_BUDGET and PART1_BUDGET above stay as the tighter guards on the glance as the building lanes grow it; the line is not counted in them.
+test("POS-1094 · the full household glance as the MCP door's default, with its line, is at or under 10,000 characters", (t) => {
+  const { p, closer, happened, went } = fullStarforge();
+  const base = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
+  const dflt = glanceV2({ ...p, closer, happened, went, isDefault: true }, { nowMs: NOW });
+  t.diagnostic(`Starforge, every block, as the default: ${served(dflt)} characters (${served(dflt) - served(base)} for the line; the tighter guard ${FULL_BUDGET} is for the glance without it)`);
+  assert.ok(served(dflt) > served(base), "the line is there");
+  assert.ok(served(dflt) <= 10000, `the default glance is ${served(dflt)} characters as served`);
+});

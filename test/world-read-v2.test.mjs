@@ -312,15 +312,15 @@ test("POS-697 item 6: under v2, cards: \"names\" says can by name and cards: \"f
 // ── POS-1094: the feedback fixes before v2 is the default ───────────────────
 
 // LAW (Kogane, 2026-11-06, POS-933): "Every house shows up twice in `view`, the parcel and the house, at the same distance and bearing. … If the parcel sat under its house, the view would halve and say the same thing." / "`lit` rides on the parcel, not the house."
-test("POS-933: a parcel sits under its house, and lit rides on the house", () => {
+test("POS-933: a parcel sits under its maker's house, and lit rides on the house", () => {
   const rows = [
-    { id: "kogane/the-well-house-parcel", name: "the Well House Parcel", body: "The ground.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 }, extent: { w: 25, h: 25 }, class: "parcel", lit: true },
-    { id: "kogane/the-well-house", name: "the Well House", body: "A squat block.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 } },
-    { id: "kogane/a-lamp", name: "a lamp", body: "On the ground.", bearing: "WSW", band: "close by", distM: 38, at: { x: 101, y: 100 }, class: "thing" },
-    { id: "rei/the-lone-parcel", name: "the Lone Parcel", body: "Bare ground.", bearing: "N", band: "a stone's throw", distM: 90, at: { x: 0, y: 900 }, extent: { w: 25, h: 25 }, class: "parcel", lit: false },
+    { id: "kogane/the-well-house-parcel", name: "the Well House Parcel", body: "The ground.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 }, extent: { w: 25, h: 25 }, class: "parcel", by: "kogane", lit: true },
+    { id: "kogane/the-well-house", name: "the Well House", body: "A squat block.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 }, by: "kogane" },
+    { id: "rei/a-lamp", name: "a lamp", body: "On the ground.", bearing: "WSW", band: "close by", distM: 38, at: { x: 101, y: 100 }, by: "rei", class: "thing" },
+    { id: "rei/the-lone-parcel", name: "the Lone Parcel", body: "Bare ground.", bearing: "N", band: "a stone's throw", distM: 90, at: { x: 0, y: 900 }, extent: { w: 25, h: 25 }, class: "parcel", by: "rei", lit: false },
   ];
   const v = viewBlock(rows);
-  assert.deepEqual(v.WSW.map((r) => r.id), ["kogane/the-well-house", "kogane/a-lamp"], "the parcel is no row of its own; a thing on its ground is no house");
+  assert.deepEqual(v.WSW.map((r) => r.id), ["kogane/the-well-house", "rei/a-lamp"], "the parcel is no row of its own");
   assert.equal(v.WSW[0].lit, true, "the light is on the house");
   assert.deepEqual(v.WSW[0].parcel, { id: "kogane/the-well-house-parcel", name: "the Well House Parcel", body: "The ground." }, "the parcel rides under it, whole");
   assert.ok(!("lit" in v.WSW[0].parcel), "and carries no light of its own");
@@ -330,6 +330,38 @@ test("POS-933: a parcel sits under its house, and lit rides on the house", () =>
   // a house outside the parcel's extent is not its house
   const away = viewBlock([{ ...rows[0] }, { ...rows[1], at: { x: 150, y: 100 } }]);
   assert.equal(away.WSW.length, 2);
+});
+
+// REVIEW of #1088 (blocking): on the world repo's data 27 of 171 parcels hold another maker's mark (voss/the-hallway-house holds three strangers' gifts and no house of its own).
+test("POS-933: a stranger's mark on a parcel is no house, the maker's mark at the parcel's own point is, and no house means no nesting", () => {
+  const parcel = { id: "voss/the-hallway-house", name: "the Hallway House", body: "Voss's ground.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, extent: { w: 25, h: 25 }, class: "parcel", by: "voss", lit: true };
+  const loaf = { id: "gift/a-loaf", name: "a loaf", body: "A gift.", bearing: "N", band: "close by", distM: 20, at: { x: 1, y: 1 }, by: "gift" };
+  // the stranger's classless mark is ranked FIRST inside the parcel and still takes nothing
+  const alone = viewBlock([loaf, parcel]);
+  assert.deepEqual(alone.N.map((r) => r.id), ["gift/a-loaf", "voss/the-hallway-house"], "Voss's ground stays a row");
+  assert.equal(alone.N[0].parcel, undefined);
+  assert.ok(!("lit" in alone.N[0]), "the stranger's loaf takes no light");
+  assert.equal(alone.N[1].lit, true, "and the parcel keeps its own");
+  // with the maker's own house in the same ground: it takes the parcel, the stranger still does not
+  const side = { id: "voss/a-shed", name: "a shed", body: "Off to one side.", bearing: "N", band: "close by", distM: 21, at: { x: 5, y: 5 }, by: "voss" };
+  const house = { id: "voss/the-house", name: "the house", body: "The house.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, by: "voss" };
+  const v = viewBlock([loaf, side, house, parcel]);
+  assert.equal(v.N.find((r) => r.id === "voss/the-house").parcel?.id, "voss/the-hallway-house", "the mark AT the parcel's own point is the house, though a shed of the maker's ranks before it");
+  assert.equal(v.N.find((r) => r.id === "voss/a-shed").parcel, undefined);
+  assert.equal(v.N.find((r) => r.id === "gift/a-loaf").parcel, undefined);
+  // a maker with no mark at the point: the best-ranked of the maker's own
+  const only = viewBlock([loaf, side, parcel]);
+  assert.equal(only.N.find((r) => r.id === "voss/a-shed").parcel?.id, "voss/the-hallway-house");
+});
+
+// REVIEW of #1088: removing the class exclusion left every test green.
+test("POS-933: a classed mark of the maker's (a thing set down on the ground) is no house", () => {
+  const parcel = { id: "kogane/the-parcel", name: "p", body: "Ground.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, extent: { w: 25, h: 25 }, class: "parcel", by: "kogane", lit: true };
+  const thing = { id: "kogane/a-pebble", name: "a pebble", body: "A pebble.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, by: "kogane", class: "thing" };
+  const v = viewBlock([thing, parcel]);
+  assert.deepEqual(v.N.map((r) => r.id), ["kogane/a-pebble", "kogane/the-parcel"], "the parcel stays a row");
+  assert.equal(v.N[0].parcel, undefined);
+  assert.equal(v.N[1].lit, true);
 });
 
 // LAW (Domovoi Boulanger, 2026-10-27): "A tiny class hint in the things list would help."
