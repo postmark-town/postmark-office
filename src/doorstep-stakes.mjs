@@ -311,10 +311,37 @@ export async function stakesFor(handles, {
   for (;;) {
     const allocation = pager.page({ limit: n, offset: start });
     if (allocation?.limit != null && allocation.limit < n) { n = Math.max(allocation.limit, 1); continue; }   // its own byte trim: both parts take the smaller
-    const out = make(previewOf(rows, { limit: n, offset: start, dateOf }), allocation);
+    const pg = previewOf(rows, { limit: n, offset: start, dateOf });
+    const out = withOneContract(make(pg, allocation), { allocation, marksLeft: Math.max(rows.length - (start + pg.rows.length), 0), marksShown: pg.rows.length, n, start });
     if (n <= 1 || textBytes(out) <= PAGE_BYTES) return out;
     n -= 1;
   }
+}
+
+/**
+ * THE TOP LEVEL IS THE ONE PAGING CONTRACT (POS-1102 review): a walker that follows only the top level's `next_offset` must see every row of BOTH parts.
+ * `next_offset` is the larger of the two parts' next offsets while either part has more (in step they are the same number), and `complete` is true only
+ * when both parts are done. A part that is exhausted while the other goes on shows no rows on the later pages, and the top level still says to go on.
+ * Nothing changes when neither part has more and the page starts at the top (a house that fits one page carries no pager fields).
+ */
+function withOneContract(out, { allocation, marksLeft, marksShown, n, start }) {
+  const stakesMore = allocation && allocation.next_offset != null;
+  if (!stakesMore && marksLeft === 0 && !("complete" in out)) return out;
+  const nexts = [];
+  if (marksLeft > 0) nexts.push(start + marksShown);
+  if (stakesMore) nexts.push(allocation.next_offset);
+  const next = nexts.length ? Math.max(...nexts) : null;
+  const stakesLeft = stakesMore ? Math.max((allocation.count ?? 0) - allocation.next_offset, 0) : 0;
+  const note = marksLeft > 0 && stakesMore ? `${marksLeft} further marks and ${stakesLeft} further stakes — call again with offset: ${next}`
+    : stakesMore ? `${stakesLeft} further stake${stakesLeft === 1 ? "" : "s"} — call again with offset: ${next}`
+    : out.more_note;
+  const { next_offset: _n, more_note: _m, ...rest } = out;
+  return {
+    ...rest,
+    limit: out.limit ?? n, offset: out.offset ?? start,
+    complete: next == null,
+    ...(next != null ? { next_offset: next, more_note: note } : {}),
+  };
 }
 
 /**
