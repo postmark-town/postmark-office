@@ -168,7 +168,9 @@ test("4 · the Hearth: every part is its recorded standalone call, made with no 
   assert.deepEqual(bundle.parts.closer.via, { door: "household", read: "closer", args: { household: HOUSE, limit: 10 } });
   assert.deepEqual(bundle.parts.went.via.args, { household: HOUSE, view: "went", limit: 20 });
   assert.deepEqual(bundle.parts.happened.via.args, { household: HOUSE, limit: 20 });
-  assert.deepEqual(bundle.parts.feed.via.args, { household: HOUSE, sort: "newest", limit: 20 });
+  // (until POS-844 this passed `household: HOUSE`, the near origin; `household` is the feed's filter now, and the Hearth's slot is the town's whole stream)
+  assert.deepEqual(bundle.parts.feed.via.args, { from: HOUSE, sort: "newest", limit: 20 });
+  assert.equal(bundle.parts.feed.data.household, undefined, "the Hearth's feed is not filtered to the house (a filtered answer echoes `household`)");
   const owner = await householdApex({ read: "hearth", household: HOUSE }, ownerKey, ctx());
   assert.deepEqual(steady(owner), steady(bundle), "an owner's bundle is the anonymous bundle: no owner overlay");
   for (const k of ["owner", "registry", "needs_you", "mail"]) assert.ok(!(k in bundle) && !(k in bundle.parts), k);

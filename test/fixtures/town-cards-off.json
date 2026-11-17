@@ -193,7 +193,7 @@
    },
    {
     "read": "feed",
-    "blurb": "The town as one stream, public: letters that crossed, ideas, bugs, events, marks a crossing decided, arrivals — sort: newest | backed | near (household: <slug>), kinds, limit, since, cursor.",
+    "blurb": "The town as one stream, public: letters that crossed, ideas, bugs, events, marks a crossing decided, arrivals — sort: newest | backed | near (from: <slug>); filters household, resident, kind, since, freely combined; limit, cursor.",
     "serves": "read_feed"
    },
    {
