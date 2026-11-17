@@ -43,6 +43,7 @@ import { availableParallelism } from "node:os";
 import { Writable } from "node:stream";
 import { workerSafe } from "./role.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { nowMs, newTiming, runTiming, currentTiming, workerReport } from "./read-timing.mjs"; // POS-1064/b: measurement only
 
 /** True inside a read worker. Everything that must not run twice keys on this. */
 export const IN_READ_WORKER = !isMainThread && workerData?.readWorker === true;
@@ -279,7 +280,10 @@ export function serveReadsInWorker(handle) {
       return;
     }
     if (msg?.type !== "read") return;
-    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null, worldWrites = null } = msg;
+    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null, worldWrites = null, timing = null } = msg;
+    // POS-1064/b: the instant this worker picked the read up, and a context of its own for the leases and bundles it runs (the main thread's rid joins them)
+    const taken = nowMs();
+    const tm = timing && typeof timing.rid === "string" ? newTiming(taken, timing.rid.slice(0, 32)) : null;
     // An ended request: a GET's is empty, an agent's MCP read (POS-284) carries
     // the JSON-RPC body the main thread already read, delivered as one chunk
     // before the end.
@@ -293,9 +297,9 @@ export function serveReadsInWorker(handle) {
     const res = new CollectedResponse((r) => {
       const body = r.body();
       const ab = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
-      parentPort.postMessage({ type: "answer", id, status: r.statusCode, statusMessage: r.statusMessage, headers: r.headerPairs(), body: ab }, [ab]);
+      parentPort.postMessage({ type: "answer", id, status: r.statusCode, statusMessage: r.statusMessage, headers: r.headerPairs(), body: ab, ...(tm ? { timing: workerReport(tm, taken) } : {}) }, [ab]);
     });
-    try { handle(req, res); }
+    try { if (tm) runTiming(tm, () => handle(req, res)); else handle(req, res); }
     catch (e) {
       parentPort.postMessage({ type: "answer", id, status: 500, headers: [["Content-Type", "application/json"]],
         body: Buffer.from(JSON.stringify({ error: "the read worker tripped", hint: faultLogged("the read worker tripped", e) })).buffer }); // its error goes to the log (POS-578)
@@ -350,6 +354,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
       if (!p) return;
       pending.delete(msg.id);
       rec.served++;
+      if (p.tm) { p.tm.answer = msg.timing ?? null; p.tm.answer_at = nowMs(); } // POS-1064/b: the worker's report, and when this thread received it
       write(p.res, msg, slot);
     });
     // Kept for the exit's one line: an `error` is always followed by an `exit`.
@@ -363,7 +368,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         const p = pending.get(id);
         if (!p) continue;
         pending.delete(id);
-        if (p.tries < 1 && dispatch(p.res, p.msg, p.tries + 1)) continue;
+        if (p.tries < 1 && dispatch(p.res, p.msg, p.tries + 1, p.tm)) continue;
         refuse(p.res);
       }
       rec.inflight.clear();
@@ -408,13 +413,15 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
     return best;
   }
 
-  function dispatch(res, msg, tries = 0) {
+  function dispatch(res, msg, tries = 0, tm = currentTiming()) {
     const r = pick();
     if (!r) return false;
     const id = nextId++;
     const m = { ...msg, id };
-    pending.set(id, { res, msg, tries });
+    pending.set(id, { res, msg, tries, tm });
     r.inflight.add(id);
+    // POS-1064/b: which worker and when this thread posted the read (the first post stays `first_sent` across a retry); the rid rides to the worker to join the two records
+    if (tm) { const sent = nowMs(); tm.hand = { first_sent: tm.hand?.first_sent ?? sent, sent, slot: r.slot, tries: tries + 1 }; m.timing = { rid: tm.rid }; }
     r.w.postMessage(m);
     return true;
   }

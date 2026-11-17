@@ -30,6 +30,7 @@ import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
 
 /**
  * The finished doorstep for one resident, or null when there is no such
@@ -40,7 +41,9 @@ import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reas
  * 500s because the ballot engine is mid-write is worse than one that arrives
  * without its votes line.
  */
-export async function doorstepBundle(handle, ctx = {}) {
+// POS-1064/b: the bundle call is timed under its request (read-timing.mjs § bundleSpan); the answer is the body's own, unchanged.
+export async function doorstepBundle(handle, ctx = {}) { return bundleSpan(() => doorstepBundleOf(handle, ctx)); }
+async function doorstepBundleOf(handle, ctx = {}) {
   // `slim` is THE CONNECTOR SKIN'S BOUND, and it is opt-in per door for the
   // same reason `conversationsOffset` is: the two call sites already differ by
   // declared args, and this is one more. Only mcp.mjs passes it — both of its
