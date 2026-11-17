@@ -1327,7 +1327,11 @@ retired disk watch used). The meeps are probe `meeps`: it reads
 (`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
 DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
 older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
-barks only on DOWN or STALE. The one alarm outside the sentinel is the
+barks only on DOWN or STALE. The meeps that moved to town-rig are probe
+`meeps_town_rig`: it reads `/srv/postmark-sentinel/meeps-town-rig.json`, landed
+by the watcher on town-rig, with the same classifier and the same 15 minutes
+(CORE-72). It ships only once that watcher is landing the file; before that it
+would read STALE. The one alarm outside the sentinel is the
 watchman's watchman: the town repo's `.github/workflows/offbox-watch.yml` runs
 off the box and alarms when the front door or the sentinel itself is dead or
 stale, which the sentinel cannot report about itself. It reads this same
