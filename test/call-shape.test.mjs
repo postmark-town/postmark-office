@@ -252,7 +252,7 @@ before(async () => {
     "--oauth-db", seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_DYNAMIC_DB: dynamicDb,
       VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "", WORLD_APEX: "1", WORLD_STORE_DB: join(tmp, "no-world.db"),
-      OFFICE_ACCESS_LOG_DIR: LOG_DIR, ...ix.env },
+      OFFICE_ACCESS_LOG_DIR: LOG_DIR, WORLD_READ_SHAPE: "v2", ...ix.env }, // POS-1099: the v2 default, so a bare call's served shape is the env's
     stdio: ["ignore", "pipe", "pipe"],
   }));
   office = booted.child;
@@ -303,7 +303,8 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
   // a bare world read, which a read worker answers (the pool is ready, above): the handed path is measured
   const bare = await mcp("world", {});
   const asked = [
-    { what: "a worker's bare world read", r: bare, mcp: "world", call: { tool: "world" } },
+    { what: "a worker's bare world read", r: bare, mcp: "world", call: { tool: "world", shape: "v2" } }, // POS-1099: no read_shape passed; the env default is what answered
+    { what: "POST /world/apex", r: await rest("POST", "/world/apex", {}), call: { tool: "world", shape: "v0" } }, // REST never takes the env default
     { what: "a worker's poisoned world read", r: await mcp("world", { read: SENTINEL, handle: SENTINEL, args: { mark: SENTINEL } }), mcp: "world", call: { tool: "world", read: "other" } },
     { what: "the household house read", r: await mcp("household", { read: "house", handle: SENTINEL }), mcp: "household", call: { tool: "household", read: "house" } },
     { what: "a poisoned letter", r: await mcp("household", { do: "send", args: { from: SENTINEL, to: SENTINEL, title: SENTINEL, body: SENTINEL.repeat(500), [SENTINEL]: 1, "jane-at-42-elm-st": 1 } }), mcp: "household", call: { tool: "household", do: "send" } },
@@ -330,7 +331,7 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
   assert.ok(bare.reader, `a read worker answered the bare read (the handed path is measured, not assumed); the office said: ${stderr.slice(-1500)}`);
   const records = parse(lines);
   assert.ok(methodLine(records, "tools/list") && methodLine(records, "other"), "a known method is named, an unknown one reads \"other\"");
-  const letter = lineFor(records, asked[3]);
+  const letter = lineFor(records, asked.find((a) => a.what === "a poisoned letter"));
   assert.equal(letter.call.keys_other, 2, "the letter's two undeclared field names are counted, not written");
   asked.forEach((a) => {
     const got = lineFor(records, a);
