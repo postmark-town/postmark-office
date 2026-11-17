@@ -584,7 +584,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
            before: { type: "string", description: "with view: went, the `next_before` a cut answer handed you: the ledger lines below it" } },
   quests: {},
   fund: {},
-  media: {},
+  media: { limit: { type: "number", description: "how many uploads a page carries (default 20, at most 200)" },
+           offset: { type: "number", description: "walk past the first uploads: the `next_offset` a cut page handed you" } },
   // Not declared here: the flat tool's own list, through the contract
   // (one-contract.mjs § READ_TWINS), so the twin cannot take a field its
   // town twin does not.
@@ -597,7 +598,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" },
                  part: { type: "string", description: "connector only: one part of a paged answer: set_downs_awaiting | takes_awaiting | unplaced_bounces | key_asks | likeness_question | stakes_at_risk | alerts" },
                  cursor: { type: "string", description: "connector only, with part: walk it from where the last page ended" } },
-  posts: {},
+  posts: { limit: { type: "number", description: "how many posts each list (put_up, taking_part) carries (default 20, at most 200)" },
+           offset: { type: "number", description: "walk past the first posts of each list: the `next_offset` a cut list handed you" } },
   closer: CLOSER_FIELDS,
   correspondents: CLOSER_FIELDS, // round 4: the glance block's own name for closer
   day: { date: { type: "string", description: "the UTC day, YYYY-MM-DD (default today, UTC)" } },
@@ -1436,10 +1438,10 @@ async function householdGlance(args, key, ctx) {
 }
 
 /** The ids of the idea posts, for a stake's kind (an idea is backed through the same ledger target as a mark); `note` says so when the posts could not be read. */
-async function ideaIdSet() {
+export async function ideaIdSet() {
   try {
     const { postsAtOffice } = await import("./town-posts.mjs");
-    const ideas = await postsAtOffice({ class: "idea" }, { pointer: false });
+    const ideas = await postsAtOffice({ class: "idea" }, { pointer: false, whole: true }); // POS-732: an internal reader of every idea, not a page of them
     return { ids: new Set((ideas?.posts ?? []).map((p) => String(p.id))), note: null };
   } catch { return { ids: null, note: "the idea posts could not be read, so a stake behind an idea is shown as kind: mark here, not as idea" }; }
 }
@@ -1905,7 +1907,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // "no other house writes on your wall" (world main 674c359c).
     if (what === "media") {
       const { mediaRead } = await import("./household-media.mjs");
-      return mediaRead(key, { odb, clone });
+      return mediaRead(key, { odb, clone, limit: f.limit, offset: f.offset }); // POS-732: the answer says "call again with offset", so the door takes it
     }
     // ── the mail reads (round 2, 2026-08-25) ────────────────────────────────
     // Your correspondence, in three views. inbox/outbox ARE list_mail — the
@@ -2191,7 +2193,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     if (what === "posts") {
       if (!handle) return whichResident("posts");
       const { householdPosts } = await import("./household-posts.mjs");
-      return householdPosts(handle, { clone });
+      return householdPosts(handle, { clone, page: { limit: f.limit, offset: f.offset } }); // POS-732: each list pages, 20 a page
     }
     // ── the house's settings (WLD-28): the caller's OWN house, read-only; the household's human changes them (the Hearth at PATCH /households/<slug>/settings, the likeness answer at its signed-in form) ──
     // The values only (likeness answer and what the town acts on, the Hearth chosen and the one it is drawn with): no human's identity and no consent audit.

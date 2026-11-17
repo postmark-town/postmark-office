@@ -1023,6 +1023,11 @@ test("GET /posts takes a class: none → 422 naming it; an idea is a post class 
   const ideas = await idea.json();
   assert.deepEqual([ideas.class, ideas.finished, ideas.total, ideas.posts], ["idea", ["shipped", "declined", "duplicate"], 0, []],
     "this office holds no idea post, and says so rather than refusing the class");
+  // POS-732: the plain REST list keeps its whole answer when it names no page (the site's snapshot readers make one request and follow nothing)
+  assert.equal(["shown", "limit", "offset", "complete"].some((k) => k in ideas), false, `GET /posts with no page is the unpaged answer: ${Object.keys(ideas)}`);
+  // …and naming a limit pages it, so the flag above is what held it whole
+  const paged = await (await get("/posts?class=idea&limit=5", null)).json();
+  assert.deepEqual([paged.shown, paged.limit, paged.complete], [0, 5, true]);
   const one = await get("/posts/postmark-pen/first-idea?class=bounty", null);
   assert.equal(one.status, 422);
   assert.match((await one.json()).defect, /"bounty" is not a post class/);
