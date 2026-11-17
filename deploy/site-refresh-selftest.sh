@@ -258,6 +258,12 @@ echo "$OUT" | grep -q "pass 1 —" && ok "a moved town DOES start a build" || ba
 TARGET2="$(readlink -f "$WEBROOT")"
 [ "$TARGET2" != "$BEFORE" ] && ok "and the webroot swung to a new release dir" || bad "the link did not move off $BEFORE"
 grep -q "\"town_sha\": \"$(git -C "$TOWN_SRC" rev-parse HEAD)\"" "$TARGET2/build.json" && ok "carrying the new town commit" || bad "stale town_sha after the move"
+# POS-1087: the second release hard-links what is byte-identical to the one that was serving, and copies what changed.
+# build-env.txt is the same bytes in both builds; index.html differs (it carries the build's nanosecond clock).
+check "the unchanged file has two links, one per release" "$(stat -c %h "$TARGET1/build-env.txt")" "2"
+[ "$(stat -c %i "$TARGET1/build-env.txt")" = "$(stat -c %i "$TARGET2/build-env.txt")" ] && ok "an unchanged file is one inode in both releases (hard-linked)" || bad "build-env.txt was copied, not linked"
+[ "$(stat -c %i "$TARGET1/index.html")" != "$(stat -c %i "$TARGET2/index.html")" ] && ok "a changed file is its own inode in each release" || bad "index.html is shared though its bytes changed"
+cmp -s "$TARGET1/index.html" "$TARGET2/index.html" && bad "the older release's index.html was changed under it" || ok "and the older release still holds its own bytes"
 
 head_ "5 · A NEW RELEASE TAG WAKES IT TOO — the box is the only publisher now"
 # If the key were the town alone, a tag cut on a quiet town would sit unpublished
