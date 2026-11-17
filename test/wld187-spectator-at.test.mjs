@@ -61,7 +61,8 @@ after(() => {
   if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-const strip = (a) => { const { cursor, ...rest } = a; return rest; }; // a cursor is minted from the clock; nothing else varies
+// a cursor and "next crossing in 7h 11m" are minted from the clock, and a minute can roll between two calls; nothing else varies
+const strip = (a) => { const { cursor, now, ...rest } = a; const { next_crossing_in, ...nowRest } = now ?? {}; return { ...rest, now: nowRest }; };
 const BLOCKS = ["now", "view", "who", "heard"];
 
 test("a coordinate: the four blocks of the v2 read, at that point, and nothing else of the caller's", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
