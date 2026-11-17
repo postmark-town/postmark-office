@@ -267,7 +267,8 @@ test("A PIN STOP is witnessed: the mint stops by name, and the crossing is owed 
   assert.equal(r.status, 3, `the pin stop is the crossing's exit: ${r.stderr}`);
   assert.match(r.stderr, /\[town-tool\] the town's tools\/stub-calls\.mjs is not the copy the office pinned/);
   assert.ok(!r.calls.some((c) => c.startsWith("mint")), "the town's mint never ran");
-  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`, "opened, from the pinned copy, though the clone differs");
+  // held by the unit's shell (r.pid, the `sh -c`): the door names its caller, not itself (POS-1035)
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --pid ${r.pid} [clean clone]`, "opened, from the pinned copy, though the clone differs");
   assert.ok(r.witness.includes(`witness owe-incomplete --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --why town-pin-mismatch: tools/stub-calls.mjs [clean clone]`),
     `the outcome is owed, by name: ${r.witness.join(" | ")}`);
   assert.ok(!r.witness.some((c) => c.startsWith("witness publish")), "the publish the pin stopped did not run");
@@ -286,7 +287,7 @@ test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and 
   const report = /wreport=(\S+);/.exec(ferryPayload())[1];
   assert.equal(JSON.parse(readFileSync(report, "utf8")).ran, true, "the report reached the unit's path");
   assert.equal(r.witness.length, 3, r.calls.join("\n"));
-  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`);
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --pid ${r.pid} [clean clone]`, "held by the unit's shell (POS-1035)");
   assert.equal(r.calls[0], r.witness[0], "the crossing is owed before it does anything (Rivet's FIX: an outcome must never vanish)");
   assert.equal(r.witness[1], `witness owe-mail --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --attempt ferry-inv-1 --exit 0 --stage done --ferry-report ${report} [clean clone]`);
   assert.equal(r.witness[2], `witness publish --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --key ${env.WITNESS_KEY} [clean clone]`);
