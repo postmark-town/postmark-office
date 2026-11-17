@@ -2387,6 +2387,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   countAct(channel);
 
   // ── write tier: a valid credential required ───────────────────────────
+    // POS-721: a keyless PATCH at the human's profile path is pointed at the form, not told to bring a key it could never use
+    // (no key sets the profile; the door below refuses every one). Still 401: nothing was presented.
+    if (!key && req.method === "PATCH" && /^\/households\/[a-z0-9-]+\/human$/.test(path)) {
+      const { humanProfileLink } = await import("./human-profile.mjs");
+      const slug = /^\/households\/([a-z0-9-]+)\/human$/.exec(path)[1];
+      return bounce(res, 401, "the household's human sets their profile through a GitHub sign-in in a browser, not with a key",
+        `open ${humanProfileLink(slug)} in a browser and set it there; no key sets it. Nothing was kept`);
+    }
     if (!key) {
       setWwwAuth(res);
       return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");

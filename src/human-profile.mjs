@@ -66,6 +66,13 @@ const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 // the text-direction controls, built from their code points so this source holds none of them raw
 const ch = (n) => String.fromCharCode(n);
 const TURNS_TEXT = new RegExp(`[${ch(0x202a)}-${ch(0x202e)}${ch(0x2066)}-${ch(0x2069)}]`, "u");
+// A TOWN NAME HOLDS NO ROUND BRACKET (Wright's call on #929's review, 2026-11-17): the reads put the true house in
+// brackets beside the name, "by DARKO (Starforge) for rei", so a name set to "DARKO (Starforge)" by another house's
+// human would read "by DARKO (Starforge) (Lantern Row) for rei" and pass for the founder's house. So ( and ), and the
+// characters that look like them (fullwidth, small, superscript, subscript, ornamental), are refused by name in a town
+// name. The short line and pronouns are never put beside a house, so they keep them.
+const ROUND_BRACKETS = [0x28, 0x29, 0xff08, 0xff09, 0xfe59, 0xfe5a, 0x207d, 0x207e, 0x208d, 0x208e, 0x2768, 0x2769, 0x276a, 0x276b];
+const BRACKETED = new RegExp(`[${ROUND_BRACKETS.map((n) => `\\u{${n.toString(16)}}`).join("")}]`, "u");
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 /** The household's human's own form: a browser sign-in, the one road that sets the profile (POS-721/c). */
@@ -97,6 +104,8 @@ export function judgeHumanProfile(body) {
     const value = body[f].trim();
     if (NOT_ONE_LINE.test(value)) throw bounce(422, `${f} is one line`, `send ${f} as one line of text, without a line break, tab or other control character`);
     if (TURNS_TEXT.test(value)) throw bounce(422, `${f} carries a text-direction control`, `send ${f} without the invisible characters that turn text around (U+202A to U+202E, U+2066 to U+2069)`);
+    if (f === "town_name" && BRACKETED.test(value))
+      throw bounce(422, "town_name holds no brackets", "the town's reads put your house in brackets beside your town name, \"DARKO (Starforge)\", so a bracket in the name itself could pass for another house's: send it without ( or ) or anything that looks like them");
     const cap = HUMAN_PROFILE_CAPS[f];
     if ([...value].length > cap) throw bounce(422, `${f} is longer than ${cap} characters`, `keep ${f} at ${cap} characters or fewer`);
     if (value) set[f] = value;

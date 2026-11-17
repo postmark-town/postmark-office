@@ -126,6 +126,16 @@ test("§ 2 the fields are judged as the resident's profile door judges its own: 
   const turns = [0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
   for (const n of turns) refused({ town_name: `DARKO${String.fromCharCode(n)}` }, /^town_name carries a text-direction control$/);
   refused({ short_line: `a ${String.fromCharCode(0x202e)}line` }, /^short_line carries a text-direction control$/);
+  // A TOWN NAME HOLDS NO ROUND BRACKET (Wright's call on the review of #929): the reads put the true house in brackets beside it,
+  // so "DARKO (Starforge)" set by another house's human would pass for the founder's house. ( and ), and every look-alike, refused.
+  refused({ town_name: "DARKO (Starforge)" }, /^town_name holds no brackets$/);
+  refused({ town_name: "DARKO)" }, /^town_name holds no brackets$/);
+  for (const n of [0xff08, 0xff09, 0xfe59, 0xfe5a, 0x207d, 0x207e, 0x208d, 0x208e, 0x2768, 0x2769, 0x276a, 0x276b])
+    refused({ town_name: `DARKO ${String.fromCharCode(n)}Starforge` }, /^town_name holds no brackets$/);
+  // only the town name: the line and pronouns are never put beside a house, and other brackets are no look-alike of ( )
+  assert.deepEqual(judgeHumanProfile({ short_line: "builds lanterns (mostly)", pronouns: "they/them (or he)" }).set,
+    { short_line: "builds lanterns (mostly)", pronouns: "they/them (or he)" });
+  assert.deepEqual(judgeHumanProfile({ town_name: "DARKO [the first]" }).set, { town_name: "DARKO [the first]" });
   // the neighbours stay: the marks just outside both ranges, and the zero-width joiner that holds an emoji family together
   // (just below U+202A is U+2029, the paragraph separator, which the one-line rule already refuses)
   for (const n of [0x2064, 0x2065, 0x206a])
@@ -343,7 +353,14 @@ test("§ 5 on a booted office: no key at PATCH sets it (a household key and a si
   // access token of the very account the house binds (what an MCP connector or a shell agent holds), are refused alike, before
   // the body is read, and pointed at the form.
   const c0 = commits();
-  assert.equal((await patch({ town_name: "DARKO" }, null)).status, 401, "no key at the door");
+  // no key at all: still 401, and pointed at the form rather than told to bring a key no one can use here
+  const keyless = await patch({ town_name: "DARKO" }, null);
+  assert.equal(keyless.status, 401, JSON.stringify(keyless.body));
+  assert.match(keyless.body.defect, /^the household's human sets their profile through a GitHub sign-in in a browser, not with a key$/);
+  assert.match(keyless.body.hint, /\/oauth\/human\?household=lantern-row/, "the keyless refusal names the form");
+  // and every other keyless write still gets the general answer (the control: the change is this path's alone)
+  const otherKeyless = await (await fetch(`${base}/households/lantern-row/hearth`, { method: "PATCH", headers: { "content-type": "application/json" }, body: "{}" })).json();
+  assert.match(otherKeyless.defect, /^no key at the door$/);
   for (const [who, token] of [["a household key", agentKey], ["the house's own access token", keeperSignIn], ["another house's access token", strangerSignIn]]) {
     const r = await patch({ town_name: "DARKO" }, token);
     assert.equal(r.status, 403, `${who}: ${JSON.stringify(r.body)}`);
@@ -369,6 +386,10 @@ test("§ 5 on a booted office: no key at PATCH sets it (a household key and a si
   assert.equal(turned.status, 422, turned.html.slice(0, 300));
   assert.match(turned.html, /town_name carries a text-direction control/);
   assert.equal(inFile(), undefined, "a refused save keeps nothing");
+  const bracketed = await submit(await open("lantern-row", KEEPER), { town_name: "DARKO (Starforge)", short_line: "", pronouns: "" });
+  assert.equal(bracketed.status, 422, bracketed.html.slice(0, 300));
+  assert.match(bracketed.html, /town_name holds no brackets/);
+  assert.equal(inFile(), undefined, "a bracketed town name keeps nothing");
   assert.equal((await submit(first, FULL)).status, 400, "a form is used once: its nonce is spent");
   const cancelled = await open("lantern-row", KEEPER);
   assert.equal((await submit(cancelled, FULL, "cancel")).status, 200);
