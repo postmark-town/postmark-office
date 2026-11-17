@@ -181,7 +181,7 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
     const why = e?.name === "NoRecordError" ? "the office is pointed at no record"
       : isMissingTable(e) ? "refused_acts is not on this store yet (migration 098)"
       : "the store could not take the write";
-    if (!known) saidAtMost(`a refusal was not kept (${cut(e?.message, 160) ?? "an error with no message"})`);
+    if (!known) saidAtMost("a refusal was not kept", e ?? "unknown");
     else if (!absentSaid) { absentSaid = true; console.error(`[office] refusal log: a refusal was not kept (${why})`); }
     return { recorded: false, why };
   }
@@ -189,11 +189,11 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
 
 /** The log hears an unexpected failure at most once a minute, so a saturated pool is one line and not one per refusal. */
 let lastSaid = 0;
-function saidAtMost(what) {
+function saidAtMost(what, cause = null) {
   const t = Date.now();
   if (t - lastSaid < 60_000) return;
   lastSaid = t;
-  try { console.error(`[office] refusal log: ${what}`); } catch { /* a log that cannot be written is not the answer's concern */ }
+  try { console.error(`[office] refusal log: ${what}${cause == null ? "" : ` (${cut(cause?.message, 160) ?? "an error with no message"})`}`); } catch { /* a log that cannot be written is not the answer's concern */ }
 }
 
 /**
@@ -225,7 +225,7 @@ export function noteMcpRefusal(msg, ctx, reply, { writeShaped }) {
     const refused = refusalInReply(reply);
     if (!refused) return;
     noteRefusal({ key: ctx.key, door: "mcp", act: actOf(name, args), target: targetOf(args), handle: actorHandle(ctx.key, args), ...refused });
-  } catch (e) { saidAtMost(`the MCP hook could not read a call (${cut(e?.message, 120) ?? "no message"})`); }
+  } catch (e) { saidAtMost("the MCP hook could not read a call", e ?? "unknown"); }
 }
 
 /**
@@ -245,7 +245,7 @@ export function noteRestRefusal(req, code, body) {
     const act = staged ? actOf(staged.name, staged.args) : `${method} ${nameOf(req.tel.path) ?? ""}`.slice(0, ACT_MAX);
     noteRefusal({ key, door: "rest", act, target: targetOf(staged?.args), handle: actorHandle(key, staged?.args),
       code: isHttpStatus(code) ? code : null, defect: cut(body.defect, DEFECT_MAX), hint: cut(body.hint, HINT_MAX) });
-  } catch (e) { saidAtMost(`the REST hook could not read a call (${cut(e?.message, 120) ?? "no message"})`); }
+  } catch (e) { saidAtMost("the REST hook could not read a call", e ?? "unknown"); }
 }
 
 // ── the household's read: its own refusals, and nobody else's ───────────────
