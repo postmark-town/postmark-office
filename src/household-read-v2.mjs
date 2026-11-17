@@ -30,6 +30,7 @@ import { HOUSEHOLD_LINES } from "./door-read-shape.mjs";
 import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
+import { sayReferenceOf } from "./circles.mjs"; // POS-1035: a say's id and the say it answers, as references
 
 /**
  * How many groups of what waits the glance shows: the largest first, ties
@@ -461,14 +462,14 @@ export const MEMBERS_KEY = "newest act first · handle · on <mark> | at x, y (m
 export const byLastAct = (a, b) => String(b.last_active ?? "").localeCompare(String(a.last_active ?? "")) || String(a.handle).localeCompare(String(b.handle));
 
 /** The `more` line, with the one sentence about what the glance leaves out (eval round 2). */
-export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothing in it is left out`;
+export const glanceMore = (cursor, { isDefault = false } = {}) => `${moreLine(cursor, { isDefault })} · a block with nothing in it is left out`;
 
 /**
  * The house's glance. `parts` is what the door read (household-apex.mjs §
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, isDefault = false } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   const steps = firstSteps(gaps, { naming, room });
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
@@ -502,7 +503,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
       ...(standing?.world_writes ? { world_writes: `${standing.world_writes.used}/${standing.world_writes.cap} this ${standing.world_writes.per ?? "hour"}` } : {}),
     },
     cursor,
-    more: glanceMore(cursor),
+    more: glanceMore(cursor, { isDefault }), // POS-1094: while v2 is the door's default, the line on it
     reading_law: READING_LAW_V2,
     read_shape: "v2",
   };
@@ -698,7 +699,15 @@ export function happenedRow(a, { houseName = null } = {}) {
     object: a.object ?? null,
     place: a.at_anchor ?? null,
     ...(by ? { by } : {}),
+    // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, as references — never words
+    ...sayReference(a),
   };
+}
+
+/** `{ say: { id, reply_to? } }` for a say act row whose id is an act number, else nothing (additive, after every existing field). */
+export function sayReference(a) {
+  const ref = sayReferenceOf(a);
+  return ref ? { say: ref } : {};
 }
 
 /**

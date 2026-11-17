@@ -57,6 +57,7 @@ import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { houseCompanions } from "./house-companions.mjs"; // POS-1070: each declared member's public outbox and quest board
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
 import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
@@ -252,7 +253,9 @@ export const ashoreVia = async (ix, handles) => {
  * are per-person cuts it does not take. Returns the answer or
  * `{ refused: [code, defect, hint] }`.
  */
-export async function houseBundle({ household = null } = {}, ctx = {}) {
+// POS-1064/b: the call is timed under its request (read-timing.mjs § bundleSpan); the answer is the body's own, unchanged.
+export async function houseBundle(ask = {}, ctx = {}) { return bundleSpan(() => houseBundleOf(ask, ctx)); }
+async function houseBundleOf({ household = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -415,7 +418,8 @@ export function pageBounds(limit, offset) {
  * The house, paged: the default answer of household { read: "house" }. Same
  * `ctx` as houseBundle. Returns the answer or `{ refused: [code, defect, hint] }`.
  */
-export async function housePage({ household = null, limit = null, offset = null } = {}, ctx = {}) {
+export async function housePage(ask = {}, ctx = {}) { return bundleSpan(() => housePageOf(ask, ctx)); }
+async function housePageOf({ household = null, limit = null, offset = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -582,6 +586,17 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
+  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended in sparks recounted from
+  // their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: every spark of the recorded collection, or a free event's private drafts, until each one's recounting is rewritten or it is
+  // gone). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
+  let recountings;
+  try {
+    const rows = readers.recountingsAwaiting
+      ? await readers.recountingsAwaiting(mine)
+      : await (await import("./event-sparks.mjs")).recountingsAwaitingAtOffice(mine);
+    recountings = { rows: rows ?? [] };
+  } catch { recountings = { rows: [], unavailable: "the house's completed events could not be read, so whether one waits on your recounting is unknown, not none" }; }
+
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
@@ -595,7 +610,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
+  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length + recountings.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -617,7 +632,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     alerts,
     ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable
+    // said only when one waits or the read failed (POS-1035), as takes_awaiting is: every other house's page keeps its shape
+    ...(recountings.rows.length || recountings.unavailable ? { recountings_awaiting: recountings } : {}),
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable && !recountings.unavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

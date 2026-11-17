@@ -27,12 +27,12 @@
 import test, { after, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-doorstep-stances-"));
+const scratch = tempDir("postmark-doorstep-stances-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────

@@ -33,10 +33,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown, emptyTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -76,7 +77,7 @@ test.after(scrub);
  * in fixture.mjs says wright's ADDRESS body is `# wright`; so does this.
  */
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-fresh-"));
+  const dir = tempDir("pm-fresh-");
   trash.push(dir);
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "HOME"), { recursive: true });
@@ -97,7 +98,7 @@ function townClone() {
 }
 
 function odbFile() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-fresh-odb-"));
+  const dir = tempDir("pm-fresh-odb-");
   trash.push(dir);
   const o = openOauthDb(join(dir, "oauth.db"));
   ensureTownJournal(o);
@@ -432,7 +433,7 @@ test("F6 · PAPER_ACTS declares, for every act, the exact file that act's door w
 /** A town that is FURNISHED and WRONG — every paper answers, and none of it
  *  matches the fixture. If any reader reaches the ambient clone, it finds this. */
 function decoyTown() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-decoy-"));
+  const dir = tempDir("pm-decoy-");
   trash.push(dir);
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "HOME"), { recursive: true });

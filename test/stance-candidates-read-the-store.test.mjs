@@ -39,9 +39,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
 import { CLASS_MARK, ACTION_LEAVE } from "../src/world-journal.mjs";
@@ -60,7 +60,7 @@ import { __setStancePoolForTest } from "../src/world2-acts.mjs";
 import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool-stub.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "pos195-stance-store-"));
+const scratch = tempDir("pos195-stance-store-");
 after(() => sweep(scratch));
 
 // ── canon, in a bottle ───────────────────────────────────────────────────────

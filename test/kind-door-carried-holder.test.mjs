@@ -12,10 +12,10 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -38,12 +38,12 @@ const PART2_WORLD = Boolean(WORLD) && existsSync(join(WORLD, KEEPING, "mark/thin
 // WLD-74 B, read off the engine this suite copies: a thing is within only once entered (mark-kind isThingIn is its mark)
 const B_ENGINE = Boolean(WORLD) && /export const isThingIn\b/.test(readFileSync(join(WORLD, "tools", "mark-kind.mjs"), "utf8"));
 const notPart2 = PART2_WORLD ? false : "the world clone predates LOGOS v2 part 2 (no the-town/consumable): its law has nothing of part 2 to drive";
-const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
+const repo = tempDir("o2-carried-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
 // NO STAMP LEDGER HERE, on purpose and the same on every machine: what a resident holds reads as unread,
 // so a drop's stake terms (POS-688 D4 step 3) answer the same way locally and on Actions
-const NO_TOWN = mkdtempSync(join(tmpdir(), "o2-no-town-"));
+const NO_TOWN = tempDir("o2-no-town-");
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 let pool;
 
@@ -405,8 +405,10 @@ test("QA fail 5 · the v2 read's you.holding carries what you hold by kind, besi
     const v2 = await worldApex({ read_shape: "v2" }, KEY);
     const holding = v2.you?.holding;
     assert.ok(Array.isArray(holding), JSON.stringify(v2).slice(0, 400));
-    assert.ok(holding.includes(BAG), `the whole bag: ${JSON.stringify(holding)}`);
-    const kinds = holding.filter((h) => typeof h === "object");
+    // POS-1094 (Kogane): one shape, an object each; a whole thing is { thing }, a counted kind { kind, count, shows }
+    assert.ok(holding.every((h) => h && typeof h === "object"), `one shape: ${JSON.stringify(holding)}`);
+    assert.ok(holding.some((h) => h.thing === BAG), `the whole bag: ${JSON.stringify(holding)}`);
+    const kinds = holding.filter((h) => "kind" in h);
     assert.deepEqual(kinds.map((k) => [k.kind, k.count]), [["pocket-comet", 3]], `the three pocket comets, a kind and a number: ${JSON.stringify(holding)}`);
     assert.equal(kinds[0].shows, "3 pocket-comets");
   });

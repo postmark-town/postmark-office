@@ -30,9 +30,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 
 import { KINOFIRE_12129 } from "./helpers/kinofire-12129.mjs";
@@ -50,8 +50,8 @@ const haveWorld = !!(SOURCE_GEOMETRY && existsSync(SOURCE_GEOMETRY));
 const skip = !haveWorld && "no WORLD_CLONE (the lint's geometry.mjs is copied from it)";
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-322-repo-"));
-const scratch = mkdtempSync(join(tmpdir(), "postmark-322-db-"));
+const repo = tempDir("postmark-322-repo-");
+const scratch = tempDir("postmark-322-db-");
 after(() => { sweep(repo); sweep(scratch); });
 
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

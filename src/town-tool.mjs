@@ -301,6 +301,22 @@ export function townToolArgv(clone, name, args = [], opts = {}) {
   return [path, ...named];
 }
 
+// THE HOLDER IS THE DOOR'S CALLER, NOT THE DOOR (POS-1035, Rivet 2026-11-17). An
+// owed entry is held by the process that will decide it: witness-chain's owe-open
+// defaults its holder to its own parent (process.ppid), and a publisher that finds
+// the holder gone publishes the entry as incomplete. Through this door that parent
+// is the door, which exits at once, so the unit's shell (the ferry's `sh -c`) would
+// not be the holder. So the door names its own caller: `--pid <the door's parent>`
+// is added when the caller named none. A library caller (townToolArgv, then a spawn)
+// is itself the child's parent, the right holder, so only the door does this.
+export const HOLDER_DEFAULTING = Object.freeze({ "witness-chain.mjs": Object.freeze(["owe-open"]) });
+
+/** `args` with `--pid <callerPid>` added for a HOLDER_DEFAULTING verb that names no `--pid`. Pure. */
+export function holderArgs(name, args, callerPid) {
+  if (!(HOLDER_DEFAULTING[name] ?? []).includes(args[0]) || args.includes("--pid")) return [...args];
+  return [...args, "--pid", String(callerPid)];
+}
+
 // ── THE SHELL'S DOOR ────────────────────────────────────────────────────────
 //   node src/town-tool.mjs run <name> --clone <town clone> [--stop-file <f>] -- <args…>
 // Runs the pinned copy as townToolArgv builds it, stdio passed through, and
@@ -320,7 +336,7 @@ async function main(argv) {
     console.error("usage: town-tool.mjs run <name> --clone <town clone> [--stop-file <f>] -- <args…>");
     return 2;
   }
-  const args = argv.slice(dd + 1);
+  const args = holderArgs(name, argv.slice(dd + 1), process.ppid);
   const cloneFree = (CLONE_FREE_VERBS[name] ?? []).includes(args[0]);
   let child;
   try { child = townToolArgv(head[ci + 1], name, args, { verifyClone: !cloneFree }); }

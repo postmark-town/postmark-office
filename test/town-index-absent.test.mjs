@@ -150,6 +150,9 @@ CHANGED["MCP household {}"].push(
   [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`],
   // AND THE HOUSEHOLD'S SETTINGS READ (WLD-28): `settings` joins the reads after blocks; nothing else in the answer moves.
   [`"blocks":"your house's mail blocks, private to it"`, `"blocks":"your house's mail blocks, private to it","settings":"likeness and Hearth, read-only"`]);
+// AND THE HOUSEHOLD'S REFUSALS READ (POS-1003): `refusals` joins the reads after settings; nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"settings":"likeness and Hearth, read-only"`, `"settings":"likeness and Hearth, read-only","refusals":"acts refused to your house, 90 days"`]);
 // AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,

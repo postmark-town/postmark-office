@@ -30,7 +30,8 @@
 //
 //   THE WORLD READ v2 (POS-632, Darko 2026-10-14), shaped by world-read-v2.mjs
 //   § shapeV2, never here: it is built from reads the apex asks only for it.
-//   A caller opts in per call with read_shape: "v2" (W1), which wins over
+//   It is the MCP door's default when WORLD_READ_SHAPE=v2 (POS-1094); a caller
+//   picks it, or the older v1, per call with read_shape (W1), which wins over
 //   WORLD_READ_SHAPE. Until 2026-10-14 "v2" named v1 with the cards as names
 //   only; that shape never ran on prod (the eval picked v1), and cards: "names"
 //   gives it per call, so the name went to the new read.
@@ -229,8 +230,8 @@ export const RECORDS_V0 = "`records` — the full mark record for everything `wi
 const RECORDS_LEAN = "`records` — each mark `within` and `nearby` names, with its body (a polygon is said as its vertex count; a place you stand inside keeps an 8-point outline), `ground` — the town's region rings and water by name —";
 export const SIZE_V0 = 'SIZE: a bare call returns roughly 50–80k characters as of 2026-10, most of it `records` and the action cards, so use targeted reads: cards: "names" (the cards alone, shrunk), mark: "<id>" (one mark whole), find: "<q>", or read: "<action>" (one act).';
 const SIZE_LEAN = {
-  v1: "SIZE: a bare call is the lean read, roughly 16k characters as of 2026-11 (it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole. read_shape: \"v2\" is the compact read, at about half this size: opt-in per call, while the default stays as it is.",
-  v2: "SIZE: a bare call is the world read v2, roughly 5k characters as of 2026-10: you, now (what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law. mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and read_shape: \"v1\" is the lean read.",
+  v1: "SIZE: a bare call is the lean read, roughly 16k characters as of 2026-11 (it grows with what stands near you), with each act as one line: mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and cards: \"full\" gives every card whole. read_shape: \"v2\" is the compact read, at about half this size, and the door's default once it is set so.",
+  v2: "SIZE: a bare call is the world read v2, the default read, roughly 8k characters as of 2026-11 (it grows with what stands near you): you, now (what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law. mark: \"<id>\" is one mark whole, find: \"<q>\" finds one, read: \"<action>\" is one act's full card, and read_shape: \"v1\" is the older, fuller read (roughly 16k; cards: \"full\" gives it every card whole).",
 };
 
 let moved = false;

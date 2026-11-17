@@ -111,6 +111,7 @@ export const DOOR_FIELDS = Object.freeze({
   world_declare_stance: NONCE,
   world_creature: NONCE, // a creature's afforded actions (POS-672, review-692 F2): a retried offer uses up one unit
   "buy-parcel-room": NONCE, // POS-939: a retry after a lost answer answers the first purchase's receipt
+  request_residency: NONCE, // POS-1038: add-resident, and POST /residency; a retry answers the first call's receipt
 });
 
 /** One `renamed` row — the same shape for a field, a read and a segment. */

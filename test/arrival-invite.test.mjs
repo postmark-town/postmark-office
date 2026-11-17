@@ -30,8 +30,8 @@ import { beforeEach as beforeEachPins } from "node:test";
 // starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
 const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -141,6 +141,22 @@ test("I3 · refused by name, crediting nobody: your own household, the town's ow
     { refused: "own", named: "wick" });
 });
 
+test("I3d · a reserved name the meep law also names gets the MEEP line, not the town-house one (POS-885, review note 1)", () => {
+  // LAW (POS-655, the receipt): a meep named in an invite "is one of the town's meeps". The postmaster and the ferry are both reserved
+  // names and meeps, and the reserved-name rule used to answer first with the town-house sentence.
+  const meepsAlso = (h) => isMeep(h) || h === "postmaster" || h === "ferry";
+  for (const name of ["postmaster", "ferry"]) {
+    const judged = judge(name, { isMeep: meepsAlso });
+    assert.deepEqual(judged, { refused: "meep", named: name }, name);
+    assert.match(inviteReceipt(judged), /is one of the town's meeps/, name);
+  }
+  // CONTROLS: a reserved name that is no meep stays the town's; the law unread still fails closed as the town's, and a
+  // non-reserved meep still reads meep.
+  assert.deepEqual(judge("office", { isMeep: meepsAlso }), { refused: "town", named: "office" });
+  assert.deepEqual(judge("postmaster", { isMeep: null }), { refused: "town", named: "postmaster" });
+  assert.deepEqual(judge("ember-lamp", { isMeep: meepsAlso }), { refused: "meep", named: "ember-lamp" });
+});
+
 test("I3c · THE FOUNDERS PAY LIKE ANY OTHER (POS-816/d): ?invite=wright credits starforge as ?invite=wick credits lantern-row; a meep of that house, and the town's own, are still refused", async () => {
   // Until 2026-11-03 this asserted POS-576/e ("No, never", Darko 2026-10-22 22:07): ?invite=wright resolved into
   // starforge and was refused as "founders", logged like a miss, nothing written. Darko 2026-11-03 09:31 EDT:
@@ -169,7 +185,7 @@ test("I3c · THE FOUNDERS PAY LIKE ANY OTHER (POS-816/d): ?invite=wright credits
 });
 
 test("I3b · the meep law is the town's own: read from its ledger through its own stamp-mint tool (the instrument declare-exec asks)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-meeplaw-"));
+  const dir = tempDir("pm-invite-meeplaw-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
@@ -184,7 +200,7 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   assert.equal((await meepLawAtOffice(dir, { strict: true }))("ember-lamp"), true, "strict reads the same law");
 
   // STRICT FAILS CLOSED: no tool, no ledger, or a ledger with no law line throws; the lenient read keeps its old answer.
-  const bare = mkdtempSync(join(tmpdir(), "pm-invite-nolaw-"));
+  const bare = tempDir("pm-invite-nolaw-");
   dirs.push(bare);
   mkdirSync(join(bare, "tools"), { recursive: true });
   mkdirSync(join(bare, "WHITE_PAGES"), { recursive: true });
@@ -279,7 +295,7 @@ test("I6 · the receipt: one sentence, public when kept, the reason when refused
 // ── I7 begin parks it ───────────────────────────────────────────────────────
 
 test("I7 · begin parks the named inviter with the declaration (the co-sign runs it), and a stranger's name refuses nothing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-begin-"));
+  const dir = tempDir("pm-invite-begin-");
   dirs.push(dir);
   const odb = openOauthDb(join(dir, "oauth.db"));
   await mintBerth(odb, "lantern-guest");
@@ -320,7 +336,7 @@ const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "u
 // read the same real ledger. `law: false` leaves the clone with no ledger.
 const ENGINE = await import(pathToFileURL(join(TOWN_CLONE, "tools", "stamp-mint.mjs")).href);
 const LAW_KEYS = generateKeyPairSync("ed25519");
-const KEY_DIR = mkdtempSync(join(tmpdir(), "pm-invite-key-"));
+const KEY_DIR = tempDir("pm-invite-key-");
 dirs.push(KEY_DIR);
 const STAMP_KEY = join(KEY_DIR, "stamp-key.pem");
 writeFileSync(STAMP_KEY, LAW_KEYS.privateKey.export({ type: "pkcs8", format: "pem" }));
@@ -329,7 +345,7 @@ function sealedLedger(lines) {
   return "# the stamp ledger\n\n" + lines.map((l, i) => `${l} · sig: ${sign(null, Buffer.from(seals[i], "utf8"), LAW_KEYS.privateKey).toString("base64url")}`).join("\n") + "\n";
 }
 function townClone({ law = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-town-"));
+  const dir = tempDir("pm-invite-town-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });

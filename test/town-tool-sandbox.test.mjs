@@ -23,8 +23,8 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedBetween, checkRequest, ferry, fingerprint, killStragglers, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
@@ -33,7 +33,7 @@ import { pinTown } from "./helpers/pinned-town.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "town-tool-sandbox.mjs");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-town-tool-"));
+const scratch = tempDir("postmark-town-tool-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const unit = (name) => readFileSync(join(OFFICE, "deploy", name), "utf8");

@@ -30,7 +30,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { householdApex, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_TOOL } from "../src/household-apex.mjs";
-import { actionFields, STANDPOINT_PARAMS } from "../src/world-apex.mjs";
+import { actionFields, STANDPOINT_PARAMS, APEX_TOOL } from "../src/world-apex.mjs";
+import { shapeV2 } from "../src/world-read-v2.mjs";
 import { TOOLS } from "../src/mcp.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
@@ -272,4 +273,31 @@ test("the act ANSWER's card speaks the same grammar, one key", async () => {
   assert.equal(paper.card.act, "home");
   assert.ok("body" in paper.card.fields,
     "the card's fields must come through the same context the bare read uses");
+});
+
+// ── POS-1094 (CORE-116): the strip keeps working when v2 is the MCP door's default ──
+//
+// The strip reads `actions` / `acts` WITH `fields`. The compact v2 glance carries neither, so the page's bare
+// call asks for the older read by name. This runs the prototype's own `bareReadArgs`, lifted by source slice.
+const bareReadArgs = liftFunction(PROTO, "bareReadArgs");
+
+test("POS-1094: a bare call on a tool with read_shape asks for the older read; any call that says what it wants is left alone", () => {
+  const household = HOUSEHOLD_TOOL;
+  const world = APEX_TOOL;
+  assert.ok(household.inputSchema.properties.read_shape && world.inputSchema.properties.read_shape, "both doors declare read_shape");
+  assert.deepEqual(bareReadArgs(household, {}), { read_shape: "v1" });
+  assert.deepEqual(bareReadArgs(household, { handle: "rei" }), { handle: "rei", read_shape: "v1" });
+  assert.deepEqual(bareReadArgs(world, { handle: "rei" }), { handle: "rei", read_shape: "v1", cards: "full" }, "the world's v1 gives each act one line unless asked for its card");
+  for (const said of [{ read: "mail" }, { do: "send", args: {} }, { explain: "" }, { since: "c1.1.1.1" }, { read_shape: "v2" }, { mark: "a/b" }])
+    assert.deepEqual(bareReadArgs(world, said), said, `${JSON.stringify(said)} stays as sent`);
+  assert.deepEqual(bareReadArgs({ name: "town", inputSchema: { properties: {} } }, {}), {}, "a tool that declares no read_shape is sent as it is");
+});
+
+test("POS-1094: with v2 the door's default, the strip finds no act in the glance, and the v1 ask brings them back", async () => {
+  const glance = shapeV2({ standpoint: { x: 0, y: 0 }, spine: [], crossing: 1, entries: [{ action: "say", blurb: "Speak.", fields: { text: { type: "string", required: true } } }] });
+  assert.ok(Object.keys(glance.can).length, "the glance has a can");
+  assert.equal(collectActions(glance).length, 0, "the glance has no acts-with-fields: the strip would be empty");
+  const older = await householdApex(bareReadArgs(HOUSEHOLD_TOOL, {}), key(), { ...ctx, readShape: "v2" });
+  assert.equal(older.read_shape, undefined, "read_shape: v1 is the older read even when v2 is the default");
+  assert.equal(collectActions(older).length, HOUSEHOLD_DISPATCHABLE.length, "asked for v1, the strip is whole again");
 });

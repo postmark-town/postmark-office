@@ -14,15 +14,15 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const tmp = mkdtempSync(join(tmpdir(), "pos779-http-"));
+const tmp = tempDir("pos779-http-");
 const H = 3600_000, MIN = 60_000;
 const iso = (ms) => new Date(ms).toISOString();
 // three published sweeps, long enough ago that "now" is in the open epoch

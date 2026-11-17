@@ -17,8 +17,8 @@
 import { test as nodeTest, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -31,7 +31,7 @@ const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 const scratch = scratchDir("save-creatures");
 /** A world clone whose tools/ are the pinned world's own, and an empty world. */
 function realToolsClone() {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-save-creatures-world-"));
+  const repo = tempDir("postmark-save-creatures-world-");
   cpSync(join(worldClone(), "tools"), join(repo, "tools"), { recursive: true, filter: (p) => !/\.test\.mjs$/.test(p) });
   mkdirSync(join(repo, "WORLD", "marks"), { recursive: true });
   writeFileSync(join(repo, "WORLD", "walk-ledger.md"), "# Walk ledger\n");

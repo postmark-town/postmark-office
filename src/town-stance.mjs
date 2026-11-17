@@ -404,12 +404,22 @@ const before = (g, m) => (dateMs(g) !== dateMs(m) ? dateMs(g) < dateMs(m) : Stri
  * and the inbox both build their `elder` here, so the two read seniority one way.
  */
 export function elderByFirstLaid(firstLaid) {
-  const ageOf = (m) => {
+  const read = (m) => {
     const v = firstLaid?.get?.(String(m?.id));
     const at = typeof v === "number" ? v : Date.parse(String(v ?? ""));
     return Number.isFinite(at) ? at : dateMs(m);
   };
-  return (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+  // ONE READ PER MARK (POS-1057). The inbox asks this of every pair of marks, and a mark with no first-laid entry parsed its date
+  // twice at every ask. The age is kept beside the mark object, for as long as that object and this comparison live; a caller that
+  // hands a fresh object gets a fresh read.
+  const ages = new WeakMap();
+  const ageOf = (m) => {
+    if (m === null || typeof m !== "object") return read(m);
+    let at = ages.get(m);
+    if (at === undefined) ages.set(m, at = read(m));
+    return at;
+  };
+  return (g, m) => { const ag = ageOf(g), am = ageOf(m); return ag !== am ? ag < am : String(g?.id ?? "") < String(m?.id ?? ""); };
 }
 
 /**
@@ -483,7 +493,10 @@ export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf
       if (!g?.id || g.id === mark.id || !g.at || !g.extent) continue;
       if (isThing && isThing(g)) continue;
       const hh = houseOf(householdOf, g.by);
-      if (hh === own || !elder(g, mark) || !overlaps(g, mark)) continue;
+      // OVERLAP FIRST (POS-1057). Both are yes-or-no questions with no effect, so the order changes no answer. Overlap is rectangle
+      // arithmetic and is false for nearly every pair; seniority reads footprints cell by cell since POS-571 and was asked of every
+      // pair, overlapping or not.
+      if (hh === own || !overlaps(g, mark) || !elder(g, mark)) continue;
       if (!grounds.has(hh)) grounds.set(hh, []);
       grounds.get(hh).push(g.id);
     }

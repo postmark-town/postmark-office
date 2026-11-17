@@ -17,11 +17,11 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -123,7 +123,7 @@ test.after(async () => { await IX_IN_RESTORE(); await IX_IN.stop(); });
  */
 const odbHomes = [];
 function liveShapeOdb() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-odb-home-"));
+  const dir = tempDir("pm-odb-home-");
   odbHomes.push(dir);
   return openOauthDb(join(dir, "oauth.db"));
 }
@@ -131,7 +131,7 @@ const dropOdbHomes = () => { for (const d of odbHomes.splice(0)) rmSync(d, { rec
 
 /** A town clone with the rooms the doors write into, under git so the pen can commit. */
 function townClone({ handles = ["wright", "limen"] } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-bridge-"));
+  const dir = tempDir("pm-bridge-");
   for (const h of handles) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -564,7 +564,7 @@ test("F5b · townLockHeld cannot guess: no flock, no answer", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F6 · THE LIVE LOG HAS NO `meta` UNTIL THE LOG MAKES ONE", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-odb-"));
+  const dir = tempDir("pm-odb-");
   try {
     // THE PREMISE, and it is what made this a live bug rather than a tidy-up:
     // the town log lives in the office's oauth.db, and openOauthDb builds FIVE
@@ -716,7 +716,7 @@ test("F11 · PARITY: the same fixture, both skins, deep-equal", async () => {
   says("src/doorstep-bundle.mjs", BOTH_SKINS_LAW,
     "the law this falsifier enforces is written where the block lives");
 
-  const tmp = mkdtempSync(join(tmpdir(), "pm-parity-"));
+  const tmp = tempDir("pm-parity-");
   const clone = townClone();
   let child;
   try {
@@ -950,7 +950,7 @@ test("F15 · A BATCH THAT CANNOT COMMIT IS PUT BACK WHOLE AND HELD, and the next
   const clone = townClone();
   const o = liveShapeOdb();
   const { bare, g, origin, pushes } = originFor(clone);
-  const hooks = mkdtempSync(join(tmpdir(), "pm-hooks-"));
+  const hooks = tempDir("pm-hooks-");
   try {
     await pushingOn(() => flagOn(async () => {
       const before = g("rev-parse", "HEAD");

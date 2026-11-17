@@ -448,11 +448,19 @@ export function groundFor(incoming, marks, overlaps) {
 export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overlaps, householdOf = (h) => h, words = [], households = null, isThing = null, elder = undefined }) {
   const mineById = new Map(mine.map((m) => [m.id, m]));
   const myHouses = households ?? new Set(mine.map((m) => houseOf(householdOf, m.by)));
+  // THE WORDS, FOUND BY THEIR MARK (POS-1057). `awaitingOf` reads only the words spoken on the mark it is asked about, and it was
+  // handed every standing word for every mark. Grouped once here, each mark is handed its own; the answer is the same.
+  const wordsOn = new Map();
+  for (const w of words) {
+    if (w?.on == null) continue;
+    if (!wordsOn.has(w.on)) wordsOn.set(w.on, []);
+    wordsOn.get(w.on).push(w);
+  }
   const out = [];
   for (const incoming of all) {
     if (!incoming?.id || mineById.has(incoming.id)) continue;
     if (spoken.has(incoming.id)) continue;
-    const ground = awaitingOf(incoming, { marks: mine, overlaps, words, householdOf, isThing, elder })
+    const ground = awaitingOf(incoming, { marks: mine, overlaps, words: wordsOn.get(incoming.id) ?? [], householdOf, isThing, elder })
       .filter((a) => myHouses.has(a.who))
       .flatMap((a) => a.ground)
       .sort()
@@ -963,7 +971,16 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   if (!mineHandles.size) return { candidates: [], standing: [], mine: [] };
   const geom = await stanceGeometry(repo);
   if (!geom) return { candidates: [], standing: [], mine: [], unavailable: "the world's own geometry could not be read — overlap is the engine's answer, never this door's" };
-  const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
+  // ONE RECTANGLE PER MARK, for this read (POS-1057): the engine's own `rect`, asked once of each mark and kept beside the mark
+  // object, where every pair used to ask it again of both sides.
+  const rects = new WeakMap();
+  const rectOf = (m) => {
+    if (m === null || typeof m !== "object") return geom.rect(m);
+    let r = rects.get(m);
+    if (r === undefined) rects.set(m, r = geom.rect(m));
+    return r;
+  };
+  const overlaps = (a, b) => geom.overlapArea(rectOf(a), rectOf(b)) > 0;
 
   // THE READ MAY BE UNREACHABLE, AND THAT IS SAID RATHER THAN ROUNDED TO ZERO.
   // `worldForStances` has no 1.0 arm to fall back on since POS-195; an office
@@ -996,7 +1013,12 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   // WHOSE GROUND THE NUMBER COUNTED, now that it is the house's: a resident's
   // own only while every mark counted is theirs, else the household's.
   const scope = mine.every((m) => mineHandles.has(m.by)) ? stancesGround(mineHandles) : "household";
-  return { candidates: candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, words, isThing, elder }), standing, mine: mine.map((m) => m.id), scope,
+  // THE SECOND PASS READS ONLY WHAT THE FIRST FOUND (POS-1057). A word can only take a mark off the list or shorten its ground,
+  // never add one: the pass above ran with no words, so every candidate with words is among `open`. Weighing the whole world a
+  // second time gave the same list at twice the cost.
+  const openIds = new Set(open.map((c) => c.mark));
+  const stillOpen = all.filter((m) => openIds.has(m?.id));
+  return { candidates: candidatesFrom({ mine, all: stillOpen, overlaps, householdOf, households: myHouses, words, isThing, elder }), standing, mine: mine.map((m) => m.id), scope,
     // Carried for the set-down group (`stanceShadow`'s `setDowns`), which needs
     // the same world and the same stance rows — never a second read of either.
     // Nothing renders these two keys; the shadow names every field it answers.
