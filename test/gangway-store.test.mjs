@@ -23,9 +23,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
@@ -51,7 +51,7 @@ after(async () => {
 const FILE = (state, since) => `---\nstate: ${state}\nsince: ${since}\nruled_by: founder\n---\n\n# The gangway\n\n**The gangway is down and it stays down.** The founder's prose.\n`;
 
 function townClone(text) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-gangway-"));
+  const dir = tempDir("pm-gangway-");
   trash.push(dir);
   mkdirSync(join(dir, "HARBOR"), { recursive: true });
   if (text !== null) writeFileSync(join(dir, GANGWAY_PATH), text);
@@ -134,7 +134,7 @@ test("GIT IN / STALE: a new (state, since) committed by the founder is adopted; 
 });
 
 test("THE GATE: the principal role, read from the registry; to anyone else the act does not exist", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-gangway-roles-"));
+  const dir = tempDir("pm-gangway-roles-");
   trash.push(dir);
   const rdb = await openPaper(join(dir, "roles.db"), { schema: rolesSchema });
   const founder = { household: "keemin", handles: new Set(["wright"]), ghId: 67605380, ghLogin: "keeminlee" };

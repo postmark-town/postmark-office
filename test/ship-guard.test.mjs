@@ -6,8 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openTrain, judgeBase, judgeTrainContainsMain, mainCommitsMissing } from "../tools/ship-guard.mjs";
@@ -63,7 +63,7 @@ test("train contains main lists at most ten commits and counts the rest", () => 
 
 // ── the git half, against a scratch repository ──────────────────────────────
 function scratchRepo() {
-  const dir = mkdtempSync(join(tmpdir(), "ship-guard-"));
+  const dir = tempDir("ship-guard-");
   const git = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd: dir, encoding: "utf8" }).trim();
   git("init", "-q", "-b", "main");
   writeFileSync(join(dir, "a.txt"), "1\n"); git("add", "."); git("commit", "-qm", "the w41 ship");

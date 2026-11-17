@@ -20,10 +20,10 @@
 // Run: WORLD_CLONE=<the office's world-clone> node --import ./test/helpers/sparse-guard.mjs --test test/outsider-lens-says-why.test.mjs
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
@@ -38,7 +38,7 @@ const SKIP = !HAVE && (REAL ? `the world clone at ${REAL} predates WLD-5 (no too
 // of your PUBLISHED marks, which is true on both surfaces (Wright's Settled line on POS-823).
 const LINE = "Strangers see your published marks just as you do: none of them is in a closed place.";
 
-const SCRATCH = mkdtempSync(join(tmpdir(), "pos823-"));
+const SCRATCH = tempDir("pos823-");
 const repo = join(SCRATCH, "world");
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
 

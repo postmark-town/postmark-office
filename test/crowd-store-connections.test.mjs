@@ -16,9 +16,9 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -32,8 +32,8 @@ const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const CROWD = 60;
 const HANDLES = Array.from({ length: CROWD }, (_, i) => `sbx-c${String(i).padStart(2, "0")}`);
 const AT = (i) => ({ x: 1000 + (i % 10) * 6, y: 1000 + Math.floor(i / 10) * 6 }); // a venue's floor: sixty residents within a few paces of each other
-const repo = mkdtempSync(join(tmpdir(), "pos1048-"));
-const NO_TOWN = mkdtempSync(join(tmpdir(), "pos1048-no-town-"));
+const repo = tempDir("pos1048-");
+const NO_TOWN = tempDir("pos1048-no-town-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "WORLD2_PG_ACQUIRE_MS", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));

@@ -15,15 +15,15 @@
 // independently). A spectator (x/y, no handle) is the unchanged control.
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { worldClone } from "./fixture-paths.mjs";
 
 const REAL = worldClone();
-const SCRATCH = mkdtempSync(join(tmpdir(), "wld9-"));
+const SCRATCH = tempDir("wld9-");
 const repo = join(SCRATCH, "world");
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
 

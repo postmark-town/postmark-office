@@ -22,16 +22,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
 const SOURCE_WORLD = worldClone();
 const HAVE_SOURCE = !!SOURCE_WORLD && existsSync(join(SOURCE_WORLD, "WORLD", "world-state.json"));
 
-const repo = mkdtempSync(join(tmpdir(), "pm-receipt-fixture-"));
+const repo = tempDir("pm-receipt-fixture-");
 // maxBuffer: the RED CONTROL reads the fixture's whole world-state back through
 // `git show`, and the town's grew past execFileSync's 1 MiB default at world
 // 8c4ed291 (1,067,523 bytes minified; 1,020,949 at 8e159d75): ENOBUFS, not a red.
