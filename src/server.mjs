@@ -2116,8 +2116,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
+        // sort= recent | staked (POS-854); staked on a class that takes no stake answers newest first and says so
+        const sortQ = url.searchParams.get("sort") ?? undefined;
         return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
-          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ, sort: sortQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));

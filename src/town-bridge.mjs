@@ -150,7 +150,7 @@ import {
 } from "./town-drain.mjs";
 import { drainPenReady } from "./ledger-pen.mjs";
 import { currentKeysOf, judgeHouseKey } from "./house-key.mjs";
-import { planFirstIdeaSweep, writeFirstIdeaSweep } from "./first-idea-sweep.mjs";
+import { planFirstIdeaSweep, writeFirstIdeaSweep, firstIdeaCandidates } from "./first-idea-sweep.mjs";
 import { replayPaperAct } from "./town-updates.mjs";
 import { replayLetter } from "./town-mail.mjs";
 import { foldLetters } from "./letter-fold.mjs"; // POS-666: a letter's amendments and withdrawal, folded as its sender reads them
@@ -881,7 +881,7 @@ export async function runTownDrain(odb, {
     const ideaPen = drainPenReady(clone);
     if (!ideaPen.ready) firstIdea = { ran: false, skipped: `pen not ready — ${ideaPen.why}` };
     else {
-      const ideaPlan = planFirstIdeaSweep(clone, { date: stamp });
+      const ideaPlan = planFirstIdeaSweep(clone, { date: stamp, ideas: await firstIdeaCandidates(stamp) });   // the idea posts and any mark still standing (POS-854)
       if (ideaPlan.refused) firstIdea = { ran: false, skipped: ideaPlan.refused };
       else {
         const ideaTouched = writeFirstIdeaSweep(clone, ideaPlan);
