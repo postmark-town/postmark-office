@@ -534,7 +534,13 @@ build_once() {
   say "extract: the checkout-coupled half (media, atlas, daily, works, doorstep bundles)"
   # POSTMARK_API named here, not inherited from the unit: the doorsteps are
   # read from the same office the rest of the pass reads (2026-10-13).
-  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_API="$API" POSTMARK_CROSSING="$crossing" node tools/extract-town.mjs --town "$TOWN" ) \
+  # DOORSTEP_STATE_DIR (POS-1086): the extractor keeps each resident's last
+  # office answer and its `rev` there, so the next pass can send `known=` and
+  # carry an unchanged doorstep over. It sits under $ROOT, beside
+  # letter-cache.json, because this script resets and cleans $SITE at the top of
+  # every pass: state kept in the tree would be wiped, and every pass would stay
+  # a full one. One pass at a time holds $LOCK, so the directory has one writer.
+  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_API="$API" POSTMARK_CROSSING="$crossing" DOORSTEP_STATE_DIR="$ROOT/doorstep-state" node tools/extract-town.mjs --town "$TOWN" ) \
     || die "extract-town.mjs tripped"
   say "extract: the API-fed half"
   # fetch-town.mjs also writes /data/pin.json (the site's tools/lib/world-pin-publish.mjs),
