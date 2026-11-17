@@ -3155,16 +3155,18 @@ The refresh needs no step: the box runs `deploy/site-refresh.sh` from the office
 
 The bare read an MCP caller gets at each door is set by one variable per door in `/etc/postmark-office.env`. Unset means today's read, byte for byte. The values are spelled per door, and **a wrong spelling is the 0 shape** with one line in the journal, never an error. So check the journal after a restart.
 
-| Variable | Today (unset) | Lean read | Names-only cards |
-|---|---|---|---|
-| `WORLD_READ_SHAPE` | `v0` | `v1` | `v2` |
-| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` |
-| `HOUSEHOLD_READ_SHAPE` | `h0` | `h1` | `h2` |
+| Variable | Unset | Lean read | Names-only cards | The compact glance (v2) |
+|---|---|---|---|---|
+| `WORLD_READ_SHAPE` | `v0` (the full read) | `v1` (about 16k characters) | none | `v2` (about 8k: you, now, view, who, can, law) |
+| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` | none yet (POS-733) |
+| `HOUSEHOLD_READ_SHAPE` | `h0` (the older read) | `h1` | `h2` | `v2` (the house's glance, about 4K to 7K) |
+
+**World and household v2 are the MCP door's default from the w48 ship (POS-1094, Darko 2026-11-16 22:09):** the box sets `WORLD_READ_SHAPE=v2` and `HOUSEHOLD_READ_SHAPE=v2`, and a call asks for the older read with `read_shape: "v1"` (the world's gives each act one line unless it also passes `cards: "full"`). Each v2 bare read says so in its `more` line while the env is set. The word `v2` is the world's and the household's own spelling, never the town's: a `TOWN_READ_SHAPE=v2` is `t0`, said once in the journal. Setting the switches is the ship's step, not a PR's.
 
 - **The shape is the MCP door's only.** The REST doors always answer the full read whatever is set: `GET`/`POST /world/apex` (the site cockpit's read), `GET`/`POST /town/apex` and `GET /household`. This is held by `test/read-shape-mcp-only.test.mjs`.
-- **The eval's recommendation** (round 1, 2026-10-09) is `WORLD_READ_SHAPE=v1`. It made no call for town or household.
+- **The eval's recommendation** (round 1, 2026-10-09) was `WORLD_READ_SHAPE=v1`; the compact v2 read, built since, is the ruled default (above).
 - **To set it:** add the line, then `sudo systemctl restart postmark-office`.
-- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
+- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the world read v2, the default read" (at `v1`: "the lean read"), and a bare `world {}` ends its `more` line with the line on the default.
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
 

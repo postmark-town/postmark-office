@@ -2225,6 +2225,29 @@ test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you 
   // ⚑ THE FLIP: drop `lit` from viewBlock (or v2's lightsFor) → red.
 });
 
+// POS-933 (Kogane, 2026-11-06), THROUGH THE REAL READ: the nesting is world-read-v2.mjs's (pure, held in test/world-read-v2.test.mjs); what it
+// needs is each v2 row's point and a parcel's extent, which only the eyes' own rows can carry. A row that stops carrying them reds here,
+// and so does a view that shows the fixture's parcel twice or drops its light.
+test("POS-933 · the eyes' v2 rows carry each place's point and a parcel's extent, and the v2 view carries the parcel once, lit", async () => {
+  on();
+  const { worldEyes } = await import("../src/world.mjs");
+  await withSpyStore(async () => {
+    const eyes = await worldEyes({ ...B }, null, { v2: true, lights: false });
+    const rows = eyes._fov.rows;
+    const parcel = rows.find((o) => o.id === HOUSE);
+    assert.ok(parcel, `the parcel is in view: ${JSON.stringify(rows.map((o) => o.id))}`);
+    assert.deepEqual(parcel.at, HOUSE_AT, "the parcel row carries its point");
+    assert.deepEqual(parcel.extent, { w: 25, h: 25 }, "and its extent");
+    assert.equal(parcel.class, "parcel", "and its class");
+    for (const o of rows) assert.ok(o.at && Number.isFinite(o.at.x), `${o.id} carries its point`);
+    assert.ok(rows.filter((o) => o.id !== HOUSE).every((o) => !o.extent), "a place that is no parcel carries no extent: it can be a house");
+    const r = await worldApex({ ...A, read_shape: "v2" }, null);
+    const shown = Object.entries(r.view).filter(([k]) => k !== "how").flatMap(([, v]) => v);
+    assert.equal(shown.filter((o) => o.id === HOUSE || o.parcel?.id === HOUSE).length, 1, "the parcel shows once");
+    assert.equal(shown.find((o) => o.id === HOUSE)?.lit, true, "with its light, as no house of its own stands in view");
+  });
+});
+
 test("v2 LIGHTS · the deep reads: read: \"view\" carries its rows' lit and, when unknown, the one lit_unknown; read: \"who\" (and happened, happening) shows no house and asks for no activity", async () => {
   on();
   const { resetActivityCache } = await import("../src/household-activity.mjs");

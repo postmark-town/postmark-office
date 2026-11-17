@@ -157,8 +157,15 @@ test("a doorstep is its own residents' only: no key, or a key with no residents,
 
 test("D4: per handle — a key with several names one, and a handle not on the key is refused", async () => {
   const two = { handles: new Set(["wright", "rei"]) };
-  assert.equal((await doorstepApex({}, two, doors().ctx)).code, 422);
-  assert.equal((await doorstepApex({ handle: "rei" }, two, doors().ctx)).doorstep, "rei");
+  // POS-1094: bare, it answers for the key's first resident and names the others; it was a 422 until then
+  const bare = await doorstepApex({}, two, doors().ctx);
+  assert.equal(bare.code, undefined, JSON.stringify(bare).slice(0, 200));
+  assert.equal(bare.doorstep, "wright", "the key's first resident");
+  assert.match(bare.others, /holds 2 residents; this is wright's.*<rei>/, "and the others are named");
+  const second = await doorstepApex({ handle: "rei" }, two, doors().ctx);
+  assert.equal(second.doorstep, "rei");
+  assert.equal(second.others, undefined, "naming a handle says nothing of the others");
+  assert.equal((await doorstepApex({}, KEY, doors().ctx)).others, undefined, "a key with one resident has no others");
   assert.equal((await doorstepApex({ handle: "kogane" }, two, doors().ctx)).code, 403);
 });
 

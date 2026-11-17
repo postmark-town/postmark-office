@@ -3131,7 +3131,8 @@ async function apexRead(args, key, ctx = {}) {
     // answers only what came after it.
     shaped.cursor = encodeCursor({ crossing: oriented.crossing?.n ?? 0, ms: nowMs, hw: happened?._hw ?? args._cursor?.hw ?? null });
     if (args._cursor) shaped.now.happened = { ...shaped.now.happened, since: "your last read (the cursor)" };
-    shaped.more = moreLine(shaped.cursor); // PR-5: the backstop, with this read's own cursor
+    // PR-5: the backstop, with this read's own cursor; and, while v2 is the MCP door's default (WORLD_READ_SHAPE=v2), the line on it (POS-1094)
+    shaped.more = moreLine(shaped.cursor, { isDefault: ctx.readShape === "v2" });
     if (!deep) return shaped;
     // The deeper read answers the block whole, under its own name, and nothing else.
     const whole = deep.block === "happened" ? (happened ?? { unavailable: "the delta is not read at this office" })
@@ -4310,7 +4311,7 @@ async function worldApexAnswer(args, key, ctx) {
   // card whole beside can, and "names" says can by name (world-read-v2.mjs).
   const v2Asked = (args.read_shape ?? ctx.readShape) === "v2";
   if (args.diagnostics != null && !v2Asked)
-    return bounce(422, "diagnostics: rides the v2 read", "world { read_shape: \"v2\", diagnostics: true } — the read you have today carries the engine's notes already");
+    return bounce(422, "diagnostics: rides the v2 read", "world { read_shape: \"v2\", diagnostics: true } — the v1 read carries the engine's notes already");
   if (v2Asked && args.telling === true)
     return bounce(422, "v2 tells no prose — it is the compact glance", "the telling rides the v1 read: world { read_shape: \"v1\", telling: true }");
   // ── THE TWO `since` CLOCKS, ONE WORD EACH (POS-70; office PR #48) ─────────
@@ -4400,7 +4401,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"who\" or \"now.happened\". explain: \"\" is the tutorial. A class name climbs the class instead (POS-659): explain: \"thing\" answers the class's body, its extends chain, its properties (what it adds: tier, default, children), open (every slot left to the maker, inherited ones too, nested ones by dotted path, like appearance.form) with open_from naming the class each inherited one comes from, its afforded actions with their conditions, and makers; every instance read names its class in class_pointer. It answers docs, never data, and rides with no do: or read:." },
     // POS-632 (W1): the shape, per call. It wins over the office's default.
-    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the compact read, opt-in: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, at about half the size of the default read. Omit it for the older, fuller default." },
+    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the compact read, the default at this door: you, now (with what happened since the last crossing), view (what fills your eyes, by bearing), who (who is active near you), happening_here, can (each act in one line) and law, roughly 8k characters. read_shape: \"v1\" is the older, fuller read, roughly 16k (cards: \"full\" gives it every card whole)." },
     diagnostics: { type: "boolean", description: "with read_shape: \"v2\", also bring the engine's notes (the full law block, presence's disclosures). v1 always carries them." },
     cards: { type: "string", enum: ["names"], description: "cards: \"names\" shrinks `actions` to each act's name, one line, and how it reached you — for a repeat read by a caller who has already learnt the acts. Which acts are afforded is identical either way; only how much is said about each changes. Omit for the full cards, which is the default and carries the fields a caller needs to compose an act." },
   },
