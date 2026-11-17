@@ -2239,6 +2239,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const held = [...(key?.handles ?? [])];
       if (!(named || held.length))
         return bounce(422, "whose marks?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has published");
+      // POS-1100 review: a handle the key does not hold is refused, as the doorstep's own reads refuse it (doorstep-apex.mjs), same code and words. The stakes
+      // read now reaches the ledger, so a stranger's stamps are not this key's to read. (No key at all keeps the marks part's old reading: published marks are public.)
+      if (key && named && !held.includes(named)) return bounce(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ")}`);
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
       // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
       // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset (default 20).

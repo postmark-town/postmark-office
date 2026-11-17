@@ -114,10 +114,20 @@ async function defaultPostClasses(ids) {
 const authorOf = (id) => String(id).split("/")[0];
 
 /**
+ * A mark's at-risk verdict, three-valued. `atRisk` is a Map (mark id → true / false / null, the stakes read's own rows), a Set (the ids at
+ * risk, every other mark safe) or null (the sweep's verdict was not measured). A mark the Map does not name is not the house's own to sweep: false.
+ */
+function atRiskOf(atRisk, id) {
+  if (atRisk instanceof Map) return atRisk.has(id) ? atRisk.get(id) : false;
+  if (atRisk instanceof Set) return atRisk.has(id);
+  return null;
+}
+
+/**
  * THE HOUSE'S STAKES: every row the handles stand behind, with the totals, or `{ unavailable }`.
  *
  * `handles`   the house's residents (the scope every other stakes read takes: who the key holds, ashore)
- * `atRisk`    a Set of mark ids the next settlement would take (the stakes read's own at-risk rows); null = not measured
+ * `atRisk`    the next settlement's verdict per mark: a Map (id → true / false / null), a Set of the ids at risk, or null = not measured
  * Readers (each replaceable by a suite): `townClone`, `markClass(id)`, `postClasses(ids)`, `fold(townClone)` (the ledger's positions).
  *
  * A row: `{ kind, id, stamps, at_risk, own?, side?, by: [{ handle, stamps }] }`. `stamps` is the HOUSE's, never the
@@ -167,7 +177,7 @@ export async function houseStakes(handles, { townClone = TOWN_CLONE(), atRisk = 
     const own = (g.family === "mark" || g.family === "post") && mine.has(authorOf(g.target));
     rows.push({
       kind, id: g.target, stamps,
-      at_risk: g.family === "mark" ? (atRisk instanceof Set ? atRisk.has(g.target) : null) : false,
+      at_risk: g.family === "mark" ? atRiskOf(atRisk, g.target) : false,
       ...(own ? { own: true } : {}),
       ...(g.side ? { side: g.side } : {}),
       by: g.by,
@@ -188,9 +198,11 @@ export function aggregateOf(stakes) {
   if (!stakes || stakes.unavailable) return { unavailable: stakes?.unavailable ?? "what your house has stamps behind could not be read" };
   const by_kind = {};
   for (const k of STAKE_KINDS) { const n = stakes.rows.filter((r) => r.kind === k).length; if (n) by_kind[k] = n; }
+  // THREE-VALUED: `null` when any mark's verdict was never measured (the escrow projection unread, the rule missing), never a count that reads as zero
+  const unmeasured = stakes.rows.some((r) => r.at_risk === null);
   const risky = stakes.rows.filter((r) => r.at_risk === true);
   return {
-    at_risk: risky.length,
+    at_risk: unmeasured ? null : risky.length,
     total: stakes.total, count: stakes.count, by_kind,
     ...(stakes.kind_note ? { kind_note: stakes.kind_note } : {}),
   };

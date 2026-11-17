@@ -271,7 +271,7 @@ export async function stakesFor(handles, {
   const unjudged = rows.filter((r) => r.at_risk === null).length;
   // POS-1100: what the house has stamps behind, marks AND posts AND pots AND ballots, from the ledger. Never throws: an unread
   // ledger is `unavailable`, said, never a zero. At-risk is the sweep's verdict above (null while it was not measured).
-  const allocation = await allocationOf(scope, { read: readAllocation, atRisk: measured ? new Set(rows.filter((r) => r.at_risk === true).map((r) => r.mark)) : null, page: allocationPage });
+  const allocation = await allocationOf(scope, { read: readAllocation, atRisk: measured ? new Map(rows.map((r) => [r.mark, r.at_risk])) : null, page: allocationPage });
   return {
     ...base,
     ...(escrowRead ? {} : { unavailable: esc?.reason ?? "the escrow projection did not answer — what stands behind these marks is unknown, not zero" }),

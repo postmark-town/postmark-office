@@ -76,6 +76,13 @@ if (!skip) {
     M.stakeLine({ date: DAY, handle: BO, topic: "sbx-topic", candidate: "sbx-c1", n: 8, via: "api" }),
     M.stakeLine({ date: DAY, handle: ANA, topic: "sbx-topic", candidate: "sbx-c1", n: 2, via: "api" }),
     M.returnLine({ date: DAY, topic: "sbx-topic", candidate: "sbx-c1", handle: ANA, n: 2 }),
+    // the three other ways a stake leaves, each net zero: a finished post's return, a pot's epoch return, a keeping burn
+    M.postStakeLine({ date: DAY, handle: BO, post: "sbx-cy/returned-post", n: 4, side: "for", via: "api" }),
+    M.postReturnLine({ date: DAY, post: "sbx-cy/returned-post", handle: BO, n: 4 }),
+    M.potStakeLine({ date: DAY, handle: ANA, pot: "sbx-pot-closed", n: 3, via: "api" }),
+    M.potReturnLine({ date: DAY, pot: "sbx-pot-closed", handle: ANA, n: 3, epoch: "2026-10" }),
+    M.potStakeLine({ date: DAY, handle: ANA, pot: "sbx-pot-burned", n: 2, via: "api" }),
+    M.keepingBurnLine({ date: DAY, pot: "sbx-pot-burned", n: 2, epoch: "2026-10", handle: ANA }),
   ], pem);
   git(town, "add", "-A"); git(town, ...ident, "commit", "-q", "--allow-empty", "-m", "fixture ledger");
 }
@@ -129,12 +136,27 @@ test("each row says what it is, how much is the HOUSE'S, and whether it is at ri
   assert.equal(by["idea:sbx-cy/other-post"].side, "against", "the side is said when it is not for");
   assert.equal(by["idea:sbx-ana/idea-post"].own, true, "your own idea, backed by your own house");
   assert.equal(by["idea:sbx-cy/idea-post"].own, undefined);
+  for (const gone of ["sbx-cy/returned-post", "sbx-pot-closed", "sbx-pot-burned"])
+    assert.equal(s.rows.some((r) => r.id === gone), false, `${gone}: a post-return, a pot-return and a keeping burn each close their position, and the total still equals foldStaked`);
   assert.equal(s.rows[0].id, "sbx-cy/plain-mark", "the at-risk row is first, though it is the smallest");
   assert.equal(s.rows[0].at_risk, true);
   assert.equal(by["pot:sbx-pot"].at_risk, false, "a pot, a post and a ballot are never swept");
   assert.deepEqual(by["idea:sbx-ana/idea-post"].by, [{ handle: ANA, stamps: 5 }]);
   const unmeasured = await houseStakes(HOUSE, readers({ atRisk: null }));
   assert.equal(unmeasured.rows.find((r) => r.id === "sbx-cy/plain-mark").at_risk, null, "a verdict nobody measured is null, never safe");
+});
+
+test("AT RISK IS THREE-VALUED IN THE AGGREGATE: unmeasured is null, never a zero that reads as safe (POS-1100 review)", { skip }, async () => {
+  const unmeasured = aggregateOf(await houseStakes(HOUSE, readers({ atRisk: null })));
+  assert.equal(unmeasured.at_risk, null, "a mark's verdict nobody measured makes the count unknown");
+  assert.equal(aggregateOf(await houseStakes(HOUSE, readers({ atRisk: new Set() }))).at_risk, 0, "measured and none at risk is a real zero");
+  assert.equal(aggregateOf(await houseStakes(HOUSE, readers({ atRisk: new Set(["sbx-cy/plain-mark"]) }))).at_risk, 1);
+  // a Map is the stakes read's own rows: one unjudged mark (null) in it makes the whole unknown
+  assert.equal(aggregateOf(await houseStakes(HOUSE, readers({ atRisk: new Map([["sbx-cy/plain-mark", null]]) }))).at_risk, null, "an unjudged mark among judged ones is still unknown");
+  // no mark at all, nothing to be at risk: zero is true even unmeasured
+  assert.equal(aggregateOf({ total: 5, count: 1, rows: [{ kind: "pot", id: "p", stamps: 5, at_risk: false }] }).at_risk, 0);
+  assert.equal(stakesAggregate(unmeasured).at_risk, null, "and the glance's block keeps the null");
+  assert.equal(stampsBlock([{ handle: ANA, tenses: { liquid: 1, staked: 33, minted: 1 } }], { stakes: unmeasured }).stakes.at_risk, null);
 });
 
 test("a kind nobody could read is said, never guessed: a mark with no readable class is a mark, a post with none is a post", { skip }, async () => {
@@ -221,9 +243,16 @@ test("THE DOORSTEP SEGMENT and THE STAKES READ carry what the house has stamps b
   const allocation = (handles, o) => houseStakes(handles, { ...o, ...readers() });
   const base = { world, registry: async () => ({}), escrow: async () => ({ townSha: "abc", byMark: new Map(), reason: null }), rule: async () => null, pathAt: async () => () => null, allocation };
   const seg = await stakesFor(HOUSE, base);
-  assert.deepEqual(seg.allocation, { at_risk: 0, total: 33, count: 8, by_kind: { idea: 4, bounty: 1, mark: 1, pot: 1, ballot: 1 } },
+  assert.deepEqual(seg.allocation, { at_risk: null, total: 33, count: 8, by_kind: { idea: 4, bounty: 1, mark: 1, pot: 1, ballot: 1 } },
     "the segment's own marks list stays as it was, and the allocation beside it counts the post stakes (idea: two marks' worth, two posts)");
   assert.equal(seg.allocation.by_kind.idea, 4, "ideas: the idea mark, two idea posts, and the against-side post");
+  // THE REVIEW'S BLOCKING 1: this base reads no sweep rule, so no mark's verdict was measured and the count says null, not 0 (it did say 0)
+  const measured = await stakesFor(HOUSE, { ...base, rule: async () => () => ({ unpublish: false }) });
+  assert.equal(measured.at_risk, 0, "the marks part measured nothing at risk");
+  assert.equal(measured.allocation.at_risk, 0, "measured, and none at risk: a real zero");
+  const blind = await stakesFor(HOUSE, { ...base, rule: async () => () => ({ unpublish: false }), escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) });
+  assert.equal(blind.at_risk, null);
+  assert.equal(blind.allocation.at_risk, null, "the escrow projection unread: the allocation's at_risk is null too, as the marks part's is");
   const paged = await stakesFor(HOUSE, { ...base, allocationPage: { limit: 3, offset: 0 } });
   assert.deepEqual([paged.allocation.shown, paged.allocation.total, paged.allocation.count, paged.allocation.next_offset], [3, 33, 8, 3]);
   assert.match(paged.allocation.more_note, /5 further stakes/);

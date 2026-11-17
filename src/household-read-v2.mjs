@@ -445,7 +445,7 @@ export function stampsBlock(details = [], { quests = [], went = null, you = null
 export const STAKES_LIST = 'household { read: "stakes" }';
 export function stakesAggregate(a) {
   if (a?.unavailable) return { unavailable: "the ledger could not be read, so this is unknown, not zero", list: STAKES_LIST };
-  return { at_risk: a.at_risk ?? 0, total: a.total ?? 0, count: a.count ?? 0, by_kind: a.by_kind ?? {}, ...(a.kind_note ? { kind_note: a.kind_note } : {}), list: STAKES_LIST };
+  return { at_risk: a.at_risk ?? null, total: a.total ?? 0, count: a.count ?? 0, by_kind: a.by_kind ?? {}, ...(a.kind_note ? { kind_note: a.kind_note } : {}), list: STAKES_LIST };
 }
 
 /** Today's household quests, one line each: "Reach out 2/5 today". */

@@ -26,6 +26,7 @@ import { copyTownTools } from "./helpers/town-tools.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { pinTown } from "./helpers/pinned-town.mjs";
 import { importTownTool } from "../src/town-tool.mjs";
+import { STAKE_KINDS } from "../src/household-stakes.mjs";
 import { householdApex } from "../src/household-apex.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
@@ -144,6 +145,17 @@ test("household { read: \"stakes\" }: the page lists marks, posts, a pot and a b
   assert.equal(one.allocation.total, 4 + 5 + 7);
 });
 
+test("household { read: \"stakes\", handle }: a handle the key does not hold is refused, same code and words as the doorstep's reads, and no stranger's rows ride out (POS-1100 review)", { skip }, async () => {
+  const r = await householdApex({ read: "stakes", args: { handle: STRANGER } }, key, ctx);
+  assert.equal(r.code, 403, JSON.stringify(r).slice(0, 300));
+  assert.equal(r.defect, `"${STRANGER}" is not one of your residents`);
+  assert.match(r.hint, /your key acts for r000, r001/);
+  assert.equal("allocation" in r, false);
+  assert.equal(JSON.stringify(r).includes("r-stranger/their-mark"), false, "the stranger's stakes are not in the refusal");
+  const held = await householdApex({ read: "stakes", args: { handle: R1 } }, key, ctx);
+  assert.equal(held.allocation.total, 3 + 6 + 8, "a resident the key does hold is read as before");
+});
+
 test("household { read_shape: \"v2\" }: the glance's stamps block carries the aggregate, equal to its own staked, and never the list", { skip }, async () => {
   const g = await householdApex({ read_shape: "v2", handle: R0 }, key, ctx);
   assert.equal(g.read_shape, "v2", JSON.stringify(g).slice(0, 300));
@@ -152,6 +164,13 @@ test("household { read_shape: \"v2\" }: the glance's stamps block carries the ag
   assert.equal(g.stamps.stakes.total, HOUSE_STAKED, "the aggregate's total is the ledger's");
   assert.equal(g.stamps.staked, g.stamps.stakes.total, "and it is the glance's own `staked`, the store's copy of the same figure");
   assert.equal(g.stamps.stakes.count, 6);
+  // the per-kind counts are the glance's whole account of the list: they add up to the count, name only known kinds, and no row's id rides anywhere in the block
+  const kinds = Object.entries(g.stamps.stakes.by_kind);
+  assert.ok(kinds.length > 0 && kinds.every(([k, n]) => STAKE_KINDS.includes(k) && Number.isInteger(n) && n > 0), JSON.stringify(g.stamps.stakes.by_kind));
+  assert.equal(kinds.reduce((n, [, c]) => n + c, 0), g.stamps.stakes.count, "the counts per kind are the whole count");
+  for (const id of ["r000/own-mark", "r000/an-idea", "fixture-pot", "fixture-topic/fixture-c", "r-stranger/their-idea"])
+    assert.equal(JSON.stringify(g.stamps).includes(id), false, `the glance never carries a row: ${id} is in its stamps block`);
+  assert.ok(Object.keys(g.stamps.stakes).every((k) => ["at_risk", "by_kind", "count", "kind_note", "list", "total"].includes(k)), `only the aggregate's own keys: ${Object.keys(g.stamps.stakes)}`);
   assert.equal("rows" in g.stamps.stakes, false, "never the list");
   assert.equal(g.stamps.stakes.list, 'household { read: "stakes" }');
   const { unexplained } = await import("../src/read-grammar.mjs");
