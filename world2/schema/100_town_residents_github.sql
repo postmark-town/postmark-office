@@ -30,15 +30,25 @@
 -- columns read through ONE function, `resident_json_doc`, which tries in order:
 --
 --   1. the plain cast: today's answer for every row that casts;
---   2. on failure, the cast of the text with its `\u0000` ESCAPES removed. The NUL sits in
---      an inbox body and the two GitHub fields do not hold one. A DOUBLED backslash before
---      `u0000` is plain text, not an escape (`\\u0000` is a backslash, then the letters),
---      and is left alone: the removal consumes backslashes in pairs;
---   3. only if that fails too, NULL.
+--   2. on failure, the cast of the text with EVERY `\u0000` ESCAPE AND EVERY SURROGATE ESCAPE
+--      (`\ud800` to `\udfff`, paired or not) removed (Jetto 2026-11-17 18:39Z, on Truey's FIX:
+--      jsonb refuses a lone surrogate as it refuses a NUL). The two GitHub fields hold ASCII
+--      logins and no escape of either kind, so nothing that is read changes, and no rule for
+--      which surrogate pairs with which is needed. A valid pair (an emoji in a letter) passes
+--      step 1, so this step never runs for a row that only holds pairs. A DOUBLED backslash
+--      before `u0000` or `ud800` is plain text, not an escape (`\\u0000` is a backslash, then
+--      the letters), and is left alone: the removal consumes backslashes in pairs;
+--   3. only if that fails too, NULL: text that is not JSON at all, which the ingest never
+--      writes (it writes JSON.stringify's output).
 --
 -- IT MUST NOT ANSWER NULL AT STEP 1's FAILURE. The GitHub line is what sign-in matches an
 -- unpinned resident's login against (oauth.mjs § loginIndex): a NULL there would let anyone
--- strip a resident's sign-in by sending them a letter with a NUL in it.
+-- strip a resident's sign-in by sending them a letter with a NUL or a lone surrogate in it.
+--
+-- THE FUNCTION PINS ITS OWN LITERAL RULES. `standard_conforming_strings` is in its SET list
+-- and its regex is written as E'' strings, so a session with the setting off reads the same
+-- backslashes (with it off, a plain '...\\...' literal reads one backslash, and a NUL row
+-- stored NULL, NULL: Truey measured it).
 --
 -- ONE COST: adding a stored generated column REWRITES THE TABLE once (48 MB), under an
 -- ACCESS EXCLUSIVE lock, a few seconds. It rides the restart's maintenance switch.
@@ -71,6 +81,7 @@ BEGIN;
 CREATE OR REPLACE FUNCTION resident_json_doc(j text) RETURNS jsonb
 LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
+SET standard_conforming_strings = on
 AS $fn$
 DECLARE
   t text;
@@ -82,10 +93,11 @@ BEGIN
     NULL;
   END;
   BEGIN
-    t := j;                                -- 2. without its \u0000 escapes (a backslash pair is plain text)
+    t := j;                                -- 2. without its \u0000 and surrogate escapes (a backslash pair is plain text)
     LOOP
       prev := t;
-      t := regexp_replace(t, '(^|[^\\])((\\\\)*)\\u0000', '\1\2', 'g');
+      -- (a char that is no backslash, or the start) (backslash pairs) \u (0000 | d800..dfff, any hex case); keep the first two groups
+      t := regexp_replace(t, E'(^|[^\\\\])((\\\\\\\\)*)\\\\u(0000|[dD][89a-fA-F][0-9a-fA-F]{2})', E'\\1\\2', 'g');
       EXIT WHEN t = prev;                  -- a run of escapes overlaps its own match: go again until none is left
     END LOOP;
     RETURN t::jsonb;

@@ -315,3 +315,70 @@ test("§ 3c a row that will not cast at all: the INSERT succeeds and both column
   await insertAs("n5", `{"github":"x\\u0000","inbox":[{"body":"a\\u0000b"}],"broken":`);
   assert.deepEqual(await columnsOf("n5"), { github_top: null, github_address: null }, "a NUL escape in text that is cut off is still NULL, never a throw");
 });
+
+// ── § 4  a lone surrogate escape fails jsonb as a NUL does, and must not blank the GitHub line either ──
+//
+// LAW (Jetto, 2026-11-17 18:39Z, on Truey's FIX): "Step 2 strips every `\u0000` escape and every surrogate escape `\ud800`–`\udfff`, paired or not.
+// A valid pair passes the plain cast, so step 2 never runs for rows that only hold pairs … Keep the doubled-backslash care … Pin
+// `standard_conforming_strings`". "After this, NULL comes only from text that isn't JSON."
+
+const BS = "\\";                                  // one backslash
+const esc = (hex) => `${BS}u${hex}`;              // a JSON escape, six characters
+const twin = (hex) => `lit ${BS}${BS}u${hex} t`;  // the same letters as plain text: a doubled backslash then u...
+const GHV = { gh: "ghsur", ad: "adrsur" };
+/** A resident's JSON text with `body` (raw, already escaped) in its inbox and the plain-text twin of `hex` in another field. */
+const rowText = (body, hex) => `{"github":"${GHV.gh}","address":{"data":{"github":"${GHV.ad}"}},"inbox":[{"body":"${body}","note":"${twin(hex)}"}]}`;
+const docOf = async (handle) => (await api.query("SELECT resident_json_doc(json) AS d FROM town_residents WHERE handle = $1", [handle])).rows[0].d;
+const wantCols = { github_top: GHV.gh, github_address: GHV.ad };
+
+const SURROGATE_CASES = [
+  // name, hex of the escape the twin copies, the body's escapes, the body the function reads, whether the plain cast refuses the row
+  ["a lone high surrogate", "d800", `x${esc("d800")}y`, "xy", true],
+  ["a lone low surrogate", "dc00", `x${esc("dc00")}y`, "xy", true],
+  ["a lone high in capitals", "D800", `x${esc("D800")}y`, "xy", true],
+  ["the top of the range, a lone low", "dfff", `x${esc("dfff")}y`, "xy", true],
+  ["a high then a NUL", "d800", `x${esc("d800")}${esc("0000")}y`, "xy", true],
+  ["a valid pair (an emoji): the plain cast answers", "d83d", `x${esc("d83d")}${esc("de00")}y`, "x\u{1F600}y", false],
+  ["a valid pair beside a NUL: step 2 answers", "d83d", `x${esc("d83d")}${esc("de00")}${esc("0000")}y`, "xy", true],
+  ["a lone low, then a valid pair", "dc00", `${esc("dc00")}${esc("d83d")}${esc("de00")}`, "", true],
+];
+
+for (const [name, hex, body, wantBody, refused] of SURROGATE_CASES) {
+  test(`§ 4 ${name}: the INSERT succeeds, both columns hold the GitHub values, and the literal doubled-backslash twin in the same row is kept`, async (t) => {
+    if (skip) return t.skip(skip);
+    await seedResidents();
+    const text = rowText(body, hex);
+    if (refused) await assert.rejects(() => api.query("SELECT $1::text::jsonb", [text]), /unsupported Unicode|Unicode (low|high) surrogate|invalid input syntax/, "control: the plain cast refuses this row");
+    else await assert.doesNotReject(() => api.query("SELECT $1::text::jsonb", [text]), "control: the plain cast answers this row");
+    await insertAs("s1", text);
+    assert.deepEqual(await columnsOf("s1"), wantCols, "the GitHub values are the row's own, not NULL");
+    const d = await docOf("s1");
+    assert.equal(d.inbox[0].body, wantBody, "what step 2 (or the plain cast) read of the body");
+    assert.equal(d.inbox[0].note, `lit ${BS}u${hex} t`, "the twin stays plain text: a backslash and the letters, never read as an escape");
+    assert.equal((await store.probeRows(api)).logins.find((l) => l.handle === "s1").github, GHV.gh, "and the probe's line for the resident is right");
+  });
+}
+
+test("§ 4b a session with standard_conforming_strings off still stores the right values", async (t) => {
+  if (skip) return t.skip(skip);
+  await seedResidents();
+  const w = await s.connect("law_ingester");
+  try {
+    await w.query("SET standard_conforming_strings = off");
+    assert.equal((await w.query("SHOW standard_conforming_strings")).rows[0].standard_conforming_strings, "off", "control: the session has it off");
+    await w.query("INSERT INTO town_residents (handle, json, digest) VALUES ($1, $2, 'd')", ["s2", rowText(`x${esc("0000")}${esc("d800")}y`, "0000")]);
+    await w.query("INSERT INTO town_residents (handle, json, digest) VALUES ($1, $2, 'd')", ["s3", rowText(`x${esc("dc00")}y`, "dc00")]);
+  } finally { await w.end(); }
+  assert.deepEqual(await columnsOf("s2"), wantCols, "a NUL and a lone high, set off");
+  assert.deepEqual(await columnsOf("s3"), wantCols, "a lone low, set off");
+  assert.equal((await docOf("s2")).inbox[0].note, `lit ${BS}u0000 t`, "the twin is kept under it too");
+});
+
+test("§ 4c NULL comes only from text that is not JSON", async (t) => {
+  if (skip) return t.skip(skip);
+  await seedResidents();
+  await insertAs("s4", `{"github":"x","inbox":[{"body":"a${esc("d800")}b"}],"broken":`);
+  assert.deepEqual(await columnsOf("s4"), { github_top: null, github_address: null }, "cut-off JSON with a lone surrogate in it");
+  await insertAs("s5", rowText(`x${esc("d800")}y`, "d800"));
+  assert.deepEqual(await columnsOf("s5"), wantCols, "the same row, whole: not NULL");
+});
