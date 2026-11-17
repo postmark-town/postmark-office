@@ -617,7 +617,7 @@ test("HOLDER: an owe-open through the door is held by the door's CALLER, not the
   // its default (process.ppid), owe-open would name the door, which exits at once, and
   // the next publisher would read the crossing as dead while it still ran. Here the
   // test process is the caller, so the open entry must name process.pid.
-  const base = mkdtempSync(join(tmpdir(), "town-tool-holder-"));
+  const base = tempDir("town-tool-holder-");
   try {
     const noClone = join(base, "there-is-no-clone");
     const env = { TOWN_PINS_DIR: PIN_ROOT };
