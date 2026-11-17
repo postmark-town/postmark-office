@@ -97,7 +97,7 @@ cat > "$SITE_SRC/tools/extract-town.mjs" <<'EOF'
 import { writeFileSync } from "node:fs";
 const town = process.argv[process.argv.indexOf("--town") + 1];
 writeFileSync("public/atelier/postmark/doorstep.md",
-  `town=${town}\ncrossing=${process.env.POSTMARK_CROSSING ?? ""}\n`);
+  `town=${town}\ncrossing=${process.env.POSTMARK_CROSSING ?? ""}\nstate=${process.env.DOORSTEP_STATE_DIR ?? ""}\n`);
 console.log("stub extract-town ran");
 EOF
 cat > "$SITE_SRC/tools/fetch-town.mjs" <<'EOF'
@@ -224,6 +224,8 @@ head_ "2 · THE ONE-RECIPE RULE: the site's own scripts ran, with what they were
 [ -f "$WEBROOT/../../$(basename "$TARGET1")/index.html" ] 2>/dev/null || true
 DOOR="$ROOT/site/public/atelier/postmark/doorstep.md"
 grep -q "town=$ROOT/town" "$DOOR" && ok "extract-town.mjs was handed the box's own town clone" || bad "extract-town.mjs did not see the town clone ($(cat "$DOOR" 2>&1 | head -2))"
+# POS-1086: the doorstep state lives under $ROOT, outside the tree this script resets each pass
+grep -q "^state=$ROOT/doorstep-state$" "$DOOR" && ok "extract-town.mjs was handed a doorstep state dir outside the reset tree" || bad "extract-town.mjs was not handed \$ROOT/doorstep-state ($(grep '^state=' "$DOOR" 2>&1))"
 # THE HONEST NULL. The sandbox's office is a closed port, so the crossing could
 # not be asked — and the whole design says that must arrive as ABSENCE, never as
 # a guess. `Number("")` is 0, and crossing 0 is the town's first ferry in June:
