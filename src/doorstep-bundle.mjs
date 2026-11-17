@@ -30,7 +30,7 @@ import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
-import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
+import { bundleSpan, segSpan } from "./read-timing.mjs"; // POS-1064/b, POS-1086: the bundle call and its segments, timed (measurement only)
 
 /**
  * WHAT ONE RESIDENT HOLDS, the doorstep's `holds` block and the full house read's (POS-1084): ONE producer, called by both, so there is no second holdings
@@ -101,10 +101,10 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // log that did not read, and the gate drops the block exactly as before.
   const own = key?.handles?.has?.(handle) === true;
   let pendingMail;
-  if (own) { try { pendingMail = { block: await hotMailBlock(odb, key, { handle }) }; } catch { pendingMail = null; } }
+  if (own) { try { pendingMail = { block: await segSpan("mail_pending", () => hotMailBlock(odb, key, { handle })) }; } catch { pendingMail = null; } }
   const standing = pendingMail?.block?.standing ?? null;
-  const opts = { conversationsOffset, slim, fresh: await freshFor(handle, { odb, clone, asOf }), nowMs, standing };
-  const core = await ix.doorstep(handle, asOf, opts);
+  const opts = { conversationsOffset, slim, fresh: await segSpan("fresh", () => freshFor(handle, { odb, clone, asOf })), nowMs, standing };
+  const core = await segSpan("core", () => ix.doorstep(handle, asOf, opts));
   if (!core) return null;
 
   // ── THE HEADER'S CLOCK (postmark#2922) ─────────────────────────────────────
@@ -188,7 +188,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   try {
     const { stancesForHandles } = await import("./world-stance.mjs");
     const args = { handle, limit: DOORSTEP_STANCES };
-    const whole = await stancesForHandles([handle], { limit: DOORSTEP_STANCES, setDowns: true });
+    const whole = await segSpan("stances", () => stancesForHandles([handle], { limit: DOORSTEP_STANCES, setDowns: true }));
     const { teach: _teach, ...trimmed } = whole;
     // ⚠ `teach_at`, NOT `teach` — THE KEY IS DROPPED, NOT RETYPED.
     //
@@ -240,7 +240,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   try {
     const { doorstepRulings } = await import("./claim-effects.mjs");
     d.outcomes = { serves: "household.outcomes", args: { handle },
-      ...(await doorstepRulings(handle, { key, nowMs })) };
+      ...(await segSpan("rulings", () => doorstepRulings(handle, { key, nowMs }))) };
   } catch (e) {
     d.outcomes = { serves: "household.outcomes", args: { handle },
       unavailable: `the crossings' outcomes for your things could not be read (${plainReason(e, "record", "the doorstep's outcomes")})`,
@@ -278,7 +278,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
     // (`nextSettlement` calls `getUTCFullYear`), so the page's instant becomes
     // a Date here and nowhere else — see the `nowMs` note at the top.
     // `ctx.stakesReaders` is the stakes report's own reader seam (doorstep-stakes.mjs § stakesFor), for a test's invented world; the live doors pass none.
-    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, allocationPage: key?.handles?.has?.(handle) === true ? { limit: DOORSTEP_STAKES } : false, ...(ctx.stakesReaders ?? {}) });
+    const whole = await segSpan("stakes", () => doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, allocationPage: key?.handles?.has?.(handle) === true ? { limit: DOORSTEP_STAKES } : false, ...(ctx.stakesReaders ?? {}) }));
     const { rule: _rule, read_the_rest: _rest, later_stakes: _later, ...trimmed } = whole;
     // the segment IS the read at its `args` (the bundle law): a report that was cut is the read at `limit`; one that fit is the bare read, as it always was
     // POS-1100: the segment carries the read's own first page of everything the house has stamps behind (`allocation`, left out when nothing is staked), so
@@ -304,7 +304,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // not be read is named in `alerts_unread`, only when there is one.
   try {
     const { alertsFor } = await import("./alerts.mjs");
-    const { alerts, unread } = await alertsFor(handle ? [handle] : [...(key?.handles ?? [])], { now: new Date(nowMs) });
+    const { alerts, unread } = await segSpan("alerts", () => alertsFor(handle ? [handle] : [...(key?.handles ?? [])], { now: new Date(nowMs) }));
     d.alerts = alerts;
     if (unread.length) d.alerts_unread = unread;
   } catch (e) {
@@ -329,7 +329,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // block to cut.
   try {
     const { householdPosts } = await import("./household-posts.mjs");
-    d.posts = { serves: "household.posts", args: { handle }, ...(await householdPosts(handle, { now: nowMs, clone })) };
+    d.posts = { serves: "household.posts", args: { handle }, ...(await segSpan("posts", () => householdPosts(handle, { now: nowMs, clone }))) };
   } catch (e) {
     d.posts = { serves: "household.posts", args: { handle },
       unavailable: [`the house's posts could not be read (${plainReason(e, "record", "the doorstep's posts")})`],
@@ -352,7 +352,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // record has no holding to read and says nothing either; one that IS pointed
   // at it and cannot read it says so, because there "unknown" must not read as
   // "empty".
-  const holdsBlockOf = await holdsBlock(handle, { readers: ctx.holdsReaders });
+  const holdsBlockOf = await holdsBlock(handle, { readers: ctx.holdsReaders }); // not segment-timed: chests-candy-flag pins this line, and it measured 0 ms
   if (holdsBlockOf) d.holds = holdsBlockOf;
   // ── THE MISTS BLOCK IS GONE FROM THE DOORSTEP (POS-902) ───────────────────────────────────────
   //
@@ -410,7 +410,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // A caller with no clone (the in-process bundle tests, the MCP twin before
   // boot) gets no garnish: `canWrite` used to short-circuit that for us.
   if (clone && votesAvailable(clone)) {
-    try { const v = await doorstepVotes(clone, handle); if (v) d.votes = v; }
+    try { const v = await segSpan("votes", () => doorstepVotes(clone, handle)); if (v) d.votes = v; }
     catch { /* the doorstep never fails on the votes garnish */ }
   }
 
@@ -456,7 +456,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     // resident who edited through REST and read back through REST was told
     // nothing about their own pending edit.
     try {
-      const hot = await hotTenseBlock(odb, key, { handle });
+      const hot = await segSpan("gate_hot_tense", () => hotTenseBlock(odb, key, { handle }));
       if (hot) d.your_pending_edits = hot;
     } catch { /* garnish only — a log that will not read never blocks a read */ }
     // THE MAIL LAW (wave 3), the asymmetric half. A SENDER is told about the
@@ -466,7 +466,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     // sender the caller holds, and a recipient never appears on that axis.
     try {
       if (pendingMail === null) throw new Error("the town log did not read");
-      const pending = pendingMail ? pendingMail.block : await hotMailBlock(odb, key, { handle });
+      const pending = pendingMail ? pendingMail.block : await segSpan("gate_mail_pending", () => hotMailBlock(odb, key, { handle }));
       if (pending) d.your_pending_letters = pending;
       // ONE SCOPE, ONE ANSWER. The count comes off the block that was just
       // composed rather than from a second query, so there is no second filter
@@ -480,7 +480,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     // and it is the only count on the page called new. An unreadable record
     // is said, never a zero.
     try {
-      const got = unread ?? await unreadFor([handle], { ix }).then((rows) => ({ rows }), (error) => ({ error }));
+      const got = unread ?? await segSpan("gate_unread", () => unreadFor([handle], { ix })).then((rows) => ({ rows }), (error) => ({ error }));
       d.unread = got.error ? unreadBlock(null, got.error) : unreadBlock(got.rows.get(handle) ?? []);
     } catch { /* garnish only */ }
     // THE HOUSEHOLD'S LETTER NOTES (POS-730): its own private marks ride the awaiting
@@ -489,7 +489,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     try {
       if (d.awaiting && typeof d.awaiting === "object") {
         const { notesFor, inScope, annotateAwaiting } = await import("./letter-notes.mjs");
-        const got = await inScope(await notesFor([handle]), [...key.handles]);
+        const got = await segSpan("gate_notes", async () => inScope(await notesFor([handle]), [...key.handles]));
         d.awaiting = annotateAwaiting(d.awaiting, got.notes);
         if (got.unavailable) d.awaiting = { ...d.awaiting, notes_unavailable: got.unavailable };
       }
@@ -498,7 +498,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     // still lacks. It retires itself the day the list empties.
     try {
       const { paperGaps } = await import("./household-apex.mjs");
-      const gaps = await paperGaps(handle, { clone, key, ix, odb, asOf });
+      const gaps = await segSpan("gate_paper_gaps", () => paperGaps(handle, { clone, key, ix, odb, asOf }));
       if (gaps.length) d.settling_in = {
         note: "your house is still settling in — this block disappears as the list empties",
         next: gaps,
@@ -518,7 +518,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
   // itself rides every read — it is what the public bundle already publishes —
   // but its gap-shaped half is gated on the same ownership test above.
   try {
-    const ns = await nextStepsFor(handle, clone, { own, key, ix, odb, asOf });
+    const ns = await segSpan("gate_next_steps", () => nextStepsFor(handle, clone, { own, key, ix, odb, asOf }));
     if (ns?.steps?.length || ns?.unavailable) d.next_steps = ns; // POS-994: a pin stop is shown by name, not dropped
   } catch { /* garnish only */ }
   return d;
