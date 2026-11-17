@@ -98,7 +98,7 @@ import { bountyBoard, ideasTank, civicQuarter } from "./world-classes.mjs"; // t
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the three nearby ids goes in `thread`
 
-import { withHouseholdBlock, householdsFor } from "./households.mjs";
+import { withHouseholdBlock, householdsFor, residentOrder } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
@@ -1090,6 +1090,7 @@ export async function callTool(name, args, ctx) {
         call: (tool, fields) => callTool(tool, fields, { ...ctx, nested: true }), // the office reading for itself: the canonical answers, never a connector page (CORE-88)
         unread: async (h) => (await unreadFor([h], { ix })).get(h) ?? [],
         steps: async (h) => (await nextStepsFor(h, clone, { own: Boolean(key?.handles?.has?.(h)), key, ix, odb, asOf }))?.steps ?? null,
+        residentOrder: (handles) => residentOrder(handles), // POS-1094: a bare doorstep's "first" is the house's own first resident
         marksOf: async (ids) => (await import("./world.mjs")).markRows(ids), // a mark a line names, whole (Darko 22:33)
       });
     }
