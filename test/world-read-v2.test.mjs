@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import {
   viewBlock, whoBlock, canBlock, happeningBlock, eventsHere, heardBlock, HEARD_CAP, SAID_MAX, happenedGlance, shapeV2, activeOf, actLine, inWords, markIdsShown,
-  LANDMARK_WEIGHT_FLOOR, ACTIVE_CAP, ACTIVE_WINDOW_MS, PUBLIC_ACTS, ACTIVE_SQL,
+  HORIZON_FAR_M, FAR_HORIZON_BAND, LANDMARK_WEIGHT_FLOOR, ACTIVE_CAP, ACTIVE_WINDOW_MS, PUBLIC_ACTS, ACTIVE_SQL,
 } from "../src/world-read-v2.mjs";
 import { ONE_LINERS } from "../src/world-read-shape.mjs";
 import { unbodied } from "./helpers/mark-bodies.mjs";
@@ -227,7 +227,10 @@ test("every block filled: aboard, seat, arrival, to_you events — each mark the
   for (const k of ["aboard", "seat", "arrival", "enters_on_arrival"]) assert.ok(v2.you[k], `the fixture fills you.${k}`);
   assert.ok(v2.you.aboard.can_ride_to.length && v2.you.aboard.ride && v2.you.aboard.arrived, "and the ride half of aboard");
   assert.deepEqual(v2.now.happened.to_you.events.map((e) => e.kind).sort(), ["carried", "claim-locked", "claim-pending", "frame-entered", "hold-give"]);
-  assert.deepEqual(unbodied(v2), [], "no mark is shown without its body");
+  // POS-1094: the one exception to "every mark shown is shown whole" is a thing in your hands, said by name (blueprints #66)
+  assert.deepEqual(unbodied(v2), [`now.happened.to_you.events[${v2.now.happened.to_you.events.findIndex((e) => e.kind === "hold-give")}].thing: mark iris/a-lantern without its body`], "no mark is shown without its body, but a held thing, which is named only");
+  assert.deepEqual(v2.now.happened.to_you.events.find((e) => e.kind === "hold-give").thing, { id: "iris/a-lantern", name: "a-lantern" }, "named, its words never printed");
+  assert.ok(!JSON.stringify(v2.now.happened.to_you.events.find((e) => e.kind === "hold-give")).includes("The body of iris/a-lantern"));
   assert.equal(v2.you.aboard.aboard.body, `The body of ${PO}.`);
   assert.equal(v2.you.aboard.moves_next.toward.body, "The body of the-town/lanternseed.");
   assert.equal(v2.you.seat.ground.body, "The body of the-town/the-quay-reach.");
@@ -304,4 +307,120 @@ test("POS-697 item 6: under v2, cards: \"names\" says can by name and cards: \"f
   assert.deepEqual(Object.keys(shapeV2({ ...p, cards: "full" }).cards), ["say", "walk", "candy-trade"]);
   assert.ok(!("cards" in shapeV2(p)), "omitted, no cards");
   assert.deepEqual(shapeV2({ ...p, cards: "names" }).can.move, ["walk"]);
+});
+
+// ── POS-1094: the feedback fixes before v2 is the default ───────────────────
+
+// LAW (Kogane, 2026-11-06, POS-933): "Every house shows up twice in `view`, the parcel and the house, at the same distance and bearing. … If the parcel sat under its house, the view would halve and say the same thing." / "`lit` rides on the parcel, not the house."
+test("POS-933: a parcel sits under its maker's house, and lit rides on the house", () => {
+  const rows = [
+    { id: "kogane/the-well-house-parcel", name: "the Well House Parcel", body: "The ground.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 }, extent: { w: 25, h: 25 }, class: "parcel", by: "kogane", lit: true },
+    { id: "kogane/the-well-house", name: "the Well House", body: "A squat block.", bearing: "WSW", band: "close by", distM: 37, at: { x: 100, y: 100 }, by: "kogane" },
+    { id: "rei/a-lamp", name: "a lamp", body: "On the ground.", bearing: "WSW", band: "close by", distM: 38, at: { x: 101, y: 100 }, by: "rei", class: "thing" },
+    { id: "rei/the-lone-parcel", name: "the Lone Parcel", body: "Bare ground.", bearing: "N", band: "a stone's throw", distM: 90, at: { x: 0, y: 900 }, extent: { w: 25, h: 25 }, class: "parcel", by: "rei", lit: false },
+  ];
+  const v = viewBlock(rows);
+  assert.deepEqual(v.WSW.map((r) => r.id), ["kogane/the-well-house", "rei/a-lamp"], "the parcel is no row of its own");
+  assert.equal(v.WSW[0].lit, true, "the light is on the house");
+  assert.deepEqual(v.WSW[0].parcel, { id: "kogane/the-well-house-parcel", name: "the Well House Parcel", body: "The ground." }, "the parcel rides under it, whole");
+  assert.ok(!("lit" in v.WSW[0].parcel), "and carries no light of its own");
+  assert.deepEqual(v.N.map((r) => r.id), ["rei/the-lone-parcel"], "a parcel with no house in view stays a row, with its light");
+  assert.equal(v.N[0].lit, false);
+  assert.deepEqual(unbodied({ view: v }), [], "every place shown is still shown whole");
+  // a house outside the parcel's extent is not its house
+  const away = viewBlock([{ ...rows[0] }, { ...rows[1], at: { x: 150, y: 100 } }]);
+  assert.equal(away.WSW.length, 2);
+});
+
+// REVIEW of #1088 (blocking): on the world repo's data 27 of 171 parcels hold another maker's mark (voss/the-hallway-house holds three strangers' gifts and no house of its own).
+test("POS-933: a stranger's mark on a parcel is no house, the maker's mark at the parcel's own point is, and no house means no nesting", () => {
+  const parcel = { id: "voss/the-hallway-house", name: "the Hallway House", body: "Voss's ground.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, extent: { w: 25, h: 25 }, class: "parcel", by: "voss", lit: true };
+  const loaf = { id: "gift/a-loaf", name: "a loaf", body: "A gift.", bearing: "N", band: "close by", distM: 20, at: { x: 1, y: 1 }, by: "gift" };
+  // the stranger's classless mark is ranked FIRST inside the parcel and still takes nothing
+  const alone = viewBlock([loaf, parcel]);
+  assert.deepEqual(alone.N.map((r) => r.id), ["gift/a-loaf", "voss/the-hallway-house"], "Voss's ground stays a row");
+  assert.equal(alone.N[0].parcel, undefined);
+  assert.ok(!("lit" in alone.N[0]), "the stranger's loaf takes no light");
+  assert.equal(alone.N[1].lit, true, "and the parcel keeps its own");
+  // with the maker's own house in the same ground: it takes the parcel, the stranger still does not
+  const side = { id: "voss/a-shed", name: "a shed", body: "Off to one side.", bearing: "N", band: "close by", distM: 21, at: { x: 5, y: 5 }, by: "voss" };
+  const house = { id: "voss/the-house", name: "the house", body: "The house.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, by: "voss" };
+  const v = viewBlock([loaf, side, house, parcel]);
+  assert.equal(v.N.find((r) => r.id === "voss/the-house").parcel?.id, "voss/the-hallway-house", "the mark AT the parcel's own point is the house, though a shed of the maker's ranks before it");
+  assert.equal(v.N.find((r) => r.id === "voss/a-shed").parcel, undefined);
+  assert.equal(v.N.find((r) => r.id === "gift/a-loaf").parcel, undefined);
+  // a maker with no mark at the point: the best-ranked of the maker's own
+  const only = viewBlock([loaf, side, parcel]);
+  assert.equal(only.N.find((r) => r.id === "voss/a-shed").parcel?.id, "voss/the-hallway-house");
+});
+
+// REVIEW of #1088: removing the class exclusion left every test green.
+test("POS-933: a classed mark of the maker's (a thing set down on the ground) is no house", () => {
+  const parcel = { id: "kogane/the-parcel", name: "p", body: "Ground.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, extent: { w: 25, h: 25 }, class: "parcel", by: "kogane", lit: true };
+  const thing = { id: "kogane/a-pebble", name: "a pebble", body: "A pebble.", bearing: "N", band: "close by", distM: 20, at: { x: 0, y: 0 }, by: "kogane", class: "thing" };
+  const v = viewBlock([thing, parcel]);
+  assert.deepEqual(v.N.map((r) => r.id), ["kogane/a-pebble", "kogane/the-parcel"], "the parcel stays a row");
+  assert.equal(v.N[0].parcel, undefined);
+  assert.equal(v.N[1].lit, true);
+});
+
+// LAW (Domovoi Boulanger, 2026-10-27): "A tiny class hint in the things list would help."
+test("POS-1094: a row says its class when it names one, and a plain place says none", () => {
+  const v = viewBlock([
+    { id: "a/bowl", name: "a bowl", bearing: "N", band: "close by", distM: 5, class: "halloween-candy-bowl" },
+    { id: "a/plain", name: "plain", bearing: "N", band: "close by", distM: 6 },
+  ]);
+  assert.equal(v.N[0].class, "halloween-candy-bowl");
+  assert.ok(!("class" in v.N[1]));
+});
+
+// LAW (Kogane, 2026-11-06): "The band 'on the horizon' covers both the Far Shore at 10.3 km and Pando Peak at 137.6 km."
+test("POS-1094: the horizon band is split at HORIZON_FAR_M", () => {
+  const v = viewBlock([
+    { id: "a/shore", name: "Far Shore", bearing: "E", band: "on the horizon", distM: 10300 },
+    { id: "a/peak", name: "Pando Peak", bearing: "E", band: "on the horizon", distM: 137600 },
+    { id: "a/edge", name: "Edge", bearing: "E", band: "on the horizon", distM: HORIZON_FAR_M },
+    { id: "a/far-off", name: "Far Off", bearing: "E", band: "far off", distM: 6000 },
+  ]);
+  assert.deepEqual(v.E.map((r) => r.band), ["on the horizon", FAR_HORIZON_BAND, FAR_HORIZON_BAND, "far off"]);
+});
+
+// LAW (Kogane, 2026-11-06): "`view.how` explains what a landmark is, but nothing in this view was one. A key for a symbol that isn't on the map is a small itch."
+test("POS-1094: view.how names only the flags in view, and is left out when there are none", () => {
+  const plain = viewBlock([{ id: "a/x", name: "x", bearing: "N", band: "close by", distM: 5, weight: 99 }]);
+  assert.ok(!("how" in plain), "no landmark, no picture: no key");
+  const lm = viewBlock([{ id: "a/x", name: "x", bearing: "N", band: "far off", distM: 5000, weight: 80, lifted: true }]);
+  assert.match(lm.how, /^landmark = /);
+  assert.doesNotMatch(lm.how, /image/, "a landmark with no picture: no picture key");
+  const both = viewBlock([{ id: "a/x", name: "x", bearing: "N", band: "far off", distM: 5000, weight: 80, lifted: true, image: true }]);
+  assert.match(both.how, /landmark = .*; image = /);
+});
+
+// LAW (Kogane, 2026-11-06): "`holding` mixes bare ids and `{kind, count, shows}` objects in one array. … two shapes where one would do."
+test("POS-1094: you.holding is one shape, an object each", () => {
+  const v2 = shapeV2({ standpoint: { x: 0, y: 0 }, spine: [], crossing: 1, entries: [], holdings: ["maker/stool"], heldKinds: { kinds: [{ kind: "pocket-comet", count: 3, shows: "3 pocket-comets" }] } });
+  assert.deepEqual(v2.you.holding, [{ thing: "maker/stool" }, { kind: "pocket-comet", count: 3, shows: "3 pocket-comets" }]);
+  assert.ok(v2.you.holding.every((h) => h && typeof h === "object"));
+});
+
+// LAW (5.5, blueprints discussion #66): "After a hand-off, the glance prints the text of the things we hold, under `happened`. … A way to list held things by name only would fix it for us."
+test("POS-1094: after a hand-off the glance names the held thing and never prints its words", () => {
+  const nowC = currentCrossing(NOW);
+  const decided = new Date(NOW - 3600000).toISOString();
+  const happened = { to_you: toYou({ holdEffects: { readable: true, events: holdEffectsFrom({ rows: [{ class: "holding", action: "give", object: "iris/a-mint", actor: "iris", crossing: nowC, written_at: decided, payload: { holder: "wright", previous_holder: "iris" } }], handles: ["wright"], sinceCrossing: nowC - 1, nowCrossing: nowC }) }, sinceCrossing: nowC - 1, nowCrossing: nowC }), around_you: { count: 0, events: [] } };
+  const SECRET = "A mint she asked to keep unread.";
+  const marks = new Map([["iris/a-mint", { id: "iris/a-mint", name: "a mint", body: SECRET }]]);
+  const v2 = shapeV2({ marks, handle: "wright", standpoint: { x: 0, y: 0 }, spine: [], happened, crossing: nowC, sinceCrossing: nowC - 1, entries: [] });
+  const ev = v2.now.happened.to_you.events.find((e) => e.kind === "hold-give");
+  assert.deepEqual(ev.thing, { id: "iris/a-mint", name: "a mint" });
+  assert.ok(!JSON.stringify(v2).includes(SECRET), "the words are nowhere in the glance");
+  assert.match(ev.read_it, /iris\/a-mint/, "and the one read that opens it is named");
+});
+
+test("POS-1094: the line on the default rides `more` only while v2 is the door's default", async () => {
+  const { moreLine, DEFAULT_LINE } = await import("../src/read-grammar.mjs");
+  assert.equal(DEFAULT_LINE, 'v2 is the default read now; read_shape: "v1" is the older, fuller one');
+  assert.ok(!moreLine("c1.1.2.3").includes("default"));
+  assert.ok(moreLine("c1.1.2.3", { isDefault: true }).includes(DEFAULT_LINE));
+  assert.ok(DEFAULT_LINE.length < 80, "kept short: it counts against the ceiling");
 });

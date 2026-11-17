@@ -389,6 +389,56 @@ test("NEEDS-YOU (WLD-83): the likeness question is a row of its own, counted, an
   assert.equal(youPart({ needs: quiet }).some((i) => /likeness question/.test(JSON.stringify(i))), false);
 });
 
+// POS-1035 (ruled 21:55/21:57Z; route settled by Rivet): an event the house's resident hosted ended and became a spark recounted
+// from their invitation — they are asked to write what happened. One list, read through needs-you's readers seam, counted.
+test("NEEDS-YOU (POS-1035): the host is asked to write what happened — a waiting row is counted and its cause named; empty keeps the page; unreadable or no record is unknown, never 'nothing waits'", async () => {
+  const { readers } = worldReaders();
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const row = { event: "r000/tea", title: "Tea", sparks: ["r000/tea"], host: "r000", completed_at: "2026-09-26T20:00:00.000Z",
+    cause: "your event \"Tea\" ended and became the spark r000/tea; its recounting is your invitation's words (or its title) — write what actually happened",
+    act: "world_leave_mark { slug: \"tea\", amend: true, … } — the spark as it stands, with properties: { recounting: \"<what happened>\" }" };
+  const asked = [];
+  readers.recountingsAwaiting = async (handles) => { asked.push([...handles]); return [row]; };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(asked, [["r000", "r001"]], "asked for the residents this key holds, and no one else");
+  assert.deepEqual(n.recountings_awaiting, { rows: [row] });
+  assert.ok(n.recountings_awaiting.rows[0].cause.length > 10, "the row names its cause");
+  assert.equal(n.count, 3 + 1, "it counts beside the stances, the bounces and the at-risk mark");
+  assert.equal(n.shown, 3 + 1);
+  const { youPart } = await import("../src/doorstep-apex.mjs");
+  assert.ok(youPart({ needs: n }).some((i) => /ended in sparks — write what happened.*r000\/tea/.test(i.what) && i.from === "household.needs-you"), "the doorstep's YOU names it");
+
+  // held-resident scope: a key holding one resident asks for that one only
+  asked.length = 0;
+  await needsYou({}, ctx({ readers, key: { household: "fixture", handles: new Set(["r000"]) } }));
+  assert.deepEqual(asked, [["r000"]], "mine, never the whole house");
+
+  // empty: read and nothing waits — the page keeps the shape it had, and the count is unchanged
+  readers.recountingsAwaiting = async () => [];
+  const quiet = await needsYou({}, ctx({ readers, key }));
+  assert.equal("recountings_awaiting" in quiet, false);
+  assert.equal(quiet.count, 3);
+
+  // a house with nothing anywhere: the quiet note, but only when this list was READ empty
+  const empty = { ...readers,
+    stances: async () => ({ stances_awaiting: 0, awaiting: [], standing: [], cursor: null, complete: true, set_downs_awaiting: [] }),
+    stakesFor: async () => ({ next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 0, at_risk: 0, rows: [] }),
+    mailAwaiting: () => ({ unplaced_bounces: [] }), alertsFor: async () => ({ alerts: [], unread: [] }),
+    likenessNeed: async () => ({ rows: [] }), claimState: async () => null };
+  const none = await needsYou({}, ctx({ readers: empty, key }));
+  assert.equal(none.count, 0);
+  assert.match(none.note ?? "", /nothing waits on you/, "an explicitly empty reader is known empty");
+
+  // unreadable, and an office pointed at no record (the pen's own NoRecordError): unknown — said, uncounted, and no "nothing waits"
+  for (const e of [new Error("the record did not answer"), Object.assign(new Error("this office is not pointed at a record"), { name: "NoRecordError" })]) {
+    const blind = await needsYou({}, ctx({ readers: { ...empty, recountingsAwaiting: async () => { throw e; } }, key }));
+    assert.match(blind.recountings_awaiting?.unavailable ?? "", /unknown, not none/, `${e.name}: unavailable`);
+    assert.deepEqual(blind.recountings_awaiting.rows, []);
+    assert.equal(blind.count, 0);
+    assert.equal("note" in blind, false, `${e.name}: never "nothing waits" over a list that could not be read`);
+  }
+});
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {

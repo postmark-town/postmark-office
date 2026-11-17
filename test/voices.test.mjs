@@ -404,7 +404,8 @@ test("world_say's description carries the window, the linger, the disclosure, an
   assert.match(tool.description, /500 characters, one voice every 15 seconds/);
   assert.match(tool.inputSchema.properties.text.description, /omit to listen without speaking/);
   assert.match(tool.description, /pass it back as since: on your next call/, "the linger economy is taught");
-  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["before", "handle", "nonce", "rules_read", "since", "text", "wait"]);
+  // POS-1035 adds the circle fields: reply_to on a say; circle (paged by after) and with on a listen
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["after", "before", "circle", "handle", "nonce", "reply_to", "rules_read", "since", "text", "wait", "with"]);
 });
 
 test("the presence sentence rides the flag — the door never describes a listeners it isn't deriving", async () => {
@@ -528,7 +529,9 @@ test("arriving mid-conversation reads the room: hearing is empty, the conversati
   assert.ok(heard.conversation, "the room's record rides the reply");
   assert.equal(heard.conversation.voice_count, 2);
   assert.deepEqual(heard.conversation.participants, ["rei", "wright"]);
-  assert.deepEqual(heard.conversation.record.map((v) => v.said), ["the first course", "and the second"]);
+  // POS-1035: the room rides as circles; says with no id (this bench has no pen) are the plain timeline, never made into circles
+  assert.deepEqual(heard.conversation.circles.timeline.map((v) => v.said), ["the first course", "and the second"]);
+  assert.equal("record" in heard.conversation, false, "the tree replaces the flat record, never rides beside it");
 
   settle(); // the settlement ends the conversation, as it ends hearing, once the hour of grace runs out (CORE-97)
   tick(61 * MIN);
@@ -544,7 +547,7 @@ test("INVARIANT since-lingering: the cursor filters both arrays to strictly-newe
   await store.say("rei", "second");
   const full = await store.hear("wright");
   assert.equal(full.voices.length, 2);
-  assert.equal(full.conversation.record.length, 2);
+  assert.equal(full.conversation.circles.timeline.length, 2); // POS-1035: the full reply's room is circles (unthreaded here: the timeline)
   assert.ok(Number.isFinite(full.latest));
 
   tick(16_000);
@@ -588,14 +591,14 @@ test("a since-call's record keeps EVERY line: one the ear caught is marked heard
 
 // ── #3350 (Kogane, 09-30): every line carries at_ms; the heard marker on every reply ──
 
-test("#3350: every line in `voices` carries at_ms, the same stamp its line in `conversation.record` carries", async () => {
+test("#3350: every line in `voices` carries at_ms, the same stamp its line in the room's circles carries", async () => {
   const { store, tick } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
   await store.say("rei", "first");
   tick(16_000);
   await store.say("rei", "second");
   const full = await store.hear("wright");
   assert.deepEqual(full.voices.map((v) => [v.said, v.at_ms]), [["first", T0], ["second", T0 + 16_000]], "voices on the record's clock");
-  assert.deepEqual(full.voices.map((v) => v.at_ms), full.conversation.record.map((v) => v.at_ms), "both arrays agree on the stamp");
+  assert.deepEqual(full.voices.map((v) => v.at_ms), full.conversation.circles.timeline.map((v) => v.at_ms), "both arrays agree on the stamp");
   tick(16_000);
   await store.say("rei", "third");
   const inc = await store.hear("wright", { since: full.latest });
@@ -611,12 +614,12 @@ test("#3350: the FULL reply marks a heard record line heard: true, and an unhear
   await store.say("a", "a line past c's earshot");
   const full = await store.hear("c"); // no since: the whole room
   assert.deepEqual(full.voices.map((v) => v.said), ["a line c can hear"]);
-  const [heard, missed] = full.conversation.record;
+  const [heard, missed] = full.conversation.circles.timeline; // POS-1035: the room is circles; the marker rides its lines
   assert.equal(heard.said, "a line c can hear");
   assert.equal(heard.heard, true, "the heard line carries the marker");
   assert.equal(missed.said, "a line past c's earshot");
   assert.equal("heard" in missed, false, "the unheard line carries no marker field at all");
-  assert.match(full.conversation.note, /a line marked heard: true is also in `voices`/);
+  assert.match(full.conversation.note, /A line marked heard: true is also in `voices`/);
 });
 
 // ── POS-330 (Kogane, Office Hours Q2): where the room's record lives ──
@@ -736,14 +739,15 @@ function presenceRoom() {
   return { store, tick: b.tick };
 }
 
-test("POS-265 delta: without since the reply is the whole room, byte for byte the old shape", async () => {
+test("POS-265 delta: without since the reply is the whole room — the old shape, with the room as circles (POS-1035)", async () => {
   const { store, tick } = presenceRoom();
   await store.say("rei", "hello");
   tick(16_000);
   const full = await store.hear("wright");
   // POS-226 adds the backward cursor and the window's instant beside `latest`
   assert.deepEqual(Object.keys(full), ["where", "listeners", "voices", "spoke", "at_the_door", "conversation", "latest", "older", "hearable_since"]);
-  assert.deepEqual(Object.keys(full.conversation), ["started", "participants", "voice_count", "latest_ms", "record", "note"]);
+  // POS-1035 (call 3: "the flat 20-voice list gives way to the pruned tree"): `circles` stands where `record` stood, after the note
+  assert.deepEqual(Object.keys(full.conversation), ["started", "participants", "voice_count", "latest_ms", "note", "circles"]);
 });
 
 test("POS-265 delta: with since, unchanged lists are held back and named; the counts and the header ride", async () => {

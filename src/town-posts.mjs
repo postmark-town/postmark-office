@@ -60,7 +60,8 @@
 // up the town, so every
 // page also carries `catchers`, the Hall of Fame's totals over the whole
 // record (bugs.mjs § THE CATCHERS): the history is still read for every bug,
-// as it was before the read paged. The other classes are not paged.
+// as it was before the read paged. The other classes page the same way since
+// POS-732 (page-rows.mjs: default 20, held under the connector's cap).
 //
 // ── A BUG CARRIES ITS OWN FIELDS ────────────────────────────────────────────
 //
@@ -83,6 +84,7 @@
 // and answers stamps_paid null, rather than calling every stage unpaid.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { pageRows } from "./page-rows.mjs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -256,10 +258,12 @@ const plain = ({ ...r }) => Object.fromEntries(Object.entries(r));   // own stri
 export { NO_CHAIN };
 
 /**
- * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
- * @param {{ now?: number, env?: object, townClone?: string }} ctx
+ * `town { read: "posts", args: { class, post?, limit?, offset? } }`: limit and offset page every class (POS-732; the bug class
+ * keeps its own default of 50). `whole` answers the plain REST list in one piece when it names no page; `hold: false` lifts the
+ * connector's cap from a page (an internal reader that wants every post).
+ * @param {{ now?: number, env?: object, townClone?: string, whole?: boolean, hold?: boolean }} ctx
  */
-export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true, backing = null } = {}) {
+export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true, backing = null, whole = false, hold = true } = {}) {
   const cls = judgePostsClass(fields);
   const wanted = judgeStateFilter(fields, cls);
   const sortAsked = judgeSort(fields);
@@ -377,6 +381,10 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     const { posts: page, ...paging } = bugPageOf(posts, fields);
     return { ...listHead, ...paging, catchers: bugCatchersOf(wholeClass, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
-  return { ...listHead, total: posts.length, posts,
-    ...(cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {}) };
+  const tail = cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {};
+  // POS-732: every other class pages as the bug class does (limit default 20, offset), held under the connector's cap.
+  // The plain REST list (GET /posts) keeps its whole answer when it names neither, for the snapshot readers that make
+  // one request and no continuation (site tools/lib/fetch-town-data.mjs); `limit` or `offset` on it pages.
+  if (whole && fields.limit == null && fields.offset == null) return { ...listHead, total: posts.length, posts, ...tail };
+  return { ...pageRows(posts, fields, { noun: cls, key: "posts", around: listHead, hold }), ...tail };
 }

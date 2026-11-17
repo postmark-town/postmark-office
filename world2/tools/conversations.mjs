@@ -68,12 +68,12 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
-import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
 import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "55a9ae3b59ace489d15f321f5857ab4b45bf0558", at: "98b54d96fcdf10c8dd3136cca62c4ea864028eeb" },
+            blob: "3e3fec2aafdd7d7d14a7b2a5dd8598b95b1737de", at: "968d780f186649a5154ba039d6f1655a2d330ce9" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -219,15 +219,9 @@ export function threadOf(cluster, { live, voiceCap }) {
     latest: new Date(last.at).toISOString(),
     participants,
     voice_count: voices.length,
-    voices: shown.map((v) => ({
-      handle: v.handle,
-      standing: standingOf(v.handle),
-      said: v.text,
-      at: new Date(v.at).toISOString(),
-      at_ms: v.at,
-      x: Math.round(v.x),
-      y: Math.round(v.y),
-    })),
+    // THE FLAT LINE, EXTENDED ADDITIVELY (POS-1035, call 24): `handle, standing, said, at, at_ms, x, y` as ever, plus optional
+    // `id`, `reply_to` and `circle` (circles.mjs § sayLine). The circle is resolved over the WHOLE room, not the shown page.
+    voices: sayLines(shown, circleIndex(voices)),
   };
 }
 
@@ -345,9 +339,13 @@ export function voiceOf(row, centreOf = null) {
         `(anchor ${JSON.stringify(row.at_anchor)}, offset ${row.at_dx},${row.at_dy}) — ` +
         `a voice with no place cannot be clustered, and {0,0} is the Origin, a real place somebody could be standing` };
     }
+    // POS-1035: a live say's act number IS its say id, and `payload.reply_to` is its one stored edge. A crystallized voice's
+    // act is the crossing save's emission, not a say, so it carries no say id: old talk stays a timeline (call 13).
+    const id = sayIdOf(row.id), replyTo = sayIdOf(p?.reply_to);
     return { era: "live", voice: {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,
-      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id) } };
+      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
+      ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) } };
   }
 
   return { refused: true, reason: `act ${row?.id} (${action}) matches no known voice era` };
@@ -474,11 +472,20 @@ export function unplacedDisclosure(unplaced = []) {
  * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
  * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null, find = null }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
   const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
+  // POS-1035: a named room or circle, found among every thread the record holds — voices.mjs `conversations` finds the same way
+  if (find) {
+    return {
+      now: new Date(t).toISOString(),
+      earshot_m: earshotM,
+      settlement_since: marks.length ? new Date(since).toISOString() : null,
+      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, marks), voiceCap }), source: "record" }),
+    };
+  }
   const live = [];
   const closed = [];
   for (const c of clusters) (roomOpen(c.latest, t, marks) ? live : closed).push(c);
