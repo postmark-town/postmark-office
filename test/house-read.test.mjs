@@ -172,6 +172,7 @@ test("ONCE: the town-wide blocks ride at the top and on no resident", async () =
 test("ASKED ONCE: stances, stakes and the walkers roll are one call each for the whole house", async () => {
   const { readers, calls } = worldReaders();
   const h = await houseBundle({ household: HOUSE }, ctx({ readers }));
+  // the house's consent inbox is one call for the house scope; each resident's OWN waiting count (POS-1084) is one pass per world-household (stanceCountsForHandles, test/pos-1084-one-pass.test.mjs), never a call per resident
   assert.deepEqual(calls.stances, [["r000", "r001", "r002"]]);
   assert.deepEqual(calls.stakesFor, [["r000", "r001", "r002"]]);
   assert.equal(calls.walkers, 1);
