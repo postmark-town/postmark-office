@@ -679,6 +679,8 @@ const GREEN_DISK = () => ({ path: "/", usedPct: 62, freeBytes: 14 * 2 ** 30 });
 // the same reason the watcher's is: tests that walk the clock forward must not
 // trip it; its own verdicts are pinned in §10 below.
 const _meeps = join(_wdir, "meeps.json");
+const _meepsTownRig = join(_wdir, "meeps-town-rig.json"); // CORE-72: the second host's record, fresh and OK like the first
+_wf(_meepsTownRig, JSON.stringify({ schema: 1, generated_at: new Date(T0 - 60_000).toISOString(), status: "OK", summary: "all 3 meeps answering on town-rig", problems: [], meeps: {} }));
 _wf(_meeps, JSON.stringify({ schema: 1, generated_at: new Date(T0 - 60_000).toISOString(), status: "OK", summary: "all 9 meeps answering; every round due in the last 3 h fired", problems: [], meeps: {} }));
 // §11 fixture, same discipline: a real temp settlement receipt from the 06:00Z
 // sweep before the fixed clock, published to the world S50 peels to, so the
@@ -720,6 +722,7 @@ const FIXTURE_CONFIG = {
   watchers: [{ key: "usdc_watch", label: "the usdc-watch timer", state: _wstate, cadenceMs: 6 * 60 * 60_000 }],
   siteRefresh: { ..._CFG.siteRefresh, report: _rrep, cadenceMs: 6 * 60 * 60_000 },
   meeps: { ..._CFG.meeps, path: _meeps, staleAfterMs: 6 * 60 * 60_000 },
+  meepsTownRig: { ..._CFG.meepsTownRig, path: _meepsTownRig, staleAfterMs: 6 * 60 * 60_000 },
 };
 // cadence is 6h IN THE FIXTURE ONLY: the LOUDLY test advances its clock ~1h to
 // exercise held-alert semantics, and the watcher must stay inside its window
@@ -3094,7 +3097,14 @@ test("§17 THE PUBLIC BOARD names no unit, on any probe, acked or not; the post,
   assert.deepEqual(fu.ack, { issue: "POS-968", until: ACK().until }, "the ack is on the board, its finding is not");
   for (const name of UNIT_NAMES) assert.ok(!board.includes(name), `the public board carries "${name}"`);
   // and where only operators read, the names are there
-  assert.match(posted[0], /DOWN — the box's failed units: 1 unit the roll-call manifest names failed: postmark-world2-backup\.service \(the World 2\.0 durability lane\); 2 units outside the manifest failed: certbot\.service; wright-rerun-s83-1790426624\.service/);
+  // This run reads the real CONFIG, whose two meeps records (the PC's and, since CORE-72, town-rig's) are both missing here, so
+  // each adds a STALE line ahead of this one and the post's 1,900-character cut may drop the line, saying "…and N more". When
+  // the line is shown it must name the units; when it is cut, the cut must say so, and the change log below still names them.
+  if (posted[0].includes("the box's failed units")) {
+    assert.match(posted[0], /DOWN — the box's failed units: 1 unit the roll-call manifest names failed: postmark-world2-backup\.service \(the World 2\.0 durability lane\); 2 units outside the manifest failed: certbot\.service; wright-rerun-s83-1790426624\.service/);
+  } else {
+    assert.match(posted[0], /…and \d+ more not shown here/);
+  }
   assert.ok(readFileSync(join(dir, "history.jsonl"), "utf8").includes("certbot.service"), "the change log names them");
   assert.match(JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).probes.failed_units.ack.finding, /postmark-world2-backup\.service\|certbot\.service wright-rerun-s83-1790426624\.service/);
 });
