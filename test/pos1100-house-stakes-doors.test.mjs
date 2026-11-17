@@ -7,7 +7,7 @@
 //
 //   household { read: "stakes" }          the paged list, with the aggregate beside it
 //   household { read_shape: "v2" }        the glance's stamps block: the aggregate, never the list
-//   the finished doorstep's stakes item   the aggregate, on both skins
+//   the finished doorstep's stakes item   the read's own first page (it is the read at its args), on both skins
 //
 // and holds the one number each reports against the stamp ledger's own staked figure for the house.
 //
@@ -177,12 +177,15 @@ test("household { read_shape: \"v2\" }: the glance's stamps block carries the ag
   assert.deepEqual(unexplained("household", g, 2), [], "every key is explained");
 });
 
-test("the finished doorstep's stakes item carries the aggregate on both skins, counting the post stakes", { skip }, async () => {
+test("the finished doorstep's stakes item carries the read's own first page on both skins, counting the post stakes, and IS the read at its args", { skip }, async () => {
   for (const slim of [false, true]) {
     const d = await doorstepBundle(R0, { key: null, asOf: AS_OF, canWrite: false, clone: scratch, pen: null, odb: null, slim });
     assert.equal(d.stakes.allocation?.unavailable, undefined, d.stakes.allocation?.unavailable);
     assert.equal(d.stakes.allocation.total, 4 + 5 + 7, `${slim ? "slim" : "full"}: r000's own stamps behind marks, posts and the pot`);
     assert.equal(d.stakes.allocation.count, 3);
-    assert.equal("rows" in d.stakes.allocation, false, "the item carries the aggregate, never the list");
+    assert.deepEqual(d.stakes.args, { handle: R0, limit: 10 }, "when it is there the pointer names the page it is");
+    assert.deepEqual(d.stakes.allocation.rows.map((x) => x.id).sort(), ["fixture-pot", "r000/an-idea", "r000/own-mark"]);
+    const read = await householdApex({ read: "stakes", args: d.stakes.args }, { household: HOUSE, handles: new Set([R0]) }, ctx);
+    assert.deepEqual(d.stakes.allocation, read.allocation, "the segment is the read at its args, the bundle's law");
   }
 });

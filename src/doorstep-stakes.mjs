@@ -307,11 +307,14 @@ async function allocationOf(handles, { read = null, atRisk = null, page = null }
     const stakes = await (read ?? houseStakes)(handles, { atRisk });
     if (!page) {
       const a = aggregateOf(stakes);
-      // The morning page does not fatten (foyer-shrink F7c5): a house with nothing staked, or whose ledger could not be read, says nothing here.
-      // The stakes read (`household { read: "stakes" }`) says the unreadable ledger in words, and the glance says it short; this item is not where.
+      // The aggregate form (the needs-you and house reads): a house with nothing staked says nothing here.
       return a.count > 0 ? a : undefined;
     }
-    return { ...pageStakes(stakes, page), ...(stakes?.unavailable ? {} : { key: STAKES_KEY }) };
+    // The paged form is the stakes read's, and the doorstep segment's own first page: the segment IS the read at its args (doorstep-bundle.test.mjs § THE BUNDLE).
+    // Both come through here, so they cannot drift. A house with nothing staked leaves it out (the morning page does not fatten); an unreadable ledger is said.
+    const out = pageStakes(stakes, page);
+    if (!out.unavailable && !(out.count > 0)) return undefined;
+    return { ...out, ...(out.unavailable ? {} : { key: STAKES_KEY }) };
   } catch (e) {
     return { unavailable: `what your house has stamps behind could not be read (${plainReason(e, "record", "the house's stakes")})` };
   }
