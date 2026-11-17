@@ -1588,6 +1588,28 @@ function fileHouseholds(repo) {
   return _hh.map;
 }
 
+// ── THE HOUSEHOLD GRAIN IS KEPT WHILE THE REGISTRY STANDS (POS-1057) ────────
+//
+// `identities` is a view over two tables, `households` and `household_pins` (055), and reading it costs about 200 ms on
+// prod (a nested loop with a jsonb subplan run 94,166 times for 394 rows, 2026-11-17). Every world read asked for it on
+// the two-connection acts pool: 54 runs of 500 ms or more in the slow-statement log's first 38 minutes.
+//
+// The map is kept per office thread on REGISTRY_PRINT, read from the store on EVERY call (about 1 ms): each table's row
+// count and the sum of its row versions (`xmin`, which Postgres moves on every write to a row). A household declared,
+// changed or removed, or a pin written, moves it. A store, or a test's stub, that cannot answer the print gets no memo.
+const REGISTRY_PRINT = `
+  SELECT (SELECT count(*)::text || ':' || coalesce(sum(xmin::text::bigint), 0)::text FROM households)
+      || '|' ||
+         (SELECT count(*)::text || ':' || coalesce(sum(xmin::text::bigint), 0)::text FROM household_pins) AS print`;
+let _identities = null; // { url, print, map }
+async function registryPrint(actsQuery, env) {
+  try {
+    const rows = await actsQuery(REGISTRY_PRINT, [], env);
+    const print = Array.isArray(rows) && rows.length === 1 ? rows[0]?.print : null;
+    return typeof print === "string" && /^\d+:\d+\|\d+:\d+$/.test(print) ? print : null;
+  } catch { return null; }
+}
+
 /** One read of the household grain -> the synchronous `(handle) => key` (null for no handle). */
 export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } = {}) {
   const { world2Enabled, actsQuery } = await import("./world2-acts.mjs");
@@ -1595,15 +1617,20 @@ export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } 
     const map = fileHouseholds(repo);
     return (handle) => (handle && !isBerthHandle(handle) ? map[handle] ?? `solo:${handle}` : null);
   }
-  let rows;
-  try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
-  catch (e) { throw new HouseholdsUnreadable(e); }
-  if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
-  const map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
+  const print = await registryPrint(actsQuery, env);
+  let map = print !== null && _identities && _identities.url === env.WORLD2_PG_URL && _identities.print === print ? _identities.map : null;
+  if (!map) {
+    let rows;
+    try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
+    catch (e) { throw new HouseholdsUnreadable(e); }
+    if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
+    map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
+    if (print !== null) _identities = { url: env.WORLD2_PG_URL, print, map };
+  }
   // a visitor's body has no household (POS-739): its walk, say, landing and ride all carry none
   return (handle) => (handle && !isBerthHandle(handle) ? map.get(String(handle)) ?? `solo:${handle}` : null);
 }
-export const resetHouseholdCache = () => { _hh = null; };
+export const resetHouseholdCache = () => { _hh = null; _identities = null; };
 
 /**
  * The household's HUMAN, as the office knows them.
