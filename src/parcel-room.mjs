@@ -134,6 +134,9 @@ export async function houseFactsAt(registerRows, townRepo) {
   return houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), engine?.classifyEntry) });
 }
 
+// the store's lines that could be parcel purchases, classified afterwards by the town's own engine
+const PARCEL_BURNS_SQL = "SELECT canonical FROM stamp_lines WHERE canonical LIKE '% → BURN · % · for: parcel:%' ORDER BY seq";
+
 /**
  * The facts now, from the store: the registry's rows and the stamp_lines rows
  * that could be purchases, classified by the town clone's engine. Null when the
@@ -149,7 +152,7 @@ export async function houseFactsNow({ env = process.env, townClone = null } = {}
   // A clone without an engine is "nothing to say"; a pin stop is not absence (POS-994).
   const engine = townClone ? await townEngineNow(townClone).catch((e) => { if (isPinStop(e)) throw e; return null; }) : null;
   if (!engine) return null;
-  const lines = await actsQuery("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% → BURN · % · for: parcel:%' ORDER BY seq", [], env);
+  const lines = await actsQuery(PARCEL_BURNS_SQL, [], env);
   if (lines === null) return null;
   return houseFactsOf({ registry: registryFromRows(rows), burns: parcelBurnsOf(lines.map((r) => r.canonical), engine.classifyEntry) });
 }
@@ -231,6 +234,67 @@ export function roomPastResidentsHeadsUp({ slug, residents, nth }) {
     + "Stamps paid for room are never returned.";
 }
 
+// ── THE TWO STAGE RULES, ONE COPY (CORE-114) ─────────────────────────────────
+//
+// Whether room can be bought at all is two questions, neither of them the
+// purse: THE DATE (the house declared after the cutoff, and the day is the
+// day room is sold from) and THE ROOM (fewer than three held). The quote
+// below refuses by them, and the glance's offer (`parcelRoomOffer`) hides by
+// them, so the two cannot disagree about who may buy. Affordability, the
+// meep rule and the ledger's filing of the payer are the quote's alone.
+export const ROOM_CAP = 3;
+const roomDateRefusal = ({ slug, since, date, lastDay, firstDay, cutoff }) => {
+  if (!since) return refuse(409, `${slug} has no declaration day in the registry`, `without one it keeps room for three, and there is none to buy; ${cutoff}`);
+  if (since <= lastDay)
+    return refuse(409, `${slug} was declared on ${since}, on or before ${lastDay} (town time)`, "it keeps room for three parcels, one per resident, for good, and has none to buy");
+  if (date < firstDay) return refuse(409, `room is bought from ${firstDay} (town time)`, cutoff);
+  return null;
+};
+const roomExhaustedRefusal = ({ slug, room }) =>
+  room >= ROOM_CAP ? refuse(409, `${slug} already has room for three parcels`, "three is the cap, one per resident; there is no more room to buy") : null;
+
+/**
+ * THE OFFER'S QUESTION: may this house buy more room, by the date and the
+ * room alone. PURE. `bought` is houseFactsOf's count; `engine` the town's
+ * stamp-mint module. → `{ open: true, room }`, `{ open: false }` (the day, the
+ * room, or a town whose ledger does not know a purchase yet: nothing can be
+ * bought, so nothing is offered), or null when the town's law cannot be read
+ * (no engine): the glance says so rather than offer or hide.
+ */
+export function parcelRoomOffer({ slug, since, bought = 0, date, engine }) {
+  if (!engine) return null;
+  const { PARCEL_PRICE: price1, PARCEL_SETTLED_BY_DAY: lastDay, PARCEL_ROOM_FROM: firstDay } = engine;
+  if (typeof engine.parcelBurnLine !== "function" || !price1 || !lastDay || !firstDay) return { open: false };
+  if (roomDateRefusal({ slug, since, date, lastDay, firstDay, cutoff: "" })) return { open: false };
+  const room = 1 + bought;
+  if (roomExhaustedRefusal({ slug, room })) return { open: false };
+  return { open: true, room };
+}
+
+/**
+ * THE OFFER, NOW: `parcelRoomOffer` for the house `slug` in `registry` (the
+ * store's, as the glance already holds it). The date decides first, from the
+ * registry row alone, so a house declared before the cutoff (most of them)
+ * costs no ledger read; only a house the date leaves open reads the ledger's
+ * parcel burns (the lines houseFactsNow reads). → the offer's answer, or null
+ * when a read it needed could not be made (said by the caller, never guessed).
+ * `engine` and `burnLines` are the two reads, named so a test can hand them in.
+ */
+export async function parcelRoomOfferNow({ slug, registry, townClone, date, env = process.env, engine: given = null, burnLines = null }) {
+  const rec = registry?.households?.[slug];
+  const since = typeof rec?.since === "string" && rec.since ? rec.since.slice(0, 10) : null;
+  const engine = given ?? (townClone ? await townEngineNow(townClone) : null);
+  if (!engine) return null; // no town engine to ask (the quote's own 503 "not-yet-open"): unread, not eligible and not exhausted
+  const byDate = parcelRoomOffer({ slug, since, bought: 0, date, engine });
+  if (!byDate?.open) return byDate;
+  const { actsQuery } = await import("./world2-acts.mjs");
+  const lines = burnLines ? await burnLines() : await actsQuery(PARCEL_BURNS_SQL, [], env);
+  if (lines === null) return null;
+  const burns = parcelBurnsOf(lines.map((r) => r.canonical), engine.classifyEntry);
+  const bought = houseFactsOf({ registry, burns })[`hh:${slug}`]?.bought ?? 0;
+  return parcelRoomOffer({ slug, since, bought, date, engine });
+}
+
 /**
  * THE QUOTE: what buying one more parcel of room would cost `handle`'s
  * household today, or the refusal, in plain words that name the price and the
@@ -250,17 +314,16 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
   const slug = Object.keys(houses).find((s) => (houses[s]?.residents ?? []).includes(handle)) ?? null;
   if (!slug) return refuse(409, `${handle} is in no declared household`, `parcel room belongs to a household; ${cutoff}`);
   const since = typeof houses[slug].since === "string" ? houses[slug].since.slice(0, 10) : null;
-  if (!since) return refuse(409, `${slug} has no declaration day in the registry`, `without one it keeps room for three, and there is none to buy; ${cutoff}`);
-  if (since <= lastDay)
-    return refuse(409, `${slug} was declared on ${since}, on or before ${lastDay} (town time)`, "it keeps room for three parcels, one per resident, for good, and has none to buy");
-  if (date < firstDay) return refuse(409, `room is bought from ${firstDay} (town time)`, cutoff);
+  const tooEarly = roomDateRefusal({ slug, since, date, lastDay, firstDay, cutoff });
+  if (tooEarly) return tooEarly;
   const house = `hh:${slug}`;
   if (houseKeyCanon(registry)(townKey) !== house)
     return refuse(409, `the town's ledger files ${handle} under ${townKey}, not ${house}`,
       `its verifier would refuse the line, so nothing is burned: a housemate the ledger files under ${house} can buy the room`);
   const bought = houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), engine.classifyEntry) })[house]?.bought ?? 0;
   const room = 1 + bought;
-  if (room >= 3) return refuse(409, `${slug} already has room for three parcels`, "three is the cap, one per resident; there is no more room to buy");
+  const spent = roomExhaustedRefusal({ slug, room });
+  if (spent) return spent;
   // ROOM PAST THE RESIDENTS WARNS AND IS ALLOWED (POS-762/g; POS-849). Before
   // POS-849 this refused the purchase ("Refuse it", Darko 2026-10-23 11:03
   // EDT, shipped in w45 by office #757). He then ruled "Warn and allow"
