@@ -23,7 +23,7 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, TownToolUnpinned, ancestorOfPin, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
+import { PIN_ROOT, REPO_DEFAULTING, TownPinMismatch, holderArgs, TownToolUnpinned, ancestorOfPin, gitBlobSha, importTownTool, importTownToolAt, readPins, townTool, townToolArgv } from "../src/town-tool.mjs";
 import { stampKeyRefusal } from "../tools/stamp-sandbox.mjs";
 import { MODULES, checkPins, collect, manifest } from "../tools/town-pins.mjs";
 
@@ -610,6 +610,33 @@ test("CLONE-FREE: the witness's owe-open and owe-incomplete run from the pinned 
     assert.throws(() => townToolArgv(noClone, "witness-chain.mjs", ["publish"], { verifyClone: false }), /only witness-chain\.mjs owe-open\/owe-incomplete may run without the clone check/);
     assert.throws(() => townToolArgv(noClone, "stamp-mint.mjs", ["owe-open"], { verifyClone: false }), /only witness-chain\.mjs/);
   } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("HOLDER: an owe-open through the door is held by the door's CALLER, not the door (POS-1035)", () => {
+  // The ferry unit's shell calls the door, and the door spawns witness-chain. Left to
+  // its default (process.ppid), owe-open would name the door, which exits at once, and
+  // the next publisher would read the crossing as dead while it still ran. Here the
+  // test process is the caller, so the open entry must name process.pid.
+  const base = mkdtempSync(join(tmpdir(), "town-tool-holder-"));
+  try {
+    const noClone = join(base, "there-is-no-clone");
+    const env = { TOWN_PINS_DIR: PIN_ROOT };
+    const openEntry = (owed) => walk(owed).map((p) => JSON.parse(readFileSync(p, "utf8"))).find((o) => o.state === "open");
+    const owed = join(base, "owed");
+    const r = door(["run", "witness-chain.mjs", "--clone", noClone, "--", "owe-open", "--owed", owed, "--kind", "mail-crossing", "--attempt", "ferry-holder"], env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(openEntry(owed)?.holder?.pid, process.pid, "held by the door's caller");
+    // a holder the caller names is kept as named
+    const owed2 = join(base, "owed2");
+    const named = door(["run", "witness-chain.mjs", "--clone", noClone, "--", "owe-open", "--owed", owed2, "--kind", "mail-crossing", "--attempt", "ferry-named", "--pid", String(process.pid)], env);
+    assert.equal(named.status, 0, named.stderr);
+    assert.equal(openEntry(owed2)?.holder?.pid, process.pid);
+  } finally { rmSync(base, { recursive: true, force: true }); }
+  // only owe-open gains a holder, and only when none is named
+  assert.deepEqual(holderArgs("witness-chain.mjs", ["owe-open", "--owed", "/o"], 41), ["owe-open", "--owed", "/o", "--pid", "41"]);
+  assert.deepEqual(holderArgs("witness-chain.mjs", ["owe-open", "--pid", "7"], 41), ["owe-open", "--pid", "7"]);
+  assert.deepEqual(holderArgs("witness-chain.mjs", ["owe-incomplete", "--owed", "/o"], 41), ["owe-incomplete", "--owed", "/o"]);
+  assert.deepEqual(holderArgs("stamp-mint.mjs", ["owe-open"], 41), ["owe-open"]);
 });
 
 test("AT: a symlinked module in an ancestor checkout is refused by name (node would import it by its real path)", async (t) => {
