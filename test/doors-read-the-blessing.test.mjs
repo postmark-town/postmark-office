@@ -16,16 +16,16 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { engineDirAt } from "../src/world-branches.mjs";
 import { mistsOnTheRoad, mistsWallOn } from "../src/world.mjs";
 import { crossingLaw } from "../src/world-crossings.mjs";
 import { mistsEngine } from "../src/mists-forecast.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "doors-blessing-"));
+const repo = tempDir("doors-blessing-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const git = (...args) => execFileSync("git", ["-c", "core.autocrlf=false", "-C", repo, ...args], { encoding: "utf8" }).trim();
 
@@ -88,6 +88,6 @@ test("a new blessing reaches the doors on the next call, in the same process", a
 });
 
 test("a directory that is not a git repository is its own engine (a test's stub)", () => {
-  const stub = mkdtempSync(join(tmpdir(), "doors-stub-"));
+  const stub = tempDir("doors-stub-");
   try { assert.equal(engineDirAt(stub), stub); } finally { rmSync(stub, { recursive: true, force: true }); }
 });

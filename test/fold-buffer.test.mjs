@@ -11,11 +11,11 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-fold-buffer-"));
+const repo = tempDir("postmark-fold-buffer-");
 after(() => { try { rmSync(repo, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 const put = (path, text) => { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text); };
 

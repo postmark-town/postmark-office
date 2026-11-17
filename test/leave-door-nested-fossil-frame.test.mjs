@@ -62,10 +62,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXEC = join(OFFICE, "src", "leave-exec.mjs");
@@ -117,7 +117,7 @@ const mark = (fields, body) => `---\n${fields.join("\n")}\n---\n\n${body}\n`;
  * the mooring's fossil filing, and the REAL engine under `tools/`.
  */
 function bottledWorld(t) {
-  const repo = mkdtempSync(join(tmpdir(), "pos181-nested-fossil-frame-"));
+  const repo = tempDir("pos181-nested-fossil-frame-");
   t.after(() => { try { rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } });
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const put = (p, text) => {

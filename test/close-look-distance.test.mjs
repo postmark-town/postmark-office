@@ -11,9 +11,9 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -34,10 +34,10 @@ const KEEP = "sbx-fort/the-keep", HALL = "sbx-fort/the-hall", HALL_LAMP = "sbx-f
 const CAT = { x: 4010, y: 10 };
 const CAT_LAMP = "sbx-ana/cat-lamp";
 const CAT_CROWD = Array.from({ length: 14 }, (_, i) => `sbx-ana/cat-big-${i}`);
-const repo = mkdtempSync(join(tmpdir(), "wld79-"));
+const repo = tempDir("wld79-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
-const NO_TOWN = mkdtempSync(join(tmpdir(), "wld79-no-town-"));
+const NO_TOWN = tempDir("wld79-no-town-");
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 let pool, callHoldTool, resetLawSnapshot;
 

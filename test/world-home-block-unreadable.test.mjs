@@ -25,12 +25,12 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-home-unreadable-"));
+const repo = tempDir("postmark-home-unreadable-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
@@ -106,7 +106,7 @@ const MISSING = join(repo, "no-such-clone-here");
 // The box resize left the clone exactly where it was and broke the ENGINE, and
 // that is the only shape where a file read without the engine can still answer.
 // So: a real clone, a real painting, an engine that throws on assembly.
-const broken = mkdtempSync(join(tmpdir(), "postmark-home-broken-engine-"));
+const broken = tempDir("postmark-home-broken-engine-");
 after(() => rmSync(broken, { recursive: true, force: true }));
 {
   const bgit = (...args) => execFileSync("git", ["-C", broken, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

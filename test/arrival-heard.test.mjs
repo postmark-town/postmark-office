@@ -28,8 +28,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -148,7 +148,7 @@ export async function actsQuery(text, params) {
 `;
 
 function execTown() {
-  const dir = mkdtempSync(join(tmpdir(), "heard-"));
+  const dir = tempDir("heard-");
   homes.push(dir);
   const origin = join(dir, "origin.git");
   const clone = join(dir, "clone");

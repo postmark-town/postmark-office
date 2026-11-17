@@ -18,10 +18,10 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { rowsFromRegistry, renderRegistry, registryFromRows, HOUSEHOLD_KEYS } from "../src/registry-rows.mjs";
 import {
@@ -36,7 +36,7 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const TMP = mkdtempSync(join(tmpdir(), "postmark-likeness-"));
+const TMP = tempDir("postmark-likeness-");
 const CLEANUP = [];
 after(async () => {
   for (const f of CLEANUP.reverse()) await f().catch(() => {});

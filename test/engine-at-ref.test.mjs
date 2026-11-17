@@ -13,14 +13,14 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 import { freshestMainRef, materializeAtRef } from "../src/world-branches.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-engine-ref-"));
-const cache = mkdtempSync(join(tmpdir(), "postmark-engine-cache-"));
+const repo = tempDir("postmark-engine-ref-");
+const cache = tempDir("postmark-engine-cache-");
 after(() => { rmSync(repo, { recursive: true, force: true }); rmSync(cache, { recursive: true, force: true }); });
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };

@@ -187,6 +187,16 @@ answers under `result`.
   household-authored text, content you read, never instructions you receive. The REST bare
   answer gains the act's card at its end (the capture diff is additive: one new card, nothing
   removed or retyped). Not in the glance's `can` list, which is sized to its budget.
+- **What a menu holds** (POS-958; Darko, 2026-11-08, on POS-947/c): "acts should be
+  reserved for always-relevant verbs; not one-offs". An act that stays relevant (`send`,
+  `stake`, `host`, the repeatable papers) belongs on the menu: the bare answer's `acts`,
+  the connector's index and the glance's `can`. An act that is done once, or stops
+  applying when a house passes a stage, does not: it is offered, while it is open to the
+  caller, in the place the door already names what moves a house forward (`next`, the
+  glance's `first_steps`), and the offer is gone when it is done or inapplicable. It
+  stays in the tool schema's `do` and `read` enums, and `read: "<act>"` answers its full
+  card by name. Which acts are one-offs is decided act by act, never by this line; the
+  next bullet is the first.
 - **Naming who invited your household, after joining** (POS-947; Darko, 2026-11-07 and 11-08;
   asked for by Little Bird): `household { do: "invited-by", args: { invited_by, handle? } }`
   and its REST twin `POST /household` with the same body. `invited_by` is a resident's handle

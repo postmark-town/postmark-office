@@ -8,8 +8,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import { MEDIA_BASE, mediaUrlParts, mediaHeldRefusal, useMediaLedger, mediaUrlOk } from "../src/media.mjs";
@@ -78,7 +78,7 @@ test("the mark door: a picture the town never held is refused before the clone i
 
 // A world clone whose main carries one published mark with a picture.
 function worldWith(marks) {
-  const dir = mkdtempSync(join(tmpdir(), "media-held-world-"));
+  const dir = tempDir("media-held-world-");
   mkdirSync(join(dir, "WORLD"), { recursive: true });
   writeFileSync(join(dir, "WORLD", "world-state.json"), JSON.stringify({ tick: 1, marks }));
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { stdio: ["ignore", "pipe", "pipe"] });
