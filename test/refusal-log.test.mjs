@@ -30,7 +30,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { removeTempDir, tempDir } from "./helpers/temp-dir.mjs";
 import {
   actOf, targetOf, isKept, refusalInReply, actorHandle, noteRestRefusal, recordRefusal, refusalLogSettled,
-  readOwnRefusals, __resetForTest, RETENTION_DAYS, TARGET_FIELDS, TARGET_VALUE_MAX, DEFECT_MAX,
+  readOwnRefusals, __resetForTest, HELD_MAX, RETENTION_DAYS, TARGET_FIELDS, TARGET_VALUE_MAX, DEFECT_MAX,
 } from "../src/refusal-log.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -281,6 +281,44 @@ test("a resident's own, and nobody else's: a key holding only a2 never reads a1'
   assert.deepEqual(viaDoor.answer.refusals.map((x) => x.target.letter), ["a2-try"]);
 });
 
+test("`held` is never cut: a try filed by a key holding 25 residents is read by a key holding all 25 and not by one holding the first 20; past HELD_MAX nothing is kept", { skip }, async () => {
+  await fresh(); __resetForTest();
+  const names = Array.from({ length: 25 }, (_, i) => `r${i + 1}`);
+  await asOwner(`INSERT INTO households (slug, ord, name, residents, since, declared_by) VALUES ('rr-house', 9, 'The RR House', $1::text[], '2026-10-01', 'r1')`, [names]);
+  const key25 = { household: "the-rr-house", handles: new Set(names) };
+  const key20 = { household: "the-rr-house", handles: new Set(names.slice(0, 20)) };
+  const kept = await recordRefusal({ key: key25, door: "mcp", act: "world:k25", target: {}, handle: null, code: 403, defect: "d", hint: null });
+  assert.deepEqual(kept, { recorded: true });
+  assert.deepEqual((await rowsKept()).map((r) => r.act), ["world:k25"]);
+  assert.equal((await asOwner("SELECT cardinality(held) AS n FROM refused_acts"))[0].n, 25, "every resident the key held is recorded");
+  assert.deepEqual((await readOwnRefusals(key25)).refusals.map((x) => x.act), ["world:k25"], "the key that held all 25 reads it");
+  assert.deepEqual((await readOwnRefusals(key20)).refusals, [], "the key holding only the first 20 does not: it may have been any of the other five's try");
+  // a key past what a row records is not recorded at all, never cut
+  const many = Array.from({ length: HELD_MAX + 1 }, (_, i) => `m${i}`);
+  const over = await recordRefusal({ key: { household: "the-rr-house", handles: new Set(many) }, door: "mcp", act: "world:over", target: {}, code: 403, defect: "d", hint: null });
+  assert.equal(over.recorded, false);
+  assert.equal((await rowsKept()).length, 1, "nothing was written for the key past the bound");
+});
+
+test("a row no key could ever read is not kept: a signed-in visitor's refusal and a no-resident key's inside a house", { skip }, async () => {
+  await fresh(); __resetForTest();
+  const visitor = { household: null, ghId: 4242424, handles: new Set() };
+  const noResident = { household: "the-aa-house", handles: new Set() };
+  for (const [what, key] of [["a signed-in visitor", visitor], ["a key with no resident inside a house", noResident]]) {
+    const r = await recordRefusal({ key, door: "mcp", act: "world:give", target: {}, code: 403, defect: "d", hint: null });
+    assert.equal(r.recorded, false, what);
+    assert.match(r.why, /holds no resident/, what);
+  }
+  assert.deepEqual(await rowsKept(), [], "no row under gh:<id> or the house");
+  // CONTROL: the same call from a key that holds a resident is kept, so the empty table was not a dead writer
+  assert.deepEqual(await recordRefusal({ key: keyA2, door: "mcp", act: "world:give", target: {}, code: 403, defect: "d", hint: null }), { recorded: true });
+  assert.equal((await rowsKept()).length, 1);
+  // and through the MCP door
+  await mcpCall("household", { do: "letter-note", args: { letter: "x", state: "no-reply" } }, noResident);
+  await mcpCall("household", { do: "letter-note", args: { letter: "x", state: "no-reply" } }, visitor);
+  assert.equal((await rowsKept()).length, 1, "the door keeps neither");
+});
+
 test("the row policy: a household's rows are invisible to another's, to a transaction that declared none, and to the export role; office_api cannot edit or delete", { skip }, async () => {
   await fresh();
   await asOwner("INSERT INTO refused_acts (household, door, act, code, defect) VALUES ($1, 'mcp', 'world:give', 403, 'mine'), ($2, 'mcp', 'world:give', 403, 'theirs')", [A, B]);
@@ -319,6 +357,7 @@ test("noteRestRefusal: a refused write is kept by its method and path, an apex a
   await fresh(); __resetForTest();
   const bounce = { error: "bounce", defect: "a refusal", hint: "its hint" };
   noteRestRefusal({ method: "POST", tel: { key: keyA, path: "/letters" } }, 422, bounce);
+  await refusalLogSettled();   // INFLIGHT_MAX is 1: one record at a time
   noteRestRefusal({ method: "POST", tel: { key: keyA, path: "/world/apex", call: {}, act: { name: "world", args: { do: "give", args: { to: "a2", text: SECRET } } } } }, 409, bounce);
   // controls: each of these must keep nothing
   noteRestRefusal({ method: "GET", tel: { key: keyA, path: "/world" } }, 404, bounce);
@@ -365,6 +404,7 @@ test("the real office's j keeps a refused write and its apex act, and not a refu
   // the refused writes
   const apex = await send("POST", "/world/apex", { do: "no-such-act", not_a_field: 1, args: { to: "someone", text: SECRET } });
   assert.ok(apex.status >= 400 && apex.status < 500, `a refused apex act: ${apex.status} ${JSON.stringify(apex.body)}`);
+  await until(async () => (await rowsKept()).length >= 1, "the first refusal kept (one record at a time)");
   const letter = await send("POST", "/letters", { not_a_field: 1 });
   assert.ok(letter.status >= 400 && letter.status < 500, `a refused letter: ${letter.status} ${JSON.stringify(letter.body)}`);
   const rows = await until(async () => { const r = await rowsKept(); return r.length >= 2 ? r : null; }, "two refused writes kept");

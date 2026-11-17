@@ -37,6 +37,11 @@
 -- `snapshot_reader` or any other role: no export reads it, and the refusal writes
 -- nothing to `acts`, so none of it reaches the public record.
 --
+-- THE RESIDENT'S SCOPE IS IN THE READ, NOT IN THE POLICY: the policy narrows to the
+-- household, and src/refusal-log.mjs § readOwnRefusals narrows further to the residents
+-- the reading key holds (`handle`, or `held` for a row with no handle). Any future
+-- reader of this table must apply the same filter.
+--
 -- ── NINETY DAYS ─────────────────────────────────────────────────────────────
 --
 -- A row older than 90 days is never read (the read says `at > now() - 90 days`) and

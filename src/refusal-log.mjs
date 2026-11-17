@@ -29,8 +29,10 @@
 //     act, a 429 is the rate limit, charged before the act is looked at, and a 413 is a
 //     body refused unread, so no act was seen; none of the three is recorded. A bounce
 //     that names no code is recorded with none.
-//   · A KNOWN HOUSEHOLD: a call whose key resolves to no household has no one to
-//     read it back to, so nothing is kept.
+//   · A KEY THAT HOLDS A RESIDENT: a call whose key holds no resident (a signed-in
+//     visitor, a no-resident key inside a house) has no one to read it back to, so
+//     nothing is kept. A key holding more than HELD_MAX residents is not recorded
+//     either: `held` is never cut, because a cut one widens who may read the row.
 //   · "ON WHAT" is the call's identifying fields only (TARGET_FIELDS), each cut to
 //     TARGET_VALUE_MAX characters. A body, a text, a note or any field not on the
 //     list is never copied, so a letter's words are never kept here.
@@ -73,7 +75,7 @@ export const TARGET_FIELDS = Object.freeze([
   "event", "pot", "quest", "stance",
 ]);
 
-export const REFUSALS_NOTE = `private to the residents your key holds: the town keeps no public record of a refusal. Each row is an act a door refused, who tried it, on what, when and the refusal's own words; rows are kept ${RETENTION_DAYS} days`;
+export const REFUSALS_NOTE = `private to the residents your key holds: the town keeps no public record of a refusal. Each row is an act a door refused, who tried it, on what, when and the refusal's own words; rows are kept ${RETENTION_DAYS} days. A refusal is kept best-effort: during a burst a record may be skipped, so this list can come up short`;
 
 // ── the shape of what is recorded ────────────────────────────────────────────
 
@@ -142,8 +144,10 @@ let absentSaid = false;
 const inflight = new Set();
 let skipped = 0;
 /** How many refusals are kept at once (the pen's pool holds three connections). */
-export const INFLIGHT_MAX = 2;
-const HELD_MAX = 20;
+export const INFLIGHT_MAX = 1;   // one while the doorstep's pool question (POS-1064) is open
+/** The most residents a row records for its key, and the longest handle; a key past either is not recorded, never cut. */
+export const HELD_MAX = 100;
+export const HELD_NAME_MAX = 80;
 
 /** Test seam: forget the prune clock, the said-once flags and the counts. */
 export function __resetForTest() { lastPrune = 0; absentSaid = false; skipped = 0; lastSaid = 0; inflight.clear(); }
@@ -159,13 +163,19 @@ export async function recordRefusal(rec, { env = process.env, now = Date.now } =
   try {
     if (!rec?.key) return { recorded: false, why: "no key" };
     if (!isKept(rec.code ?? null)) return { recorded: false, why: "not a refusal this log keeps" };
+    // A ROW NO KEY CAN EVER READ IS NOT KEPT: the read refuses a key that holds no resident (a signed-in visitor's key, or a
+    // no-resident key inside a house), so such a refusal would sit 90 days for nobody. And `held` is never cut: a row whose
+    // residents would not all fit is not kept, since a cut `held` would let a key holding fewer residents read it.
+    const held = heldHandles(rec.key);
+    if (!held.length) return { recorded: false, why: "the key holds no resident, so no key could read it back" };
+    if (held.length > HELD_MAX || held.some((h) => h.length > HELD_NAME_MAX)) return { recorded: false, why: "the key holds more residents than a row records" };
     const mine = await officeRead(async (c) => (await keyHouseholdOf(c, rec.key)).household, { env, by: "recordRefusal" });
     if (!mine) return { recorded: false, why: "no household" };
     await officeWrite(async (c) => {
       await c.query(
         `INSERT INTO refused_acts (household, handle, held, door, act, target, code, defect, hint)
          VALUES ($1, $2, $3::text[], $4, $5, $6::jsonb, $7, $8, $9)`,
-        [mine, cut(rec.handle, 80), heldHandles(rec.key).slice(0, HELD_MAX).map((h) => h.slice(0, 80)), rec.door === "rest" ? "rest" : "mcp", cut(rec.act, ACT_MAX) || "?",
+        [mine, cut(rec.handle, 80), held, rec.door === "rest" ? "rest" : "mcp", cut(rec.act, ACT_MAX) || "?",
          JSON.stringify(rec.target ?? {}), rec.code ?? null, cut(rec.defect, DEFECT_MAX), cut(rec.hint, HINT_MAX)]);
     }, { env, household: mine });
     if (now() - lastPrune >= PRUNE_EVERY_MS) {
