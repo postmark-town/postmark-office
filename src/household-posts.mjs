@@ -63,6 +63,7 @@ import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { BUG_CLASS } from "./bugs.mjs";
+import { pageRows } from "./page-rows.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -331,7 +332,7 @@ export function postOrder(a, b) {
  * @param {string} handle  any resident of the house; the answer is the house's
  * @param {{ now?: number, env?: object, clone?: string|null, townClone?: string, readers?: object }} ctx
  */
-export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {} } = {}) {
+export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {}, page = null } = {}) {
   const h = String(handle ?? "").trim();
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
@@ -346,6 +347,9 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
+    // POS-732: the deeper read (`page` given: its limit and offset, either may be undefined) walks each list in the one paging
+    // pattern, default POSTS_CAP; the doorstep's segment and the glance ask with no `page` and keep their bounded preview.
+    if (page) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
     return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)

@@ -83,6 +83,7 @@
 // and answers stamps_paid null, rather than calling every stage unpaid.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { pageRows } from "./page-rows.mjs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -242,7 +243,7 @@ export { NO_CHAIN };
  * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
  * @param {{ now?: number, env?: object, townClone?: string }} ctx
  */
-export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true } = {}) {
+export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true, whole = false } = {}) {
   const cls = judgePostsClass(fields);
   const wanted = judgeStateFilter(fields, cls);
   const one = String(fields?.post ?? "").trim();
@@ -330,6 +331,10 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     const { posts: page, ...paging } = bugPageOf(posts, fields);
     return { ...listHead, ...paging, catchers: bugCatchersOf(wholeClass, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
-  return { ...listHead, total: posts.length, posts,
-    ...(cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {}) };
+  const tail = cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {};
+  // POS-732: every other class pages as the bug class does (limit default 20, offset), held under the connector's cap.
+  // The plain REST list (GET /posts) keeps its whole answer when it names neither, for the snapshot readers that make
+  // one request and no continuation (site tools/lib/fetch-town-data.mjs); `limit` or `offset` on it pages.
+  if (whole && fields.limit == null && fields.offset == null) return { ...listHead, total: posts.length, posts, ...tail };
+  return pageRows(posts, fields, { noun: cls, key: "posts", around: { ...listHead, ...tail } });
 }

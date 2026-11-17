@@ -545,17 +545,17 @@ test("the uploads list is bounded, and `count` is the whole ledger — not the p
   const none = async () => ({ hits: new Set(), unreadable: [] });
 
   const page = await mediaRead(key(), { odb: db, embedded: none });
-  assert.equal(page.uploads.length, 25, "the page");
+  assert.equal(page.uploads.length, 20, "the page (until POS-732 this asserted 25: the one paging pattern's default is 20)");
   assert.equal(page.count, 30, "the whole ledger");
   assert.notEqual(page.count, page.uploads.length,
     "THE FALSIFIER: a count that cannot disagree with its own list is the list length wearing a total's name");
-  assert.equal(page.shown, 25);
+  assert.equal(page.shown, 20);
   assert.equal(page.complete, false);
-  assert.equal(page.next_offset, 25);
+  assert.equal(page.next_offset, 20);
   assert.match(page.more_note, /measured in BYTES/, "the quota counts every file, listed or not");
 
-  const rest = await mediaRead(key(), { odb: db, embedded: none, offset: 25 });
-  assert.equal(rest.uploads.length, 5);
+  const rest = await mediaRead(key(), { odb: db, embedded: none, offset: 20 });
+  assert.equal(rest.uploads.length, 10);
   assert.equal(rest.complete, true);
   assert.equal(rest.next_offset, undefined);
   assert.equal(rest.count, 30, "the total does not shrink as you walk");
