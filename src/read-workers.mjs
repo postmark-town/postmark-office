@@ -196,6 +196,10 @@ export function wantsEarshot(messages, shape = "v0") {
     if (m?.params?.name !== "world") return false;
     const a = m.params?.arguments ?? {};
     if ((a.do != null && a.do !== "") || (a.read != null && a.read !== "")) return false;
+    // WLD-187: a top-level at: is the spectator look, which is always the v2 read (and so carries `heard`), whatever the office's
+    // default shape: before the default flip it must reach a worker WITH the earshot snapshot, or its heard block is "unavailable".
+    // A look that asks another shape is refused at the door, so it needs none.
+    if (a.at != null && a.at !== "") return a.read_shape == null || a.read_shape === "" || a.read_shape === "v2";
     return (a.read_shape ?? shape) === "v2";
   });
 }
