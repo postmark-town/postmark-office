@@ -271,7 +271,6 @@ export async function householdsAt(registerRows, townRepo) {
   const { mkdtempSync, readdirSync, cpSync, symlinkSync, writeFileSync, rmSync, unlinkSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { pathToFileURL } = await import("node:url");
   const { registry, pins } = await registerOfVersions(registerRows);
   const dir = mkdtempSync(join(tmpdir(), "snapshot-town-"));
   try {
@@ -282,7 +281,16 @@ export async function householdsAt(registerRows, townRepo) {
     }
     writeFileSync(join(dir, "tools", "households.json"), JSON.stringify(registry, null, 2) + "\n");
     writeFileSync(join(dir, "tools", "github-ids.json"), JSON.stringify(pins, null, 2) + "\n");
-    const engine = await import(pathToFileURL(join(dir, "tools", "stamp-mint.mjs")).href);
+    // POS-994 (Wright, 2026-11-16): the checkout's own engine only inside the
+    // office's reviewed history, held to git at its commit; past the pin, the
+    // pinned copy or a stop by name (town-tool.mjs § importTownToolAt).
+    // A town folder git cannot name a commit for is checked against the pins as a clone.
+    const { spawnSync } = await import("node:child_process");
+    const { importTownTool, importTownToolAt } = await import("./town-tool.mjs");
+    const head = spawnSync("git", ["-C", townRepo, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" });
+    const engine = head.status === 0
+      ? await importTownToolAt(dir, head.stdout.trim(), "stamp-mint.mjs", { gitRepo: townRepo })
+      : await importTownTool(dir, "stamp-mint.mjs");
     const { worldHouseholdsAt } = await import("./household-logins.mjs");
     return worldHouseholdsAt(dir, engine).households;
   } finally {

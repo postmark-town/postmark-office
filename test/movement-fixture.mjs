@@ -24,9 +24,9 @@
 // that would be testing an import path the office does not use.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
 
@@ -75,7 +75,7 @@ export function fixtureMarks({ pace = 40 } = {}) {
 
 /** A git world clone carrying the real engine at `main`. Caller removes it. */
 export function makeWorldClone({ from = WORLD_CLONE } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "stageD-world-"));
+  const dir = tempDir("stageD-world-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   for (const f of ENGINE_FILES) copyFileSync(join(from, "tools", f), join(dir, "tools", f));
   writeFileSync(join(dir, "README.md"), "movement fixture world\n", "utf8");

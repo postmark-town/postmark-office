@@ -54,7 +54,7 @@
 
 import { resolve, dirname, join } from "node:path";
 import { existsSync, statSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { officeRead } from "./world2-pen.mjs";
 import { ideasTank } from "./world-classes.mjs";
@@ -63,6 +63,7 @@ import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { BUG_CLASS } from "./bugs.mjs";
+import { pageRows } from "./page-rows.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -240,8 +241,10 @@ async function backingOf(townClone) {
   try { const st = statSync(ledger); stamp = `${st.mtimeMs}:${st.size}`; } catch { /* the engine reads an absent ledger as empty */ }
   const key = `${townClone}|${stamp}`;
   if (backingCache?.key === key) return backingCache.value;
-  const stake = await import(pathToFileURL(join(townClone, "tools", "world-stake.mjs")));
-  const { classifyEntry } = await import(pathToFileURL(join(townClone, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copies, checked against the clone.
+  const { importTownTool } = await import("./town-tool.mjs");
+  const stake = await importTownTool(townClone, "world-stake.mjs");
+  const { classifyEntry } = await importTownTool(townClone, "stamp-mint.mjs");
   const state = stake.worldStakeState(townClone);
   // who holds what on each mark, and the newest stake or unstake on it
   const holders = new Map();
@@ -329,7 +332,7 @@ export function postOrder(a, b) {
  * @param {string} handle  any resident of the house; the answer is the house's
  * @param {{ now?: number, env?: object, clone?: string|null, townClone?: string, readers?: object }} ctx
  */
-export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {} } = {}) {
+export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {}, page = null } = {}) {
   const h = String(handle ?? "").trim();
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
@@ -344,7 +347,14 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
-    return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
+    // POS-732: a call that names `limit` or `offset` walks each list in the one paging pattern (default POSTS_CAP). A call that
+    // names neither keeps the bounded preview the doorstep's segment is (the segment IS this read's answer at the same args),
+    // and a cut preview now says how to go on: the same `next_offset` and `more_note`.
+    if (page && (page.limit != null || page.offset != null)) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
+    const shown = Math.min(all.length, POSTS_CAP);
+    const more = all.length - shown;
+    return { total: all.length, shown, rows: all.slice(0, POSTS_CAP).map(plain),
+      ...(more > 0 ? { next_offset: shown, more_note: `${more} further post${more === 1 ? "" : "s"} — call again with offset: ${shown}` } : {}) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)
   const gaps = halves.map((x, i) => (QUIET_WHEN_CLOSED[classes[i]]?.(env) ? null : x.unavailable));

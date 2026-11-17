@@ -20,8 +20,8 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fixtureTown, put, setMeta, drop } from "./fixture.mjs";
 
 delete process.env.TOWN_INDEX_READS;
@@ -37,6 +37,19 @@ const tis = await import("../src/town-index-store.mjs");
 const TOWN = townClone();
 const QP = TOWN ? join(TOWN, "tools", "quest-progress.mjs") : null;
 const SKIP = !TOWN ? NO_TOWN : (!existsSync(QP) && "the town clone has no tools/quest-progress.mjs");
+// quest-progress.mjs's relative-import closure in the suite's town clone (POS-994: the loader checks it whole).
+const { relativeImports } = await import("../src/town-tool.mjs");
+const closureOfQP = (() => {
+  const seen = new Set();
+  const walk = (p) => {
+    if (seen.has(p) || !TOWN || !existsSync(join(TOWN, p))) return;
+    seen.add(p);
+    for (const d of relativeImports(p, readFileSync(join(TOWN, p), "utf8"))) walk(d);
+  };
+  walk("tools/quest-progress.mjs");
+  seen.delete("tools/quest-progress.mjs");
+  return [...seen];
+})();
 
 const scratch = tempDir("postmark-pos603-steps-");
 
@@ -68,6 +81,13 @@ function clone({ card = null, home = false, window = false } = {}) {
   const dir = join(scratch, `clone-${++seq}`);
   mkdirSync(join(dir, "tools"), { recursive: true });
   symlinkSync(QP, join(dir, "tools", "quest-progress.mjs"));
+  // POS-994: the office loads quest-progress as its pinned copy, checked against the
+  // clone together with everything it imports, so the clone links that closure too
+  // (stamp-mint, crossings, envelope, …): still the town's own files, never copies.
+  for (const p of closureOfQP) {
+    mkdirSync(dirname(join(dir, p)), { recursive: true });
+    if (!existsSync(join(dir, p))) symlinkSync(join(TOWN, p), join(dir, p));
+  }
   mkdirSync(join(dir, "WHITE_PAGES", "TEMPLATE"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "TEMPLATE", "ADDRESS.md"), TEMPLATE);
   for (const h of ["wright", "limen"]) {

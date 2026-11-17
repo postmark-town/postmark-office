@@ -27,6 +27,10 @@
 // read once for the house; behind WORLD_POSITIONS that roll is the kept
 // projection, position-projection.mjs).
 //
+// AND TWO PUBLIC COMPANIONS PER DECLARED MEMBER (POS-1070; POS-1061, Darko 2026-11-15 17:25 EST): `outboxes[<handle>]` and `quests[<handle>]`, what the Hearth's readHouse()
+// asked `GET /mail/<h>?box=outbox` and `GET /quests/<h>` for, so one office read returns all of a house's resident data (house-companions.mjs). Always anonymous, even
+// on the house's own key, and keyed by every DECLARED member, not only those ashore.
+//
 // THE OWNERSHIP GATE IS THE DOORSTEP'S, CALLED, NOT COPIED: each resident is
 // finished by `doorstep-bundle.mjs § ownerGate`, so `own = key.handles.has(h)`
 // decides the owner-only blocks here exactly as it does on the morning page.
@@ -51,7 +55,9 @@ import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { houseCompanions } from "./house-companions.mjs"; // POS-1070: each declared member's public outbox and quest board
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
 import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
@@ -247,7 +253,9 @@ export const ashoreVia = async (ix, handles) => {
  * are per-person cuts it does not take. Returns the answer or
  * `{ refused: [code, defect, hint] }`.
  */
-export async function houseBundle({ household = null } = {}, ctx = {}) {
+// POS-1064/b: the call is timed under its request (read-timing.mjs § bundleSpan); the answer is the body's own, unchanged.
+export async function houseBundle(ask = {}, ctx = {}) { return bundleSpan(() => houseBundleOf(ask, ctx)); }
+async function houseBundleOf({ household = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -265,7 +273,7 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
     ashore,
     ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
-    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep.",
+    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep. `outboxes[<handle>]` and `quests[<handle>]` are each declared member's PUBLIC outbox (the bare array GET /mail/<handle>?box=outbox answers) and quest board (GET /quests/<handle>), the same for every caller, the house's own key included; null is a read that could not be made, [] an outbox read and found empty.",
   };
 
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
@@ -309,6 +317,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
   // resident here, never one per resident (last-active.mjs).
   const lastActiveUnavailable = await stampRows(Object.values(residents), { find: (handles) => ix.lastActiveFor(handles) });
+  // THE PUBLIC COMPANIONS, for every DECLARED member (not only those ashore), the legacy public doors' own reads and never keyed (house-companions.mjs)
+  const { outboxes, quests } = await houseCompanions(house.members, { ix });
 
   return {
     ...out,
@@ -323,6 +333,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     last_active: `per resident, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
     ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
     residents,
+    outboxes,
+    quests,
   };
 }
 
@@ -406,7 +418,8 @@ export function pageBounds(limit, offset) {
  * The house, paged: the default answer of household { read: "house" }. Same
  * `ctx` as houseBundle. Returns the answer or `{ refused: [code, defect, hint] }`.
  */
-export async function housePage({ household = null, limit = null, offset = null } = {}, ctx = {}) {
+export async function housePage(ask = {}, ctx = {}) { return bundleSpan(() => housePageOf(ask, ctx)); }
+async function housePageOf({ household = null, limit = null, offset = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });

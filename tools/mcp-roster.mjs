@@ -121,6 +121,13 @@ lines.push("|---|---|");
 for (const k of ["mark", "with_image", "find", "find_offset", "find_limit"])
   lines.push(`| \`${k}\` | ${fence(APEX_TOOL.inputSchema.properties[k].description)} |`);
 lines.push("");
+// The spectator look (WLD-187, POS-844 call 4): the bare v2 read taken as nobody standing at a place. It is the call's own word, not a focus.
+lines.push("The spectator look (`world { at: … }`; the compact read as nobody standing there — now, view, who, heard; no can, nothing recorded; it stands alone):");
+lines.push("");
+lines.push("| field | what it does |");
+lines.push("|---|---|");
+lines.push(`| \`at\` | ${fence(APEX_TOOL.inputSchema.properties.at.description)} |`);
+lines.push("");
 
 // ── the flat roster ─────────────────────────────────────────────────────────
 lines.push("## The flat tools, whole");

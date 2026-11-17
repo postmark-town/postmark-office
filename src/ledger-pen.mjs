@@ -20,14 +20,16 @@
 // says the office's authorized writer emitted this line at this position.
 //
 // The seal arithmetic is the TOWN's, not ours — computed by importing the
-// clone's own tools/stamp-mint.mjs in a subprocess (the same subprocess-pen
-// shape the fund/gift/stake execs already are), so there is exactly one
-// authority for canonical + chain and this file duplicates none of it.
-// STAMP_ENGINE_DIR overrides the tools dir for fixtures whose throwaway clones
-// carry no tools/ (the fund.test.mjs precedent).
+// town's tools/stamp-mint.mjs in a subprocess (the same subprocess-pen shape the
+// fund/gift/stake execs already are), so there is exactly one authority for
+// canonical + chain and this file duplicates none of it. The module is the
+// OFFICE'S PINNED COPY (POS-994), checked against the clone first: this process
+// holds the stamp key, and a town change the office has not reviewed stops here
+// by name (TownPinMismatch). There is no other folder to point it at.
 
 import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 import { join } from "node:path";
 
 export const DRAIN_KEY_PATH = () => process.env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem";
@@ -39,7 +41,7 @@ export function signedRegistryLines(clone, bareLines) {
     e.code = "pen-key-absent";
     throw e;
   }
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]);
   const script = [
     "const [clone, engineDir, keyPath] = process.argv.slice(1);",
     "const { readFileSync } = await import('node:fs');",

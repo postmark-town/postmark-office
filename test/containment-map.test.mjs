@@ -37,8 +37,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -56,7 +56,7 @@ const gitq = (dir, args) => execFileSync("git", ["-C", dir, ...args], {
 
 /** A world fixture, in two commits — the hydrator refuses a history it cannot walk. */
 function buildFixtureWorld({ withMap }) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-freeze-"));
+  const dir = tempDir("pm-freeze-");
   // The hydrator imports the fold and the geometry FROM THE TREE IT INDEXES,
   // never a vendored copy, so the fixture needs the world's own tools.
   cpSync(join(WORLD_CLONE, "tools"), join(dir, "tools"), { recursive: true });

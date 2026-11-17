@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -86,6 +87,12 @@ function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3
   mkdirSync(join(tree, "town-clone", "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(tree, "world-clone"), { recursive: true });
   writeFileSync(join(tree, "town-clone", "tools", "stamp-mint.mjs"), STAMP_MINT);
+  // POS-994: the chain comparison loads the town's mint through the dev tree's own
+  // loader, against dev's own pins (the freshen writes them at <dev tree>/town-pins-dev);
+  // the stand-in tree carries the loader, with pins of its stand-in clone there.
+  mkdirSync(join(tree, "src"), { recursive: true });
+  copyFileSync(join(ROOT, "src", "town-tool.mjs"), join(tree, "src", "town-tool.mjs"));
+  pinTown(join(tree, "town-clone"), join(tree, "town-pins-dev"));
   if (ledger) writeFileSync(join(tree, "town-clone", "WHITE_PAGES", "stamp-ledger.md"), ledgerOf(ledger));
   const sigs = join(dir, "store-sigs.txt");
   writeFileSync(sigs, store.length ? `${store.join("\n")}\n` : "");

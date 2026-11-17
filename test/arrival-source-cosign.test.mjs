@@ -22,10 +22,10 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
@@ -39,7 +39,7 @@ let tmp, clone, ghServer, GH_PORT, child, BASE, IX;
 let ghIdentity = { id: 999, login: "keeminlee" };
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), "postmark-office-cosign-source-"));
+  tmp = tempDir("postmark-office-cosign-source-");
   IX = await indexStore(fixtureTown());
   // A real git clone, as declare.test.mjs makes one: the two registers and a gangway, committed, so penCommit has something to commit onto.
   clone = join(tmp, "town-clone");

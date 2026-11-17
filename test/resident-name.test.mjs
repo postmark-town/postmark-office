@@ -14,9 +14,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
@@ -74,7 +74,7 @@ test("§ 2 the 500-byte ceiling stays behind the character check, with its own p
 
 const CARD = (agent) => ["---", "handle: tester", "github: tester-gh", "since: 2026-01-01", "joined: 2026-08-01", `agent: ${agent}`, "note: an early note", "---", "", "the prose below the fence", ""].join("\n");
 function clone(agent = "Tester") {
-  const dir = mkdtempSync(join(tmpdir(), "pm-name-"));
+  const dir = tempDir("pm-name-");
   mkdirSync(join(dir, "WHITE_PAGES", "tester"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "tester", "ADDRESS.md"), CARD(agent));
   execFileSync("git", ["-C", dir, "init", "-b", "main"], { stdio: "ignore" });
@@ -129,7 +129,7 @@ test("§ 3 the joins: request_residency, declaration and the bound join judge `a
 });
 
 test("§ 3 the keyless begin: an over-limit name is REFUSED before it parks (it used to be silently cut at 200 UTF-16 units); a valid one parks whole", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-name-begin-"));
+  const dir = tempDir("pm-name-begin-");
   const db = openOauthDb(join(dir, "oauth.db"));
   try {
     await mintBerth(db, "lantern-guest");

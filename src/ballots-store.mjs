@@ -57,7 +57,7 @@ import {
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the pinned copies of the town's modules
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
@@ -78,11 +78,11 @@ async function write(fn, env) {
   }
 }
 
-/** The town's own engine and line builders, from the clone (the same live import votes.mjs has always made). */
+/** The town's own engine and line builders: the office's pinned copies, checked against the clone (POS-994; a mismatch throws TownPinMismatch, by name). */
 export async function townEngine(clone) {
   const [ballot, mint] = await Promise.all([
-    import(pathToFileURL(join(clone, "tools", "ballot.mjs")).href),
-    import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href),
+    importTownTool(clone, "ballot.mjs"),
+    importTownTool(clone, "stamp-mint.mjs"),
   ]);
   return { ballot, mint };
 }

@@ -32,9 +32,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
@@ -72,7 +72,7 @@ const L3 = "- 2026-09-12 · quarantine · loki · by: registrar · reason: Two s
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 
 function townClone(ledger) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-standing-store-"));
+  const dir = tempDir("pm-standing-store-");
   trash.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (ledger !== null) writeFileSync(join(dir, STANDING_LEDGER_PATH), ledger);

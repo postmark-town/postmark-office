@@ -14,9 +14,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
@@ -125,7 +125,7 @@ const SAILED_AFTER = "limen-2026-07-12-to-wright-after-the-copy";
 
 /** A town clone the envelope pre-flight can scan. */
 function mailClone() {
-  const d = mkdtempSync(join(tmpdir(), "pm-stale-copy-town-"));
+  const d = tempDir("pm-stale-copy-town-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(d, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(d, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -211,7 +211,7 @@ test("GET /letters/{id}: the same truthful 404, from a running office", async ()
   const { spawn } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
   const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-  const tmp = mkdtempSync(join(tmpdir(), "pm-stale-copy-rest-"));
+  const tmp = tempDir("pm-stale-copy-rest-");
   const offices = [];
   try {
     for (const [name, env] of [["office", IX.env]]) {

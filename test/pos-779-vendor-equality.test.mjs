@@ -16,10 +16,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-xyz");
 const producer = await import("../src/voices.mjs");
@@ -63,7 +64,7 @@ test("clusterVoices: the vendored copy and voices.mjs agree on 60 seeded clouds 
 });
 
 test("the page: voices.mjs's own conversations() over a log, against conversationsOf, thread for thread, first page and every page behind it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pos779-vendor-"));
+  const dir = tempDir("pos779-vendor-");
   let checked = 0, paged = 0;
   try {
     for (let seed = 101; seed <= 130; seed++) {
@@ -101,7 +102,7 @@ test("the page: voices.mjs's own conversations() over a log, against conversatio
 // POS-951: the twin of the paged thread. The page test above stays under the 80-voice cap, so it could not see a thread cut at the cap: this one cuts every thread at 3 voices and walks
 // `voices_before` back through the whole record, producer against port, every page and every thread, and checks the walk loses and repeats nothing.
 test("OVER THE CAP: voices.mjs conversations() and conversationsOf agree on every thread, every voices_before page; the walk reads each voice exactly once", () => {
-  const dir = mkdtempSync(join(tmpdir(), "pos951-vendor-"));
+  const dir = tempDir("pos951-vendor-");
   const noteless = (cs) => JSON.stringify(cs.map((c) => (c.voices_earlier ? { ...c, voices_earlier: { ...c.voices_earlier, note: undefined } } : c)));
   let cut = 0, pages = 0;
   try {

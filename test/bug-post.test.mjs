@@ -103,6 +103,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { holdMedia } from "./helpers/media-ledger.mjs";
@@ -1482,8 +1483,7 @@ test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recre
 
 const { githubAuthorOf } = await import("../src/bug-credit.mjs");
 const { judgeEarnedLink } = await import("../src/bugs.mjs");
-const { mkdtempSync, writeFileSync: writeFile, rmSync: rmTree } = await import("node:fs");
-const { tmpdir } = await import("node:os");
+const { writeFileSync: writeFile, rmSync: rmTree } = await import("node:fs");
 const { join: joinPath } = await import("node:path");
 
 /** A fetch that answers `statuses` in turn and records each call's url and headers. */
@@ -1500,7 +1500,7 @@ function recordingFetch(statuses) {
 const LINKED = (() => { const e = judgeEarnedLink("diagnosed", "https://github.com/postmark-town/postmark/issues/3500#issuecomment-7"); return { to: "diagnosed", link: e.link, earned: e.ref }; })();
 
 test("15 · the read token goes to api.github.com only: never to another base, and a refused token (401) is retried once, keyless", async () => {
-  const dir = mkdtempSync(joinPath(tmpdir(), "bug-credit-token-"));
+  const dir = tempDir("bug-credit-token-");
   const tokenFile = joinPath(dir, "token");
   writeFile(tokenFile, "tok-not-a-secret\n");
   try {

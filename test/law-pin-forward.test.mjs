@@ -10,9 +10,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { pinMove, writeLaw, LAW_REPO_KEY } from "../world2/tools/law-ingest.mjs";
 
@@ -20,7 +20,7 @@ const store = await startStore({ db: "law_pin_forward_test" });
 
 /** A scratch repo with a line of history: settlement S99 is an ancestor of main. */
 function history(t) {
-  const dir = mkdtempSync(join(tmpdir(), "law-pin-"));
+  const dir = tempDir("law-pin-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const g = (...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" }).trim();
   g("init", "-q");

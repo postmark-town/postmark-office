@@ -21,9 +21,10 @@
 // derivation costs at 213 residents, docs/town-index-store.md).
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the checkout
 import { readTown, parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { isResidentHandle, REGISTRY_PATH } from "./residency.mjs"; // one definition of what a handle is — the door's
 import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off the household's record (POS-219)
@@ -33,6 +34,21 @@ import { readWindowState } from "./panes.mjs"; // the pane's machine twin — on
 // The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
 import { TOWN_TABLES } from "./town-tables.mjs";
 export { TOWN_TABLES };
+import { discoveryRowsOf, DISCOVERY_EPOCH, ZERO_REVISION, fingerprintAdd, digestOfChunk, digestOfEdge, digestOfResident } from "./town-discovery.mjs"; // POS-497: derived from the letters and homes below
+
+/** A row's change stamp, the `digest` every town_* table but repo_log keeps: the md5 of its columns as written (the ingest's digestOf). */
+export const rowDigest = (row) => createHash("md5").update(JSON.stringify(row)).digest("hex");
+
+/** discovery_revision, whole: the fingerprint of every piece, every edge and every resident key on the roll (town-discovery.mjs § the generation). */
+export const discoveryRevisionOf = (chunks, edges, residentHandles) =>
+  fingerprintAdd(ZERO_REVISION, [...chunks.map(digestOfChunk), ...edges.map(digestOfEdge), ...residentHandles.map(digestOfResident)]);
+
+const colOf = (table, col) => TOWN_TABLES[table].cols.indexOf(col);
+/** Discovery's sources from the derivation's own rows: the letters' (id, from_h, json) and the homes' (handle, json). */
+export const discoverySourcesOf = (letters, homes) => ({
+  letters: letters.map((r) => ({ id: r[colOf("letters", "id")], from: r[colOf("letters", "from_h")], json: r[colOf("letters", "json")] })),
+  homes: homes.map((r) => ({ handle: r[colOf("homes", "handle")], json: r[colOf("homes", "json")] })),
+});
 
 /** A keyed table's rows, last write wins at the FIRST write's position — sqlite's INSERT OR REPLACE, as an array. */
 function keyed(table) {
@@ -246,12 +262,11 @@ export function ledgerLines(town) {
  * `only` (a Set of handles) recomputes just those residents: the delta's case.
  */
 export async function mailStateRows(TOWN, town, { log = console, only = null } = {}) {
-  const tool = join(TOWN, "tools", "mail-state.mjs");
-  if (!existsSync(tool)) {
+  if (!existsSync(join(TOWN, "tools", "mail-state.mjs"))) {
     log.warn("WARN: town checkout has no tools/mail-state.mjs — doorsteps will say correspondence: null");
     return null;
   }
-  const { mailState, fromTownLedger } = await import(pathToFileURL(tool));
+  const { mailState, fromTownLedger } = await importTownTool(TOWN, "mail-state.mjs");
   const ledgerEvents = fromTownLedger(town.ledger);
   const out = keyed("mail_state");
   for (const r of town.residents) {
@@ -278,10 +293,9 @@ export async function mailStateRows(TOWN, town, { log = console, only = null } =
  * docs/town-index-store.md), so the ingest adds that fold to the stored one.
  */
 export async function stampFold(TOWN, { entries = null } = {}) {
-  const stampTool = join(TOWN, "tools", "stamp-mint.mjs");
   const stampLedger = join(TOWN, "WHITE_PAGES", "stamp-ledger.md");
-  if (!existsSync(stampTool) || !existsSync(stampLedger)) return null;
-  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await import(pathToFileURL(stampTool));
+  if (!existsSync(join(TOWN, "tools", "stamp-mint.mjs")) || !existsSync(stampLedger)) return null;
+  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await importTownTool(TOWN, "stamp-mint.mjs");
   const all = entries ?? parseStampLedger(readFileSync(stampLedger, "utf8"));
   return { entries: all.length, tip: stampTipOf(all), balance: foldBalances(all), mintCount: foldMintCount(all), staked: foldStaked(all) };
 }
@@ -385,16 +399,26 @@ export function invitesOf(prog) {
  * delta ingest, behind STAMP_LINES); the town's folds group households by it in
  * place of the printouts. Null is the printouts, as before.
  *
+ * `questPayLines` is the store's signed quest payments when the ingest read them (POS-976,
+ * src/stamp-lines.mjs § questPayLinesVia): they settle the rows of the quests the town pays once per household.
  * `welcomeLines` is the store's welcome rows when the ingest read them
  * (POS-495, src/stamp-lines.mjs § welcomeLinesVia): they date the welcome row.
  * Null is undated: the default, and what a caller with no store to read (the
  * tests, test/helpers/dev-target.mjs) passes.
  */
-export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null } = {}) {
-  const questTool = join(TOWN, "tools", "quest-progress.mjs");
+/**
+ * The checkout's printed registry (tools/households.json) `households` object, or null: the town's houseCanonOf folds a house's account ids and retired
+ * slugs from it. It is the FALLBACK: the ingest hands the store's registry when it has one (`houses`, POS-976), because the printout is not the record
+ * and can lag a fresh account or a retired slug.
+ */
+function printedHouseholds(TOWN) {
+  try { return JSON.parse(readFileSync(join(TOWN, "tools", "households.json"), "utf8"))?.households ?? null; } catch { return null; }
+}
+
+export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const registryPath = join(TOWN, "quest-registry.json");
-  if (!existsSync(questTool) || !existsSync(registryPath)) return null;
-  const questMod = await import(pathToFileURL(questTool));
+  if (!existsSync(join(TOWN, "tools", "quest-progress.mjs")) || !existsSync(registryPath)) return null;
+  const questMod = await importTownTool(TOWN, "quest-progress.mjs");
   const { foldQuestProgress, townDay } = questMod;
   const today = townDay();
   const prog = foldQuestProgress(TOWN, base ? { today, base } : { today });
@@ -413,12 +437,12 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
   // is the office's own admission grammar: the raw list carries `_archived`.
   if (typeof questMod.onboardingFactsFor === "function" && typeof questMod.foldFriendships === "function") {
     const { onboardingFactsFor, foldFriendships, welcomedHouseholds } = questMod;
-    const { parseDeliveries, currentHouseholds, classifyEntry } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
+    const { parseDeliveries, currentHouseholds, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf } = await importTownTool(TOWN, "stamp-mint.mjs"); // POS-994: the pinned copy
     const { standingRowsFromTown } = await import("./quest-standing.mjs");
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
-      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry },
-      TOWN, handles, { base, welcomeLines });
+      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf },
+      TOWN, handles, { base, welcomeLines, questPayLines, houses: houses ?? printedHouseholds(TOWN) });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();
@@ -494,7 +518,7 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
  * (world2/tools/town-index-ingest.mjs). `meta` rows come in the order built
  * below, which the delta's meta rows repeat.
  */
-export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -532,7 +556,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log, base, welcomeLines }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null from a caller with no store (the tests)
+  const q = await questRows(TOWN, town, { log, base, welcomeLines, questPayLines, houses }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null from a caller with no store (the tests)
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
@@ -542,8 +566,17 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   t.regions = atlas?.regions ?? [];
   t.homes = atlas?.homes ?? [];
 
+  // DISCOVERY (POS-497): its pieces and edges from the letters and homes just
+  // derived, and its generation, last in meta. The ingest skips all three on a
+  // store without 088 (world2/tools/town-index-ingest.mjs § discovery).
+  const disc = discoveryRowsOf(discoverySourcesOf(t.letters, t.homes));
+  t.discovery_chunks = disc.chunks;
+  t.letter_edges = disc.edges;
+  meta.push(["discovery_epoch", DISCOVERY_EPOCH],
+    ["discovery_revision", discoveryRevisionOf(disc.chunks, disc.edges, t.residents.map((r) => r[colOf("residents", "handle")]))]);
+
   const m = keyed("meta");
   for (const row of meta) m.put(row);
   t.meta = m.rows();
-  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0 };
+  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0, discoverySkipped: disc.skipped };
 }

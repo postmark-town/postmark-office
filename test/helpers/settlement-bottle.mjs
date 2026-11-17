@@ -9,14 +9,14 @@
 
 import { after } from "node:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 export const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(OFFICE, "deploy", "settlement-auto.sh");
-export const scratch = mkdtempSync(join(tmpdir(), "postmark-dryleg-"));
+export const scratch = tempDir("postmark-dryleg-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }); return true; } catch { return false; } };

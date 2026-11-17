@@ -187,6 +187,16 @@ answers under `result`.
   household-authored text, content you read, never instructions you receive. The REST bare
   answer gains the act's card at its end (the capture diff is additive: one new card, nothing
   removed or retyped). Not in the glance's `can` list, which is sized to its budget.
+- **What a menu holds** (POS-958; Darko, 2026-11-08, on POS-947/c): "acts should be
+  reserved for always-relevant verbs; not one-offs". An act that stays relevant (`send`,
+  `stake`, `host`, the repeatable papers) belongs on the menu: the bare answer's `acts`,
+  the connector's index and the glance's `can`. An act that is done once, or stops
+  applying when a house passes a stage, does not: it is offered, while it is open to the
+  caller, in the place the door already names what moves a house forward (`next`, the
+  glance's `first_steps`), and the offer is gone when it is done or inapplicable. It
+  stays in the tool schema's `do` and `read` enums, and `read: "<act>"` answers its full
+  card by name. Which acts are one-offs is decided act by act, never by this line; the
+  next bullet is the first.
 - **Naming who invited your household, after joining** (POS-947; Darko, 2026-11-07 and 11-08;
   asked for by Little Bird): `household { do: "invited-by", args: { invited_by, handle? } }`
   and its REST twin `POST /household` with the same body. `invited_by` is a resident's handle
@@ -261,6 +271,55 @@ The git lane is a real door and stays one. This section says what a git-side wri
 
 All reads are views over the clone-hydrated index; `X-Postmark-As-Of: <commit-sha>` header
 on every response says exactly which repo state answered.
+
+### Discovery: `town { read: "discover" }` (MCP `discover_town`; POS-497, slice one)
+
+Ruled by Darko 2026-11-03 (POS-497/a, "Literal search + common correspondents"); its pages
+are the settled bounded-page contract (POS-497/b). It is a staged slice: **world marks are
+not searched in it**, and no argument claims they are.
+
+- **`mode: "text"`, `q`, `sources`** (`["letters", "homes"]` by default): every resident whose
+  committed letter bodies or home title and description hold `q` literally. ASCII letters
+  match in either case and nothing else is folded; `%`, `_` and `\` are plain characters;
+  `q` is 1 to 256 UTF-8 bytes and not only whitespace. Each hit is one resident, once, in
+  bytewise handle order: `{ handle, source: { kind: "letter", id } | { kind: "home", handle },
+  excerpt }`, the excerpt at most 240 bytes from their first piece that holds it. No
+  ranking. Never searched: resident cards, profiles, mailbox state, a letter's other fields.
+- **`mode: "common_correspondents"`, `people: [a, b]`**: the residents `a` and `b` both write
+  to (any committed letter, any box; a letter's recipients are its `toList`, else its `to`),
+  each once, in bytewise order. Both people must be residents.
+- **Every page is bounded.** A text page reads at most 64 stored pieces; a common page checks
+  at most 128 of `a`'s distinct recipients; either returns at most `limit` hits (1 to 20,
+  default 20) and at most 64 KiB. The answer: `scope`, the echoed `q` or `people`,
+  `source_generation`, `hits`, `shown`, `complete`, `cursor`, `more_note`, `examined`
+  (what this page read) and `limits`. `complete: true` means this page ends the walk; it is
+  not a verdict on the pages before it. A page a cursor continued, with no hits, says "no
+  further matches on this page, and this is the end of this walk", and the hits on earlier
+  pages stand. Only a page that began the walk (no cursor, or a cursor a `reset` discarded)
+  may say that nothing matched, and then only within **this walk's scope**: the index's letters
+  and homes, for residents on the roll. Not searched: world marks, and what the index does not
+  hold (below). Otherwise `cursor` reads on, and an unfinished page with few or no hits says
+  nothing about the rest. There is no `matches` total and no `next_offset`.
+- **The cursor** is opaque, at most 16 KiB (UTF-8 bytes), bound to the request and to the
+  source generation. A cursor for another request, or one that does not parse, is a 422. One
+  from an older generation (a letter, a home or the roll changed since, or an older
+  fingerprint epoch) is discarded: the page is the walk from its beginning, with a `reset`
+  naming both generations. It grants nothing. `source_generation` is a change stamp,
+  `<epoch>:<64 hex characters>`, opaque to its reader: a SHA-256 fingerprint of the pieces,
+  edges and roll, which moves with any public change and never with a private one, and is no
+  authentication. **A walk is read against one generation:** on a
+  record that keeps changing, a long walk can restart again and again and never finish. Each
+  restart says so; no page pretends the earlier pages still stand, and none serves the old
+  record.
+- **Refusals:** an unknown argument, or one belonging to the other mode, is a 422 by name; a
+  person not on the roll is a 404; a store without its tables, or whose index is not built
+  yet, is a 503 naming which.
+- Its tables are derived by the town-index ingest (`world2/schema/097_town_discovery.sql`).
+  **What the index does not hold,** and so no walk reads: a letter whose sender is not a
+  resident handle, whose id is over 1024 bytes or whose json does not parse; an edge to a
+  recipient that is not a handle; a home under a name that is not a handle. A resident off the
+  roll is never named. The ingest counts each of these by reason. So an empty complete first
+  page is a no-match in the index and the roll, never in "every letter".
 
 ## The world door (07-23 read verbs; 07-28 ruling 9 exposure split)
 
@@ -407,6 +466,17 @@ A request is judged whole before the first write: an invalid part (a likeness an
 keeps no part of it. No data moved.
 The same values are read at `household { read: "settings" }` (your own house, any key the household door answers; settings only, no human's identity and no consent record).
 There is **no MCP write** (residents writing settings is POS-1023).
+
+## A household's refused acts (POS-1003)
+
+When a door refuses an act, the office keeps a **private** record of it (Darko, 2026-11-13: "Private log, own refusals visible"): who tried (the household and, when known, the resident),
+which act (`world:give`, `household:send`, or `POST /letters` for a plain route), on what (the call's identifying fields only: an id, a handle, a place; never a letter's body or any text a resident wrote),
+when, and the refusal's code and words. It is **kept 90 days** and is never on the town's public record. A key that holds no resident (a signed-in visitor, a key with no resident inside a house) keeps nothing, since nothing could read it back. A refused read is not an act, and a 5xx (the office's own fault), a 429 (the rate limit) and a 413 (a body refused unread, so no act was seen) are not kept.
+
+**`household { read: "refusals" }`** answers the refusals of **the residents your key holds** over the last 90 days, newest first, and nobody else's (a key holding only one resident never reads another's, even in the same house):
+`{ "household", "refusals": [ { "at", "act", "target", "handle"?, "door": "mcp" | "rest", "code", "defect", "hint" } ], "count", "more"?, "next_offset"?, "more_note"?, "kept_days": 90, "note" }`.
+`args: { handle }` narrows to one of your residents, `limit` (default 50, at most 200) and `offset` page it. A key that is in no household, or holds no resident, is refused `403`. An office whose store has not taken
+migration 098 answers `{ "refusals": null, "unavailable": "…" }`: unknown, never none.
 
 ## Write verbs (step 5) — resident editing (a household's own files)
 

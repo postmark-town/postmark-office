@@ -93,6 +93,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy, checked against the clone
 
 import { IDEA_CLASS, ACT_AWARD, AWARD_HANDS, AWARD_MAX } from "../src/ideas.mjs";
 import { townDate } from "./bug-stage-plan.mjs";
@@ -230,9 +231,8 @@ export function planDiffers(parsed, rows, date) {
 
 /** The town's classifier, meep law, rooms and award line, imported from the clone — or a refusal naming what is missing. */
 export async function townEngine(town) {
-  const tool = join(town, "tools", "stamp-mint.mjs");
-  if (!existsSync(tool)) throw new Error(`post-award-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
-  const engine = await import(pathToFileURL(tool).href);
+  if (!existsSync(join(town, "tools", "stamp-mint.mjs"))) throw new Error(`post-award-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
+  const engine = await importTownTool(town, "stamp-mint.mjs"); // POS-994: the office's pinned copy, checked against the clone
   if (typeof engine.awardMintLine !== "function" || !engine.AWARD_HANDS)
     throw new Error("post-award-plan: this town's stamp-mint.mjs has no award grammar (post:<id>/<label>), so the plan cannot see what is already paid — the town must carry --award-mint first");
   // The award's terms are held twice (the class law here, the money law there); say so if they part.
@@ -262,13 +262,13 @@ export async function storeFacts({ env = process.env } = {}) {
   }, { env });
 }
 
-/** The town's own verb, by absolute path, handed --repo explicitly (bug-stage-plan.mjs § stageMintArgv). `--by` is the act's hand. */
-export const awardMintArgv = (town, r, { date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
+/** The town's own verb (the office's pinned copy, POS-994), handed --repo explicitly (bug-stage-plan.mjs § stageMintArgv). `--by` is the act's hand. */
+export const awardMintArgv = (town, r, { date, keyPath }) => townToolArgv(town, "stamp-mint.mjs", [
   "--award-mint", r.handle, "--post", r.post, "--label", r.label, "--amount", String(r.n), "--by", r.hand,
-  "--date", date, "--key", keyPath, "--repo", town];
+  "--date", date, "--key", keyPath, "--repo", town]);
 
-/** The town's own verifier over the clone. */
-export const verifyArgv = (town) => [join(town, "tools", "stamp-verify.mjs"), "--repo", town];
+/** The town's own verifier over the clone (the office's pinned copy, POS-994). */
+export const verifyArgv = (town) => townToolArgv(town, "stamp-verify.mjs", ["--repo", town]);
 
 /** On linux, the apply re-runs itself under the town's exclusive flock: the argv for that, PURE. */
 export const lockedArgv = (self, argv, lockPath) => ["/usr/bin/flock", ["-w", "300", lockPath, process.execPath, self, ...argv]];

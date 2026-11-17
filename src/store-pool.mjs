@@ -41,6 +41,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { threadId } from "node:worker_threads";
+import { leaseStart } from "./read-timing.mjs"; // POS-1064/b: each pen lease's acquire wait and held time, under the request that took it (measurement only)
 
 export const ACQUIRE_MS_DEFAULT = 10_000;
 export const IDLE_TX_MS_DEFAULT = 30_000;
@@ -237,7 +238,10 @@ export function refuseNested(asked) {
  */
 export async function onPenClient(pool, by, fn) {
   refuseNested(by);
-  const client = await acquire(pool, "pen");
+  const lease = leaseStart();   // POS-1064/b: timing only; inert outside a request, and it never changes what follows
+  let client;
+  try { client = await acquire(pool, "pen"); } catch (e) { lease.failed(); throw e; }
+  lease.got();
   const mark = { by, open: true };
   let discard = false;
   const heard = (e) => {
@@ -251,5 +255,6 @@ export async function onPenClient(pool, by, fn) {
     mark.open = false;
     client.removeListener?.("error", heard);
     client.release(discard ? true : undefined);
+    lease.released();
   }
 }

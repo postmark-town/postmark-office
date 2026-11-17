@@ -50,10 +50,11 @@
 
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+// POS-994: the town engine at the checkout's commit, through the loader (town-tool.mjs §
+// importTownToolAtHead): its own inside the office's reviewed history, else the pinned copy or a stop by name.
+import { importTownToolAtHead } from "../../src/town-tool.mjs";
 import { stakesFromRows } from "./fold-input.mjs";
 
-const toolUrl = (repo, file) => pathToFileURL(join(resolve(repo), "tools", file)).href;
 
 const CHUNK = 500;
 
@@ -90,7 +91,7 @@ export async function deriveEscrow({ townRepo }) {
     throw new Error(`no ECONOMY-DIALS.json under ${repo} — the weight dial has no source at this sha, and a projection may not record a defaulted dial as a pinned one`);
   }
 
-  const stake = await import(toolUrl(repo, "world-stake.mjs"));
+  const stake = await importTownToolAtHead(resolve(repo), "world-stake.mjs");
   const dial = stake.worldWeightDial(repo);
   const state = stake.worldStakeState(repo);
 

@@ -34,9 +34,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -47,7 +47,7 @@ import { sketchbookNameFor } from "../src/store-writedown.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OFFICE = resolve(HERE, "..");
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-second-key-"));
+const scratch = tempDir("postmark-second-key-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 // THE STORE the export renders (POS-350): it reads the registry from the store,
 // never the fixture town's printouts, so each run re-states the store from them.

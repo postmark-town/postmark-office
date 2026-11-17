@@ -13,13 +13,13 @@
 // Every reserved handle below passes the handle grammar, so the refusal it meets is the
 // prefix rule's and no other, and an ordinary handle beside it is admitted.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { RESERVED_HANDLE_PREFIXES, reservedHandlePrefix } from "../vendor/tools/reserved-handles.mjs";
 import { validateResidencyRequest, isResidentHandle, REGISTRY_PATH } from "../src/residency.mjs";
@@ -64,7 +64,7 @@ test("POS-884 · the residency door refuses each reserved prefix with the rule's
 // ── the crossing (town-drain.mjs § planTownDrain) ────────────────────────────
 
 const trash = [];
-const tmp = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const tmp = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 test.after(() => { for (const d of trash.splice(0)) { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* the OS will */ } } });
 
 function townClone() {
@@ -76,6 +76,7 @@ function townClone() {
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q");
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

@@ -17,6 +17,7 @@
 // tokens table since POS-352: OFFICE_KEYS='devkey1=keemin:wright,postmaster'
 // node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
+import { MAIL_DOOR, QUESTS_DOOR } from "./door-handle.mjs";
 import { dateFilterDefect } from "./date-filter.mjs";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
@@ -58,6 +59,8 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
+import { noteRestRefusal } from "./refusal-log.mjs"; // POS-1003: a refused write is kept, privately, for 90 days
+import { newTiming, runTiming, markRouted, timingLine } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
@@ -97,6 +100,7 @@ import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's 
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { installRejectionGuard } from "./rejection-guard.mjs";
+import { PIN_STOP_HINT, isPinStop } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
 
 // POS-709: a promise nobody awaited is logged loudly and the office keeps
 // serving; before this, Node's default exit took every resident's door down.
@@ -608,7 +612,7 @@ const j = (res, code, obj, cause) => {
   if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))
     res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
-  if (code >= 400) obj = markRefused(obj);
+  if (code >= 400) { noteRestRefusal(res.req, code, obj); obj = markRefused(obj); } // POS-1003: the one writer of every REST refusal keeps a write's, privately
   const body = JSON.stringify(obj, null, 1);
   const headers = {
     "content-type": "application/json; charset=utf-8",
@@ -763,7 +767,12 @@ const bounce = (res, code, defect, hint, field, cause) => {
 // resident reads, which can be a SQL fragment, a path on the box, a table name.
 // The defect stays each door's own sentence ("the drafts door tripped"); the
 // hint is FAULT_LOGGED; the message is logged by bounce, beside the status.
-const bounceFault = (res, defect, e, code = 500) => bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
+// POS-994 (Truey's review of #1065): a pin stop under a read door or the letter
+// send is no trip of the office's: it is the named 503 the exec doors answer, its
+// hint the office's own words, what differs in the log.
+const bounceFault = (res, defect, e, code = 500) => isPinStop(e)
+  ? bounce(res, 503, "town-pin-mismatch", PIN_STOP_HINT, undefined, e)
+  : bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
 
 // ── THE CONTRACT AT THE PLAIN API (POS-70 box 1) ─────────────────────────────
 //
@@ -848,6 +857,26 @@ async function handOverRead(req, res, raw, messages, key = null) {
 // ASYNC since POS-347: the standing gate reads the store. `handle` below
 // catches every route's rejection, so a throw anywhere in here answers 500
 // instead of escaping the request listener.
+// POS-1064/b: the timing record for the doorstep and household doors, chosen from fixed labels (the path's own shape, the MCP tool's name, the call's read name
+// from call-shape's fixed sets); null for every other request, and never a fault.
+const timingFields = (req, res, path) => {
+  try {
+    // READS ONLY. A REST read is a GET, and a GET /household that names an act, an explain or a letter opening is not one. An MCP request is classified from the whole
+    // request (read-timing.mjs § classifyMcpRead, set where mcp.mjs parses the body), never from its last tool: a batch holding an act carries no timing.
+    let door = null, calls = 1;
+    if (path === "/mcp") {
+      const k = req.tm?.klass;
+      if (k) { door = k.door; calls = k.calls; }
+    } else if (req.method === "GET") {
+      const q = new URL(req.url, "http://localhost").searchParams;
+      const actShaped = (q.get("do") ?? "") !== "" || q.has("explain") || String(q.get("read") ?? "").trim() === "letter";
+      door = /^\/doorstep\/[a-z0-9-]+$/.test(path) ? "doorstep" : path === "/doorsteps" ? "doorsteps" : path === "/household" && !actShaped ? "household" : null;
+    }
+    if (!door) return {};
+    const timing = timingLine(req.tm, { door, calls, read: calls === 1 ? req.tel?.call?.read : null, status: res.statusCode });
+    return timing ? { timing } : {};
+  } catch { return {}; }
+};
 const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -884,6 +913,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     household: req.tel.household,
     mcp: req.tel.mcp,
     call: finishCall(req.tel, res.statusCode),
+    // POS-1064/b: the doorstep and household doors' path-tagged timing (read-timing.mjs), on this one line; absent on every other path
+    ...timingFields(req, res, path),
   }));
 
   // ── CORS: windows are first-class callers. Resident dashboards run on the
@@ -1287,6 +1318,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   const key = resolvedKey;
   noteRequester(key); // POS-633 H4: a site act is the human's only at their own residents' wheel (act-provenance.mjs)
   req.tel.household = key?.household ?? null;
+  req.tel.key = key; // POS-1003: who a refused write is kept for (refusal-log.mjs § noteRestRefusal); never written to the access line
+  req.tel.path = path;
 
   // Keyless public GETs get the same token-bucket backstop as nginx's prepared
   // outer layer. Invalid/stale credentials deliberately land in this tier.
@@ -1377,6 +1410,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // the pool takes (read-workers.mjs § workerTakes) is answered by a worker and
   // written back on this socket; when no worker is ready this thread answers it,
   // exactly as before.
+  markRouted(req.tm); // POS-1064/b: admission is done; the door runs here or the read is handed over
   if (readPool && workerTakes(req.method, path, url.searchParams, key) && readPool.forward(req, res)) return;
 
   // MCP skin — same verbs, JSON-RPC dress (P3). The MCP door REQUIRES a
@@ -2079,7 +2113,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
         return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
-          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }))
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
@@ -2122,7 +2156,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
       }
 
-      if ((m = /^\/mail\/([a-z0-9-]+)$/.exec(path))) {
+      if ((m = MAIL_DOOR.exec(path))) {
         const box = url.searchParams.get("box") ?? "inbox";
         if (!["inbox", "outbox"].includes(box)) return bounce(res, 400, "box must be inbox or outbox", "GET /mail/{handle}?box=inbox|outbox");
         // ── THIS ROUTE ANSWERS THE BARE ARRAY, AND THAT IS A PROMISE ────────
@@ -2274,7 +2308,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
 
       // quest board for one resident (registry × today's progress). The handle
       // regex IS the arg validation; the board zeroes on a rolled TOWN_TZ day.
-      if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
+      if ((m = QUESTS_DOOR.exec(path))) {
         const handle = m[1];
         // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
         // composition after the connection is back), the thread that ran it and that thread's event-loop lag; until then only nginx
@@ -2600,6 +2634,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("household", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "household", args: payload }; // POS-1003
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
@@ -2783,6 +2818,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("world", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "world", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb, cost: worldWriteCost(verb, payload) });
@@ -2831,6 +2867,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("town", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "town", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = townDispatchToolFor(payload.do) ?? "town";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb });
@@ -3119,7 +3156,14 @@ async function lawMovedRefused(res) {
   j(res, moved.code, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
   return true;
 }
+// POS-1064/b: the request's timing context begins where `t0` does, before the credential is resolved. A read worker runs under the context its handover made.
 const handleRequest = (req, res) => {
+  if (IN_READ_WORKER) return handleRequestBody(req, res);
+  let tm;
+  try { tm = newTiming(); req.tm = tm; } catch { tm = undefined; }
+  return tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res);
+};
+const handleRequestBody = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };

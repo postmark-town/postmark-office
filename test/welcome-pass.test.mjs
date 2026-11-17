@@ -27,6 +27,10 @@ import { parseWelcomePlan, townDate, mintArgv, main } from "../deploy/welcome-pa
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
+import { pinnedPath, pinnedTown } from "./helpers/pinned-town.mjs";
+// POS-994: the argv builders check the town against the office's pins, so the
+// pure argv tests name a town that holds exactly the pinned files (removed at exit).
+const PT = pinnedTown();
 
 const TOWN = townClone(); // the same real checkout every office test imports the town's tools from
 const SKIP = !TOWN && NO_TOWN;
@@ -244,11 +248,11 @@ test("a missing town and a missing key are refused before anything is read", { s
 
 // ── the seams that no unit test would otherwise reach ────────────────────────
 
-test("the pass runs the town clone's OWN mint, and tells it which repo it is", () => {
-  const argv = mintArgv("/srv/town", ["--welcome-plan"]);
-  assert.equal(argv[0], join("/srv/town", "tools", "stamp-mint.mjs"),
-    "the tool is named by absolute path under --town; resolving it from the cwd would let a moved subshell sign against another clone");
-  assert.deepEqual(argv.slice(-2), ["--repo", "/srv/town"],
+test("the pass runs the office's pinned copy of the town's mint (POS-994), checked against --town, and tells it which repo it is", () => {
+  const argv = mintArgv(PT, ["--welcome-plan"]);
+  assert.equal(argv[0], pinnedPath("stamp-mint.mjs"),
+    "the tool is the office's pinned copy, by absolute path, checked against --town's copy; never resolved from the cwd");
+  assert.deepEqual(argv.slice(-2), ["--repo", PT],
     "stamp-mint falls back to a DEFAULT_REPO of its own when --repo is absent, and a pass that signs against a clone it was not pointed at still prints a valid receipt");
 });
 

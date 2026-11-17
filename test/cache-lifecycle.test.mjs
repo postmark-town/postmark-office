@@ -18,8 +18,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
@@ -33,7 +34,7 @@ const SRC_URL = pathToFileURL(SRC).href;
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 10, 10, 12, 0, 0);
 const sha = (c) => c.repeat(40);
-const scratch = () => mkdtempSync(join(tmpdir(), "pos989-"));
+const scratch = () => tempDir("pos989-");
 const age = (path, ms) => { const at = new Date(T0 - ms); utimesSync(path, at, at); };
 const leaseName = (name, pid, thread = 0, token = "0a1b2c3d4e5f") => `${name}.lease.${pid}.${thread}.${token}`;
 
@@ -296,7 +297,7 @@ test("A PIN THAT CANNOT BE TAKEN IS NOT A PATH TO HAND OUT: materializeAtRef ref
 async function mutant(label, from, to) {
   const text = readFileSync(SRC, "utf8");
   assert.ok(text.includes(from), `the flip's anchor is still in the module: ${label}`);
-  const dir = mkdtempSync(join(tmpdir(), "pos989-mutant-"));
+  const dir = tempDir("pos989-mutant-");
   const file = join(dir, "cache-lifecycle.mjs");
   writeFileSync(file, text.split(from).join(to));
   try { return await import(`${pathToFileURL(file).href}?${label}`); }

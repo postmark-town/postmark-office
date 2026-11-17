@@ -46,14 +46,20 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-hhrefresh-"));
+const scratch = tempDir("postmark-hhrefresh-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 // THE STORE the crossing's household export renders (POS-350): the export reads
 // the registry from the store, never the fixture town's printouts, so each
@@ -206,6 +212,7 @@ process.stdout.write(JSON.stringify({
     // the trip moved to the one source it does read.)
     env = { ...env, WORLD2_PG_URL: "postgres://office_api@127.0.0.1:9/none" };
   }
+  process.env.TOWN_PINS_DIR = pinTown(townSeed); // POS-994: the crossing runs pinned town code; this seed (and its clone) pinned to itself
   g(".", "init", "-q", "-b", "main", townSeed);
   g(townSeed, "config", "user.email", "seed@postmark.invalid");
   g(townSeed, "config", "user.name", "seed");

@@ -30,7 +30,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 import { foldedStateAtRef, mainRef, readJsonAtRef } from "./world-branches.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
@@ -78,9 +78,8 @@ export function settlementAtOrBefore(t = new Date()) {
 // office never learns the ledger grammar; it asks the module that owns it, the
 // same way world_stake_read already does for escrow and retirement.
 export async function pendingStakeRows(townClone) {
-  const engine = join(townClone, "tools", "world-stake.mjs");
-  if (!existsSync(engine)) return null;
-  const mod = await import(pathToFileURL(engine));
+  if (!existsSync(join(townClone, "tools", "world-stake.mjs"))) return null;
+  const mod = await importTownTool(townClone, "world-stake.mjs"); // POS-994: the office's pinned copy, checked against the clone
   return mod.deriveWorldMarkWeights(townClone)?.rows ?? [];
 }
 

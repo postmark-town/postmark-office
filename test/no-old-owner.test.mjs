@@ -31,6 +31,8 @@ const KEEPS = [
     why: "the same historical PR name, kept with its two siblings" },
   { path: "deploy/world2-backup.sh", text: `${OLD}/postmark-office-private-archive`,
     why: "a real private archive repo that stays under the old owner" },
+  { path: "src/town-pins/tools/world-stake.mjs", text: `${OLD}/postmark-world`,
+    why: "a byte-for-byte pinned copy of the TOWN's tools/world-stake.mjs (POS-994): re-spelling it here would break the pin; it changes when the town's own file does and the pin moves" },
 ];
 
 const PATTERN = `${OLD}/postmark-|owner["']?[[:space:]]*:[[:space:]]*["']${OLD}["'][[:space:]]*,[[:space:]]*name["']?[[:space:]]*:[[:space:]]*["']postmark`;

@@ -120,6 +120,21 @@ jobs:
 
       - run: bash .github/scripts/suite-clones.sh --check
 
+      # POS-994: the office runs only the town code it pinned (src/town-pins), so
+      # "the pins equal the town at the commit PINS.json names" is checked here on
+      # every run, not only by hand. The commit is fetched, trees only, into a
+      # scratch repo of its own: town-clone stays at test/clone-pins.json's sha and
+      # out of the clones cache, and no sparse guard applies to a git-object read
+      # (--check reads `git rev-parse <commit>:<path>`, never a working tree). Red
+      # here when a pinned file's bytes, a closure, or a town blob disagree.
+      - name: The office's town pins equal the town at their commit
+        run: |
+          sha=$(node -p 'require("./src/town-pins/PINS.json").town_commit')
+          git init -q "$RUNNER_TEMP/pin-town"
+          git -C "$RUNNER_TEMP/pin-town" remote add origin https://github.com/postmark-town/postmark.git
+          git -C "$RUNNER_TEMP/pin-town" fetch -q --depth=1 --filter=blob:none origin "$sha"
+          node tools/town-pins.mjs --check --town "$RUNNER_TEMP/pin-town"
+
       - name: The plan
         run: node .github/scripts/suite-shard.mjs --plan "$SHARDS"
 
@@ -180,10 +195,11 @@ jobs:
       # across its run and reds when one appears, and a shard's own TAP landing in
       # the tree beside it is exactly that (CI's first run).
       - name: Shard ${{ matrix.shard }} of ${{ env.SHARDS }}
-        # the sparse guard in every process of the suite (POS-652); on this step
+        # the sparse guard (POS-652) and the suite clone's town pins (POS-994,
+        # test/helpers/town-pins-env.mjs) in every process of the suite; on this step
         # only, so the actions' own node never loads a file from the checkout
         env:
-          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs
+          NODE_OPTIONS: --import=${{ github.workspace }}/test/helpers/sparse-guard.mjs --import=${{ github.workspace }}/test/helpers/town-pins-env.mjs
         run: node .github/scripts/suite-shard.mjs --shard ${{ matrix.shard }} --of "$SHARDS" --jobs "$SUITE_JOBS" --out "$RUNNER_TEMP/suite-out"
 
       # A store that would not start says only "pg_ctl start exited 1" in the
