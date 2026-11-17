@@ -490,7 +490,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   // under the foyer's 8 KiB bound; it goes when w41 ships.
   rulings: "renamed: outcomes",
   // POS-633 part 2: shortened by Plumb to make room for closer and happened under the foyer's 8 KiB bound (F5c).
-  stakes: "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident",
+  stakes: "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes), and the escrow behind your own published marks, the ones the next settlement would sweep first; limit/offset page both, 20 a page, next_offset walks on; bare it is your whole house, handle: narrows",
   address: "your address card, as the white pages hold it",
   home: "your home page",
   // POS-543: "papers" names its three checks (paperGapRows: HOME page, window,
@@ -584,7 +584,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
              part: { type: "string", description: "connector only: one list of a paged answer instead of the marks: set_downs | takes | standing | ground (cursor walks it) | teach (one block, no cursor)" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
-  stakes: { limit: { type: "number", description: "the newest N rows (the doorstep shows a few); omit for every row" } },
+  stakes: { limit: { type: "number", description: "the page size of both parts, in step: your own marks' rows (newest first) and `allocation`, everything your house has stamps behind (default 20, at most 200)" },
+            offset: { type: "number", description: "where the next page of both parts starts: the `next_offset` the last page handed you" } },
   address: {},
   home: {},
   standing: {},
@@ -1435,6 +1436,14 @@ async function householdGlance(args, key, ctx) {
     }),
     soft(() => householdPosts(you ?? ashore[0], { clone, now: nowMs })),
   ]);
+  // POS-1100: everything the house has stamps behind, as its AGGREGATE only (the list is household { read: "stakes" }). At risk is needs-you's own set.
+  const stakeRows = needs?.stakes_at_risk?.rows ?? null;
+  const stakes = ashore.length
+    ? await soft(async () => {
+      const { houseStakes, aggregateOf } = await import("./household-stakes.mjs");
+      return aggregateOf(await houseStakes(ashore, { atRisk: stakeRows ? new Set(stakeRows.map((r) => r.mark)) : null }));
+    })
+    : null;
   // ROOM (CORE-114): offered in first_steps while this house may buy room for one more parcel, by the quote's own DATE and
   // ROOM rules (parcel-room.mjs § THE TWO STAGE RULES), and not while the harbor gate would bounce the act. The caller's own
   // house only (the registry row above); no resident is named, since the payer is chosen at the call. A read that fails is
@@ -1445,6 +1454,7 @@ async function householdGlance(args, key, ctx) {
     return parcelRoomOfferNow({ slug: house.slug, registry: house.registry, townClone: clone, date: townDay() });
   }).then((o) => (o === null ? "unread" : o.open ? "open" : "closed"));
   return v2.glanceV2({
+    stakes,
     room,
     isDefault: ctx.readShape === "v2", // POS-1094: the line on the default (HOUSEHOLD_READ_SHAPE=v2 at the MCP door)
     marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
@@ -2258,9 +2268,16 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const held = [...(key?.handles ?? [])];
       if (!(named || held.length))
         return bounce(422, "whose marks?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has published");
+      // POS-1100 review: a handle the key does not hold is refused, as the doorstep's own reads refuse it (doorstep-apex.mjs), same code and words. The stakes
+      // read now reaches the ledger, so a stranger's stamps are not this key's to read. (No key at all keeps the marks part's old reading: published marks are public.)
+      if (key && named && !held.includes(named)) return bounce(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ")}`);
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
-      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
-      return doorstepStakes(named || null, { key, limit: f.limit ?? null });
+      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview.
+      // POS-1100: and beside those marks, everything the house has stamps behind (marks, posts, pots, ballots), paged by limit/offset.
+      // POS-1102 (Darko, 2026-11-17 09:09 EST: "Page it at 20"): bare, the read is no longer every row in one answer: both parts page by the same
+      // limit (default 20, at most 200) and offset, in step, with next_offset and more_note. Every row is reachable by paging.
+      const limit = Math.min(Math.max(Math.floor(Number(f.limit)) || 20, 1), 200);
+      return doorstepStakes(named || null, { key, limit, offset: f.offset, allocationPage: (named ? held.includes(named) : held.length > 0) ? { limit, offset: f.offset } : false, ...(ctx.stakesReaders ?? {}) });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and
