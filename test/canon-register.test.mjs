@@ -53,8 +53,8 @@
 import { townHoldsOf } from "../world2/tools/canon-register.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -71,7 +71,7 @@ import { slugOf } from "../world2/tools/materialize.mjs";
 // fixture that stubbed either of those would be testing a different function.
 const made = [];
 function worldFixture(ids, { unreadable = [] } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "canon-reg-"));
+  const dir = tempDir("canon-reg-");
   made.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });
@@ -174,7 +174,7 @@ test("an unknown backend is a throw, not a default", async () => {
 // ── 7 · a checkout git cannot answer for ────────────────────────────────────
 test("no checkout, and a checkout with no WORLD/marks, both refuse", async () => {
   await assert.rejects(() => canonRegisterAt({ backend: "git", worldRepo: null }), /no world checkout/);
-  const dir = mkdtempSync(join(tmpdir(), "canon-reg-bare-"));
+  const dir = tempDir("canon-reg-bare-");
   made.push(dir);
   await assert.rejects(() => canonRegisterAt({ backend: "git", worldRepo: dir }), /no WORLD\/marks under/);
 });
@@ -239,7 +239,7 @@ const caughtAsync = async (fn) => { try { await fn(); return null; } catch (e) {
  * sha and a read at HEAD can DISAGREE and the test can see it.
  */
 function readingWorldFixture() {
-  const dir = mkdtempSync(join(tmpdir(), "canon-sha-"));
+  const dir = tempDir("canon-sha-");
   made.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });

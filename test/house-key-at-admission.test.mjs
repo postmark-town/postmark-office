@@ -22,9 +22,9 @@ import assert from "node:assert/strict";
 import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 
 import { fixtureTown } from "./fixture.mjs";
@@ -78,7 +78,7 @@ const PINS = () => ({
 function sealedTown({ houses = HOUSES(), pins = PINS(), rooms = { alpha: "tester-gh", beta: "tester-gh", zed: "zed-gh" }, ledger = [], mail = [], cards = {} } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const dir = mkdtempSync(join(tmpdir(), "pm-house-key-"));
+  const dir = tempDir("pm-house-key-");
   dirs.push(dir);
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(dir, "tools"), { recursive: true });
@@ -106,7 +106,7 @@ function sealedTown({ houses = HOUSES(), pins = PINS(), rooms = { alpha: "tester
   const signed = lines.map((l, i) => `${l} · sig: ${edSign(null, Buffer.from(seals[i], "utf8"), key).toString("base64url")}`);
   writeFileSync(join(dir, "WHITE_PAGES/stamp-ledger.md"), `# the ledger\n\n${signed.join("\n")}\n`);
   writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
-  const keyFile = join(mkdtempSync(join(tmpdir(), "pm-house-key-pen-")), "stamp-key.pem");
+  const keyFile = join(tempDir("pm-house-key-pen-"), "stamp-key.pem");
   dirs.push(join(keyFile, ".."));
   writeFileSync(keyFile, pem);
   git(dir, "init", "-q");
