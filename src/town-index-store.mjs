@@ -27,6 +27,7 @@
 // inside `officeRead`'s READ ONLY transaction and a test runs it on its own.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { deepFreeze, sameScalars } from "./hoist.mjs"; // POS-1086: the doorstep's town-wide halves, kept once per input
 import { publicActSql } from "./hearth-public.mjs"; // POS-1027: which acts a public read may name
 // The row SHAPES (pages, cards, entries) are queries.mjs's own exported
 // functions; only the SQL is written here. A reader that restated a shape
@@ -962,6 +963,48 @@ export async function doorstepRows(q, handle, opts = {}) {
   };
 }
 
+// ── THE TOWN-WIDE HALVES OF A DOORSTEP, COMPOSED ONCE PER INPUT (POS-1086) ───────────────────────────────────────────────
+//
+// The bulletin's listing (every posting's excerpt, markdown stripped) and the mail pulse (the day series, the totals, every
+// thread's json parsed) are the same for every resident: each is a pure fold of rows the doorstep's snapshot already read,
+// with no resident and no clock in it. A pass of ~392 doorsteps folded them ~392 times (9.6% of a CPU profile).
+//
+// THE KEY IS THE ROWS THEMSELVES, not a print of them: the kept answer stands only while the rows it was folded from equal,
+// value for value, the rows in hand. So a row added, deleted or edited in place (a json that moved without a count or a
+// date moving) is a different key by construction, and there is no input the key could miss. Comparing the rows costs a
+// memcmp per string; the fold it saves parses and strips every one of them. One entry each: a new key drops the old.
+// Both answers are handed out frozen.
+let bulletinKept = null; // { rows: [[slug, json]…], listings }
+let pulseKept = null;    // { newest, totals, days: [[date, kind, n]…], threads: [json…], span, value }
+const builds = { bulletin: 0, pulse: 0 };
+/** Tests only: forget what the doorstep kept, and the build counts. */
+export function __forgetDoorstepHoistsForTest() { bulletinKept = null; pulseKept = null; builds.bulletin = 0; builds.pulse = 0; }
+/** Tests only: how many times each half was folded (not served from the kept one). */
+export const __doorstepHoistBuildsForTest = () => ({ ...builds });
+
+function bulletinListingsKept(rows) {
+  const flat = rows.map((r) => [r.slug, r.json]);
+  if (bulletinKept && bulletinKept.rows.length === flat.length
+    && bulletinKept.rows.every((k, i) => k[0] === flat[i][0] && k[1] === flat[i][1])) return bulletinKept.listings;
+  builds.bulletin++;
+  const listings = deepFreeze(rows.map(bulletinListing));
+  bulletinKept = { rows: flat, listings };
+  return listings;
+}
+
+function metricsPulseKept(pulse, opts) {
+  const span = opts?.days ?? null;
+  const days = pulse.dayCountRows.map((r) => [r.date, r.kind, String(r.n)]);
+  const totals = Object.entries(pulse.totals).flat();
+  const k = pulseKept;
+  if (k && k.span === span && k.newest === pulse.newest && sameScalars(k.totals, totals) && sameScalars(k.threads, pulse.threadJsons)
+    && k.days.length === days.length && k.days.every((d, i) => d[0] === days[i][0] && d[1] === days[i][1] && d[2] === days[i][2])) return k.value;
+  builds.pulse++;
+  const value = deepFreeze(metricsMailFrom(pulse, opts));
+  pulseKept = { newest: pulse.newest, totals, days, threads: pulse.threadJsons.slice(), span, value };
+  return value;
+}
+
 /**
  * THE DOORSTEP, COMPOSED (POS-1064): the page from `doorstepRows`' rows, with no store and no connection. The bundle's `as_of` is the STORE's head,
  * whatever the caller passes: the segments came from this index. `nowMs` is injected only so the PSA window is testable against a fixed day; `fresh`
@@ -977,8 +1020,8 @@ export function doorstepFromRows(rows, handle, opts = {}) {
     awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset, standing: opts.standing ?? null }),
     mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
     stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
-    bulletin: bulletinTeaserOf(rows.bulletin.map(bulletinListing), { limit: DOORSTEP_SIZES.bulletin }),
-    pulse: metricsMailFrom(rows.pulse, { days: DOORSTEP_SIZES.pulseDays }),
+    bulletin: bulletinTeaserOf(bulletinListingsKept(rows.bulletin), { limit: DOORSTEP_SIZES.bulletin }),
+    pulse: metricsPulseKept(rows.pulse, { days: DOORSTEP_SIZES.pulseDays }),
     window: windowOfRow(rows.window, handle, fresh, asOf),
     psa: psaFoldOf(rows.psa, { now: nowMs }),
     pendingOutbox: rows.pendingOutbox,
