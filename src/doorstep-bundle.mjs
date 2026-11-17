@@ -352,7 +352,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // record has no holding to read and says nothing either; one that IS pointed
   // at it and cannot read it says so, because there "unknown" must not read as
   // "empty".
-  const holdsBlockOf = await segSpan("holds", () => holdsBlock(handle, { readers: ctx.holdsReaders }));
+  const holdsBlockOf = await holdsBlock(handle, { readers: ctx.holdsReaders }); // not segment-timed: chests-candy-flag pins this line, and it measured 0 ms
   if (holdsBlockOf) d.holds = holdsBlockOf;
   // ── THE MISTS BLOCK IS GONE FROM THE DOORSTEP (POS-902) ───────────────────────────────────────
   //

@@ -23,7 +23,8 @@ const tis = await import("../src/town-index-store.mjs");
 const NOW = Date.parse("2026-07-12T09:30:00Z");
 const compose = (key) => doorstepBundle("wright", { key, asOf: undefined, canWrite: false, clone: null, odb: null, ix: tis.storeIndexPooled(null), nowMs: NOW });
 
-const PUBLIC = ["core", "fresh", "stances", "rulings", "stakes", "alerts", "posts", "holds"];
+// `holds` is not timed: test/chests-candy-flag.test.mjs pins its call line in source, and it measured 0 ms on dev.
+const PUBLIC = ["core", "fresh", "stances", "rulings", "stakes", "alerts", "posts"];
 const GATE = ["gate_next_steps"];
 const OWN = ["gate_hot_tense", "gate_unread", "gate_paper_gaps"];
 
