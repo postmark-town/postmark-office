@@ -1235,7 +1235,7 @@ async function metricsMailRows(q) {
     threads: await count(q, "SELECT COUNT(*) AS n FROM town_threads"),
     residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
   };
-  const threadJsons = newest ? (await q.query("SELECT json FROM town_threads ORDER BY root COLLATE \"C\"")).rows.map((t) => t.json) : [];
+  const threadJsons = newest ? (await q.query("SELECT json FROM town_threads ORDER BY root")).rows.map((t) => t.json) : [];
   return { newest, dayCountRows, totals, threadJsons };
 }
 function metricsMailFrom({ newest, dayCountRows, totals, threadJsons }, opts) {
