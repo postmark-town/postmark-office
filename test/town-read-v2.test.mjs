@@ -221,7 +221,7 @@ test("the MCP default (ctx.readShape v2) serves the glance; REST with no shape s
   assert.equal(optIn.read_shape, "v2", "read_shape: v2 on the call opts in");
 });
 
-test('read_shape: "v1" (and "t0") still answer today\'s read, whatever the default; an unknown shape is refused by name', async () => {
+test('read_shape: "v1" (and "t0") still answer today\'s read, whatever the default; any other value is ignored as on base', async () => {
   const t = town();
   const today = await townApex({}, null, t.ctx({ readShape: undefined }));
   for (const asked of ["v1", "t0"]) {
@@ -230,9 +230,12 @@ test('read_shape: "v1" (and "t0") still answer today\'s read, whatever the defau
   }
   const lean = await townApex({ read_shape: "v1" }, null, t.ctx({ readShape: "t2" }));
   assert.equal(JSON.stringify(lean), JSON.stringify(today), "v1 is the fuller read even where the default is a lean t-shape");
-  const bad = await townApex({ read_shape: "v9" }, null, t.ctx());
-  assert.equal(bad.code, 422);
-  assert.match(bad.defect, /not a town shape/);
+  // POS-687 (Darko, 10-18: keep the old ways working): base ignored any read_shape on the bare read, so any other value is still ignored
+  for (const odd of ["t1", "v9", 7]) {
+    const r = await townApex({ read_shape: odd }, null, t.ctx({ readShape: undefined }));
+    assert.equal(JSON.stringify(r), JSON.stringify(today), `read_shape: ${JSON.stringify(odd)} is ignored, as on base`);
+    assert.equal((await townApex({ read_shape: odd }, null, t.ctx())).read_shape, "v2", `and the default (v2) answers`);
+  }
   assert.equal((await townApex({ cards: "full" }, null, t.ctx({ readShape: "t1" }))).acts.length, today.acts.length, "t1's own cards still work");
 });
 
@@ -363,4 +366,48 @@ test("explain: the glance's parts answer through the door, and the old posts row
   const posts = explainAnswer("town", "posts");
   assert.match(posts.what, /read_shape: "v2"/);
   assert.match(posts.detail, /THE WORD IS STATE/, "the posts read's own words are kept");
+});
+
+// ── review fixes (POS-733, FIX at 7cc29605) ──────────────────────────────────
+
+test("a floor read is not none: the Bounty Board on its floor, and a Think Tank with no marks count, are named unavailable and never counted as 0", async () => {
+  const floor = await townApex({}, null, town({ over: { read_bounties: { notices: [], source: "floor", disclosed: "the world store would not open" } } }).ctx());
+  assert.ok(floor.unavailable.includes("bounties"), JSON.stringify(floor.unavailable));
+  assert.ok(!("bounty" in floor.posts.open), "a bounty count that could not be read is left out, not 0");
+  assert.equal(floor.posts.open.idea, 91, "the other class is still counted");
+  const tank = await townApex({}, null, town({ over: { read_posts: (a) => postsAnswer(a.class, [], { marks: null }) } }).ctx());
+  assert.ok(tank.unavailable.includes("idea marks"), JSON.stringify(tank.unavailable));
+  const fine = await townApex({}, null, town().ctx());
+  assert.ok(!("unavailable" in fine) && fine.posts.open.bounty === 2, "and a store that answered is not called unavailable");
+});
+
+test("since: a bulletin posting from earlier today is not new to a call a minute later; one posted after the cursor's instant is", async () => {
+  const dated = (posted) => ({ over: { read_feed: { rows: [] }, read_bulletin: { entries: [{ slug: "release-notes", title: "Notes", posted }] } } });
+  const c = (await townApex({}, null, town().ctx())).cursor;
+  const sameDay = await townApex({ since: c }, null, town(dated("2026-11-17")).ctx({ nowMs: NOW + 60_000 }));
+  assert.equal(sameDay.nothing_new, true, "2026-11-17 00:00Z is before the cursor's 03:40Z");
+  const later = await townApex({ since: c }, null, town(dated("2026-11-17T03:50:00Z")).ctx({ nowMs: NOW + 20 * 60_000 }));
+  assert.match(later.bulletin.headline, /^release-notes · 11-17 · Notes$/);
+  assert.ok(!("nothing_new" in later));
+});
+
+test('"X of Y": Y is the true open count past the fetched page, and a since answer says "at least" when a class was cut', async () => {
+  const many = Array.from({ length: 200 }, (_, i) => posts("bug", 200, { base: 20 })[i]);
+  const g = await townApex({}, null, town({ over: { read_posts: (a) => (a.class === "bug"
+    ? { ...postsAnswer("bug", many), counts_by_state: { ...postsAnswer("bug", many).counts_by_state, reported: 250 - 200 + postsAnswer("bug", many).counts_by_state.reported } }
+    : postsAnswer(a.class, posts(a.class, 2, { base: 5 }), { marks: a.class === "idea" ? 1 : null })) } }).ctx());
+  assert.equal(g.posts.open.bug, 250);
+  assert.equal(g.posts.rows_shown, `${g.posts.rows.length} of ${250 + 2 + 2 + 2 + 2}`, "the open bugs are 250, not the 200 fetched");
+  const old = (await townApex({}, null, town().ctx({ nowMs: NOW - 10 * 60_000 }))).cursor;
+  const since = await townApex({ since: old }, null, town({ over: { read_posts: (a) => (a.class === "bug"
+    ? { ...postsAnswer("bug", many), counts_by_state: { reported: 250 } } : postsAnswer(a.class, posts(a.class, 2, { base: 1 })) ) } }).ctx());
+  assert.match(since.posts.rows_shown, /^\d+ of at least \d+$/);
+});
+
+test("the town tool's description and read_shape text say what the bare read is now, and where the older read is", () => {
+  const d = TOWN_TOOL.description;
+  assert.match(d, /Bare, it answers the town's glance/);
+  assert.match(d, /read_shape: "v1" is the older, fuller read, with every act's card/);
+  assert.match(TOWN_TOOL.inputSchema.properties.read_shape.description, /"v1" is the older, fuller read, with every act's card/);
+  assert.match(v2.POSTS_KEY, /since: open posts only/);
 });

@@ -74,7 +74,7 @@ export function townBlock({ name = "Postmark", nowMs, residents = null, househol
 
 // ── posts ───────────────────────────────────────────────────────────────────
 
-export const POSTS_KEY = 'newest act first · class author/slug · state · responses · last act, age · title · open counts every class; idea marks and bounties are counted, not shown as rows · more: read "posts", args: { class, state? }';
+export const POSTS_KEY = 'newest act first · class author/slug · state · responses · last act, age · title · open counts every class; idea marks and bounties are counted, not shown as rows · more: read "posts", args: { class, state? } · since: open posts only, so a post closed after your cursor is not listed';
 
 /** One post as one line: `class author/slug · state · responses · last act, age · title`. */
 export function postRow(p, cls, nowMs) {
@@ -104,11 +104,13 @@ export function cutPosts(byClass, { nowMs, shown = POSTS_SHOWN, perClass = POSTS
 }
 
 /** `open` is `{ class: count }` (a class with none is left out), then the rows and "X of Y". */
-export function postsBlock({ open = {}, byClass = {}, nowMs } = {}) {
+export function postsBlock({ open = {}, openPosts = null, byClass = {}, nowMs } = {}) {
   const counts = Object.fromEntries(COUNT_CLASSES.filter((c) => Number(open[c]) > 0).map((c) => [c, Number(open[c])]));
-  const { rows, total } = cutPosts(byClass, { nowMs });
+  const { rows, total: fetched } = cutPosts(byClass, { nowMs });
   if (!Object.keys(counts).length && !rows.length) return null;
-  return { open: counts, ...(rows.length ? { rows, rows_shown: `${rows.length} of ${total}` } : {}), key: POSTS_KEY };
+  // Y is the true count of open posts where the read gave one (a class read is fetched in a bounded page), else what was fetched
+  const total = Object.keys(byClass).reduce((n, c) => n + Math.max(byClass[c]?.length ?? 0, Number(openPosts?.[c]) || 0), 0);
+  return { open: counts, ...(rows.length ? { rows, rows_shown: `${rows.length} of ${Math.max(total, fetched)}` } : {}), key: POSTS_KEY };
 }
 
 // ── events ──────────────────────────────────────────────────────────────────
@@ -227,7 +229,7 @@ export const glanceMore = (cursor, reads = []) =>
  */
 export function glanceTownV2(parts, { nowMs = Date.now(), reads = [] } = {}) {
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs });
-  const posts = postsBlock({ open: parts.open, byClass: parts.byClass, nowMs });
+  const posts = postsBlock({ open: parts.open, openPosts: parts.openPosts, byClass: parts.byClass, nowMs });
   const events = eventsBlock(parts.calendar, nowMs);
   const votes = votesBlock(parts.votes);
   const bulletin = bulletinBlock(parts.bulletin);
@@ -267,12 +269,14 @@ export function sinceTownV2(parts, sinceCursor, { nowMs = Date.now() } = {}) {
   const happened = (parts.feed?.rows ?? []).filter((r) => Date.parse(r.at ?? "") > c.ms).slice(0, HAPPENED_SHOWN);
   const newest = parts.bulletin?.entries?.[0];
   const posted = Date.parse(newest?.posted ?? "");
-  const bulletin = newest && Number.isFinite(posted) && new Date(posted).toISOString().slice(0, 10) >= sinceIso.slice(0, 10) ? bulletinBlock(parts.bulletin) : null;
+  // against the cursor's own instant, never its day: a posting from earlier today is not new to a call a minute later
+  const bulletin = newest && Number.isFinite(posted) && posted > c.ms ? bulletinBlock(parts.bulletin) : null;
+  const truncated = Object.keys(parts.byClass ?? {}).some((k) => (parts.byClass[k]?.length ?? 0) < (Number(parts.openPosts?.[k]) || 0));
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs });
   const blind = Boolean(parts.unavailable?.length);
   const out = {
     since: sinceIso,
-    ...(rows.length ? { posts: { rows, rows_shown: `${rows.length} of ${total}` } } : {}),
+    ...(rows.length ? { posts: { rows, rows_shown: `${rows.length} of ${truncated ? "at least " : ""}${total}` } } : {}),
     ...(happened.length ? { happened: happened.map((r) => happenedRow(r, nowMs)) } : {}),
     ...(bulletin ? { bulletin: { headline: bulletin.headline } } : {}),
     ...(blind ? { unavailable: parts.unavailable } : {}),
