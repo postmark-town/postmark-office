@@ -59,6 +59,7 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
+import { noteRestRefusal } from "./refusal-log.mjs"; // POS-1003: a refused write is kept, privately, for 90 days
 import { newTiming, runTiming, markRouted, timingLine } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
@@ -611,7 +612,7 @@ const j = (res, code, obj, cause) => {
   if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))
     res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
-  if (code >= 400) obj = markRefused(obj);
+  if (code >= 400) { noteRestRefusal(res.req, code, obj); obj = markRefused(obj); } // POS-1003: the one writer of every REST refusal keeps a write's, privately
   const body = JSON.stringify(obj, null, 1);
   const headers = {
     "content-type": "application/json; charset=utf-8",
@@ -1317,6 +1318,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   const key = resolvedKey;
   noteRequester(key); // POS-633 H4: a site act is the human's only at their own residents' wheel (act-provenance.mjs)
   req.tel.household = key?.household ?? null;
+  req.tel.key = key; // POS-1003: who a refused write is kept for (refusal-log.mjs § noteRestRefusal); never written to the access line
+  req.tel.path = path;
 
   // Keyless public GETs get the same token-bucket backstop as nginx's prepared
   // outer layer. Invalid/stale credentials deliberately land in this tier.
@@ -2631,6 +2634,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("household", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "household", args: payload }; // POS-1003
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
@@ -2814,6 +2818,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("world", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "world", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb, cost: worldWriteCost(verb, payload) });
@@ -2862,6 +2867,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("town", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "town", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = townDispatchToolFor(payload.do) ?? "town";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb });
