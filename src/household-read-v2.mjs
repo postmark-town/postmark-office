@@ -26,7 +26,7 @@
 // without read_shape.
 
 import { memberRow } from "./house-bundle.mjs";
-import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
+import { HOUSEHOLD_LINES } from "./door-read-shape.mjs";
 import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
@@ -57,7 +57,8 @@ export const CAN_GROUPS = Object.freeze({
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
   host: ["host", "cancel-event", "rsvp", "announce"],
-  house: ["add-resident", "declare", "begin", "buy-parcel-room"],
+  // CORE-114: declare, begin and buy-parcel-room are offered (the tier's next; first_steps), never listed here
+  house: ["add-resident"],
 });
 
 /**
@@ -75,14 +76,10 @@ export const actFields = (act) => {
   return fields.length ? `${act} { ${fields.join(", ")} }` : act;
 };
 
-/** The groups, each one line of `act { fields }`, for the acts this caller can use. */
-export function canBlock(tier, household) {
-  const usable = usableActs(tier, household);
+/** The groups, each one line of `act { fields }`. */
+export function canBlock() {
   const out = {};
-  for (const [group, acts] of Object.entries(CAN_GROUPS)) {
-    const mine = acts.filter(usable);
-    if (mine.length) out[group] = mine.map(actFields).join(" · ");
-  }
+  for (const [group, acts] of Object.entries(CAN_GROUPS)) out[group] = acts.map(actFields).join(" · ");
   return out;
 }
 
@@ -135,20 +132,31 @@ export const FIRST_STEPS = Object.freeze({
   // the one-off naming of a household's inviter, offered here only while its record names none (`naming` below),
   // gone once named, never in `can`. The house's, not a member's, so no handle; the card is read: "invited-by".
   "invited-by": 'household { do: "invited-by", args: { invited_by: "<their handle, or hh:<slug>>" } }: if someone invited your house; once, public',
+  // CORE-114 (Wright 2026-11-17): room for one more parcel is offered here, while the house may buy it (declared after the
+  // cutoff, room below three: parcel-room.mjs § THE TWO STAGE RULES) and never listed in `can`. `from` is whichever
+  // resident pays, said as a placeholder: the offer is the house's, so it names no resident. The call quotes first.
+  "buy-parcel-room": 'household { do: "buy-parcel-room", args: { from: "<who pays>", preview: true } }: room for one more parcel; the quote first, writes nothing',
 });
+/** CORE-114: said in place of the offer when the facts that decide it could not be read: neither offered nor hidden. */
+export const ROOM_UNREAD_STEP = 'buy-parcel-room: not readable just now, so not offered';
 /** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
-export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel", "invited-by"]);
+export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel", "buy-parcel-room", "invited-by"]);
 
 /**
  * The first steps for what the members are missing, in order, each naming the
  * call (and so its tool), or null when nothing is. None of them gates a
  * resident: each makes the house more visible. `naming`: the house's record
- * names no inviter yet, so the one-off naming is offered (POS-947/c).
+ * names no inviter yet, so the one-off naming is offered (POS-947/c). `room`
+ * (CORE-114): "open" when the house may buy room for one more parcel (the offer),
+ * "unread" when the facts that decide it could not be read (said, never guessed),
+ * anything else when it may not (the date, the room: nothing offered).
  */
-export function firstSteps(gaps = {}, { naming = false } = {}) {
-  const missing = new Set(Object.values(gaps).flat().filter((k) => k !== "invited-by"));
+export function firstSteps(gaps = {}, { naming = false, room = null } = {}) {
+  const missing = new Set(Object.values(gaps).flat().filter((k) => k !== "invited-by" && k !== "buy-parcel-room"));
   if (naming === true) missing.add("invited-by");
+  if (room === "open") missing.add("buy-parcel-room");
   const steps = FIRST_STEPS_ORDER.filter((k) => missing.has(k)).map((k) => `${k}: ${FIRST_STEPS[k]}`);
+  if (room === "unread") steps.push(ROOM_UNREAD_STEP);
   return steps.length ? steps : null;
 }
 
@@ -461,9 +469,9 @@ export const glanceMore = (cursor, { isDefault = false } = {}) => `${moreLine(cu
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, naming = false, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, isDefault = false } = parts;
+  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, isDefault = false } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
-  const steps = firstSteps(gaps, { naming });
+  const steps = firstSteps(gaps, { naming, room });
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
   // and marks.at_risk cannot disagree (a fixture that handed marks its own list made them say 0 and 1)
   const marksOf = marks ? marksBlock({ ...marks, atRisk: needs?.stakes_at_risk?.rows ?? null }) : null;
@@ -489,7 +497,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
     ...(closer?.length ? { correspondents: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
     ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name) } } : {}),
-    can: canBlock(standing?.tier, standing?.household),
+    can: canBlock(),
     law: {
       tier: standing?.tier ?? null,
       ...(standing?.world_writes ? { world_writes: `${standing.world_writes.used}/${standing.world_writes.cap} this ${standing.world_writes.per ?? "hour"}` } : {}),
@@ -515,7 +523,13 @@ export function isNewHouse(house = {}, rows = [], nowMs = Date.now()) {
 export const FIRST_STEPS_NOTE = "none is required; each makes your house easier to find";
 /** POS-947/c: naming an inviter does not make a house easier to find, so the note says what it does instead, only when it is offered. */
 export const FIRST_STEPS_NAMING_NOTE = "none is required; each paper makes your house easier to find, and invited-by credits who brought you";
-export const firstStepsNote = (steps = []) => (steps.some((s) => s.startsWith("invited-by: ")) ? FIRST_STEPS_NAMING_NOTE : FIRST_STEPS_NOTE);
+export const FIRST_STEPS_ROOM_CLAUSE = "buy-parcel-room is the exception: its price is never returned";
+export const firstStepsNote = (steps = []) => {
+  const named = steps.some((s) => s.startsWith("invited-by: "));
+  const room = steps.some((s) => s.startsWith("buy-parcel-room: ") && s !== ROOM_UNREAD_STEP);
+  if (!room) return named ? FIRST_STEPS_NAMING_NOTE : FIRST_STEPS_NOTE;
+  return named ? `${FIRST_STEPS_NAMING_NOTE}; ${FIRST_STEPS_ROOM_CLAUSE}` : `${FIRST_STEPS_NOTE}; ${FIRST_STEPS_ROOM_CLAUSE}`;
+};
 
 /**
  * since: "<cursor>" on the glance: only what changed. Needs dated on or after
