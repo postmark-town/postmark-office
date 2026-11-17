@@ -215,21 +215,27 @@ async function stakesOf(handles, { nowMs, readers = {} }) {
 }
 
 /**
- * ONE RESIDENT'S WAITING-STANCE COUNT (POS-1084), the doorstep's `stances.stances_awaiting` and its ground: the one resident's own scope asked of the
- * same reader the doorstep asks (`stancesForHandles([handle])`), the count taken whole (it is the length of the resident's candidates, not of a page). The
- * rows stay in `household { read: "stances", handle }`. A read that could not be made says `unavailable` and carries no count, never 0.
+ * EVERY RESIDENT'S OWN WAITING-STANCE COUNT (POS-1084), the doorstep's `stances.stances_awaiting` and its ground, for the whole house in ONE pass per
+ * world-household (world-stance.mjs § stanceCountsForHandles): every resident of one house is counted from the same candidate list, so the house is asked
+ * once, never once per resident (that was 5.0 s → 56.6 s for Starforge on dev). The count is whole (the length of the candidates, not of a page); the rows
+ * stay in `household { read: "stances", handle }`. Answers `{ [handle]: block }`; a read that could not be made says `unavailable` and carries no count, never 0.
  */
-export async function stanceCountOf(handle, { readers = {} } = {}) {
-  const base = { serves: "household.stances", args: { handle } };
+export async function stanceCountsOf(handles, { readers = {} } = {}) {
+  const block = (handle, answer) => ({ serves: "household.stances", args: { handle }, ...answer });
+  let counts;
   try {
-    const { stancesForHandles } = readers.stances ? { stancesForHandles: readers.stances } : await import("./world-stance.mjs");
-    const whole = await stancesForHandles([handle], { limit: DOORSTEP_STANCES });
-    if (whole?.unavailable || !Number.isFinite(whole?.stances_awaiting))
-      return { ...base, unavailable: whole?.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" };
-    return { ...base, stances_awaiting: whole.stances_awaiting, ...(whole.stances_awaiting_ground !== undefined ? { stances_awaiting_ground: whole.stances_awaiting_ground } : {}) };
+    const { stanceCountsForHandles } = readers.stanceCounts ? { stanceCountsForHandles: readers.stanceCounts } : await import("./world-stance.mjs");
+    counts = await stanceCountsForHandles(handles);
   } catch (e) {
-    return { ...base, unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the house's stance counts")})` };
+    const unavailable = `the consent inbox could not be read (${plainReason(e, "record", "the house's stance counts")})`;
+    return Object.fromEntries(handles.map((h) => [h, block(h, { unavailable })]));
   }
+  return Object.fromEntries(handles.map((h) => {
+    const c = counts?.get?.(h);
+    if (c?.unavailable || !Number.isFinite(c?.stances_awaiting))
+      return [h, block(h, { unavailable: c?.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" })];
+    return [h, block(h, { stances_awaiting: c.stances_awaiting, ...(c.stances_awaiting_ground !== undefined ? { stances_awaiting_ground: c.stances_awaiting_ground } : {}) })];
+  }));
 }
 
 /** The REST skin's inbox bound: the house read has no connector abridgement. */
@@ -318,6 +324,9 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
     ? await unreadFor(held, { ix }).then((rows) => ({ rows }), (error) => ({ error }))
     : null;
 
+  // POS-1084: each resident's own waiting count, one stance pass per world-household for the whole house
+  const stanceCounts = await stanceCountsOf(ashore, { readers });
+
   const residents = {};
   for (const h of ashore) {
     const fresh = await freshFor(h, { odb, clone, asOf });
@@ -331,7 +340,7 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
     await ownerGate(d, h, { clone, key, odb, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
     // POS-1084: the two per-resident facts the doorstep carries and the house's own blocks cannot give (a house scope's count is not each resident's), public, outside the gate
-    d.stances = await stanceCountOf(h, { readers });
+    d.stances = stanceCounts[h];
     const heldBlock = await holdsBlock(h, { readers });
     if (heldBlock) d.holds = heldBlock;
     residents[h] = d;

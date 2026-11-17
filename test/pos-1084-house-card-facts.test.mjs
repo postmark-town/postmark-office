@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { holdsBlock, doorstepBundle } from "../src/doorstep-bundle.mjs";
-import { houseBundle, housePage, stanceCountOf } from "../src/house-bundle.mjs";
+import { houseBundle, housePage, stanceCountsOf } from "../src/house-bundle.mjs";
 import { DOORSTEP_STANCES } from "../src/queries.mjs";
 import { CHESTS_CANDY_ENV } from "../src/chests-candy.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
@@ -74,8 +74,15 @@ const stancesFn = async (handles, opts) => {
   const rows = Array.from({ length: Math.min(n, opts.limit) }, (_, i) => ({ mark: `r-stranger/m${i}`, by: "r-stranger", on_your_ground: [`${h}/garden`] }));
   return { stances_awaiting: n, stances_awaiting_ground: `${h}'s ground`, awaiting: rows, cursor: n > opts.limit ? String(opts.limit) : null, complete: n <= opts.limit, standing: [], set_downs_awaiting: [] };
 };
+// The batch reader (world-stance.mjs § stanceCountsForHandles) answered from the same per-resident table: each invented resident is its own world-household here, so
+// each asks for themselves. One house of several residents on one pass is § 5 below, and the old-against-new equivalence on a real world is test/pos-1084-one-pass.test.mjs.
+const countsFn = async (handles) => new Map(await Promise.all(handles.map(async (h) => {
+  const a = await stancesFn([h], { limit: DOORSTEP_STANCES });
+  return [h, a.unavailable ? { unavailable: a.unavailable } : { stances_awaiting: a.stances_awaiting, stances_awaiting_ground: a.stances_awaiting_ground }];
+})));
 const readers = {
   stances: stancesFn,
+  stanceCounts: countsFn,
   stakesFor: async () => ({ next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 0, at_risk: 0, rows: [] }),
   lastActiveFor: async () => new Map(),
   walkers: async () => ({ at: 190.5, walkers: [] }),
@@ -108,7 +115,7 @@ test("1 · FALSIFIER, stances: each resident carries their OWN waiting count, ta
     assert.equal(h.residents[who].stances.stances_awaiting, own.stances_awaiting, `${who}: the doorstep reader's count`);
   }
   // the reader that throws is unavailable too, never zero
-  const boom = await stanceCountOf("r000", { readers: { stances: async () => { throw new Error("down"); } } });
+  const boom = (await stanceCountsOf(["r000"], { readers: { stanceCounts: async () => { throw new Error("down"); } } })).r000;
   assert.ok(!("stances_awaiting" in boom) && /could not be read/.test(boom.unavailable));
 });
 
@@ -141,6 +148,19 @@ test("3 · SAME PUBLIC FACTS FOR EVERY CALLER: anonymous, the house's own key an
   }
   assert.ok("unread" in owner.residents.r000 && !("unread" in anon.residents.r000) && !("unread" in foreign.residents.r000), "owner-only blocks keep their gate");
   delete process.env[CHESTS_CANDY_ENV];
+});
+
+test("3b · ONE CALL FOR THE WHOLE HOUSE: the house read asks the batch reader once, for every resident ashore, and each resident's block is that one answer's", async () => {
+  const calls = [];
+  const oneHouse = async (handles) => { calls.push([...handles]); return new Map(handles.map((h) => [h, { stances_awaiting: 7, stances_awaiting_ground: h === "r000" ? "resident:r000" : "household" }])); };
+  const h = await houseBundle({ household: HOUSE }, ctx({ readers: { ...readers, stanceCounts: oneHouse } }));
+  assert.deepEqual(calls, [MEMBERS], "one call, with all three residents (a per-resident loop would be three calls)");
+  assert.equal(h.residents.r000.stances.stances_awaiting_ground, "resident:r000");
+  for (const who of MEMBERS) {
+    assert.equal(h.residents[who].stances.stances_awaiting, 7, `${who}: the house's one pass, their own block`);
+    assert.deepEqual(h.residents[who].stances.args, { handle: who });
+  }
+  assert.equal(h.residents.r001.stances.stances_awaiting_ground, "household");
 });
 
 test("4 · THE PAGED READ KEEPS ITS CONTRACT, and the full read keeps what it had", async () => {
