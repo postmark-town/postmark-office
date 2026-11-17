@@ -735,7 +735,7 @@ test("10 · the offer and the quote agree on who may buy, by the date and the ro
   const poor = parcelRoomQuote({ handle: "ash", date: "2026-11-03", registry, entries: [GIFT("ash", 1)], engine: townEngine, townKey: "gh:101" });
   assert.match(poor.error.defect, /costs 50 stamps, and ash holds 1 liquid/, "unaffordable is the quote's own refusal");
   assert.equal(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", bought: 0, date: "2026-11-03", engine: townEngine }).open, true, "and the offer is made all the same");
-  // a town whose ledger does not know a purchase yet sells nothing, so offers nothing; no engine at all is unread, not hidden
+  // a town whose ledger does not know a purchase yet sells nothing, so offers nothing; no engine at all is a null from the pure question (parcelRoomOfferNow maps it to not-yet-open: nothing offered)
   assert.deepEqual(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", date: "2026-11-03", engine: { PARCEL_SETTLED_BY_DAY: "2026-10-31" } }), { open: false });
   assert.equal(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", date: "2026-11-03", engine: null }), null);
 });
@@ -752,5 +752,5 @@ test("10 · the offer, now: a house the date closes reads no ledger; an open one
   assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: burnLines([{ canonical: BUY("birch", 2, "hh:the-rowan") }, { canonical: BUY("birch", 3, "hh:rowan-house") }]) }), { open: false },
     "room three, a purchase filed under the house's old name counted: exhausted");
   assert.equal(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: async () => null }), null, "the ledger's lines unreadable: unread");
-  assert.equal(await parcelRoomOfferNow({ ...base, engine: null, slug: "the-rowan", townClone: null }), null, "no town engine: unread");
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, engine: null, slug: "the-rowan", townClone: null }), { open: false }, "no town engine configured: the quote's not-yet-open, so nothing is offered");
 });

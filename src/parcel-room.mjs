@@ -276,15 +276,16 @@ export function parcelRoomOffer({ slug, since, bought = 0, date, engine }) {
  * store's, as the glance already holds it). The date decides first, from the
  * registry row alone, so a house declared before the cutoff (most of them)
  * costs no ledger read; only a house the date leaves open reads the ledger's
- * parcel burns (the lines houseFactsNow reads). → the offer's answer, or null
- * when a read it needed could not be made (said by the caller, never guessed).
+ * parcel burns (the lines houseFactsNow reads). No town engine at all is the
+ * quote's "not-yet-open": nothing to buy on, so nothing offered. → the offer's
+ * answer, or null when a read it needed FAILED (said by the caller, never guessed).
  * `engine` and `burnLines` are the two reads, named so a test can hand them in.
  */
 export async function parcelRoomOfferNow({ slug, registry, townClone, date, env = process.env, engine: given = null, burnLines = null }) {
   const rec = registry?.households?.[slug];
   const since = typeof rec?.since === "string" && rec.since ? rec.since.slice(0, 10) : null;
   const engine = given ?? (townClone ? await townEngineNow(townClone) : null);
-  if (!engine) return null; // no town engine to ask (the quote's own 503 "not-yet-open"): unread, not eligible and not exhausted
+  if (!engine) return { open: false }; // no town engine configured: the quote's own 503 "not-yet-open", so nothing is offered (a read that FAILS is null)
   const byDate = parcelRoomOffer({ slug, since, bought: 0, date, engine });
   if (!byDate?.open) return byDate;
   const { actsQuery } = await import("./world2-acts.mjs");

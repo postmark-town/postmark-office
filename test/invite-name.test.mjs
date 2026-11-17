@@ -444,9 +444,10 @@ test("N8 · buy-parcel-room is OFFERED in first_steps while the house may buy ro
     // a house declared after the cutoff, no room bought: offered, with the quote's own words and a placeholder payer, never a resident's name
     const open = await householdApex(V2, NEWHALL, SLIM({ clone }));
     assert.equal(open.error, undefined, JSON.stringify(open).slice(0, 300));
-    assert.deepEqual(roomOffer(open), ['buy-parcel-room: household { do: "buy-parcel-room", args: { from: "<the resident who pays>", preview: true } }: quotes the price and writes nothing; room for one more parcel, paid to the town and never returned']);
-    assert.match(open.house.first_steps_note, /buy-parcel-room is the exception: it buys room for one more parcel, and its price is never returned/);
+    assert.deepEqual(roomOffer(open), ['buy-parcel-room: household { do: "buy-parcel-room", args: { from: "<who pays>", preview: true } }: room for one more parcel; the quote first, writes nothing']);
+    assert.match(open.house.first_steps_note, /buy-parcel-room is the exception: its price is never returned/);
     assert.ok(!JSON.stringify(open.can).includes("buy-parcel-room"), "never in can");
+    assert.ok(JSON.stringify(open, null, 1).length <= 4096, `the offer fits the glance's 4K bound: ${JSON.stringify(open, null, 1).length}`);
     const legacy = await householdApex({}, NEWHALL, REST({ clone }));
     const legacySlim = await householdApex({}, NEWHALL, SLIM({ clone }));
     for (const menu of [legacy, legacySlim]) assert.equal(JSON.stringify(menu.acts ?? []).includes('"buy-parcel-room"'), false, "nor on the older shapes' act menus");
@@ -464,12 +465,18 @@ test("N8 · buy-parcel-room is OFFERED in first_steps while the house may buy ro
     await owner.query("DELETE FROM stamp_lines WHERE canonical LIKE '% for: parcel:%'");
     assert.deepEqual(roomOffer(await householdApex(V2, { ...NEWHALL, harbor: true }, SLIM({ clone }))), [], "at the harbor the act would bounce, so it is not offered");
 
-    // A READ THAT CANNOT BE MADE IS SAID, NEVER GUESSED: no town engine here, so neither offered nor hidden
-    const blind = await householdApex(V2, NEWHALL, SLIM());
-    assert.equal(roomOffer(blind).length, 1, "no clone, no engine: the one buy-parcel-room line is the unread one");
-    assert.match(roomOffer(blind)[0], /the town's room facts could not be read just now, so it is not offered/);
-    assert.ok(!/household \{ do: "buy-parcel-room"/.test(roomOffer(blind)[0]), "an unread state carries no call to make");
-    assert.doesNotMatch(blind.house.first_steps_note ?? "", /exception/, "and its note does not describe an offer that was not made");
+    // NO TOWN ENGINE CONFIGURED is the quote's "not-yet-open": nothing to buy on, so nothing is offered (and nothing is said unread)
+    assert.deepEqual(roomOffer(await householdApex(V2, NEWHALL, SLIM())), [], "no clone, no engine: not offered");
+
+    // A READ THAT FAILS IS SAID, NEVER GUESSED: the ledger's lines cannot be read (the role loses its SELECT), so neither offered nor hidden
+    await owner.query("REVOKE SELECT ON stamp_lines FROM office_api");
+    try {
+      const blind = await householdApex(V2, NEWHALL, SLIM({ clone }));
+      assert.equal(blind.error, undefined, JSON.stringify(blind).slice(0, 300));
+      assert.deepEqual(roomOffer(blind), ["buy-parcel-room: not readable just now, so not offered"]);
+      assert.doesNotMatch(blind.house.first_steps_note ?? "", /exception/, "and its note does not describe an offer that was not made");
+      assert.deepEqual(roomOffer(await householdApex(V2, FERN, SLIM({ clone }))), [], "a house the date closes reads no ledger, so it is not told the ledger is unreadable");
+    } finally { await owner.query("GRANT SELECT ON stamp_lines TO office_api"); }
   } finally {
     await owner.query("DELETE FROM stamp_lines WHERE canonical LIKE '% for: parcel:%'").catch(() => {});
     await owner.end();

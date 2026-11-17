@@ -134,10 +134,10 @@ export const FIRST_STEPS = Object.freeze({
   // CORE-114 (Wright 2026-11-17): room for one more parcel is offered here, while the house may buy it (declared after the
   // cutoff, room below three: parcel-room.mjs § THE TWO STAGE RULES) and never listed in `can`. `from` is whichever
   // resident pays, said as a placeholder: the offer is the house's, so it names no resident. The call quotes first.
-  "buy-parcel-room": 'household { do: "buy-parcel-room", args: { from: "<the resident who pays>", preview: true } }: quotes the price and writes nothing; room for one more parcel, paid to the town and never returned',
+  "buy-parcel-room": 'household { do: "buy-parcel-room", args: { from: "<who pays>", preview: true } }: room for one more parcel; the quote first, writes nothing',
 });
 /** CORE-114: said in place of the offer when the facts that decide it could not be read: neither offered nor hidden. */
-export const ROOM_UNREAD_STEP = 'buy-parcel-room: the town\'s room facts could not be read just now, so it is not offered; household { read: "buy-parcel-room" } answers its card';
+export const ROOM_UNREAD_STEP = 'buy-parcel-room: not readable just now, so not offered';
 /** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
 export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel", "buy-parcel-room", "invited-by"]);
 
@@ -522,7 +522,7 @@ export function isNewHouse(house = {}, rows = [], nowMs = Date.now()) {
 export const FIRST_STEPS_NOTE = "none is required; each makes your house easier to find";
 /** POS-947/c: naming an inviter does not make a house easier to find, so the note says what it does instead, only when it is offered. */
 export const FIRST_STEPS_NAMING_NOTE = "none is required; each paper makes your house easier to find, and invited-by credits who brought you";
-export const FIRST_STEPS_ROOM_CLAUSE = "buy-parcel-room is the exception: it buys room for one more parcel, and its price is never returned";
+export const FIRST_STEPS_ROOM_CLAUSE = "buy-parcel-room is the exception: its price is never returned";
 export const firstStepsNote = (steps = []) => {
   const named = steps.some((s) => s.startsWith("invited-by: "));
   const room = steps.some((s) => s.startsWith("buy-parcel-room: ") && s !== ROOM_UNREAD_STEP);
