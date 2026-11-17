@@ -63,6 +63,7 @@ import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { BUG_CLASS } from "./bugs.mjs";
+import { pageRows } from "./page-rows.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -163,6 +164,15 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
     "SELECT id, object, action, at FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id",
     [cls, kept.map((p) => p.id)]);
   const latest = new Map(acts.map((a) => [a.object, { act: ACT_WORD[a.action] ?? a.action, at: new Date(a.at).toISOString() }]));
+  // A POST CONVERTED FROM A MARK (POS-854) carries when its author first put the idea up as `fields.origin.date`;
+  // while its only act is the conversion's own `post`, that is when it was last active, so a hundred converted
+  // ideas do not all read as written the night the tool ran. Its first later act (an amend, a stage) is newer, and wins.
+  const fieldsOf = (p) => (typeof p.fields === "string" ? JSON.parse(p.fields) : (p.fields ?? {}));
+  const latestOf = (p) => {
+    const l = latest.get(p.id) ?? null;
+    const origin = fieldsOf(p).origin?.date;
+    return l && l.act === "post" && origin && !Number.isNaN(Date.parse(origin)) ? { act: "post", at: new Date(origin).toISOString() } : l;
+  };
   return kept.map((p) => ({
     class: p.class,
     id: p.id,
@@ -170,7 +180,7 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
     author: p.author,
     household: p.household ?? null,
     state: stateOf(p, now),
-    latest: latest.get(p.id) ?? null,
+    latest: latestOf(p),
     responses: (who.get(p.id) ?? []).length,
     // the span's start, for the order only; never on the answer (§ ORDER)
     [STARTS]: p.starts == null ? null : new Date(p.starts).toISOString(),
@@ -190,11 +200,26 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
 // on top, here and nowhere else:
 //   event   its window (postRowsOf § WINDOWED) and its state from the clock (§ stateOf)
 //   bug     its stage, which is its stored state
-//   idea    no stake stands on an idea post yet (the stake on posts is w43's), so
-//           `stake` and `ours` are 0, which is true; and the half is quiet when it
-//           cannot be read while the class is closed (ideas.mjs § ideaPostsOn)
+//   idea    takes a stake (POS-854): `stake` is what the stamp ledger holds behind the post and
+//           `ours` the house's part of it, from post-stake.mjs § postBackingOf; a house that
+//           staked an idea it did not write takes part. The half is quiet when it cannot be
+//           read while the class is closed (ideas.mjs § ideaPostsOn)
 // A class added to POST_CLASSES is read with no change here. The Think Tank's
-// idea MARKS are world marks, not posts, and keep their own read (§ ideaRows).
+// idea MARKS are world marks, not posts, and keep their own read (§ ideaRows), until the
+// conversion has made each its author's post (tools/convert-idea-marks.mjs): a mark that has
+// become a post is read once, as the post (§ CONVERTED MARKS below).
+
+/**
+ * The Think Tank's mark rows that have NOT become a post (POS-854): a mark that is a post's `origin.mark` is that post,
+ * and is read once, as the post. `postRows` are the table's rows (they carry `FIELDS`, which never reaches an answer).
+ */
+export function unconvertedMarks(markRows, postRows) {
+  const converted = new Set(postRows.filter((r) => r.class === IDEA_CLASS).map((r) => r[FIELDS]?.origin?.mark).filter(Boolean));
+  return markRows.filter((r) => !converted.has(r.id));
+}
+
+/** The classes whose posts take a stake: the post's `stake` and `ours` are the ledger's. (A bug takes none; a ballot has its own.) */
+const STAKE_CLASSES = new Set([IDEA_CLASS]);
 
 /** What each class's half is called when it cannot be read; a class not named here says "the <class> posts". */
 const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "the idea posts", [BUG_CLASS]: "the bugs", quest: "the quests" });
@@ -203,21 +228,35 @@ const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "
 const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(env) });
 
 /** One class of the posts table: the house's own posts and the ones it answered. `{ rows }` or `{ unavailable }`. */
-async function tableRows(cls, members, now, { env, what }) {
+async function tableRows(cls, members, now, { env, what, townClone = TOWN_CLONE, backingOf = null }) {
   const house = new Set(members);
+  // A class that takes a stake (POS-854: the idea) carries what stands behind each post, from the ledger's
+  // own fold (post-stake.mjs § postBackingOf), the one owner of a post's escrow. A ledger that cannot be
+  // read leaves the stake at 0 and says so in `unavailable`: never a quiet zero for "could not tell".
+  let backing = null;
+  let backingGap = null;
+  if (STAKE_CLASSES.has(cls) && (cls !== IDEA_CLASS || ideaPostsOn(env))) {   // while the class is closed there is no idea post to back
+    try { backing = backingOf ? await backingOf(townClone) : await (await import("./post-stake.mjs")).postBackingOf(townClone); }   // `backingOf` is a suite's seam
+    catch { backingGap = `the stakes behind ${what} could not be read from the stamp ledger`; }
+  }
+  const heldBy = (id) => backing?.holders.get(id) ?? [];
   try {
-    return await officeRead(async (client) => {
+    const out = await officeRead(async (client) => {
       const rows = await postRowsOf(client, cls, now,
-        { keep: (p, who) => house.has(p.author) || who.some((h) => house.has(h)) });
+        { keep: (p, who) => house.has(p.author) || who.some((h) => house.has(h)) || heldBy(p.id).some((h) => house.has(h.handle)) });
       return {
-        rows: rows.map((r) => ({
-          ...r,
-          role: house.has(r.author) ? "author" : "participant",
-          stake: 0,
-          ours: 0,
-        })),
+        rows: rows.map((r) => {
+          const ours = heldBy(r.id).filter((h) => house.has(h.handle)).reduce((a, h) => a + h.n, 0);
+          return {
+            ...r,
+            role: house.has(r.author) ? "author" : "participant",
+            stake: backing?.escrow.get(r.id) ?? 0,
+            ours,
+          };
+        }),
       };
     }, { env });
+    return backingGap ? { ...out, unavailable: backingGap } : out;
   } catch {
     return { unavailable: `${what} could not be read from the office's record` };
   }
@@ -331,7 +370,7 @@ export function postOrder(a, b) {
  * @param {string} handle  any resident of the house; the answer is the house's
  * @param {{ now?: number, env?: object, clone?: string|null, townClone?: string, readers?: object }} ctx
  */
-export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {} } = {}) {
+export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {}, backingOf = null, page = null } = {}) {
   const h = String(handle ?? "").trim();
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
@@ -340,13 +379,23 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const classes = Object.keys((await import("./town-posts.mjs")).POST_CLASSES);
   const [ideas, ...halves] = await Promise.all([
     ideaRows(mine.members, whose, { townClone }),
-    ...classes.map((cls) => tableRows(cls, mine.members, now, { env, what: CLASS_WORDS[cls] ?? `the ${cls} posts` })),
+    ...classes.map((cls) => tableRows(cls, mine.members, now, { env, townClone, backingOf, what: CLASS_WORDS[cls] ?? `the ${cls} posts` })),
   ]);
-  const rows = [...halves.flatMap((x) => x.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
+  // CONVERTED MARKS (POS-854): an idea mark that has become its author's post is the post's `origin.mark`; while
+  // the mark still stands (the world half withdraws it at a crossing) it is read once, as the post.
+  const tableRowsAll = halves.flatMap((x) => x.rows ?? []);
+  const rows = [...tableRowsAll, ...unconvertedMarks(ideas.rows ?? [], tableRowsAll)].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
-    return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
+    // POS-732: a call that names `limit` or `offset` walks each list in the one paging pattern (default POSTS_CAP). A call that
+    // names neither keeps the bounded preview the doorstep's segment is (the segment IS this read's answer at the same args),
+    // and a cut preview now says how to go on: the same `next_offset` and `more_note`.
+    if (page && (page.limit != null || page.offset != null)) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
+    const shown = Math.min(all.length, POSTS_CAP);
+    const more = all.length - shown;
+    return { total: all.length, shown, rows: all.slice(0, POSTS_CAP).map(plain),
+      ...(more > 0 ? { next_offset: shown, more_note: `${more} further post${more === 1 ? "" : "s"} — call again with offset: ${shown}` } : {}) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)
   const gaps = halves.map((x, i) => (QUIET_WHEN_CLOSED[classes[i]]?.(env) ? null : x.unavailable));

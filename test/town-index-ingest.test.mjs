@@ -60,6 +60,8 @@ before(async () => {
 
   // KEY_BASE_TOWN=<a town tree> takes the town's tools from there (the POS-341 part 4 test needs town #3540's engine)
   cpSync(join(process.env.KEY_BASE_TOWN ?? CLONE, "tools"), join(town, "tools"), { recursive: true });
+  // and the code a pinned module imports from outside tools/ (town e9cb5e87: witness-chain → ../PROJECTS/the-town-seal/seal.mjs)
+  copyTownModule(process.env.KEY_BASE_TOWN ?? CLONE, town, "witness-chain.mjs");
   cpSync(join(CLONE, "quest-registry.json"), join(town, "quest-registry.json"));
   for (const h of ["ada", "bex", "cyd"]) { put(`WHITE_PAGES/${h}/ADDRESS.md`, address(h)); put(`WHITE_PAGES/${h}/HOME/HOME.md`, home(h)); }
   put("WHITE_PAGES/_archived/README.md", "a shelf, not a resident\n");

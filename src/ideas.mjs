@@ -83,7 +83,17 @@ export const LABEL_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** Is the idea class open on this office? Only the exact value `IDEA_POSTS=1` opens it. */
 export const ideaPostsOn = (env = process.env) => env.IDEA_POSTS === "1";
 
-export const IDEA_POST_HOW = 'town { do: "post", args: { class: "idea", title, body } }';
+/**
+ * The idea post's own law, in the office's words, built from the constants that ARE the law here (the stages, the hands, the body
+ * limit). The Think Tank's read quotes this when the record's `mark/idea` declaration is gone (POS-854): the read stands on the post
+ * law and the post read, never on a declaration that is being retired.
+ */
+export const IDEA_POST_LAW = () =>
+  `An idea is a post: a title and a body of up to ${BODY_MAX} characters, put up by its author. It stands in one of ${IDEA_STAGES.join(", ")}; ` +
+  `the town's hands (${IDEA_HANDS.join(", ")}) move it between stages, and it is finished at ${IDEA_FINISHED.join(", ")}. ` +
+  "Anyone may sign up to build a part of it, and anyone may put stamps behind it: a stake stands in the stamp ledger, is the staker's own, and comes home whole at an unstake.";
+
+export const IDEA_POST_HOW ='town { do: "post", args: { class: "idea", title, body } }';
 /** The refusal every idea-post act answers while the switch is off. */
 export const IDEAS_NOT_POSTS = () => refuse(409, "ideas are not posts on this office yet",
   'an idea still stands as a mark at the Think Tank: town { do: "post", args: { class: "idea", slug, body } } publishes one, and town { read: "ideas" } lists them');

@@ -20,7 +20,7 @@ const T = (min) => new Date(Date.parse("2026-11-13T12:00:00Z") - min * 60_000).t
 const row = (kind, id, min, extra = {}) => ({ id, kind, at: T(min), href: `https://example.test/${kind}/${id}`, title: `${kind} ${id}`, ...extra });
 
 /** Sources over fixed rows, honouring since/before/cap the way a real source does, and counting the calls. */
-function sources(rows, { cut = {}, fail = {}, origin = { x: 0, y: 0, from: "the test" } } = {}) {
+function sources(rows, { cut = {}, fail = {}, origin = { x: 0, y: 0, from: "the test" }, houses = { h1: ["ann", "bo"], h2: ["cy"] } } = {}) {
   const calls = [];
   const by = (kind) => async ({ since, before, resume, cap }) => {
     calls.push([kind, since, before, cap]);
@@ -31,7 +31,9 @@ function sources(rows, { cut = {}, fail = {}, origin = { x: 0, y: 0, from: "the 
     return { rows: mine.slice(0, take), cut: mine.length > take };
   };
   const out = Object.fromEntries(FEED_KINDS.map((k) => [k, by(k)]));
-  return { calls, sources: { ...out, origin: async () => origin, asOf: async () => "asof-1" } };
+  const origins = [];
+  return { calls, origins, sources: { ...out, origin: async (h) => { origins.push(h); return origin; }, asOf: async () => "asof-1",
+    members: async (slug) => (houses[slug] ? { slug, members: houses[slug] } : { unavailable: `no house "${slug}" is known here` }) } };
 }
 
 const MIX = [
@@ -71,30 +73,30 @@ test("2 · backed ranks by the stamps behind a row; near by metres from the hous
   assert.ok(backed.rows.every((x) => !("backed" in x) && !("distance_m" in x)), "the contract's spelling: backing and distance");
   assert.equal(backed.rows.find((x) => x.id === "M1").backing, 9);
   assert.ok(backed.rows.filter((x) => x.backing === undefined).length > 0, "none is absent, never a made-up 0");
-  const near = await feedRead({ sort: "near", household: "h", limit: 100 }, { sources: s });
+  const near = await feedRead({ sort: "near", from: "h", limit: 100 }, { sources: s });   // (until POS-844 the origin was spelled household:)
   assert.equal(near.sort, "near");
   assert.deepEqual(near.rows.slice(0, 3).map((x) => [x.id, x.distance]), [["E1", 5], ["I1", 50], ["M1", 1000]]);
   assert.ok(near.rows.slice(3).every((x) => x.distance === undefined), "a row with no place has no distance and ranks last");
   // no origin: said, and the rows come newest
   const { sources: none } = sources(MIX, { origin: { unavailable: "the walkers roll places none of h's residents" } });
-  const unranked = await feedRead({ sort: "near", household: "h", limit: 100 }, { sources: none });
+  const unranked = await feedRead({ sort: "near", from: "h", limit: 100 }, { sources: none });
   assert.equal(unranked.sort, "newest");
   assert.equal(unranked.sort_asked, "near");
   assert.match(unranked.near_unavailable, /walkers roll places none/);
   assert.ok(unranked.rows.every((x) => x.distance === undefined));
   const noHouse = await feedRead({ sort: "near" }, { sources: s });
-  assert.match(noHouse.near_unavailable, /pass household/);
+  assert.match(noHouse.near_unavailable, /pass from/);
 });
 
 test("3 · the cursor never skips and never duplicates: whole feeds paged small equal the one-page list, in every sort, with ties across kinds", async () => {
   for (const sort of ["newest", "backed", "near"]) {
     const { sources: s } = sources(MIX);
-    const whole = (await feedRead({ sort, household: "h", limit: 100 }, { sources: s })).rows.map((x) => `${x.kind}:${x.id}`);
+    const whole = (await feedRead({ sort, from: "h", limit: 100 }, { sources: s })).rows.map((x) => `${x.kind}:${x.id}`);
     for (const size of [1, 2, 3, 5]) {
       const ids = [];
       let cursor;
       for (let guard = 0; guard < 40; guard++) {
-        const page = await feedRead({ sort, household: "h", limit: size, ...(cursor ? { cursor } : {}) }, { sources: s });
+        const page = await feedRead({ sort, from: "h", limit: size, ...(cursor ? { cursor } : {}) }, { sources: s });
         ids.push(...page.rows.map((x) => `${x.kind}:${x.id}`));
         if (!page.cursor) break;
         cursor = page.cursor;
@@ -213,6 +215,105 @@ test("4d · resumeFor and afterResume: what is still to come for a kind after a 
   assert.equal(afterResume(r("L9", "2026-11-13T11:00:00.000Z"), resumeFor("letter", key)), true, "older always");
   assert.equal(afterResume(r("L9", "2026-11-13T13:00:00.000Z"), resumeFor("letter", key)), false, "newer never");
   assert.equal(afterResume(r("x", null), resumeFor("letter", key)), true, "no time ranks last: still to come");
+});
+
+// ── the filters (POS-844, Darko 2026-11-16 22:57: "Yeah" to household, resident, kind and since, freely combined, newest first) ──
+//
+// Wright's fit: the feed keeps its CURSOR (never an offset); its old `household` (the origin for sort near) is renamed `from` and is still read that way
+// when sort is near and no `from` is given, for one train, with a note; otherwise `household` is the filter. No place filter.
+
+const WHO = [
+  row("letter", "L1", 1, { by: "ann" }), row("idea", "I1", 2, { by: "bo" }), row("bug", "B1", 3, { by: "cy" }), row("event", "E1", 4, { by: "ann" }),
+  row("mark", "M1", 5), row("arrival", "A1", 6, { by: "bo" }), row("letter", "L2", 50, { by: "cy" }), row("letter", "L3", 60, { by: "ann" }),
+];
+const ids = (r) => r.rows.map((x) => x.id);
+
+test("6 · household, resident, kind and since filter, freely combined, newest first; the filters are echoed", async () => {
+  const { sources: s } = sources(WHO);
+  assert.deepEqual(ids(await feedRead({ household: "h1", limit: 100 }, { sources: s })), ["L1", "I1", "E1", "A1", "L3"], "h1's residents are ann and bo: the rows they did, newest first");
+  assert.deepEqual(ids(await feedRead({ household: "h2", limit: 100 }, { sources: s })), ["B1", "L2"]);
+  assert.deepEqual(ids(await feedRead({ resident: "cy", limit: 100 }, { sources: s })), ["B1", "L2"]);
+  assert.deepEqual(ids(await feedRead({ resident: "Ann", limit: 100 }, { sources: s })), ["L1", "E1", "L3"], "a handle is lowercase: the filter reads it so");
+  // `kind` is `kinds` as a filter reads, and either narrows
+  assert.deepEqual(ids(await feedRead({ household: "h1", kind: "letter", limit: 100 }, { sources: s })), ["L1", "L3"]);
+  assert.deepEqual(ids(await feedRead({ household: "h1", kinds: ["idea", "arrival"], limit: 100 }, { sources: s })), ["I1", "A1"]);
+  assert.deepEqual(ids(await feedRead({ kinds: "letter", kind: "bug", limit: 100 }, { sources: s })), ["L1", "L2", "L3"], "kinds wins when both are given");
+  // freely combined: a house, one of its residents, a kind, a time
+  assert.deepEqual(ids(await feedRead({ household: "h1", resident: "ann", limit: 100 }, { sources: s })), ["L1", "E1", "L3"]);
+  assert.deepEqual(ids(await feedRead({ household: "h1", resident: "cy", limit: 100 }, { sources: s })), [], "cy is not in h1: nothing");
+  assert.deepEqual(ids(await feedRead({ household: "h1", resident: "ann", kind: "letter", since: T(30), limit: 100 }, { sources: s })), ["L1"]);
+  // the answer says what it filtered by, and a row with no doer is nobody's
+  const r = await feedRead({ household: "h1", resident: "ann", limit: 100 }, { sources: s });
+  assert.deepEqual([r.household, r.resident], ["h1", "ann"]);
+  assert.ok(!ids(await feedRead({ household: "h1", limit: 100 }, { sources: s })).includes("M1"), "the mark has no doer, so it is no house's");
+  assert.equal((await feedRead({ limit: 100 }, { sources: s })).household, undefined, "no filter, no echo");
+  // the filters ride in every sort
+  assert.deepEqual(ids(await feedRead({ household: "h2", sort: "backed", limit: 100 }, { sources: s })).sort(), ["B1", "L2"]);
+  // an unknown house is refused by name, never read as an empty feed
+  const bad = await feedRead({ household: "nowhere" }, { sources: s });
+  assert.deepEqual([bad.error, bad.code], ["bounce", 422]);
+  assert.match(bad.defect, /household: "nowhere" is not a house the town knows/);
+  // CONTROL: the same sources, unfiltered, hold every row (the filters did the narrowing, not the fixture)
+  assert.equal((await feedRead({ limit: 100 }, { sources: s })).rows.length, WHO.length);
+});
+
+test("6b · `from` is the near origin; `household` with sort near and no from is the origin too, said, and not also a filter", async () => {
+  const mk = () => sources(WHO.map((x) => ({ ...x, place: { x: 3, y: 4 } })));
+  const a = mk();
+  const both = await feedRead({ sort: "near", from: "h2", household: "h1", limit: 100 }, { sources: a.sources });
+  assert.deepEqual(a.origins, ["h2"], "from is where the ranking starts");
+  assert.deepEqual(ids(both).sort(), ["A1", "E1", "I1", "L1", "L3"].sort(), "and household filters: h1's rows");
+  assert.equal(both.household, "h1");
+  assert.equal(both.from_note, undefined);
+  // the old spelling, for one train: household is the origin, every row is still served, and the note says what to write
+  const b = mk();
+  const old = await feedRead({ sort: "near", household: "h1", limit: 100 }, { sources: b.sources });
+  assert.deepEqual(b.origins, ["h1"]);
+  assert.equal(old.rows.length, WHO.length, "not also a filter: no row was dropped");
+  assert.equal(old.household, undefined);
+  assert.match(old.from_note, /now called from:/);
+  assert.equal(old.near_from, "the test");
+  // not near: household is only the filter
+  const c = mk();
+  const plain = await feedRead({ household: "h1", limit: 100 }, { sources: c.sources });
+  assert.deepEqual(c.origins, []);
+  assert.equal(plain.from_note, undefined);
+  assert.equal(plain.rows.length, 5);
+  // near with neither: said
+  assert.match((await feedRead({ sort: "near" }, { sources: mk().sources })).near_unavailable, /pass from/);
+});
+
+test("6c · a filtered feed pages by cursor, never an offset: the walk equals the one-page list, and a cut source that holds the matches is read on down", async () => {
+  const { sources: s } = sources(WHO);
+  const whole = ids(await feedRead({ household: "h1", limit: 100 }, { sources: s }));
+  const walked = [];
+  let cursor = null;
+  for (let i = 0; i < 20; i++) {
+    const p = await feedRead({ household: "h1", limit: 2, ...(cursor ? { cursor } : {}) }, { sources: s });
+    walked.push(...ids(p));
+    assert.equal("next_offset" in p, false, "a cursor, never an offset");
+    if (!p.cursor) { assert.equal(p.complete, true); break; }
+    assert.match(p.more_note, /same filters/);
+    cursor = p.cursor;
+  }
+  assert.deepEqual(walked, whole);
+  // THE EDGE: the letter source is cut at 3 per read, six recent letters are ann's and the one resident asked for wrote far back. The first pages hold
+  // nothing for her, and must say where to go on (the source's horizon), never end the walk
+  const LET = [...[1, 2, 3, 4, 5, 6].map((m) => row("letter", `La${m}`, m, { by: "ann" })), row("letter", "Lz", 300, { by: "zed" })];
+  const cutSources = sources(LET, { cut: { letter: 3 } }).sources;
+  const got = [];
+  let at = null, pages = 0, firstEmpty = null;
+  for (; pages < 10; pages++) {
+    const p = await feedRead({ resident: "zed", kinds: "letter", limit: 5, ...(at ? { cursor: at } : {}) }, { sources: cutSources });
+    if (pages === 0) firstEmpty = p;
+    got.push(...ids(p));
+    if (!p.cursor) { assert.equal(p.complete, true); break; }
+    at = p.cursor;
+  }
+  assert.deepEqual(firstEmpty.rows, [], "the first page holds nothing of hers");
+  assert.equal(firstEmpty.complete, false, "and does not say the feed is over");
+  assert.ok(firstEmpty.cursor, "it says where to go on");
+  assert.deepEqual(got, ["Lz"], "the walk reaches her one row");
 });
 
 test("5 · bad arguments are refused by name", async () => {
