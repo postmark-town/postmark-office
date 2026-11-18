@@ -250,7 +250,8 @@ test("POS-1140 · the title is read only from a regular hearth.md of a real entr
 test("POS-1140 · the votes explain row names the optional candidate title", async () => {
   const { EXPLAIN } = await import("../src/read-grammar.mjs");
   const row = EXPLAIN.town.votes;
-  assert.match(row.what, /optional title \(the design's own name; absent when it has none\)/);
-  assert.match(row.what, /Hearth design/);
+  assert.match(row.detail, /optional title: the design's own name from its hearth\.md, absent when it has none/);
+  assert.match(row.detail, /Hearth design/);
+  assert.ok(row.what.length <= 200, "the one-line rule still holds");
   assert.equal(row.deeper, 'town { read: "votes" }');
 });
