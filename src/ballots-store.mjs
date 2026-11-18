@@ -65,9 +65,12 @@ const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === 
 const UNREACHABLE = () => refuse(503, "the ballots live in the office's record, and the record cannot be reached",
   "nothing was written; ask again shortly");
 
+// A read's failure as the read answers it: a refusal is itself, anything else the record's 503 with the cause beside it (never sent). One spelling for
+// the read and for the shaping a read now does after its lease (§ ballotsWithVotes, POS-1129).
+const readRefusal = (e) => (isRefusal(e) ? e : Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) }));
 async function read(fn, env) {
   try { return await officeRead(fn, { env }); }
-  catch (e) { if (isRefusal(e)) throw e; throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) }); }
+  catch (e) { throw readRefusal(e); }
 }
 async function write(fn, env) {
   try { return await officeWrite(fn, { env }); }
@@ -539,8 +542,7 @@ export async function ballotsWithVotes({ env = process.env, open = false } = {})
     const votes = byPost(raw.votes.map(responseOf));
     return posts.map((post) => ({ post, votes: votes.get(post.id) ?? [] }));
   } catch (e) {
-    if (isRefusal(e)) throw e;
-    throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) });
+    throw readRefusal(e);
   }
 }
 
