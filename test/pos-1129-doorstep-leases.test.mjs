@@ -26,7 +26,8 @@
 //
 // FLIPS (run on this branch, results in the PR): put the copy back on its own lease (doorstep-bundle.mjs: `copyBlock(await ix.copy(), …)`) and 4
 // reds the lease count, in process and at both doors; compose the page inside its lease (town-index-store.mjs § storeIndexPooled's `doorstepPage`,
-// the composition moved into the read) and 3 reds THE BOUNDARY while 1 stays green.
+// the composition moved into the read) and 3 reds THE BOUNDARY while 1 stays green; hand the next steps no `nextPre` (doorstep-bundle.mjs § ownerGate's
+// call) and they read their own three leases again: 4 reds at 6 leases, and 3 reds on the quest standing parsed under its own lease.
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
