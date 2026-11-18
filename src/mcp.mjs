@@ -9,7 +9,7 @@
 // arrive with no CONTRIBUTING.md in context, so the contract IS the etiquette.
 
 import { dateFilterDefect } from "./date-filter.mjs";
-import { classifyMcpRead } from "./read-timing.mjs"; // POS-1064/b: which requests the timing record is for (measurement only)
+import { classifyMcpRead, classifyMcpAct } from "./read-timing.mjs"; // POS-1064/b: which requests the timing record is for (measurement only)
 import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
 import { identityOf, DOORSTEP_SEGMENTS } from "./queries.mjs";
 import { storeAnswer, repoLog as repoLogFromStore, regionList as regionListFromStore, bulletinList as bulletinListFromStore, bulletinTeaser as bulletinTeaserFromStore, bulletinEntry as bulletinEntryFromStore, home as homeFromStore, stampsRoster as stampsRosterFromStore, stampsDetail as stampsDetailFromStore, questIndexRows, questBoardOfRows } from "./town-index-store.mjs"; // POS-268: the town index, the store's
@@ -1381,7 +1381,7 @@ export function handleMcp(req, res, ctx) {
 
     const messages = Array.isArray(parsed) ? parsed : [parsed];
     // POS-1064/b telemetry: whether this WHOLE request is a doorstep/household read (read-timing.mjs § classifyMcpRead), taken here where the batch is whole; it changes nothing
-    if (ctx.req?.tm) { try { ctx.req.tm.klass = classifyMcpRead(messages); } catch { /* telemetry never fails a read */ } }
+    if (ctx.req?.tm) { try { ctx.req.tm.klass = classifyMcpRead(messages); ctx.req.tm.aklass = classifyMcpAct(messages); } catch { /* telemetry never fails a read */ } } // POS-1110: aklass names a request holding an act
     // telemetry: the call's SHAPE, never its arguments (POS-722, call-shape.mjs).
     // Taken here, on the thread that writes the access line, before a read
     // worker can take the call; a batch is shaped by its last tools/call.

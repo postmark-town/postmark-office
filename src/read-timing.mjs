@@ -45,9 +45,32 @@
 //   route     "main" | "worker"; worker the slot (0-based) the read was handed to, `tries` how many workers were asked (2: the first stopped before it answered)
 //   door      "doorstep" | "doorsteps" | "household" | "mcp" | "mcp-doorstep"; `read` the household read's own name when it is one of the office's fixed set, and only
 //             for a single-call request; `batch` the number of tools/calls when an MCP request carried more than one (the record describes the whole request).
-//             READS ONLY: a REST GET, or an MCP request whose every message is a household/doorstep read (classifyMcpRead); an act, an explain, a letter opening, a
-//             batch holding any of them or any other tool, carries no timing
+//             THE READ DOORS ARE READS ONLY: a REST GET, or an MCP request whose every message is a household/doorstep read (classifyMcpRead); an act, an explain, a
+//             letter opening, a batch holding any of them or any other tool, carries no READ timing (an act's own record is the ACTS section below)
 //   status    the response's status; `ok: false` is a refusal or a failure, not an absent measurement
+//
+// ── ACTS (POS-1110) ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// World acts (`world { do: "enter" }` and every other act on POST /world/apex, POST /town/apex, POST /household and the MCP world / household / town tools) carry
+// the SAME `timing` object, plus `act: { seg: { <name>: { n, sum_ms, max_ms } } }` (actSpan below). Doors: "world-act" | "household-act" | "town-act" | "mcp-act" (an MCP
+// request holding at least one act; `batch` is how many calls it carried). `route` is always "main" (an act is never handed to a read worker). `routed_ms` / `admit_ms`
+// are the act's admission, credential resolution included; `exec_ms` is routed → finish. Segments are sums of durations, NOT wall time: they overlap and NEST (a
+// `dispatch` holds the apex's own segments, `handler` holds the verb's), so read a nested one against its parent, never added to it. `leases.main` is the pen pool only
+// (cov "pen"); the ACTS pool (the enter/exit ledger scan) and the town lock's child are covered only by the segments that name them (`ledger`, `ledger_scan`, `record`).
+//
+//   body          the request body's arrival (REST and MCP)
+//   standing      the standing gate (a store read)             law_moved   the act-law pin check (POS-680)
+//   dispatch      the whole door call: worldApex / householdApex / townApex (everything below nests in it). Argument validation is a synchronous in-memory check and is not
+//                 timed: it is part of the line's `exec_ms` and of nothing named
+//   orient        the apex's standpoint read (worldOrient)    eyes        the apex's read of what the act's caller sees (worldEyes)
+//   ledger_scan   the shared enter/exit ledger scan (the ACTS pool), where orient / eyes ask for the enter stack
+//   spine, gather, holdings, households   the apex's law gathering: the containment spine, the actions the ground / reach / held things grant, the holdings read, the roll
+//   nonce_kept    the retry key's store check               handler     the act's own verb (the verb's whole run, its write included)
+//   crossing_law  enter / exit: the clone's enter-exit law (the engine import)
+//   world_state, ledger, standpoint, acts_read, lends, dungeon_locks, door_holdings, vessel_service   enter / exit: each read the crossing makes before it judges
+//   record        enter / exit: the pen write (the town lock's wait, the child process, the commit: one segment, not split)
+//   walking, walk_stop, land_write   enter / exit: the walk the entry ends, and a set-down's write
+//   land          the ground's set-down after an enter (the lookup and the land pen)
+//   creatures     the creatures' answer to an act in their ring (act-watch.mjs § perceived)
 //
 // ABSENT, ZERO AND FAILED ARE THREE THINGS: null is "this was not measured here" (no worker ran it, no lease was taken on that thread, no bundle ran), 0 is a
 // measurement that found zero, and `failed` counts acquisitions that did not get a connection.
@@ -80,7 +103,7 @@ export function runTiming(tm, fn) {
 }
 
 // ── WHICH REQUESTS THIS RECORD IS FOR ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// The doorstep and household READS, and nothing that writes. A REST read is a GET (server.mjs § timingFields); an MCP request is classified here from the WHOLE
+// The doorstep and household READS, and nothing that writes (acts have their own door labels, POS-1110, below). A REST read is a GET (server.mjs § timingFields); an MCP request is classified here from the WHOLE
 // request, never from its last tool: every message must be a tools/call to a household or doorstep READ, so a batch holding an act, an explain, a letter opening,
 // any other tool or any non-call message carries NO timing at all (it is not a request this record covers, said in docs/read-workers.md), and an act can never be
 // made to look like a read by a read that follows it.
@@ -179,6 +202,52 @@ export async function segSpan(name, fn) {
   }
 }
 
+/**
+ * POS-1110: time one phase of an ACT under the current request, into `act.seg[name] = { n, sum, max }`. Measurement only: sync or async, the callback's result
+ * or exception is returned or thrown untouched (a thenable comes back as a promise that settles as it does); inert with no request in scope. `name` is chosen
+ * from the fixed list in this file's header by the caller, never from a request. Spans nest and overlap; a phase that throws is still counted.
+ */
+export function actSpan(name, fn) {
+  const tm = currentTiming();
+  if (!tm) return fn();
+  const t = nowMs();
+  const end = () => {
+    try {
+      const d = nowMs() - t;
+      const seg = (tm.act ??= { seg: {} }).seg;
+      const s = (seg[name] ??= { n: 0, sum: 0, max: 0 });
+      s.n += 1; s.sum += d; if (d > s.max) s.max = d;
+    } catch { /* */ }
+  };
+  let out;
+  try { out = fn(); } catch (e) { end(); throw e; }
+  // `Promise.resolve` first: a native promise comes back as itself, and a thenable that is not one (whose `then` need not return a promise) settles as it does
+  if (out !== null && typeof out === "object" && typeof out.then === "function") return Promise.resolve(out).then((v) => { end(); return v; }, (e) => { end(); throw e; });
+  end();
+  return out;
+}
+
+/**
+ * The door label of a REST act, or null: a POST to one of the apex paths (`doors` is call-shape.mjs § APEX_DOORS, handed in so this file stays a leaf) whose body
+ * named a `do` (`call` is the call's own shape, which sets `do` only when the body carried one). A GET is never an act here, and a POST that only reads is not.
+ */
+export const restActDoor = (doors, method, path, call) => (method === "POST" && Object.hasOwn(doors, path) && call?.do != null ? `${doors[path]}-act` : null);
+
+const MCP_ACT_TOOLS = new Set(["world", "household", "town"]);
+
+/**
+ * `{ door: "mcp-act", calls }` for an MCP request holding at least one act (a `tools/call` to the world, household or town apex with a non-empty `do`), else
+ * null. Taken from the WHOLE request, the mirror of classifyMcpRead: a read after an act cannot hide it. A request that is wholly reads never reaches here.
+ */
+export function classifyMcpAct(messages) {
+  try {
+    if (!Array.isArray(messages) || !messages.length) return null;
+    const acts = messages.some((m) => m?.method === "tools/call" && isObject(m.params) && MCP_ACT_TOOLS.has(m.params.name)
+      && isObject(m.params.arguments) && m.params.arguments.do != null && m.params.arguments.do !== "");
+    return acts ? { door: "mcp-act", calls: messages.length } : null;
+  } catch { return null; }
+}
+
 // ── THE SUMMARIES ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A lease group as the record states it. */
@@ -197,7 +266,8 @@ export function workerReport(tm, taken, done = nowMs()) {
   try { return { rid: tm.rid, taken, done, bundle: bundleGroup(tm.bundle), leases: leaseGroup(tm.leases) }; } catch { return null; }
 }
 
-const DOORS = new Set(["doorstep", "doorsteps", "household", "mcp", "mcp-doorstep"]);
+const ACT_DOORS = new Set(["world-act", "household-act", "town-act", "mcp-act"]); // POS-1110
+const DOORS = new Set(["doorstep", "doorsteps", "household", "mcp", "mcp-doorstep", ...ACT_DOORS]);
 const num = (x) => (Number.isFinite(x) ? round(x) : null);
 
 /**
@@ -228,6 +298,7 @@ export function timingLine(tm, { door = null, read = null, calls = 1, status = n
       bundle: onWorker ? (w?.bundle ?? null) : bundleGroup(tm.bundle),
       leases: { main: leaseGroup(tm.leases), worker: onWorker ? (w?.leases ?? null) : null },
       cov: "pen",
+      ...(ACT_DOORS.has(door) ? { act: { seg: segGroup(tm.act?.seg ?? {}) } } : {}), // POS-1110: an act's phases; a read's line is unchanged
     };
   } catch { return null; }
 }
