@@ -31,6 +31,10 @@
 // reds the lease count, in process and at both doors; compose the page inside its lease (town-index-store.mjs § storeIndexPooled's `doorstepPage`,
 // the composition moved into the read) and 3 reds THE BOUNDARY while 1 stays green; hand the next steps no `nextPre` (doorstep-bundle.mjs § ownerGate's
 // call) and they read their own three leases again: 4 reds at 6 leases, and 3 reds on the quest standing parsed under its own lease.
+// And for the review of db640416d: the lease-A SAVEPOINT back outside its part's `try` reds 5's BETWEEN case ("killed before part 1: … threw");
+// the dead-connection fallback dropped (a refused dead transaction thrown as the page's 503) reds 5's failures and its BETWEEN case
+// ("threw TownIndexUnreachable"); lease B's fallback dropped reds 6 ("kill in the event class: 3 classes were said unreadable"); lease B's
+// ROLLBACK TO SAVEPOINT dropped reds 6 on real Postgres ("error in the event class: 3 classes …"), which the stub in pos-1098 cannot show.
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
