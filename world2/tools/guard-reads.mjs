@@ -990,6 +990,21 @@ export function assertAttachmentOrder(rows) {
  * `target` is offered and pushed into SQL for that reason and no other.
  */
 export async function pgAttachmentsFor(client, { target = null, until = null, strict = true, afterId = null } = {}) {
+  return attachmentsFromRows(await pgAttachmentRows(client, { target, afterId }), { until, strict });
+}
+
+/**
+ * THE COMPOSITION HALF of `pgAttachmentsFor` (POS-1098): the rows hydrated, the strict refusal, and `readAttachments`' own `until`. No store: a reader that holds a
+ * pen connection takes `pgAttachmentRows` under it, lets the connection go, and calls this after.
+ */
+export function attachmentsFromRows(rows, { until = null, strict = true } = {}) {
+  const read = attachmentRecords(rows, { strict });
+  // `readAttachments`' own `until`, verbatim: `rows.filter((a) => Date.parse(a.born_at) <= until)`.
+  return until == null ? read : { ...read, rows: read.rows.filter((a) => Date.parse(a.born_at) <= until) };
+}
+
+/** THE SQL HALF of `pgAttachmentsFor` (POS-1098): the holding acts in `ATTACHMENT_ORDER_SQL`'s order, as the store holds them, nothing hydrated. */
+export async function pgAttachmentRows(client, { target = null, afterId = null } = {}) {
   const args = [ATTACHMENT_ACTIONS];
   let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1) AND ${ATTACHMENT_CLASS_SQL}`;
   if (target != null) {
@@ -1001,10 +1016,7 @@ export async function pgAttachmentsFor(client, { target = null, until = null, st
     args.push(Number(afterId));
     sql += ` AND id > $${args.length}`;
   }
-  const { rows } = await client.query(`${sql} ${ATTACHMENT_ORDER_SQL}`, args);
-  const read = attachmentRecords(rows, { strict });
-  // `readAttachments`' own `until`, verbatim: `rows.filter((a) => Date.parse(a.born_at) <= until)`.
-  return until == null ? read : { ...read, rows: read.rows.filter((a) => Date.parse(a.born_at) <= until) };
+  return (await client.query(`${sql} ${ATTACHMENT_ORDER_SQL}`, args)).rows;
 }
 
 // ── THE HOLDING JOURNAL, over `acts` (POS-162) ──────────────────────────────
@@ -1245,7 +1257,15 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  * world-stance.mjs § wordsAwaiting); test/owners-word-at-the-door.test.mjs does.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
-export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {
+export async function pgHoldingRows(client, opts = {}) {
+  return holdingRowsFrom(await pgHoldingRawRows(client, opts));
+}
+
+/** THE COMPOSITION HALF of `pgHoldingRows` (POS-1098): the store's rows as the holding journal's records. No store. */
+export function holdingRowsFrom(rows) { return rows.map(holdingRowOf); }
+
+/** THE SQL HALF of `pgHoldingRows` (POS-1098): the same statement, the rows as the store holds them. */
+export async function pgHoldingRawRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {
   const args = [CLASS_HOLDING];
   let sql = `SELECT id, at, crossing, actor, action, object,
                     at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household
@@ -1281,8 +1301,7 @@ export async function pgHoldingRows(client, { thing = null, since = null, until 
     args.push(Number(afterId));
     sql += ` AND id > $${args.length}`;
   }
-  const { rows } = await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args);
-  return rows.map(holdingRowOf);
+  return (await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args)).rows;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
