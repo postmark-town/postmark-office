@@ -27,6 +27,7 @@
 import { worldFreezeBounce } from "./freeze.mjs";
 import { forgetOccupancy } from "./creature-sight.mjs"; // WLD-74: a passage written is forgotten by the shared occupancy read
 import { perceived } from "./act-watch.mjs";
+import { actSpan, currentTiming } from "./read-timing.mjs"; // POS-1110: where an enter or an exit's time goes, under its request (measurement only)
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
 import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
@@ -41,6 +42,20 @@ import { importEngineAt } from "./world-branches.mjs"; // the doors' engine, at 
 import { visitorBody } from "./harbor-gate.mjs"; // POS-739: a visitor enters, exits and rides as its berth body
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// POS-1110: each read or write the crossing makes through its injected deps, timed under the request as a named segment (read-timing.mjs § actSpan). Measurement
+// only: the same deps with each function's own result or exception, and the deps untouched when no request is in scope. `this` stays the caller's own deps.
+const DEP_SEGMENTS = Object.freeze({ world: "world_state", ledger: "ledger", standpointOf: "standpoint", acts: "acts_read", actsStrict: "acts_read", lends: "lends",
+  dungeonLocks: "dungeon_locks", doorHoldings: "door_holdings", record: "record", walking: "walking", stop: "walk_stop", land: "land_write" });
+export function timedDeps(deps) {
+  if (!deps || !currentTiming()) return deps;
+  const timed = { ...deps };
+  for (const [k, name] of Object.entries(DEP_SEGMENTS)) {
+    const f = deps[k];
+    if (typeof f === "function") timed[k] = (...a) => actSpan(name, () => f.apply(deps, a));
+  }
+  return timed;
+}
 
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;
@@ -464,11 +479,12 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   const markId = String(payload.mark ?? payload.mark_id ?? "").trim();
   if (!markId) throw bounce(422, "enter what?", "name a mark — mark: \"<by>/<slug>\", as ids appear in the telling");
 
-  const { thresholds, verbs } = await crossingLaw(worldClone);
+  deps = timedDeps(deps); // POS-1110
+  const { thresholds, verbs } = await actSpan("crossing_law", () => crossingLaw(worldClone));
   const w = await deps.world();
   const ledger = await deps.ledger();
   const here = await deps.standpointOf(who);
-  const { service } = await serviceFor(worldClone, w, deps);
+  const { service } = await actSpan("vessel_service", () => serviceFor(worldClone, w, deps));
   // The clock is read here, after every read above (POS-618): see passageInstant.
   const { at, iso, judgedMs } = passageInstant(thresholds, deps);
   const acts = thresholds.parseEnterExitLedger(ledger).acts;
@@ -923,7 +939,8 @@ export async function exitViaOffice(worldClone, payload = {}, key = null, deps =
 async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const who = actorFrom(payload, key);
-  const { thresholds, verbs } = await crossingLaw(worldClone);
+  deps = timedDeps(deps); // POS-1110
+  const { thresholds, verbs } = await actSpan("crossing_law", () => crossingLaw(worldClone));
   const w = await deps.world();
   const ledger = await deps.ledger();
   // The clock is read here, after the reads above (POS-618): see passageInstant.
@@ -976,7 +993,7 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   // (live-reads § DEPARTURE_ACTIONS). NEVER a second pen: a position written by
   // anything but the movement record is a position half the office cannot see.
   const nowMs = deps.nowMs ? deps.nowMs() : Date.now();
-  const svc = await serviceFor(worldClone, w, deps);
+  const svc = await actSpan("vessel_service", () => serviceFor(worldClone, w, deps));
   const { service, mod } = svc;
   const vessel = vesselIdOf(service);
   const target = (w.marks ?? []).find((m) => m.id === markId) ?? null;

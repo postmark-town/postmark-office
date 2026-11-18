@@ -51,6 +51,7 @@
 // commit — and `parseStandingLine` is the only place that knows it.
 
 import { standingForHandles } from "./standing-store.mjs";
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the standing gate's wait, timed under the act's request (measurement only)
 
 export const STANDING_LEDGER_PATH = "tools/standing-ledger.md";
 
@@ -207,6 +208,9 @@ export const STANDING_UNREADABLE = Object.freeze({
  * ASYNC since POS-347: the record is the store. Every caller awaits it.
  */
 export async function standingBounce(key, env = process.env) {
+  return actSpan("standing", () => standingBounceOf(key, env)); // POS-1110: one writer for every door (REST, MCP, the town apex), timed here
+}
+async function standingBounceOf(key, env) {
   const handles = [...(key?.handles ?? [])];
   if (!handles.length) return null;
   let standing;

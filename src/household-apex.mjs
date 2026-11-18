@@ -57,7 +57,7 @@ import { asPaper } from "./paperwork.mjs"; // POS-271: the berth card is paperwo
 import { caughtBounce, faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { explainAnswer, explainPath } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table
-import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bare glance's composition, timed (measurement only)
+import { bundleSpan, actSpan } from "./read-timing.mjs"; // POS-1064/b: the bare glance's composition, timed (measurement only)
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 
@@ -1275,6 +1275,9 @@ function cardOnBounce(what, ctx = {}) {
  * flat schemas; passing them down keeps the dependency a line, not a cycle).
  */
 export async function householdApex(args = {}, key = null, ctx = {}) {
+  return actSpan("dispatch", () => householdApexOf(args, key, ctx)); // POS-1110: the whole door call, timed under the act's request (measurement only)
+}
+async function householdApexOf(args = {}, key = null, ctx = {}) {
   // `asOf` rides the ctx (both skins pass it). `slim` rides the ctx too, and
   // only the MCP skin sets it, on purpose rather than by omission. It is read
   // in several places, each noted where it is read: the bare foyer, the shadow

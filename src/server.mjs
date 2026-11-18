@@ -60,7 +60,7 @@ import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
-import { newTiming, runTiming, markRouted, timingLine } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
+import { newTiming, runTiming, markRouted, timingLine, restActDoor } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
@@ -855,12 +855,15 @@ async function handOverRead(req, res, raw, messages, key = null) {
 // from call-shape's fixed sets); null for every other request, and never a fault.
 const timingFields = (req, res, path) => {
   try {
-    // READS ONLY. A REST read is a GET, and a GET /household that names an act, an explain or a letter opening is not one. An MCP request is classified from the whole
-    // request (read-timing.mjs § classifyMcpRead, set where mcp.mjs parses the body), never from its last tool: a batch holding an act carries no timing.
+    // THE READ DOORS ARE READS ONLY. A REST read is a GET, and a GET /household that names an act, an explain or a letter opening is not one. An MCP request is classified from the whole
+    // request (read-timing.mjs § classifyMcpRead, set where mcp.mjs parses the body), never from its last tool: a batch holding an act carries no READ timing; it carries the ACT's
+    // (POS-1110: `aklass`, and a POST to an apex whose body named a `do`), which is the same object plus `act.seg`.
     let door = null, calls = 1;
     if (path === "/mcp") {
-      const k = req.tm?.klass;
+      const k = req.tm?.klass ?? req.tm?.aklass; // POS-1110: a request that is wholly reads has `klass`; one holding an act has `aklass` (read-timing.mjs § classifyMcpAct)
       if (k) { door = k.door; calls = k.calls; }
+    } else if (req.method === "POST") {
+      door = restActDoor(APEX_DOORS, req.method, path, req.tel?.call); // POS-1110: an act on the world / household / town apex, named by the call's own shape; any other POST has no timing
     } else if (req.method === "GET") {
       const q = new URL(req.url, "http://localhost").searchParams;
       const actShaped = (q.get("do") ?? "") !== "" || q.has("explain") || String(q.get("read") ?? "").trim() === "letter";
