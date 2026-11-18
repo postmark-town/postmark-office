@@ -28,7 +28,7 @@ import { actsQuery } from "./world2-acts.mjs";
 /** The tags an outreach link may carry (POS-770; the site's list is the same). */
 export const FROM_TAGS = Object.freeze([
   "reddit", "bsky", "x", "discord", "youtube", "substack", "1f3d9", "1f916",
-  "mongoose", "obend", "commons", "delve", "gsb", "harbor",
+  "mongoose", "obend", "commons", "delve", "gsb", "harbor", "tiktok",
 ]);
 /** The browser keep the site writes and the carrier reads. */
 export const FROM_KEY = "pm.from";

@@ -25,6 +25,11 @@
 //   · agents     keyless berths minted, per town each claimed to sail from
 //                (chartered towns named, every other claim summed in other,
 //                exactly as GET /berth counts them);
+//   · shorts     (POS-1125) the visits above, per short id, for a link that carried `&s=<short id>` beside its tag
+//                (`?from=youtube&s=Ab3dE_f9XyZ`): `tag -> short id -> n`, a visit count and nothing else. The id is
+//                read from this log line and from nowhere else: it is never kept, never joined to a household or a
+//                resident, never in `pm.from`, never in a consent, a park or a landing, and the settled counts and
+//                their `<3` fold are untouched. An `s` with no listed tag counts for nothing.
 //   · referrers  page views arriving from another site, per referring host.
 //
 // COUNTS ONLY. No address, agent string, path beyond the tag, or person is
@@ -69,6 +74,17 @@ export function tagOf(query) {
   return FROM_TAGS.includes(tag) ? tag : null;
 }
 
+/** A short id as a tagged link carries it: letters, digits, `_` and `-`, 1 to 64 long (a YouTube short's id is 11). Case is kept: ids are case-sensitive. Whitespace around the value is trimmed; inside it, it is not an id. */
+export const SHORT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The short id a request's query carries in `s=`, or null (none, empty, or not an id). Never read without a listed tag (§ foldLog). */
+export function shortOf(query) {
+  let raw = null;
+  try { raw = new URLSearchParams(query).get("s"); } catch { return null; }
+  const id = String(raw ?? "").trim();
+  return SHORT_ID.test(id) ? id : null;
+}
+
 /** The referring host of an off-site page view, or null (none, ours, or unreadable). */
 export function referrerHost(referrer, ownHost) {
   if (!referrer || referrer === "-") return null;
@@ -79,29 +95,37 @@ export function referrerHost(referrer, ownHost) {
 }
 
 /**
- * Fold parsed lines into per-day counts: `{ visits: {day: {tag: n}}, referrers: {day: {host: n}} }`.
- * `since` (a Date) drops older lines.
+ * Fold parsed lines into per-day counts: `{ visits: {day: {tag: n}}, referrers: {day: {host: n}}, shorts: {day: {tag: {shortId: n}}} }`.
+ * `shorts` counts the tagged page views that also carry a short id; it adds to `visits` (every one of those is also a visit
+ * of its tag) and reads nothing but the tag, the id and the day from the line. `since` (a Date) drops older lines.
  */
 export function foldLog(lines, { since = null } = {}) {
-  const visits = {}, referrers = {};
+  const visits = {}, referrers = {}, shorts = {};
   const bump = (o, day, k) => { (o[day] ??= {})[k] = (o[day][k] ?? 0) + 1; };
   for (const r of lines) {
     if (!r || !isPageView(r) || (since && r.at < since)) continue;
     const day = dayET(r.at);
     const tag = tagOf(r.query);
-    if (tag) bump(visits, day, tag);
+    if (tag) {
+      bump(visits, day, tag);
+      const id = shortOf(r.query);
+      // The id is the VISITOR's string, so its per-tag count map has no prototype: `constructor`, `toString` and `__proto__` are ids
+      // like any other, counted as integers (an ordinary object would start `constructor` from the inherited function).
+      if (id) { const d = (shorts[day] ??= {}); const t = (d[tag] ??= Object.create(null)); t[id] = (t[id] ?? 0) + 1; }
+    }
     const ref = referrerHost(r.referrer, r.host);
     if (ref) bump(referrers, day, ref);
   }
-  return { visits, referrers };
+  return { visits, referrers, shorts };
 }
 
 /** The whole report, as rows per day, newest first. */
-export function report({ visits = {}, referrers = {}, settled = [], agents = [] }) {
-  const days = new Set([...Object.keys(visits), ...Object.keys(referrers), ...settled.map((s) => s.day), ...agents.map((a) => a.day)]);
+export function report({ visits = {}, referrers = {}, shorts = {}, settled = [], agents = [] }) {
+  const days = new Set([...Object.keys(visits), ...Object.keys(referrers), ...Object.keys(shorts), ...settled.map((s) => s.day), ...agents.map((a) => a.day)]);
   return [...days].sort().reverse().map((day) => ({
     day,
     visits: visits[day] ?? {},
+    shorts: shorts[day] ?? {},
     settled: Object.fromEntries(settled.filter((s) => s.day === day).map((s) => [s.tag, s.n])),
     agents: Object.fromEntries(agents.filter((a) => a.day === day).map((a) => [a.town, a.n])),
     referrers: referrers[day] ?? {},
@@ -113,12 +137,16 @@ const line = (label, counts) => {
   const parts = Object.entries(counts).sort((a, b) => size(b[1]) - size(a[1]) || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`);
   return `  ${label.padEnd(10)}${parts.length ? parts.join(" · ") : "none"}`;
 };
+/** A day's shorts as one flat count line: `tag/id` -> n. */
+const shortCounts = (shorts) => Object.fromEntries(Object.entries(shorts ?? {}).flatMap(([tag, ids]) => Object.entries(ids).map(([id, n]) => [`${tag}/${id}`, n])));
 export function printReport(rows, { log = true } = {}) {
   if (!rows.length) return "nothing in this range.\n";
   return rows.map((r) => [`${r.day} (ET)`,
     ...(log ? [line("visits", r.visits)] : []),
     line("settled", r.settled), line("agents", r.agents),
-    ...(log ? [line("referrers", r.referrers)] : [])].join("\n")).join("\n\n") + "\n"
+    ...(log ? [line("referrers", r.referrers)] : []),
+    // the shorts line appears only on a day that has some, so every earlier day prints exactly as it did
+    ...(log && Object.keys(r.shorts ?? {}).length ? [line("shorts", shortCounts(r.shorts))] : [])].join("\n")).join("\n\n") + "\n"
     + (log ? "" : "\n(no --log: visits and referrers need the access log piped in)\n");
 }
 
@@ -145,7 +173,7 @@ if (isMain) {
   if (!Number.isInteger(days) || days < 1 || days > 400) { console.error(`--days takes a whole number of days, 1 to 400, not "${arg("--days")}"`); process.exit(2); }
   const since = new Date(Date.now() - days * 864e5);
   const logArg = arg("--log");
-  let folded = { visits: {}, referrers: {} };
+  let folded = { visits: {}, referrers: {}, shorts: {} };
   if (logArg) {
     const parsed = [];
     const input = logArg === "-" ? process.stdin : createReadStream(logArg);
