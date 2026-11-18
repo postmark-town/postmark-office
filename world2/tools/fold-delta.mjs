@@ -182,6 +182,23 @@ import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 // by the docket and is not also removed; its withdrawal is owed, and carried,
 // at the next crossing. One sketchbook never writes and removes one mark.
 //
+// EXCEPT A HOLD PRINTOUT: THE MAKER'S WITHDRAWAL WINS IT (WLD-179). Darko,
+// 2026-11-16: "Withdrawal wins is the correct short-term solution"; Wright's
+// build: "a maker's verified withdrawal wins over another actor's same-window
+// holding change, at the next settlement; a later re-declaration by the maker
+// still wins". A hold printout (hold-through.mjs § writeHoldThrough, the docket
+// row whose data carries `_held_through`) is no act of the maker's: it prints
+// someone's take, give or drop. Deferring the withdrawal behind it held
+// Berthillon's six sorbet stations a settlement past "canon lets it go at the
+// next crossing" (S172; S173 retired them). So an owed withdrawal on a docket
+// slug whose docket row is a hold printout goes on as if the docket had not
+// named it: removed (or `retire_only` when canon no longer holds it), and the
+// printout leaves `marks`, so the one-sketchbook rule above still holds. Any
+// other docket entry keeps the deferral. A later re-declaration still wins
+// because the owed predicate asks for the owner's LATEST mark act. Retiring
+// keeps the mark's whole life in the record; nothing here moves ownership or
+// reads anyone's stakes (that question is filed for a sitting).
+//
 // The rows go to the write-down as `withdrawals`, beside `marks`, and become
 // removals on the household's sketchbook. The sweep's withdrawal law judges
 // them exactly as it judged a drained deletion: the town wall, authorship,
@@ -197,6 +214,14 @@ export const WITHDRAWN_OWED_SELECT = `
     ) latest_mark_act ON true
    WHERE m.status = 'standing' AND latest_mark_act.action = 'withdraw'
    ORDER BY m.slug`;
+
+/** A docket row a hold printout wrote (hold-through.mjs § writeHoldThrough: `data._held_through`, the hold act it printed through). PURE. */
+export function isHoldPrintout(row) {
+  let d = row?.data;
+  if (typeof d === "string") { try { d = JSON.parse(d); } catch { return false; } }
+  const t = d && typeof d === "object" ? d._held_through : undefined;
+  return t !== undefined && t !== null && /^[0-9]{1,18}$/.test(String(t));
+}
 
 
 // ── THE FOURTH TERM: A TOWN-SIGNED HOLD CANON HAS NOT PRINTED (WLD-5) ────────
@@ -464,13 +489,19 @@ export async function foldDelta(
   const withdrawals = [];
   const withdrawnSkippedNoHousehold = [];
   const withdrawnDeferred = [];
+  const withdrawnOverHold = [];
   const retireOnly = [];
   if (canonRegister) {
     const docketSlugs = new Set(rows.map((r) => r.slug));
+    // the docket rows a hold printout wrote: a maker's withdrawal wins them (WLD-179)
+    const holdPrinted = new Set(rows.filter(isHoldPrintout).map((r) => r.slug));
     const owed = await client.query(WITHDRAWN_OWED_SELECT);
     const withdrawnLatest = new Set(owed.rows.map((r) => r.slug));
     for (const r of owed.rows) {
-      if (docketSlugs.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+      if (docketSlugs.has(r.slug)) {
+        if (!holdPrinted.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+        withdrawnOverHold.push(r.slug);
+      }
       // the file has left canon and the row still stands: the retirement is owed
       if (!canonRegister.slugs.has(r.slug)) { retireOnly.push(r.slug); continue; }
       if (!r.household) { withdrawnSkippedNoHousehold.push(r.slug); continue; }
@@ -526,6 +557,12 @@ export async function foldDelta(
       carriedSlugs = carriedRows.map((r) => r.slug);   // the query ordered by slug already
     }
   }
+
+  // A HOLD PRINTOUT A WITHDRAWAL WON (WLD-179) leaves the docket's write, so no
+  // sketchbook writes and removes one mark: only once the withdrawal is really
+  // removed or retire-only, never when it was skipped (that printout still prints).
+  const removedOverHold = new Set([...withdrawals.map((x) => x.slug), ...retireOnly].filter((s) => withdrawnOverHold.includes(s)));
+  const docketRows = rows.filter((r) => !removedOverHold.has(r.slug));
 
   // § THE FOURTH TERM: a town-signed hold canon has not printed.
   let holdSlugs = [];
@@ -621,6 +658,9 @@ export async function foldDelta(
         slugs: withdrawals.map((w) => w.slug),
         acts: withdrawals.map((w) => ({ slug: w.slug, act: w.act, crossing: w.crossing })),
         deferred_to_docket: withdrawnDeferred,
+        // WLD-179: docket hold printouts a maker's withdrawal won; each is in `slugs` or `retire_only`, never in
+        // `marks`. The count is the write-down's starvation guard's: these docket rows materialized and are removed.
+        over_hold_printout: { count: removedOverHold.size, slugs: [...removedOverHold].sort() },
         retire_only: retireOnly,
         skipped_no_household: withdrawnSkippedNoHousehold,
         canon_sha: canonRegister ? canonRegister.sha : null,
@@ -644,7 +684,7 @@ export async function foldDelta(
     // order is the structure: a keeper scrolling the fold sees this crossing's
     // own window, then the rows it swept up behind it, in the same shape
     // `written_by_locked_window` reports downstream.
-    marks: [...rows, ...carriedRows, ...holdRows].map((r) => ({
+    marks: [...docketRows, ...carriedRows, ...holdRows].map((r) => ({
       slug: r.slug,
       kind: r.kind,
       by: r.owner,
