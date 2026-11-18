@@ -107,6 +107,16 @@ test("a finding and a not-run together say both, and exit 1 (the finding keeps i
   assert.equal(x.status, 1);
 });
 
+// A TEXT PIN, the weakest instrument (WIRING-AND-PINS): the roles step needs a Postgres and a roles copy to run,
+// so no behavioural test reaches its NOT-RUN arm here. It sees that the arm which prints "NOT-RUN: no roles-*.db"
+// records itself in NOTRUN on the next line; the harness test above shows what NOTRUN=" roles" does to the verdict.
+test("text pin: the roles step's NOT-RUN arm records itself in NOTRUN", () => {
+  const lines = REHEARSE.split("\n");
+  const i = lines.findIndex((l) => l.includes('say "   NOT-RUN: no roles-*.db'));
+  assert.ok(i >= 0, "the roles NOT-RUN arm moved: this pin sees nothing");
+  assert.match(lines[i + 1], /^\s*NOTRUN="\$NOTRUN roles"$/, "the roles NOT-RUN arm prints NOT-RUN but does not count it, so the rehearsal can still end PASS");
+});
+
 test("the script ends by exiting the verdict's code (wiring), and the state file's status follows it", () => {
   assert.match(REHEARSE, /^exit "\$VRC"$/m, "the script does not exit with the verdict's code");
   assert.match(REHEARSE, /"\$\(\[ "\$VRC" -eq 0 \] && echo pass \|\| echo fail\)"/, "the state file's status is not read from the verdict");
