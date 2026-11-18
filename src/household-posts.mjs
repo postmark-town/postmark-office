@@ -276,14 +276,17 @@ async function tableRowsAll(classes, members, now, { env, what, townClone = TOWN
       loaded = [];
       for (const cls of classes) {
         if (dead) { loaded.push({ lone: true }); continue; }
+        let begun = false;
         try {
           await client.query("SAVEPOINT posts_class");
+          begun = true;
           const raw = await postRowsLoad(client, cls, now, { keep: keepOf(cls) });
           await client.query("RELEASE SAVEPOINT posts_class");
-          loaded.push({ raw });
+          loaded.push({ raw });   // only once its RELEASE stands
         } catch {
-          loaded.push({ failed: true });
           try { await client.query("ROLLBACK TO SAVEPOINT posts_class"); } catch { dead = true; }
+          // its SAVEPOINT failed and the transaction cannot go on (the connection died between two classes): read alone; else unread
+          loaded.push(begun || !dead ? { failed: true } : { lone: true });
         }
       }
     }, { env });
