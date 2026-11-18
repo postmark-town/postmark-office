@@ -15,6 +15,7 @@
 //   F3  NO HIDDEN CONSTANT: the same marks under a changed property default, and under no property at all
 //   F4  AMENDMENTS are judged on what they carry, like a leave: a real resident mark amended over either cap refuses,
 //       and so does one re-sent over a lowered cap (published records are not resized, but nothing re-writes them over it)
+//   F6  the git door (flag off): refusals only, answered before its exec (which would pull into the shared world clone)
 //   F5  THE DIRECT CALLERS: the journal pass refuses the same way (preview and write); the side cap's SCOPE is the door's
 //       ground verdict: a parcel, a spark, an unplaced mark and a mark on the household's own parcel are not judged by it
 //
@@ -30,9 +31,12 @@ import { footprintCaps, footprintRefusal, pointCount, sidesOf } from "../src/mar
 const CLONE = join(process.cwd(), "world-clone");
 const SKIP = !existsSync(CLONE) && "no pinned world clone in this tree";
 const store = await startStore({ db: "mark_footprint_caps" });
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
-Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE });
+// THE JOURNAL ROAD (prod's flags). No leg here lets a mark through the git door's exec: it pulls into the SHARED world clone (and fetches
+// its tags), which would move what other files read there (test/porch-lights-http.test.mjs's blessed settlement). The git door is covered by
+// refusals only (F6), which the gate gives before the exec is reached.
+Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE, WORLD_SINGLE_LOG: "1" });
 const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
 after(async () => {
   resetLawSnapshot();
@@ -205,28 +209,22 @@ test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on previ
   await assert.rejects(gate({ ...shed, by: "someone-else", household: "someone-else" }, owned), (e) => /20 m wide/.test(e.defect), "another household's mark on that parcel is on common ground");
 });
 
-// ── F6 the journal road, through the public door ────────────────────────────
+// ── F6 the git door (flag off): refusals only ───────────────────────────────
 
-test("F6 · THE JOURNAL ROAD (WORLD_SINGLE_LOG): the public door reaches the same refusal there, on a leave and on an amendment, preview and write", { skip: SKIP }, async () => {
+test("F6 · THE GIT DOOR (WORLD_SINGLE_LOG off): the gate answers before its exec, so 257 points and a 2001 m side refuse on a leave and an amendment, preview and write, and nothing is run", { skip: SKIP }, async () => {
   const prev = process.env.WORLD_SINGLE_LOG;
-  process.env.WORLD_SINGLE_LOG = "1";
+  delete process.env.WORLD_SINGLE_LOG;
   try {
     await lawWith();
     const { canonForGuards } = await import("../src/world.mjs");
     for (const preview of [true, false]) {
-      const before = await actsCount();
       await assert.rejects(leave({ points: ring(257), preview }), refusal(/at most 256 points; this one has 257/), `leave, preview ${preview}`);
       await assert.rejects(leave({ points: box(1000, 2001), preview }), refusal(/this one is 2001 m deep/), `leave, preview ${preview}`);
-      assert.equal(await actsCount(), before, `preview ${preview}: no act, no draft`);
     }
     const real = canonForGuards().marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && m.extent && Number(m.extent.w) > 20 && Number(m.extent.w) < 1800
       && !m.points && String(m.id).startsWith(`${m.by}/`) && m.parent_id == null && m.household);
     const key = { household: real.household, handles: new Set([real.by]) };
     const slug = real.id.slice(real.by.length + 1);
-    const amend = (extent) => leave({ slug, by: real.by, at: real.at, extent, amend: true, preview: true, body: `${real.body ?? "a mark"} (amended)` }, key);
-    await assert.rejects(amend({ w: 2001, h: real.extent.h }), refusal(/2001 m wide/), "an amendment past the cap");
-    assert.equal((await amend(real.extent)).preview, true, "an amendment inside it");
-    await lawWith({ points: 256, side: Math.floor(Math.max(Number(real.extent.w), Number(real.extent.h))) - 1 });
-    await assert.rejects(amend(real.extent), refusal(/a side/), "an amendment carrying an over-cap footprint is refused: no keep/shrink allowance");
+    await assert.rejects(leave({ slug, by: real.by, at: real.at, extent: { w: 2001, h: real.extent.h }, amend: true, preview: true, body: "amended" }, key), refusal(/2001 m wide/), "an amendment past the cap");
   } finally { if (prev == null) delete process.env.WORLD_SINGLE_LOG; else process.env.WORLD_SINGLE_LOG = prev; }
 });
