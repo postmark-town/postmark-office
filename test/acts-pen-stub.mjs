@@ -114,6 +114,9 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
     // (test/exit-stake-boundary.test.mjs, test/drop-recovery.test.mjs).
     if (/^SELECT pg_advisory_(xact_)?(un)?lock(_shared)?\(hashtext\((\$1|'[^']*')\)\)$/i.test(q)) return { rows: [{}], rowCount: 1 };
     if (/^COMMIT/i.test(q)) { state.committed += 1; return { rows: [], rowCount: 0 }; }
+    // A SAVEPOINT inside a read (POS-1129: the posts' classes share one lease, each under its own savepoint) is answered as Postgres answers it.
+    // Rolling back TO a savepoint is not the transaction's rollback, so it is not counted as one.
+    if (/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/i.test(q)) return { rows: [], rowCount: 0 };
     if (/^ROLLBACK/i.test(q)) { state.rolledBack += 1; return { rows: [], rowCount: 0 }; }
     if (/set_config\('app\.household'/i.test(q)) { state.household = params[0] ?? null; return { rows: [], rowCount: 0 }; }
     // THE SPELLING SET, declared beside the household (POS-160 / #165): a house
