@@ -69,6 +69,9 @@ test("CONTROL: the same class reads through Promise.all ask for every class at o
 });
 
 // LAST in the file: it puts in a pen of its own (one that fails one class), which the tests above, on the counting pen, must not see.
+// WHAT THIS STUB CAN AND CANNOT SHOW: it keeps no aborted-transaction state, so "the classes after it are still read" cannot go red here if the
+// savepoint were missing; only the ROLLBACK TO assertion bites. The behaviour is proved on real Postgres, an SQL error and a dead connection
+// both, in test/pos-1129-doorstep-leases.test.mjs § 6 (the review of db640416d).
 test("POS-1129: a class that cannot be read inside the one lease is said ALONE, and every class after it is still read", async () => {
   const { householdPosts } = await import("../src/household-posts.mjs");
   const { POST_CLASSES } = await import("../src/town-posts.mjs");
