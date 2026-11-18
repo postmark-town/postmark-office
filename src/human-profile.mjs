@@ -133,7 +133,7 @@ export function profileShown(p) {
  *      (403), read from the record;
  *   3. the store changes the row that has this slug AND binds this account, or
  *      nothing (`setHouseholdHumanProfile`), in one statement; a store without
- *      migration 098 refuses 503 by name and keeps nothing;
+ *      migration 101 refuses 503 by name and keeps nothing;
  *   4. the drain renders the town's households.json inside `penTransaction`, so
  *      the fields land on the public record; a refused drain leaves them kept in
  *      the store and the file a crossing behind, said so in the result.

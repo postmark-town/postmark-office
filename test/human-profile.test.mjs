@@ -16,7 +16,7 @@
 //   § 2b the writer's refusals, in order: any caller but the browser form (403), the fields, then no
 //        such house (404), an unbound account (403), and a store without 101 (503), each keeping nothing
 //   § 3  the store write, on a real Postgres: merge, clear, nothing left is NULL, another house's
-//        account writes nothing, 098's shape refuses anything else, and the landed probe answers
+//        account writes nothing, 101's shape refuses anything else, and the landed probe answers
 //   § 4  the reads: every phrase that names the house's human says the town name, with the house beside it
 //   § 5  on a booted office: every key at PATCH /households/{slug}/human is refused (a household key AND
 //        a signed-in access token) and pointed at the form; the form refuses another house's account,
@@ -153,7 +153,7 @@ test("§ 2 the fields are judged as the resident's profile door judges its own: 
   assert.deepEqual(HUMAN_PROFILE_CAPS, { town_name: 72, short_line: 240, pronouns: 56 });
 });
 
-test("§ 2b the writer refuses in order, keeping nothing: any caller but the browser form first, the fields before the record is read, then no such house 404, an unbound account 403, a store without 098 503", async () => {
+test("§ 2b the writer refuses in order, keeping nothing: any caller but the browser form first, the fields before the record is read, then no such house 404, an unbound account 403, a store without 101 503", async () => {
   const calls = [];
   const loadRows = async () => { calls.push("read"); return seed(); };
   const write = async (w) => { calls.push(`write ${w.slug}`); return { slug: w.slug, human_profile: w.set }; };
@@ -190,7 +190,7 @@ test("§ 2b the writer refuses in order, keeping nothing: any caller but the bro
   assert.deepEqual(done, { household: "lantern-row", human_profile: FULL, registry: { rendered: true }, commit: "c0ffee" });
 });
 
-test("§ 3 on a real Postgres: one statement merges and clears, a profile left empty is NULL, another house's account writes nothing, the private name is untouched, and 098's shape refuses anything else", async () => {
+test("§ 3 on a real Postgres: one statement merges and clears, a profile left empty is NULL, another house's account writes nothing, the private name is untouched, and 101's shape refuses anything else", async () => {
   const ix = await indexStore(null, { db: "human_profile_store" });
   CLEANUP.push(() => ix.stop());
   await seedRegistry(ix.store, REGISTRY, PINS);

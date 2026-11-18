@@ -587,7 +587,7 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
  * value and `clear` the fields given an empty string: ONE statement merges the
  * one and drops the other, so a field nobody named keeps its value and two
  * sign-ins changing different fields never undo each other. A profile left
- * with nothing in it is stored NULL (098's shape refuses `{}`).
+ * with nothing in it is stored NULL (101's shape refuses `{}`).
  *
  * THE ACCOUNT IS CHECKED IN THE SAME STATEMENT THAT WRITES, as the likeness
  * answer's is: the row is found by its slug AND by the signed-in account being

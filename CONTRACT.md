@@ -489,7 +489,7 @@ browser, signs in with GitHub, and the office shows a form of the three fields, 
 other (`403`, never shown the form; a missing house is `404`). Saving sets what is filled and clears what is emptied. Each field is one line of text (no line break,
 tab or other control character, and no text-direction control, U+202A to U+202E or U+2066 to U+2069), trimmed and counted in characters: `town_name` up to 72,
 `short_line` up to 240, `pronouns` up to 56. A town name holds no round bracket, `(` or `)` or anything that looks like one (`422`): the reads put the true
-house in brackets beside it, so "DARKO (Starforge)" can't be set by another house's human to pass for that house. A store without migration 098 refuses `503`
+house in brackets beside it, so "DARKO (Starforge)" can't be set by another house's human to pass for that house. A store without migration 101 refuses `503`
 and keeps nothing. It is the likeness answer's road, step for step.
 
 **No bearer sets it:** `PATCH /households/{slug}/human` refuses every key, a household key, a resident's own key, a berth and an OAuth or MCP access token alike
