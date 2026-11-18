@@ -44,6 +44,7 @@
 import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // POS-70: the one rename shape; POS-246: the door's own fields; POS-427: refused beside did
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
 import { noteActWritten } from "./act-watch.mjs"; // POS-637: the crossing pass's row, told to the act door's creatures
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the act's phases, timed under its request (measurement only)
 import { readFileSync, readdirSync } from "node:fs";
 import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household grain is the store's identities
 import { refShaFromDisk } from "./world-branches.mjs";
@@ -3229,13 +3230,13 @@ export async function dispatchCreatureVerb(action, args, key, { kept = null, doo
     if (bad) return bounce(422, bad.defect, bad.hint);
     delete fields.nonce;
   }
-  const run = () => door({ ...fields, act: action }, key);
+  const run = () => actSpan("handler", () => door({ ...fields, act: action }, key)); // POS-1110: the creature's door, timed as an act's verb is
   try {
     if (nonce == null) {
       const result = await run();
       return result?.error === "bounce" ? { ...result, ...done } : { ...done, result };
     }
-    const keyed = await actUnderNonce({ action, nonce, kept: kept ?? await actsHaveNonce(), run,
+    const keyed = await actUnderNonce({ action, nonce, kept: kept ?? await actSpan("nonce_kept", () => actsHaveNonce()), run,
       actors: [...new Set([...(key?.handles ?? []), standingHandle(args, key)].filter(Boolean))] });
     if (keyed.duplicate) return { ...done, result: keyed.duplicate };
     const result = keyed.result;
@@ -3290,10 +3291,10 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [], note: false }); // DEC-11: the town roll rides into `present`
+  const oriented = await actSpan("orient", () => worldOrient(args, key, { roll: ctx.roll ?? [], note: false })); // DEC-11: the town roll rides into `present`
   if (oriented?.error) return oriented;
   // no porch lights: this answer shows no houses (WLD-29)
-  const seen = await worldEyes(args, key, { lights: false });
+  const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
   if (seen?.error) return seen;
 
   const spine = oriented.you?.within ?? [];
@@ -3306,12 +3307,12 @@ async function apexDo(args, key, ctx = {}) {
     // gathering: "read: is every action's shadow … anything you can do, you can
     // read, and never the reverse." A door that admits an act the read did not
     // show is precisely the reverse that law forbids.
-    const spineIds = await apexSpineIds(store.db, spine, args, key);
+    const spineIds = await actSpan("spine", () => apexSpineIds(store.db, spine, args, key));
     const reachIds = (seen.objects ?? []).map((o) => o.id);
-    const amb = gatherActions(store.db, { spineIds, reachIds });
-    const ground = gatherGroundActions(store.db, { spineIds, reachIds });
-    const held = gatherHeldActions(store.db, await holdingsFor(args, key));
-    const houseOf = await worldHouseholds(); // POS-350: the store's identities, read once for every ground below
+    const amb = actSpan("gather", () => gatherActions(store.db, { spineIds, reachIds }));
+    const ground = actSpan("gather", () => gatherGroundActions(store.db, { spineIds, reachIds }));
+    const held = gatherHeldActions(store.db, await actSpan("holdings", () => holdingsFor(args, key)));
+    const houseOf = await actSpan("households", () => worldHouseholds()); // POS-350: the store's identities, read once for every ground below
     const kind = actorKindOf(args);
     const { entries, refused: refusedGrants, seated: seatedAt, handoff: handoffSeat } = resolveForActor(
       [...held.entries, ...ground.entries, ...amb.entries], {
@@ -3648,12 +3649,12 @@ async function apexDo(args, key, ctx = {}) {
         // and it is deliberately double-underscored, the `__action` precedent,
         // to say out loud that it is office plumbing rather than a field a
         // resident writes.
-        const run = () => handler.run(
+        const run = () => actSpan("handler", () => handler.run( // POS-1110: the act's own verb, its write included
           hand ? { ...fields, as_human: hand, ...(seatedAt ? { __seated_ground: seatedAt } : {}) } : fields,
-          key, ctx);
+          key, ctx));
         if (nonce == null) result = await run();
         else {
-          const keyed = await actUnderNonce({ action, nonce, kept: await actsHaveNonce(), run,
+          const keyed = await actUnderNonce({ action, nonce, kept: await actSpan("nonce_kept", () => actsHaveNonce()), run,
             // whose acts a spent key is looked for among: the key's own residents
             // and its human's hand, so a nonce cannot be probed across households
             actors: [...new Set([...(key?.handles ?? []), standingHandle(args, key), hand].filter(Boolean))] });
@@ -3694,7 +3695,7 @@ export const enteredTheTarget = (result, target) => !!target && !result?.error &
 export async function groundLandsAfterEnter(args, result, key, who, deps = {}) {
   const target = enterTargetOfArgs(args);
   if (!enteredTheTarget(result, target)) return null;
-  return landOnEnter(target, key, who, deps);
+  return actSpan("land", () => landOnEnter(target, key, who, deps)); // POS-1110: the ground's set-down (its lookup and the land pen), timed
 }
 
 /**
@@ -4230,7 +4231,7 @@ async function explainClassOr(path, bounced) {
 // marked `refused: true` (POS-427, one-contract.mjs § withRefused). Every
 // return below, the act's catch included, comes back through here.
 export async function worldApex(args = {}, key = null, ctx = {}) {
-  return withRefused(await worldApexAnswer(args, key, ctx));
+  return actSpan("dispatch", async () => withRefused(await worldApexAnswer(args, key, ctx))); // POS-1110: the whole door call, timed under the act's request
 }
 
 /** POS-823: an outsider read that changed nothing for the household says why, in `lens_note` (world.mjs §

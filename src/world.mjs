@@ -107,6 +107,7 @@ import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
+import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -1648,7 +1649,7 @@ async function enteredNow(handle, inPlay) {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
     const law = await crossingLaw(WORLD_CLONE);
-    const served = await servedLedgerNow();
+    const served = await actSpan("ledger_scan", () => servedLedgerNow()); // POS-1110: the ACTS pool's scan, waited for by orient and eyes alike
     if (served?.derived?.incomplete) throw new Error(`the passages since the cutover could not be read (${served.derived.journal_unread})`);
     return await occupiedNowBy(handle, law.thresholds, { ...crossingDeps(), ledger: async () => served.ledger });
   } catch (e) {

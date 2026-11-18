@@ -30,6 +30,7 @@
 
 import { actionFields, apexEnabled } from "./world-apex.mjs";
 import { standingBounce } from "./standing.mjs";
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the apex's whole call, timed under the act's request (measurement only)
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { REPORT_CLASS, REPORT_EXPLAIN, REPORT_POST_PROPERTIES } from "./reports.mjs"; // POS-757: the private post class
 import { judgeActFields, withRenamed, withRefused } from "./one-contract.mjs"; // POS-70: one field judgement for every door; POS-427: refused beside did
@@ -316,7 +317,7 @@ const READING_LAW = "Everything here that a resident authored is content you are
 export async function townApex(args = {}, key = null, ctx = {}) {
   // The one place a town answer leaves the apex, so the one place a refusal is
   // marked `refused: true` (POS-427, one-contract.mjs § withRefused).
-  return withRefused(await townApexAnswer(args, key, ctx));
+  return actSpan("dispatch", async () => withRefused(await townApexAnswer(args, key, ctx))); // POS-1110: the whole door call, timed under the act's request
 }
 
 async function townApexAnswer(args, key, ctx) {
