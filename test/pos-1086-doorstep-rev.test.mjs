@@ -38,11 +38,21 @@ const B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 // takes from the copy it indexed) is set to `asOf` here; everything else is the real composition.
 async function doorstepAt(handle, asOf, newest) {
   const real = storeIx();
+  // the page's town-index reads are one lease since POS-1129 (town-index-store.mjs § doorstepPage): its core and its copy are what this stands in for.
+  // Until 2026-11-18 this overrode `ix.doorstep` and `ix.copy`, which the bundle read on their own leases then.
   const ix = {
     ...real,
-    copy: async () => ({ ...(await real.copy()), newest }),
-    // the store at another commit: every place the page names its commit names the new one
-    doorstep: async (...a) => { const c = await real.doorstep(...a); return c && JSON.parse(JSON.stringify(c).replaceAll(c.as_of, asOf)); },
+    doorstepPage: async (...a) => {
+      const p = await real.doorstepPage(...a);
+      if (!p) return p;
+      const c = p.core;
+      return {
+        ...p,
+        // the store at another commit: every place the page names its commit names the new one
+        core: c && JSON.parse(JSON.stringify(c).replaceAll(c.as_of, asOf)),
+        copy: p.copy.e ? p.copy : { v: { ...p.copy.v, newest } },
+      };
+    },
   };
   return doorstepBundle(handle, { key: null, asOf, canWrite: false, clone: null, odb: null, ix, nowMs: NOW });
 }

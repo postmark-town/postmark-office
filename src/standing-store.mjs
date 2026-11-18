@@ -63,11 +63,21 @@ export async function standingForHandles(handles, env = process.env) {
  * second pool in every worker on a cluster dev and prod share.
  */
 export async function standingForHandlesVia(c, handles) {
-  const list = [...new Set([...(handles ?? [])].map(String))];
-  if (!list.length) return new Map();
-  const { rows } = await c.query(FOR_HANDLES_SQL, [list]);
-  return foldRecords(rows.map(recordOfRow)).standing;
+  return standingOfRows(await standingRowsVia(c, handles));
 }
+
+/**
+ * THE SAME READ, SPLIT AT THE CONNECTION (POS-1129): the rows only, on the caller's client, so a caller holding a pen transaction folds them after it
+ * gives the connection back (`standingOfRows`). No handles is no statement and no rows.
+ */
+export async function standingRowsVia(c, handles) {
+  const list = [...new Set([...(handles ?? [])].map(String))];
+  if (!list.length) return [];
+  return (await c.query(FOR_HANDLES_SQL, [list])).rows;
+}
+
+/** `standingRowsVia`'s rows, folded: `Map<handle, standing>`. */
+export const standingOfRows = (rows) => foldRecords(rows.map(recordOfRow)).standing;
 
 /** The fold over records already in append order (the file fold's twin). */
 export function foldRecords(records) {

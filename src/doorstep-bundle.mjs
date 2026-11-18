@@ -28,7 +28,7 @@ import { hotMailBlock, outboxTense } from "./town-mail.mjs";
 import { votesAvailable, doorstepVotes } from "./votes.mjs";
 import { nextCrossingForDoorstep, copyBlock, copyHoldsWords } from "./crossings.mjs";
 import { unreadFor, unreadBlock } from "./unread-store.mjs";
-import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { pendingRowsFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read (the standing rides the page's lease, POS-1129)
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { bundleSpan, segSpan } from "./read-timing.mjs"; // POS-1064/b, POS-1086: the bundle call and its segments, timed (measurement only)
 
@@ -103,9 +103,15 @@ async function doorstepBundleOf(handle, ctx = {}) {
   let pendingMail;
   if (own) { try { pendingMail = { block: await segSpan("mail_pending", () => hotMailBlock(odb, key, { handle })) }; } catch { pendingMail = null; } }
   const standing = pendingMail?.block?.standing ?? null;
-  const opts = { conversationsOffset, slim, fresh: await segSpan("fresh", () => freshFor(handle, { odb, clone, asOf })), nowMs, standing };
-  const core = await segSpan("core", () => ix.doorstep(handle, asOf, opts));
-  if (!core) return null;
+  // ── THE PAGE'S TOWN-INDEX READS, ONE LEASE (POS-1129) ──────────────────────────────────────────────────────────────────
+  // The core, the freshness ladder's standing, the copy's history and the next steps' quest reads are one READ ONLY transaction
+  // (town-index-store.mjs § doorstepPageRows), composed after the connection is back. They were six leases. The town log's pending rows are
+  // not the index and are read first, as freshFor read them; the fresh context is built from both inside the page's composition.
+  const freshBase = { clone, asOf, pendingRows: await segSpan("fresh", () => pendingRowsFor(odb, handle)) };
+  const opts = { conversationsOffset, slim, nowMs, standing, freshBase };
+  const page = await segSpan("core", () => ix.doorstepPage(handle, asOf, opts));
+  if (!page) return null;
+  const core = page.core;
 
   // ── THE HEADER'S CLOCK (postmark#2922) ─────────────────────────────────────
   //
@@ -135,7 +141,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // page that is caught up must not look alike.
   const { handle: h, as_of, ...rest } = core;
   let copy;
-  try { copy = copyBlock(await ix.copy(), as_of, nowMs); }
+  try { if (page.copy.e) throw page.copy.e; copy = copyBlock(page.copy.v, as_of, nowMs); }   // read in the page's lease (POS-1129)
   catch { copy = { ...copyBlock({}, as_of, nowMs), caught_up: null, sentence: `The office's copy of the town record ${copyHoldsWords(undefined)}; as_of above names its commit.` }; }
   const d = { handle: h, as_of, copy, next_crossing: nextCrossingForDoorstep(nowMs), ...rest };
 
@@ -364,7 +370,7 @@ async function doorstepBundleOf(handle, ctx = {}) {
   // walks `segments` to find them, so it must name all ten or none.
   d.segments = [...DOORSTEP_SEGMENTS];
 
-  await ownerGate(d, handle, { clone, key, odb, ix, pendingMail });
+  await ownerGate(d, handle, { clone, key, odb, ix, pendingMail, nextPre: page.next });
 
   // ── the civic pointer (2026-09-01, the clarity round) ─────────────────────
   //
@@ -433,7 +439,9 @@ async function doorstepBundleOf(handle, ctx = {}) {
 // (`{ block }`, or null for a log that did not read), so the block here is the
 // one the awaiting segment was composed with (POS-375). Absent, the gate reads
 // it itself.
-export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unread = null, ix = null, pendingMail = undefined } = {}) {
+// `nextPre` is the next steps' quest reads, already read in the doorstep's one town-index lease (POS-1129; town-index-store.mjs §
+// doorstepPageFromRows); absent (the house read), the next steps read them themselves, as before.
+export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unread = null, ix = null, pendingMail = undefined, nextPre = null } = {}) {
   const own = key?.handles?.has?.(handle) === true;
   // THE COUNTER'S TENSE (Vex of the Drift, 2026-08-26). `pending_outbox` is a
   // COUNT(*) over the settled index, so under the town log it could read 0 for
@@ -518,7 +526,7 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
   // itself rides every read — it is what the public bundle already publishes —
   // but its gap-shaped half is gated on the same ownership test above.
   try {
-    const ns = await segSpan("gate_next_steps", () => nextStepsFor(handle, clone, { own, key, ix, odb, asOf }));
+    const ns = await segSpan("gate_next_steps", () => nextStepsFor(handle, clone, { own, key, ix, odb, asOf, pre: nextPre }));
     if (ns?.steps?.length || ns?.unavailable) d.next_steps = ns; // POS-994: a pin stop is shown by name, not dropped
   } catch { /* garnish only */ }
   return d;
