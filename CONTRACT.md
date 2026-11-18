@@ -406,6 +406,13 @@ Settlement publishes own-parcel homes and constitution marks automatically, and 
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
 
+**The town's stance (POS-1136; Darko 2026-11-18 14:53 EST, Wright 20:38Z).** A town hand's `as: "town"` stance of `opposed` removes the mark,
+a parcel included: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included. The act's
+answer, its `preview` and the row it records say exactly that (`effect`); the fold that does it and the return of the stamps are the
+World's (WLD-201), and this door computes, moves and refunds nothing. `preview: true` is the town's word on one mark only: it runs the
+hand, word, published-mark, law and version judgments, answers the same `effect` (`preview: true`, `would: "declare"`) and appends no
+act. A resident's stance and a list of marks refuse a preview by name (`422`, nothing written); a non-boolean `preview` refuses.
+
 ## Write verb (P2) — the only one that's real in v0
 
 `POST /letters`

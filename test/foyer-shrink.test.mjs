@@ -312,6 +312,12 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-18 FOR POS-1136 (Darko 14:53 EST, "the town declaring opposed to something should remove it, even parcels"; Wright
+  // 20:38Z): the act `declare-stance-on` gained the optional field `preview`, the town's no-write preview (as: "town", one mark). ADDITIVE and
+  // proven so: the golden gained exactly `/acts/10/fields/preview/{type,description}` (2 leaves) and removed or retyped none, by hand, not
+  // re-captured. PSA for the release notes: "household { do: \"declare-stance-on\", args: { as: \"town\", on, stance, law, preview: true } }
+  // (a town hand) runs every check and says what the town's word would do, and writes nothing; a town opposed now says the mark, a parcel
+  // included, leaves at the next settlement and its staked stamps go back to each staker, the owner included."
   // ⚑ REGENERATED 2026-11-13 FOR POS-1027 (Darko, POS-1024/f "Add the field"; the Hearth's public reads): the act `send` gained the optional field
   // `resend`, the id of one's bounced letter that this letter replaces. ADDITIVE and proven so: the capture diff added exactly
   // `/acts/<send>/fields/resend/{type,description}` (2 leaves) and removed or retyped none. Its description is "the bounced letter this replaces"

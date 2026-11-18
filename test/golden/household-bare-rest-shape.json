@@ -329,6 +329,10 @@
       "string"
      ]
     },
+    "preview": {
+     "description": "string",
+     "type": "string"
+    },
     "stance": {
      "description": "string",
      "enum": [
