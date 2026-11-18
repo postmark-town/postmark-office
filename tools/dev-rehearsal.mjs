@@ -38,7 +38,8 @@
 //               migrations create; the office's flags read the store as prod's
 //               do (STAMP_LINES=store included); its pens sign with dev's own
 //               key, never prod's, and the town clone is on it; the store's
-//               stamp chain agrees with the clone; nothing it can reach pushes
+//               stamp chain agrees with the clone; stamp-mint-parity is green
+//               (the mint's gate before the store, POS-940); nothing it can reach pushes
 //               (TOWN_PUSH=0, GitHub stubbed); and the rehearsal's ground is
 //               found, inside the Mists at every keyframe, on free ground
 //               (POS-595; it never stands on fixed coordinates)
@@ -527,6 +528,20 @@ export function plan() {
           else if (gitQuiet(ctx.t.townClone, "merge-base", "--is-ancestor", h.sha, head).status !== 0)
             p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed --reseed, as law_ingester)`);
         }
+        // THE MINT'S GATE (POS-940; POS-354 fix a, ruled 2026-10-04 Q3): before anything mints from the
+        // store, its key base, deliveries, ledger and replay equal the town clone's. The gate is
+        // world2/tools/stamp-mint-parity.mjs itself, read-only, run as the dev office's job (its env, its
+        // pins); prod runs the same line before its switch (DEPLOY.md § the store mint, step 6). On 10-10
+        // dev's household_pins was a 09-25 copy and the crossing's mint replay diverged mid-run; this names
+        // that here instead. A difference is a stop, reconciled nowhere (the ruling).
+        if (!p.length) {
+          const par = await ctx.job("world2/tools/stamp-mint-parity.mjs", ["--clone", ctx.t.townClone]);
+          const lines = String(par.out ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+          if (par.code !== 0)
+            p.push(`stamp-mint-parity ${par.code === 1 ? "names a DIFFERENCE" : "could not run"} (exit ${par.code}) between the store and ${ctx.t.townClone}: ` +
+              `${lines.slice(-8).join(" | ").slice(0, 1200)} — a stale registry (household_pins) is DEPLOY.md § The dev seed advance, step 3`);
+          else rec.notes.push(`stamp-mint-parity: ${lines.filter((l) => /^(key base|ledger|replay)/.test(l)).join(" · ")} · PARITY`);
+        }
         // THE GROUND (POS-595), last: a store that lags or an office misread is named first
         if (!p.length) {
           try {
@@ -776,8 +791,12 @@ export function plan() {
         // pen that writes windows; the newest window has no successor to tile against).
         // Left in the future, every reader keyed on closes_at misses this crossing:
         // settlements-backfill names a settlement's window as the newest closed at or
-        // before its publish, and a settlement S<n> would carry no window.
-        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window]);
+        // before its publish, and a settlement S<n> would carry no window. And a close
+        // already PAST is pulled to now too (POS-940; POS-354 fix b): on 10-10 dev's
+        // open window had been past due since 09-25, the clearing opened a successor
+        // whose close was past as well, and the bless named 212, not 211. Here and at
+        // the by-hand and refused-alone clearings below.
+        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open'", [ctx.window]);
         return ctx.clearing(ctx.window);
       },
       async check(ctx, r) {
@@ -869,7 +888,7 @@ export function plan() {
           by: ctx.who.c, slug: ctx.mark2, kind: "parcel", at: ctx.parcelAt2, stamps: 0, body: `The by-hand road's ground (POS-354, run ${ctx.run}).`,
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
-        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window2]);
+        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open'", [ctx.window2]);
         const clearing = await ctx.clearing(ctx.window2);
         if (clearing.code !== 0) return { claim, clearing };
         return { claim, clearing, settle: await ctx.settlement({ byHand: true }) };
@@ -922,7 +941,7 @@ export function plan() {
         // the box's order: the scheduled settlement starts first and waits for the candle
         ctx.settling = ctx.settlement();
         await new Promise((ok) => setTimeout(ok, 5_000));
-        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window3]);
+        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open'", [ctx.window3]);
         const clearing = await ctx.clearing(ctx.window3);
         const settle = await ctx.settling;
         ctx.settling = null;
