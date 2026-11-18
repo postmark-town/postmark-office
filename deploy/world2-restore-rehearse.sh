@@ -160,6 +160,7 @@ TABLES=$(psql_owner --dbname "$SCRATCH" -tAc \
 # oauth_pending 2 restored vs 1 live, a pending sign-in completed or expired between the 08:10 dump and the count.)
 TRANSIENT="oauth_pending oauth_codes oauth_tokens oauth_key_claims"
 bad=0; rows_total=0; drift_lines=""; RS_AUDIT=""; RS_ROLES=""
+NOTRUN=""   # the checks that reported NOT-RUN (POS-1121): a check that did not run proved nothing, so it can never end in PASS
 printf '   %-26s %10s %10s  %s\n' table restored live verdict
 for t in $TABLES; do
   a=$(psql_owner --dbname "$SCRATCH" -tAc "SELECT count(*) FROM \"$t\"" 2>/dev/null)
@@ -209,6 +210,7 @@ elif [ -z "${ROLES_COPY:-}" ]; then
   # Absent is legal and is NOT a pass: it is reported in the operator's words so
   # a reader cannot mistake "nothing to check" for "checked and fine".
   say "   NOT-RUN: no roles-*.db in $ROLES_DIR and no office_role_audit in the restore — either no role has ever been granted on this box (OFFICE_ROLE_GATES is unset on every office today) or the lane has not shipped one yet"
+  NOTRUN="$NOTRUN roles"
 else
   # One node, both files, read-only on each. A missing live registry counts as
   # zero rather than as an error: the copy having rows the live side lost is the
@@ -283,18 +285,28 @@ if [ -d "$LAWDIR/.git" ] && [ -d "$TOWNDIR/.git" ]; then
 else
   say "   NOT-RUN: no ingest checkouts on this box"
 fi
+# ── the verdict (POS-1121) ──────────────────────────────────────────────────
+# A check that did not run is not a pass. On 11-18 the falsifier printed "NOT-RUN (exit 2) — never as a pass" and the
+# line under it said "PASS". Now a NOT-RUN check ends the rehearsal FAIL and the exit is non-zero: 1 for a real finding
+# (as before), 2 when nothing was found but something was not run ("could not prove it", the falsifier's own code).
+# The test drives this region (test/rehearsal-not-run-is-not-a-pass.test.mjs): keep the two markers.
+# >>> verdict
 case "$FRC" in
   0) say "   falsifier: EQUAL (exit 0)" ;;
   1) say "   falsifier: RED — drift (exit 1)"; bad=$((bad + 1)) ;;
-  *) say "   falsifier: NOT-RUN (exit 2) — reported as not-run, never as a pass" ;;
+  *) say "   falsifier: NOT-RUN (exit 2) — reported as not-run, never as a pass"; NOTRUN="$NOTRUN falsifier" ;;
 esac
-
+NOTRUN="${NOTRUN# }"
 t1=$(date +%s)
-say "== rehearsal finished in $((t1 - t0))s · $( [ "$bad" -eq 0 ] && echo PASS || echo "FAIL ($bad finding(s))" )"
+if [ "$bad" -ne 0 ] && [ -n "$NOTRUN" ]; then VERDICT="FAIL ($bad finding(s); not run: $NOTRUN)"; VRC=1
+elif [ "$bad" -ne 0 ]; then VERDICT="FAIL ($bad finding(s))"; VRC=1
+elif [ -n "$NOTRUN" ]; then VERDICT="FAIL ($NOTRUN not run)"; VRC=2
+else VERDICT="PASS"; VRC=0; fi
+say "== rehearsal finished in $((t1 - t0))s · $VERDICT"
+# <<< verdict
 w2_state restore-rehearsal.json "$(printf '"status":"%s","source":"%s","dump":"%s","seconds":%d,"restore_seconds":%d,"rows_restored":%d,"tables":%d,"roles_audit_copy":%s,"roles_audit_live":%s,"falsifier_exit":%d,"drift":"%s"' \
-  "$([ "$bad" -eq 0 ] && echo pass || echo fail)" \
+  "$([ "$VRC" -eq 0 ] && echo pass || echo fail)" \
   "$([ "$FROM_REMOTE" = true ] && echo off-box || { [ "$FROM_S3" = true ] && echo s3 || echo on-box; })" \
   "$(basename "$DUMP")" "$((t1 - t0))" "$((r1 - r0))" "$rows_total" "$(echo "$TABLES" | wc -w)" \
   "${RA_COPY:-null}" "${RA_LIVE:-null}" "$FRC" "$drift_lines")"
-[ "$bad" -eq 0 ] || exit 1
-exit 0
+exit "$VRC"
