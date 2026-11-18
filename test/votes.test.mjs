@@ -11,7 +11,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -167,4 +167,90 @@ test("POS-1057 · the ledger's fold is kept while the clone stands, and a ledger
   execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "--allow-empty", "-m", "a commit"], { encoding: "utf8" });
   assert.notEqual(await __ballotStateForTest(clone), held, "a commit is a new fold");
   rmSync(clone, { recursive: true, force: true });
+});
+
+// ── POS-1140 · a Hearth candidate's design title rides the votes reads ──────────────────────────────────────────────
+//
+// Darko, 2026-11-18 16:57 EST: "the ballot box shows household names instead of theme/design names for each entry, it should show the theme
+// name and by {household}". The votes reads add each candidate's `title`, read from PROJECTS/household-hearths/<candidate>/hearth.md frontmatter at
+// the supplied town clone (CORE-126 is the site half). Missing file = no title key (not null, not a guess). Candidate ids, credit, link, note, tallies,
+// headroom and staking are unchanged. The fixture SUPPLIES the hearth files (the CI sparse town has none), and each leg first asserts they are there.
+// FLIP: take the title spread out of votes.mjs § wordsOf → every title assertion below goes red.
+
+const hearthDir = (clone, id) => join(clone, "PROJECTS", "household-hearths", id);
+const putHearth = (clone, id, text) => { mkdirSync(hearthDir(clone, id), { recursive: true }); writeFileSync(join(hearthDir(clone, id), "hearth.md"), text); };
+const WINDOW = "---\ntitle: The Working Window\nauthor: the-window-household\n---\n\nA warm window above the dark river.\n";
+
+test("POS-1140 · both reads carry the Hearth design's title; a candidate with no hearth.md carries no title key; nothing else moves", async () => {
+  const clone = await voteClone({ cap: 12 });
+  const before = await voteList(clone);
+  const beforeView = await voteView(clone, "name-vote", kKey);
+  assert.ok(before.topics[0].candidates.every((c) => !("title" in c)), "no hearth files, no titles");
+
+  putHearth(clone, "lumen", WINDOW);                          // a titled design; brightwork has no file (the Illuminator case)
+  assert.equal(readFileSync(join(hearthDir(clone, "lumen"), "hearth.md"), "utf8"), WINDOW, "the fixture supplies the file (not an absent asset behind an empty assertion)");
+  await stakeViaOffice(clone, { from: "wright", topic: "name-vote", candidate: "lumen", stamps: 7 }, kKey);
+
+  const list = await voteList(clone);
+  const view = await voteView(clone, "name-vote", kKey);
+  const L = list.topics[0].candidates, V = view.candidates;
+  assert.equal(L.find((c) => c.candidate === "lumen").title, "The Working Window", "the list");
+  assert.equal(V.find((c) => c.candidate === "lumen").title, "The Working Window", "the topic read");
+  for (const rows of [L, V]) assert.ok(!("title" in rows.find((c) => c.candidate === "brightwork")), "no file: the key is absent, not null, not the name");
+  assert.deepEqual(L.map((c) => c.title ?? null), V.map((c) => c.title ?? null), "list and topic agree");
+
+  // ADDITIVE: strip the title and every other byte of each row is what it was; ids and order, tallies, headroom unchanged
+  const strip = (rows) => rows.map(({ title, ...rest }) => rest);
+  assert.deepEqual(strip(L).map((c) => c.candidate), before.topics[0].candidates.map((c) => c.candidate), "ids and order");
+  assert.deepEqual(strip(L).find((c) => c.candidate === "lumen"), { candidate: "lumen", credit: null, link: null, note: null, added: null, staked: 7, backing_households: 1 });
+  assert.deepEqual(Object.keys(V.find((c) => c.candidate === "brightwork")).sort(), Object.keys(beforeView.candidates.find((c) => c.candidate === "brightwork")).sort(), "an untitled row has exactly the keys it had");
+  assert.equal(view.your_household.headroom.lumen, 5);
+  assert.equal(view.your_household.headroom.brightwork, 12);
+  assert.equal(list.topics[0].title, before.topics[0].title, "the ballot's own title is the ballot's, distinct from a candidate's");
+
+  // MCP and REST ask the same two producers: town { read: "votes" } is read_votes
+  const { callTool } = await import("../src/mcp.mjs");
+  const mcpList = await callTool("read_votes", {}, { canWrite: true, clone });
+  const mcpView = await callTool("read_votes", { topic: "name-vote" }, { canWrite: true, clone, key: kKey });
+  assert.equal(mcpList.topics[0].candidates.find((c) => c.candidate === "lumen").title, "The Working Window", "town { read: votes }");
+  assert.equal(mcpView.candidates.find((c) => c.candidate === "lumen").title, "The Working Window", "town { read: votes, args: { topic } }");
+  assert.ok(!("title" in mcpList.topics[0].candidates.find((c) => c.candidate === "brightwork")));
+  rmSync(clone, { recursive: true, force: true });
+});
+
+test("POS-1140 · the title is read only from a regular hearth.md of a real entry folder, and only its frontmatter title", async () => {
+  const { candidateTitle, ENTRY_ID, MAX_HEARTH_MD_BYTES } = await import("../src/candidate-titles.mjs");
+  const clone = tempDir("office-votes-titles-");
+  const T = (id) => candidateTitle(clone, id);
+  putHearth(clone, "kilmartin", "---\ntitle: The Stoop\nauthor: kilmartin\n---\nbody\n");
+  putHearth(clone, "default", `---\ntitle: "Postmark's default"\nauthor: postmark\n---\n`);
+  putHearth(clone, "quoted", `---\ntitle: "The \\"Quoted\\" One"\n---\n`);
+  putHearth(clone, "no-title", "---\nauthor: someone\n---\nbody\n");
+  putHearth(clone, "blank-title", "---\ntitle:\nauthor: someone\n---\n");
+  putHearth(clone, "no-fence", "title: Not In A Fence\n");
+  putHearth(clone, "too-big", `---\ntitle: Huge\n---\n${"x".repeat(MAX_HEARTH_MD_BYTES)}`);
+  assert.equal(T("kilmartin"), "The Stoop");
+  assert.equal(T("default"), "Postmark's default");
+  assert.equal(T("quoted"), 'The "Quoted" One');
+  for (const nothing of ["no-title", "blank-title", "no-fence", "too-big", "no-such-folder"]) assert.equal(T(nothing), null, nothing);
+  // a link is no entry, and a name that is no folder name never reaches the filesystem
+  mkdirSync(hearthDir(clone, "linked"), { recursive: true });
+  writeFileSync(join(clone, "outside.md"), "---\ntitle: Outside\n---\n");
+  symlinkSync(join(clone, "outside.md"), join(hearthDir(clone, "linked"), "hearth.md"));
+  assert.equal(T("linked"), null, "a symlinked hearth.md is not read");
+  writeFileSync(join(clone, "PROJECTS", "hearth.md"), "---\ntitle: Up One\n---\n");
+  for (const bad of ["..", "../household-hearths/kilmartin", "kilmartin/", "Kilmartin", "a b", "", null, undefined, 7, "x".repeat(41)]) assert.equal(T(bad), null, `${JSON.stringify(bad)}`);
+  assert.equal(candidateTitle(null, "kilmartin"), null);
+  // the same spelling as the registered entries' (household-hearth.mjs § HEARTH_ID)
+  const { HEARTH_ID } = await import("../src/household-hearth.mjs");
+  assert.equal(ENTRY_ID.source, HEARTH_ID.source);
+  rmSync(clone, { recursive: true, force: true });
+});
+
+test("POS-1140 · the votes explain row names the optional candidate title", async () => {
+  const { EXPLAIN } = await import("../src/read-grammar.mjs");
+  const row = EXPLAIN.town.votes;
+  assert.match(row.what, /optional title \(the design's own name; absent when it has none\)/);
+  assert.match(row.what, /Hearth design/);
+  assert.equal(row.deeper, 'town { read: "votes" }');
 });
