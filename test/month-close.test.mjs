@@ -171,7 +171,12 @@ test("STARFORGE: the real close is derived WITHOUT its dollars, byte for byte; t
   const t = await freshTown();
   const att = [{ pot: "keeping-ec2", usd: 40, ref: "inv-1" }, { pot: "meeps-fund", usd: 100, ref: "inv-2" }];
   const without = pure(t), withIt = pure(t, att);
-  for (const pot of MONTH_CLOSE_ORDER) assert.deepEqual(byPot(withIt, pot).lines, byPot(without, pot).lines, `${pot}: the real rows do not move when Starforge's dollars are attested`);
+  for (const pot of MONTH_CLOSE_ORDER) {
+    assert.deepEqual(byPot(withIt, pot).lines, byPot(without, pot).lines, `${pot}: the real rows do not move when Starforge's dollars are attested`);
+    const chain = (d) => { const p = byPot(d, pot); return [p.ledger_before, p.ledger_after, p.tail_seal_before, p.tail_seal_after]; };
+    assert.deepEqual(chain(withIt), chain(without), `${pot}: the real ledger prefix is the same length and the same seal chain: the simulated receipt never joined it`);
+  }
+  assert.deepEqual(withIt.ledger, without.ledger, "and the plan's ledger span is the same");
   assert.ok(!withIt.pots.flatMap((p) => p.lines ?? []).some((l) => /starforge|wright/.test(l) && /holo/.test(l)), "no real holo row for the credited household");
   assert.ok(!withIt.pots.flatMap((p) => p.lines ?? []).some((l) => /pot-receipt/.test(l)), "no receipt");
   const ec2 = byPot(withIt, "keeping-ec2").provisional, meeps = byPot(withIt, "meeps-fund").provisional;
