@@ -215,14 +215,18 @@ test("§ 4 the access line carries each doorstep/household read's timing: worker
     assert.equal(restW.length, 1);
     assert.equal(restM.length, 1);
     assert.equal(lines.filter((l) => l.path === "/town").every((l) => !l.timing), true, "a door outside the family carries no timing");
-    // READS ONLY: every act, explain, act-bearing batch (whichever tool is last) and act-shaped GET is on the log WITHOUT timing; the two-read batch is one line of 2 calls
+    // READS keep their read timing exactly as before; since POS-1110 every ACT-bearing request (an act, or a batch with an act
+    // in it, whichever tool is last) carries ACT timing on a door of its own (`mcp-act` / `household-act`), never a read's door.
+    // An explain and an act-shaped GET still carry none. The two-read batch is one line of 2 calls.
     const mcp = lines.filter((l) => l.path === "/mcp");
     assert.equal(mcp.length, 7, "seven MCP requests: doorstep read, mail read, act, explain, act+read, read+act, two reads");
-    assert.equal(mcp.filter((l) => l.timing).length, 3, "only the three pure-read requests carry timing: " + JSON.stringify(mcp.map((l) => [l.mcp, !!l.timing])));
-    const batched = mcp.filter((l) => l.timing?.batch);
+    assert.equal(mcp.filter((l) => l.timing?.door === "mcp").length, 3, "the three pure-read requests carry read timing: " + JSON.stringify(mcp.map((l) => [l.mcp, l.timing?.door ?? null])));
+    assert.equal(mcp.filter((l) => l.timing?.door === "mcp-act").length, 3, "the three act-bearing requests carry act timing (POS-1110): " + JSON.stringify(mcp.map((l) => [l.mcp, l.timing?.door ?? null])));
+    assert.equal(mcp.filter((l) => !l.timing).length, 1, "the explain carries none");
+    const batched = mcp.filter((l) => l.timing?.batch && l.timing.door === "mcp");
     assert.equal(batched.length, 1); assert.equal(batched[0].timing.batch, 2); assert.ok(!("read" in batched[0].timing), "a batch names no single read");
     const post = lines.filter((l) => l.path === "/household" && l.method === "POST");
-    assert.equal(post.length, 1); assert.ok(!post[0].timing, "POST /household (an act) carries no timing");
+    assert.equal(post.length, 1); assert.equal(post[0].timing?.door, "household-act", "POST /household (an act) carries act timing, not a read's (POS-1110)");
     const getAct = lines.filter((l) => l.path === "/household" && l.method === "GET" && !l.timing);
     assert.equal(getAct.length, 1, "the GET that names an act carries no timing, and the plain GET /household still does");
     if (process.env.POS1064_PRINT_TIMING) for (const l of timed) console.log("TIMING", JSON.stringify({ path: l.path, status: l.status, ms: l.ms, timing: l.timing }));   // the operator's example line
