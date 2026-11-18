@@ -19,9 +19,9 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import {
   blessed, draftDeltaForKey, draftRefForHousehold, ensureDraftCheckout, freshestMainRef, mainRef,
@@ -29,8 +29,8 @@ import {
 } from "../src/world-branches.mjs";
 import { questionKind, startWorldRefresher, worldRefresher } from "../src/world-refresher.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-refresher-"));
-const cache = mkdtempSync(join(tmpdir(), "postmark-refresher-engine-"));
+const repo = tempDir("postmark-refresher-");
+const cache = tempDir("postmark-refresher-engine-");
 after(() => {
   worldRefresher(repo)?.stop();
   rmSync(repo, { recursive: true, force: true });
@@ -149,7 +149,7 @@ test("after a ref moves, a read answers from the last refresh until the refreshe
 });
 
 test("a write sees the refs it just moved: the pen reseats on origin's new tip, not on the refresher's memory of it", async () => {
-  const base = mkdtempSync(join(tmpdir(), "postmark-refresher-pen-"));
+  const base = tempDir("postmark-refresher-pen-");
   try {
     const at = (dir) => (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     const who = ["-c", "user.name=f", "-c", "user.email=f@t.invalid"];

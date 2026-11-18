@@ -29,8 +29,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -58,7 +58,7 @@ before(async () => {
   if (WHY_SKIP) return;
   // A throwaway checkout AT THE TAG. `--shared` borrows the clone's objects and
   // writes nothing into it; the office's clone is never checked out or moved.
-  dir = mkdtempSync(join(tmpdir(), "pos142-fold-"));
+  dir = tempDir("pos142-fold-");
   execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, join(dir, "w")], { stdio: "ignore" });
   const repo = join(dir, "w");
   git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
@@ -231,7 +231,7 @@ test("GET /world/store advertises W2_FOLD beside its siblings — and only adver
 // (the property first, 60) and stays what live readers ask for, and the record
 // the store fold rebuilds carries the file's own line, as the loader's does.
 test("POS-704 · a class file's own dials: line rides the law row beside the merge, and the store fold gives it back", { skip: WHY_SKIP }, async () => {
-  const work = mkdtempSync(join(tmpdir(), "pos704-dials-"));
+  const work = tempDir("pos704-dials-");
   try {
     const repo = join(work, "w");
     execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });

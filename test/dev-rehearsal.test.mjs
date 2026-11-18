@@ -13,8 +13,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -60,7 +60,7 @@ test("the guard refuses a pen that names any database but the dev office's", () 
 });
 
 test("the CLI refuses before it connects, and its first line says why", () => {
-  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-cli-"));
+  const dir = tempDir("dev-rehearsal-cli-");
   try {
     // port 1: a connection attempt would answer ECONNREFUSED, so its absence proves none was made
     writeFileSync(join(dir, "dev.env"), `WORLD2_PG_URL=${url("office_api", PROD_DB, 1)}\nTOWN_PUSH=0\n`);
@@ -88,7 +88,7 @@ test("the table census reads this tree's migrations, drops included", () => {
 });
 
 test("the GitHub stub answers the pen's join road and records the PR's files, never another repo", async () => {
-  const town = mkdtempSync(join(tmpdir(), "dev-rehearsal-stub-"));
+  const town = tempDir("dev-rehearsal-stub-");
   try {
     const g = (...a) => execFileSync("git", ["-C", town, ...a], { encoding: "utf8" }).trim();
     g("init", "-q", "-b", "main");
@@ -170,7 +170,7 @@ test("the seal job skips, naming the uninstalled socket, and runs once the socke
   const seal = CROSSING.find((j) => j.name === "seal");
   assert.equal(seal.box, "tools/town-seal-sandbox.mjs");
   const was = process.env.TOWN_SEAL_SOCKET;
-  const dir = mkdtempSync(join(tmpdir(), "seal-socket-"));
+  const dir = tempDir("seal-socket-");
   try {
     process.env.TOWN_SEAL_SOCKET = join(dir, "absent.sock");
     assert.match(seal.skipIf({}), /absent\.sock is not here: postmark-town-seal\.socket installs after the release that carries it is live \(POS-988\)/);
@@ -231,7 +231,7 @@ test("a failed, running or missing sandbox run is red, and so is a GitHub that d
 });
 
 test("what was carried is release.json's sha and tag (the carry writes both), else the tree's HEAD and branch", () => {
-  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-sha-"));
+  const dir = tempDir("dev-rehearsal-sha-");
   try {
     writeFileSync(join(dir, "release.json"), JSON.stringify({ tag: "train/2026-w42", sha: "65c5e6d", target: "dev" }));
     assert.deepEqual(carried(dir), { sha: "65c5e6d", ref: "train/2026-w42" });
@@ -385,7 +385,7 @@ test("the rehearsal's ground keeps off the world's parcels when its store holds 
 
 test("a world clone that reads no parcels refuses, by name: couldn't read is never a world with none (POS-928)", async () => {
   // the world's own git and tools, and no WORLD/marks on disk: a half-failed checkout, or a sparse set that drops it. loadMarks answers [] and throws nothing.
-  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-nomarks-"));
+  const dir = tempDir("dev-rehearsal-nomarks-");
   try {
     const clone = join(dir, "world");
     execFileSync("git", ["clone", "--quiet", "--no-checkout", WORLD, clone], { windowsHide: true });

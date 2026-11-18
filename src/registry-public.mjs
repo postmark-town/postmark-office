@@ -60,7 +60,7 @@
 //   - `likeness` and `invited_by` are cut as before: an object to its named
 //     keys, each holding a single value (a list is walked, and a single value
 //     passes as it is).
-//   - `human_profile` (098, POS-721) is NAMED public: the town name, short line
+//   - `human_profile` (101, POS-721) is NAMED public: the town name, short line
 //     and pronouns the household's human chose to show (Wright, settled
 //     2026-11-06: "the public reads show them"). It is what its one writer
 //     writes (src/human-profile.mjs): an object of those three keys, each a

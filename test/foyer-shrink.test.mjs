@@ -61,6 +61,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 import { fixtureTown, metaOf } from "./fixture.mjs";
@@ -88,7 +89,7 @@ const trash = [];
 after(() => { for (const d of trash.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 // A scratch directory of the file's own (NOT in `trash`: it outlives the sweep).
-const dir = mkdtempSync(join(tmpdir(), "pm-foyer-"));
+const dir = tempDir("pm-foyer-");
 after(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 // The doors below run in this process and read their town index from a store
 // seeded from the fixture town (POS-268, office-under-test.mjs). The checks
@@ -113,7 +114,7 @@ const logDb = () => {
 
 /** A town clone the envelope pre-flight can scan and the pen can commit into. */
 function mailClone() {
-  const d = mkdtempSync(join(tmpdir(), "pm-foyer-town-"));
+  const d = tempDir("pm-foyer-town-");
   trash.push(d);
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(d, "WHITE_PAGES", h, "outbox"), { recursive: true });
@@ -519,43 +520,18 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   //
   // The witness: in the frozen copy, exactly one act shape carries `heard`,
   // and on the live door begin's card is that shape, and so is declare's.
-  const heardShapes = frozen.acts.filter((a) => a.fields && "heard" in a.fields);
-  assert.equal(heardShapes.length, 1, "begin and declare share one shape in the frozen copy");
-  const beginLive = full.acts.find((a) => a.act === "begin");
-  assert.deepEqual(shapeOf(beginLive), heardShapes[0], "the live begin card asks the question");
-  assert.deepEqual(shapeOf(full.acts.find((a) => a.act === "declare")), heardShapes[0]);
-
-  // ⚑ REGENERATED 2026-10-14 FOR POS-574 (the harbor's signs, Wright's ruling
-  // G4a), named here for the same reason. What grew: declare's and begin's
-  // shared shape gained one optional field, `from_town`, the town an agent says
-  // it came from, printed on its berth as its own claim. ADDITIVE and proven so:
-  // the capture diff added exactly `/acts/0/fields/from_town/{type,description}`
-  // and removed or retyped none (docs/2026-10-13/rail/POS-574/). It stays off
-  // the abridged index (household-apex.mjs § OFF_INDEX, F5d). PSA for the
-  // release notes: "declare_household (and begin) take an optional from_town —
-  // the short name of the agent town you already live in, like 1f3d9 — and the
-  // ship's manifest prints it on your berth as your claim."
+  // ⚑ REGENERATED 2026-11-17 FOR CORE-114 (Wright 00:26:57Z, fitting POS-958's proposal; Darko sees it before merge). What
+  // MOVED: the cards of `begin`, `declare` and `buy-parcel-room` left the bare answer's acts: they are offered (the berth's and
+  // the visitor's `next`, the glance's `first_steps`), not listed, so the REST bare answer, the connector's index and every
+  // shape no longer carry them. That is a REMOVAL, ruled and named here: the capture diff is exactly the arrival shape (declare's and
+  // begin's one shared shape, with heard, heard_note, from_town and invited_by) and buy-parcel-room's shape, nothing else removed or
+  // retyped. All three still dispatch by `do:`, stay in the tool schema's enum and answer their full card (`read: "<act>"`, F7b, F5d).
+  // PSA for the release notes: "household's bare answer no longer lists begin, declare or buy-parcel-room; a berth or a signed-in
+  // account with no household finds its arrival call in `next`, and a house that may buy room finds it in the glance's first_steps."
   //
-  // The witness: that shared shape carries from_town, in the frozen copy and on
-  // the live door.
-  assert.equal(heardShapes[0].fields.from_town?.type, "string", "the frozen arrival shape carries from_town");
-  assert.equal(beginLive.fields.from_town?.type, "string", "and the live begin card takes it");
-
-  // ⚑ REGENERATED 2026-10-22 FOR POS-576 (Darko 20:40, the invitation link),
-  // named here for the same reason. What grew: declare's and begin's shared
-  // shape gained one optional field, `invited_by`, who invited the household,
-  // printed on its row in the town's tools/households.json as a public credit.
-  // ADDITIVE and proven so: the capture diff added exactly
-  // `/acts/0/fields/invited_by/{type,description,maxLength}` and removed or
-  // retyped none. It stays off the abridged index (household-apex.mjs §
-  // OFF_INDEX, F5d). PSA for the release notes: "declare_household (and begin)
-  // take an optional invited_by: the resident or household that invited you,
-  // credited publicly on your household's record."
-  //
-  // The witness: that shared shape carries invited_by, in the frozen copy and
-  // on the live door.
-  assert.equal(heardShapes[0].fields.invited_by?.type, "string", "the frozen arrival shape carries invited_by");
-  assert.equal(beginLive.fields.invited_by?.type, "string", "and the live begin card takes it");
+  // The witness: no card in the live REST answer is one of the three, and no act shape in the frozen copy carries `heard`.
+  for (const act of ["begin", "declare", "buy-parcel-room"]) assert.equal(full.acts.some((a) => a.act === act), false, `the live REST answer does not list ${act}`);
+  assert.equal(frozen.acts.filter((a) => a.fields && "heard" in a.fields).length, 0, "the frozen copy no longer holds the arrival shape");
 
   // ⚑ REGENERATED 2026-10-20 FOR WLD-83 (Darko 09:55: pronouns are a profile
   // field, beside the name). What grew: the profile act's fields gained one
@@ -618,13 +594,10 @@ test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the c
 // Measured on the POS-292 head with them off: connector bare 8,180 B, so the
 // headroom under SLIM_CEILING is 12 B; REST bare 21,668 B under 24,576.
 // POS-570: begin asks the same two fields, on the same rule. POS-576: invited_by too.
-test("F5d · POS-292 + POS-570 + POS-574 + POS-576: the abridged index leaves declare's and begin's heard fields, from_town and invited_by off, and both cards still carry them", async () => {
+test("F5d · POS-292 + POS-570 + POS-574 + POS-576, CORE-114: declare and begin are off the abridged index (the tier's next offers them), and both cards still carry heard, from_town and invited_by", async () => {
   const slim = await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
   for (const act of ["declare", "begin"]) {
-    const entry = slim.acts.find((a) => a.act === act);
-    assert.ok(entry, `${act} is on the index`);
-    for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
-    assert.ok("household" in entry.fields, `the rest of ${act}'s fields are still listed`);
+    assert.equal(slim.acts.some((a) => a.act === act), false, `${act} is not on the index`);
     const card = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     const fields = card.card?.fields ?? card.fields ?? {};
     for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
@@ -736,7 +709,15 @@ test("F7b · the TWENTY-ONE acts that own their name answer their card; the THRE
   //
   // ⚑ TWENTY → TWENTY-ONE, 2026-11-07 (POS-730): `letter-note` joined as a BARE act. What it marks is
   // shown on the awaiting view's rows (`read: "mail", view: "awaiting"`), not at a household read of its name.
-  assert.equal(bare.length, 21);
+  // ⚑ TWENTY-ONE → EIGHTEEN, 2026-11-17 (CORE-114): `begin`, `declare` and `buy-parcel-room` left the BARE acts for the
+  // OFFERED ones (household-apex.mjs § OFFERED_ACTS): offered by the tier's `next` and the glance's `first_steps`, never listed.
+  // Their cards are still read by name (asserted below, with the offered acts) and they still dispatch.
+  assert.equal(bare.length, 18);
+  for (const act of ["begin", "declare", "buy-parcel-room"]) {
+    const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
+    assert.equal(r.error, undefined, `read: "${act}" still answers its card`);
+    assert.ok(r.card && r.card.act === act, `${act}'s card is the full named one`);
+  }
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
@@ -1866,7 +1847,7 @@ const runRoster = (env, args = []) => spawnSync(process.execPath, [ROSTER_TOOL, 
 
 /** A world store the roster gate accepts: constitution-tier town marks in the works. */
 function goodWorldStore() {
-  const p = join(mkdtempSync(join(tmpdir(), "pm-foyer-world-")), "world.db");
+  const p = join(tempDir("pm-foyer-world-"), "world.db");
   trash.push(join(p, ".."));
   const d = new DatabaseSync(p);
   d.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, subkind TEXT, tier TEXT, by TEXT, at_x REAL, at_y REAL, extent_w REAL, extent_h REAL, props TEXT);");
@@ -1879,7 +1860,7 @@ function goodWorldStore() {
 }
 
 test("F17 · a FLOOR roster refuses to render — nothing is written and the exit code says so", () => {
-  const outFile = join(mkdtempSync(join(tmpdir(), "pm-foyer-roster-")), "OUT.md");
+  const outFile = join(tempDir("pm-foyer-roster-"), "OUT.md");
   trash.push(join(outFile, ".."));
   const r = runRoster({ WORLD_STORE_DB: join(tmpdir(), "pm-foyer-no-such-world-store.db") }, ["--out", outFile]);
   assert.equal(r.status, 1, "a doc build that cannot see the record must fail loudly, not publish a smaller truth");
@@ -1889,7 +1870,7 @@ test("F17 · a FLOOR roster refuses to render — nothing is written and the exi
 });
 
 test("F17b · --allow-floor renders, but the page itself carries the disclosure — the fallback is never presented as the live enum", () => {
-  const outFile = join(mkdtempSync(join(tmpdir(), "pm-foyer-roster-")), "OUT.md");
+  const outFile = join(tempDir("pm-foyer-roster-"), "OUT.md");
   trash.push(join(outFile, ".."));
   const r = runRoster({ WORLD_STORE_DB: join(tmpdir(), "pm-foyer-no-such-world-store.db") }, ["--out", outFile, "--allow-floor"]);
   assert.equal(r.status, 0);
@@ -1899,7 +1880,7 @@ test("F17b · --allow-floor renders, but the page itself carries the disclosure 
 });
 
 test("F17c · a GOOD store renders with NO warning — the stamp is a disclosure, not decoration", async () => {
-  const outFile = join(mkdtempSync(join(tmpdir(), "pm-foyer-roster-")), "OUT.md");
+  const outFile = join(tempDir("pm-foyer-roster-"), "OUT.md");
   trash.push(join(outFile, ".."));
   // The roster tool reads the world graph as rows (POS-270 lane W 3a), never the file.
   const { rowsEnv } = await import("./helpers/world-rows.mjs");

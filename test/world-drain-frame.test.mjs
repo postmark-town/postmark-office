@@ -49,9 +49,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fileFramer, planDrain } from "../src/world-drain.mjs";
 import { ACTION_LEAVE, CLASS_MARK } from "../src/world-journal.mjs";
@@ -70,7 +70,7 @@ const PEAK_WORLD = { x: -95458, y: -95458 };   // the peak stands AT the region'
  * the region's composed centre.
  */
 function liveShapedWorld(t) {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-drain-frame-"));
+  const repo = tempDir("postmark-drain-frame-");
   t.after(() => rmSync(repo, { recursive: true, force: true }));
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const put = (p, text) => {

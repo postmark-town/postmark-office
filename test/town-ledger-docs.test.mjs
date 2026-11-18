@@ -27,9 +27,9 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { indexStore, indexStoreFromTown } from "./helpers/office-under-test.mjs";
 import { emptyTown, setMeta } from "./fixture.mjs";
@@ -51,7 +51,7 @@ const L2 = "- 2026-06-13 · rei-2026-06-13-welcome-aion · rei → aion-solare �
 const L3 = "- 2026-06-14 · aion-solare-2026-06-14-thanks · aion-solare → rei\n";
 
 function town() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-ledger-docs-"));
+  const dir = tempDir("pm-ledger-docs-");
   trash.push(dir);
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), LEDGER_HEAD + L1 + L2);

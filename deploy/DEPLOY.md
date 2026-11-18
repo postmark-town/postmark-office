@@ -1,9 +1,22 @@
-# Deploying the office to the atelier box (EC2, nginx/Ubuntu)
+# Deploying the office to the box (EC2, nginx/Ubuntu)
 
 The same box that serves `starforge-atelier.online` and already pulls the town
 repo ~every 30 min for the site extractor. The office rides that rhythm.
 
-> **Live-truth note (2026-07-19):** the box's `/srv/postmark-office` is a plain
+> **How code reaches the box (current):** from a `release/2026-wNN[.k]` tag,
+> never from a branch tip. `release-train.yml` takes `git archive <tag>`, rsyncs
+> it onto the box, restarts `postmark-office`, and polls `GET /release` until it
+> names the tag (§ The auto-deploy below; `deploy/remote-deploy.sh` is the box
+> half). Which branch a PR targets, how a train or a hotfix hand tag is cut, and
+> who merges are `SHIPPING.md`'s (linked under § The weekly train); this file does
+> not restate them. A hand-run `scp` of single files is **break-glass only**, and
+> the dated note below is its record, not a competing recipe.
+
+> **Live-truth note (2026-07-19) — historical; superseded as the normal code
+> deploy by the tag route above (POS-60). Kept verbatim as the discovery
+> receipt and as the break-glass procedure.** What it said that day:
+>
+> the box's `/srv/postmark-office` is a plain
 > file copy, NOT the git clone step 1 below describes — a code deploy is
 > `scp src/<changed>.mjs meepo-ec2:/srv/postmark-office/src/` +
 > `sudo systemctl restart postmark-office`, then probe a route whose response
@@ -29,8 +42,8 @@ ENGINE changes reach prod through the site's world pin riding the site train.
 
 `.github/workflows/release-train.yml` no longer only cuts the tag — it deploys
 it, in the same run. **Nothing about the procedure changed; only the hand did.**
-The workflow does the three steps the live-truth note above prescribes, in that
-order, and goes red if any of them cannot be proven:
+The workflow does the three steps the (now historical) live-truth note above
+prescribed, in that order, and goes red if any of them cannot be proven:
 
 | the hand-carry | the workflow |
 |---|---|
@@ -46,7 +59,9 @@ no train name cuts no tag and deploys nothing.
 
 Until the repo variable `OFFICE_AUTODEPLOY` is `on`, an automatic trigger cuts
 the tag exactly as it always did **and stops**. Today's behaviour, unchanged;
-the hand-carry stays the way code reaches the box.
+the deploy of that tag is then a person's act: run the workflow from the
+Actions tab (`workflow_dispatch`, never gated), or, as break-glass only, the
+hand-carry in the live-truth note above.
 
 ```sh
 gh variable set OFFICE_AUTODEPLOY --body on  -R postmark-town/postmark-office   # adopt
@@ -260,8 +275,30 @@ cd /srv/postmark-office-dev && sudo bash -c '
 `world2-lib.sh § w2_db` falls back to `world2_dev` (PROD) when `WORLD2_DB` is
 unset, so the line sets it and asserts it before anything writes.
 
-**8. The switch.** Add `STAMP_LINES=store` to `/etc/postmark-office-dev.env`
-(sudoedit), then `sudo systemctl restart postmark-office-dev`.
+**8. The switch, behind the mint's gate.** First `stamp-mint-parity`, read-only,
+run as the dev office runs its jobs (POS-341's ruling, 10-04 Q3: before anything
+mints from the store, its key base, deliveries, ledger and replay equal the clone's;
+prod's switch has the same gate, § The store mint at the crossing, step 6). That is
+`dev-seed-advance.sh § as_dev_office`'s binding: meepo, the dev env file, and dev's
+OWN town pins. `TOWN_PINS_DIR` is not in the env file; the dev units take it from
+their drop-in (`deploy/postmark-office-dev.service-dropin-town-pins.conf`), and
+without it the tool checks dev's re-signed clone against the office's pins, which
+a dev clone never equals.
+```sh
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+  node world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office-dev/town-clone
+#   expect: … PARITY (exit 0). A DIFFERENCE stops here: report it, reconcile nothing.
+```
+Read a red by what it names, not by its exit code alone. A `TownPinMismatch`
+("… is not the copy the office pinned") is the PINS, not the store: the clone and
+dev's pins disagree, and the remedy is the freshen
+(`sudo systemctl start postmark-dev-freshen.service`, which re-pins), never the
+registry. A key-base difference is a registry that lags the clone (on 10-10 dev's
+`household_pins` was a 09-25 copy, and the rehearsal's mint diverged): refresh it
+as § The dev seed advance, step 3 does, then run the gate again. Only on PARITY,
+add `STAMP_LINES=store` to `/etc/postmark-office-dev.env` (sudoedit), then
+`sudo systemctl restart postmark-office-dev`. The rehearsal's preflight runs the
+same gate on every rehearsal (step 10).
 
 **9. The pens file**, `/etc/postmark-dev-rehearsal.env` (root 0600, sudoedit),
 both URLs naming dev's database (the tool refuses any other):
@@ -280,7 +317,8 @@ cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --
 The first line names the store it writes. The preflight names anything still
 missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
 `tools/stamp-pubkey.pem` must be its public half), the town index off the
-clone's history, a stamp chain that disagrees with the clone.
+clone's history, a stamp chain that disagrees with the clone, and a red
+`stamp-mint-parity` (step 8's gate, run as the dev office's job).
 
 The last step is the stamp sandbox (POS-366). It cannot run on the box (the
 carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
@@ -379,6 +417,8 @@ dev's. Then, in order, stopping at the first failure and naming it:
    moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
    database but the sandbox and any count of open windows but one. A close still ahead
    is left alone. The step prints the close: rehearse before it, or run the advance again.
+   Since POS-940 the rehearsal's clearings pull a past close to now as well, so this
+   step is a second guard, kept.
 9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
@@ -1323,11 +1363,20 @@ A new box alarm is a probe in `tools/site-sentinel.mjs`, never a script with
 its own webhook call; `test/site-sentinel.test.mjs` § ONE ROUTE reds on a PR
 that adds one. The root disk is probe `disk_root` (DOWN at 85%, the line the
 retired disk watch used). The meeps are probe `meeps`: it reads
-`/srv/postmark-sentinel/meeps.json`, which Wright's watcher on Darko's desktop
-(`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
-DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
+`/srv/postmark-sentinel/meeps.json`, a record landed from outside the box. The
+desktop watcher that once wrote it (`G:/Wright-HQ/tools/meep-watch.mjs`, every 5
+minutes by scp) is **retired**; the producer is routed to the
+starforge-rig repo, source tree `windows/meepops` (MeepOps). Read its source there for
+how, and how often, the record is written: this file does not restate the
+producer, and nothing here was checked against the live box. The probe's own
+contract does not depend on the producer: it reads that path, `status` `OK` is
+healthy, and the record's DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
 older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
-barks only on DOWN or STALE. The one alarm outside the sentinel is the
+barks only on DOWN or STALE. The meeps that moved to town-rig are probe
+`meeps_town_rig`: it reads `/srv/postmark-sentinel/meeps-town-rig.json`, landed
+by the watcher on town-rig, with the same classifier and the same 15 minutes
+(CORE-72). It ships only once that watcher is landing the file; before that it
+would read STALE. The one alarm outside the sentinel is the
 watchman's watchman: the town repo's `.github/workflows/offbox-watch.yml` runs
 off the box and alarms when the front door or the sentinel itself is dead or
 stale, which the sentinel cannot report about itself. It reads this same
@@ -3155,16 +3204,18 @@ The refresh needs no step: the box runs `deploy/site-refresh.sh` from the office
 
 The bare read an MCP caller gets at each door is set by one variable per door in `/etc/postmark-office.env`. Unset means today's read, byte for byte. The values are spelled per door, and **a wrong spelling is the 0 shape** with one line in the journal, never an error. So check the journal after a restart.
 
-| Variable | Today (unset) | Lean read | Names-only cards |
-|---|---|---|---|
-| `WORLD_READ_SHAPE` | `v0` | `v1` | `v2` |
-| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` |
-| `HOUSEHOLD_READ_SHAPE` | `h0` | `h1` | `h2` |
+| Variable | Unset | Lean read | Names-only cards | The compact glance (v2) |
+|---|---|---|---|---|
+| `WORLD_READ_SHAPE` | `v0` (the full read) | `v1` (about 16k characters) | none | `v2` (about 8k: you, now, view, who, can, law) |
+| `TOWN_READ_SHAPE` | `t0` | `t1` | `t2` | none yet (POS-733) |
+| `HOUSEHOLD_READ_SHAPE` | `h0` (the older read) | `h1` | `h2` | `v2` (the house's glance, about 4K to 7K) |
+
+**World and household v2 are the MCP door's default from the w48 ship (POS-1094, Darko 2026-11-16 22:09):** the box sets `WORLD_READ_SHAPE=v2` and `HOUSEHOLD_READ_SHAPE=v2`, and a call asks for the older read with `read_shape: "v1"` (the world's gives each act one line unless it also passes `cards: "full"`). Each v2 bare read says so in its `more` line while the env is set. The word `v2` is the world's and the household's own spelling, never the town's: a `TOWN_READ_SHAPE=v2` is `t0`, said once in the journal. Setting the switches is the ship's step, not a PR's.
 
 - **The shape is the MCP door's only.** The REST doors always answer the full read whatever is set: `GET`/`POST /world/apex` (the site cockpit's read), `GET`/`POST /town/apex` and `GET /household`. This is held by `test/read-shape-mcp-only.test.mjs`.
-- **The eval's recommendation** (round 1, 2026-10-09) is `WORLD_READ_SHAPE=v1`. It made no call for town or household.
+- **The eval's recommendation** (round 1, 2026-10-09) was `WORLD_READ_SHAPE=v1`; the compact v2 read, built since, is the ruled default (above).
 - **To set it:** add the line, then `sudo systemctl restart postmark-office`.
-- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the lean read".
+- **To check it:** an MCP `tools/list` shows the world tool's SIZE line reading "the world read v2, the default read" (at `v1`: "the lean read"), and a bare `world {}` ends its `more` line with the line on the default.
 - **To roll back:** delete the line and restart.
 - **Never `TOWN_READ_SHAPE=v1`:** that is t0, said once in the journal.
 

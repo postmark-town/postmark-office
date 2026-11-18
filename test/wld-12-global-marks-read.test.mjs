@@ -20,14 +20,14 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 
 import { worldClone } from "./fixture-paths.mjs";
 
-const scratch = mkdtempSync(join(tmpdir(), "wld12-"));
+const scratch = tempDir("wld12-");
 const repo = join(scratch, "world");
 after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* litter */ } });
 

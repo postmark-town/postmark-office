@@ -155,3 +155,18 @@ test("4 · a future date, a bad date and an unknown resident are refused by name
   assert.equal(nameList("abcdefgh".split("")), "a, b, c, d, e and 3 more");
   assert.deepEqual(daySentences({ letters: { read: false }, received: { read: false } }), { sentences: [], counts: {} });
 });
+
+test("5 · POS-1035: each say rides as a REFERENCE — its id and the say it answers — never its words; the sentences and counts keep their meanings; unavailable is null, an empty day is []", async () => {
+  const acts = [
+    { id: "70002", action: "say", reply_to: "70001", at: "2026-11-12T10:00:00Z" },
+    { id: "70003", action: "say", reply_to: null, at: "2026-11-12T10:01:00Z" }, // a top say, or old talk: no parent invented
+    { id: "70004", action: "walk", reply_to: null, at: "2026-11-12T10:02:00Z" },
+  ];
+  const day = await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix({ acts }) });
+  assert.deepEqual(day.says, [{ id: 70002, reply_to: 70001 }, { id: 70003 }]);
+  assert.equal(day.counts.said, 2);
+  assert.ok(day.sentences.includes("spoke 2 times"));
+  assert.ok(!JSON.stringify(day).includes("text"), "no words anywhere");
+  assert.deepEqual((await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix() })).says, [], "read whole and empty: []");
+  assert.equal((await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix({ fail: { acts: true } }) })).says, null, "acts unavailable: null, never []");
+});

@@ -1,4 +1,4 @@
--- 098 — households.human_profile: THE HOUSEHOLD'S HUMAN'S TOWN NAME, SHORT LINE AND PRONOUNS (POS-721, small)
+-- 101 — households.human_profile: THE HOUSEHOLD'S HUMAN'S TOWN NAME, SHORT LINE AND PRONOUNS (POS-721, small)
 --
 -- SETTLED (Wright, 2026-11-06 00:51:44Z, on POS-721), verbatim:
 --   "POS-721, rebuilt small. Darko's ask (10-19, 10-20, POS-845 "Town name
@@ -36,7 +36,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/098_household_human_profile.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/101_household_human_profile.sql
 --
 -- THE PRODUCTION MIGRATION IS THE OPERATOR'S BOX ACT, on Darko's go; nothing in
 -- the code lane applies it. Until it lands every registry read answers as
@@ -52,10 +52,9 @@
 --   SELECT count(*) FROM households WHERE human_profile IS NOT NULL;      -- 0 until the first set
 --   node tools/registry-drain.mjs --check                                 -- still byte-equal
 --
--- This was 091 on its branch; 092–097 reached the train first, so it is 098,
--- the next number free on the train. Open office PRs hold 090 (#906) and 095
--- (#1022), and #1074 (POS-1003) also adds a 098: whichever of the two merges
--- second renumbers to 099, with its LANDED key and this header.
+-- This was 091 on its branch, then 098 when 092–097 reached the train first; 098 (POS-1003's refused acts), 099 and 100 then landed, so it is 101, the
+-- next number free on the train at the carry (POS-1131). Open office PRs hold 090 (#906) and 095 (#1022). Only the name, this header and the LANDED key
+-- changed: the statements below are exactly as reviewed.
 --
 -- No new grants: `office_api` already holds UPDATE on `households` (019).
 

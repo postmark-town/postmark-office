@@ -24,13 +24,13 @@ import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── the fixture world ────────────────────────────────────────────────────────
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-world-serve-"));
+const repo = tempDir("postmark-world-serve-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const dbPath = join(repo, "fixture-world.db");
 const logPath = join(repo, "shadow.jsonl");
@@ -500,7 +500,7 @@ test("the health surface names the mode, the shas, and whether the store is fres
 test("a main the office cannot read answers the plain reason, never git's own words (POS-663)", () => {
   // A directory with no git in it: blessed() throws, and the throw is git's
   // "fatal: not a git repository", the raw text the keyless panel used to carry.
-  const notAClone = mkdtempSync(join(tmpdir(), "postmark-world-serve-noclone-"));
+  const notAClone = tempDir("postmark-world-serve-noclone-");
   const said = [];
   const was = console.error;
   console.error = (...a) => said.push(a.join(" "));
@@ -548,7 +548,7 @@ test("publishedMainSha follows the DESCENDANT when local main and origin/main di
   // The two-pens case (2026-08-17): the keeper's PC pushes straight to GitHub
   // while the box's local main only moves at settlements — the as-of bar read
   // that lag backwards and called the store BEHIND a two-hour-stale "main".
-  const two = mkdtempSync(join(tmpdir(), "pm-two-pens-"));
+  const two = tempDir("pm-two-pens-");
   const g = (...args) => execFileSync("git", ["-C", two, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(join(two, "a.txt"), "one");
   g("init", "--quiet", "--initial-branch=main");

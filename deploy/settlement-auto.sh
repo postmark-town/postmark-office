@@ -1348,7 +1348,42 @@ fi
 # `exit` inside a shell function exits the script, which is what the race branch
 # means; and `WORLD_TO` assigned inside it is the script's own variable, which is
 # what the salvage branch means. Both are POSIX and both are load-bearing.
+#
+# THE CROSSING NAMES ITS WINDOW (POS-940; POS-354 fix c, Darko 2026-10-10: "Durable
+# fix: settlement-auto.sh writes a `Window: <id>` trailer, and the backfill prefers
+# it"). A clearing 12 h or more late used to leave world2/tools/settlements-backfill.mjs
+# naming the SUCCESSOR window by time, with no snapshot, permanently. So the commit
+# this crossing publishes — the one the keeper's tag blesses — says which docket it
+# folded: `Window: $DOCKET_WINDOW`, the window await-clearing saw locked for THIS
+# crossing (or, by hand, the newest unfolded one). Only the MESSAGE of a commit
+# this crossing made changes: the tree, the author, the committer and the committer
+# date (the row's `published_at`) are kept, so the harm gate's verdict and the
+# salvage's path comparison are untouched. Here, at the top of the one publisher,
+# because main's HEAD is final only now (the quiet registry-only crossing too), and
+# AFTER the quiet check, which compares main with $WORLD_BASE. No docket (the
+# retired git source), nothing new on main, or a trailer already there: nothing to
+# do. A refused amend is said and is never fatal; the backfill's closed-window
+# guard still holds the row.
+name_window() {
+  [ -n "${DOCKET_WINDOW:-}" ] || return 0
+  [ "$(git -C "$SWEEP" rev-parse main)" != "$WORLD_FROM" ] || return 0
+  if git -C "$SWEEP" log -1 --format=%B main > "$WORK/window.msg" \
+     && git -C "$SWEEP" interpret-trailers --parse < "$WORK/window.msg" | grep -q '^Window:'; then return 0; fi
+  # `set -e` is on: every step that could fail is inside this one `if`, so a refusal is a line, never an exit
+  if git -C "$SWEEP" interpret-trailers --in-place --trailer "Window: $DOCKET_WINDOW" "$WORK/window.msg" \
+     && GIT_COMMITTER_DATE="$(git -C "$SWEEP" log -1 --format=%cI main)" \
+        git -C "$SWEEP" -c user.name="$(git -C "$SWEEP" log -1 --format=%cn main)" \
+          -c user.email="$(git -C "$SWEEP" log -1 --format=%ce main)" \
+          commit -q --amend --allow-empty -F "$WORK/window.msg"; then
+    echo "[settlement-auto] window: main's commit names Window: $DOCKET_WINDOW ($(git -C "$SWEEP" rev-parse --short main))" >&2
+  else
+    echo "[settlement-auto] window: the Window: $DOCKET_WINDOW trailer could NOT be written (non-fatal; the backfill's closed-window guard still holds the row)" >&2
+  fi
+  WORLD_TO="$(git -C "$SWEEP" rev-parse main)"
+}
+
 publish_main() {
+  name_window
   if [ "$DRY" = "1" ]; then
     withheld "world main's push: $(git -C "$SWEEP" rev-parse main) over origin/main $WORLD_FROM"
     return 0

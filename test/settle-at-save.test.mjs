@@ -27,9 +27,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
@@ -46,7 +46,7 @@ import { seedJournalRow } from "./journal-seed.mjs";
 import { materializeLedgers } from "../src/world-drain.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-settle-"));
+const scratch = tempDir("postmark-settle-");
 after(() => sweep(scratch));
 
 const WALK_LEDGER = "WORLD/walk-ledger.md";

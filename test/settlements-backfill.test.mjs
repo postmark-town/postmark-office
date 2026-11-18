@@ -36,7 +36,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { settlementRowsFrom, windowFor, planFrom } from "../world2/tools/settlements-backfill.mjs";
+import { settlementRowsFrom, windowFor, planFrom, windowTrailer, heldWindow } from "../world2/tools/settlements-backfill.mjs";
 
 // `refs/tags/settlement/S71` on the shared clone, 2026-09-17: an ANNOTATED tag.
 // The tag OBJECT is 9b5e294f…; the commit it blesses is 1984062f…. Both are
@@ -52,15 +52,17 @@ const S71_LINE = {
 // A LIGHTWEIGHT tag is the commit itself: nothing to peel, no date of its own.
 const LIGHT_LINE = { tag: "settlement/S2", type: "commit", sha: "eeef9ae3a2a5a0be0fc23b33f01bf8a96dd43dc6", peeled: null, cdate: "2026-07-29T08:11:48-04:00", pcdate: null, tdate: null };
 
-// The candle's rows around S71, as the store holds them.
+// The candle's rows around S71, as the store holds them. `status` and
+// `cleared_at` are the columns the guard reads (POS-940): the clearing job sets
+// both in one UPDATE (clearing-job.mjs), seconds after the close.
 const WINDOWS = [
-  { id: 190, closes_at: "2026-09-15T05:45:40Z" },
-  { id: 191, closes_at: "2026-09-15T17:45:40Z" },
-  { id: 192, closes_at: "2026-09-16T05:45:40Z" },
-  { id: 193, closes_at: "2026-09-16T17:45:40Z" },
-  { id: 194, closes_at: "2026-09-17T05:45:40Z" },
-  { id: 195, closes_at: "2026-09-17T17:45:40Z" },
-  { id: 196, closes_at: "2026-09-18T05:45:40Z" },   // open at the time of writing; closes in the future
+  { id: 190, closes_at: "2026-09-15T05:45:40Z", status: "closed", cleared_at: "2026-09-15T05:45:44Z" },
+  { id: 191, closes_at: "2026-09-15T17:45:40Z", status: "closed", cleared_at: "2026-09-15T17:45:44Z" },
+  { id: 192, closes_at: "2026-09-16T05:45:40Z", status: "closed", cleared_at: "2026-09-16T05:45:44Z" },
+  { id: 193, closes_at: "2026-09-16T17:45:40Z", status: "closed", cleared_at: "2026-09-16T17:45:44Z" },
+  { id: 194, closes_at: "2026-09-17T05:45:40Z", status: "closed", cleared_at: "2026-09-17T05:45:44Z" },   // S71's journal: "window 194 locked at 05:45:45Z"
+  { id: 195, closes_at: "2026-09-17T17:45:40Z", status: "closed", cleared_at: "2026-09-17T17:45:44Z" },
+  { id: 196, closes_at: "2026-09-18T05:45:40Z", status: "open", cleared_at: null },   // open at the time of writing; closes in the future
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -175,6 +177,68 @@ test("a row in the table with no tag behind it is `extra` — the verify reds on
   const stored = [...d.map((r) => asStored(r)), { number: 9001, tag_sha: "9".repeat(40), published_at: new Date("2099-01-01T00:00:00Z"), window_id: null, blessed_at: null }];
   const { extra } = planFrom(d, stored, WINDOWS);
   assert.deepEqual(extra, [9001]);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 3b · A CLEARING 12 H LATE (POS-940; POS-354 fix c) — the trailer and the guard
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Window 197 closes 09-18 17:45:40Z and is cleared thirteen hours late; 198
+// closed by the clock at 09-19 05:45:40Z and is still open. The crossing that
+// folded 197 publishes at 06:52Z. The store-backed run of the same case, through
+// settlement-auto.sh's own name_window and the real tick, is
+// test/settlement-late-clear.test.mjs.
+
+const LATE = [...WINDOWS.filter((w) => w.id < 196),
+  { id: 196, closes_at: "2026-09-18T05:45:40Z", status: "closed", cleared_at: "2026-09-18T05:45:44Z" },
+  { id: 197, closes_at: "2026-09-18T17:45:40Z", status: "closed", cleared_at: "2026-09-19T06:50:00Z" },
+  { id: 198, closes_at: "2026-09-19T05:45:40Z", status: "open", cleared_at: null }];
+const LATE_LINE = { ...S71_LINE, tag: "settlement/S72", sha: "7".repeat(40), peeled: "8".repeat(40), pcdate: "2026-09-19T06:52:00Z", tdate: "2026-09-19T07:10:00Z" };
+const lateRow = (stated_window = null) => settlementRowsFrom([LATE_LINE]).map((r) => ({ ...r, stated_window }));
+
+test("THE DEFECT: by time alone, a crossing 13 h late names the successor window", () => {
+  assert.equal(windowFor("2026-09-19T06:52:00Z", LATE), 198, "198's close passed before the push; 197 is what the crossing folded");
+});
+
+test("THE GUARD: with no trailer, that row is HELD before insertion — the successor is open — and stays held once it closes later", () => {
+  const { plan } = planFrom(lateRow(), [], LATE);
+  assert.equal(plan[0].state, "HELD");
+  assert.equal(plan[0].window_id, 198);
+  assert.equal(plan[0].held, "window 198 is open, not closed");
+  const closedLater = LATE.map((w) => (w.id === 198 ? { ...w, status: "closed", cleared_at: "2026-09-19T18:00:00Z" } : w));
+  assert.match(planFrom(lateRow(), [], closedLater).plan[0].held, /^window 198 was not closed when this crossing published \(cleared 2026-09-19T18:00:00\.000Z, published 2026-09-19T06:52:00\.000Z\)$/,
+    "closing 198 afterwards does not make it the window this crossing closed");
+});
+
+test("THE PREFERENCE: the blessed commit's Window: trailer names 197, and the row is new at 197", () => {
+  const { plan } = planFrom(lateRow(197), [], LATE);
+  assert.deepEqual([plan[0].state, plan[0].window_id, plan[0].window_from], ["new", 197, "trailer"]);
+});
+
+test("the guard also holds a trailer naming a window the store lacks or has not closed; a row before the first window is never held", () => {
+  assert.equal(planFrom(lateRow(999), [], LATE).plan[0].held, "window 999 is not in the store");
+  assert.equal(planFrom(lateRow(198), [], LATE).plan[0].held, "window 198 is open, not closed");
+  assert.equal(heldWindow({ window_id: null, published_at: "2026-07-28T20:08:58Z" }, LATE), null);
+  const [s2] = planFrom(settlementRowsFrom([LIGHT_LINE]), [], LATE).plan;
+  assert.deepEqual([s2.state, s2.window_id], ["new", null]);
+});
+
+test("the guard never touches a row already present: an old row on a window the time rule names is still `present`", () => {
+  const d = lateRow();
+  const { plan } = planFrom(d, [{ number: 72, tag_sha: d[0].tag_sha, published_at: d[0].published_at, window_id: 198, blessed_at: d[0].blessed_at }], LATE);
+  assert.equal(plan[0].state, "present");
+});
+
+test("windowTrailer reads `Window: <id>` from the trailer block only — never the subject, and never two that disagree", () => {
+  assert.equal(windowTrailer("settlement: sweep 4 published\n\nWindow: 312\n"), 312);
+  assert.equal(windowTrailer("settlement: sweep 4 published\r\n\r\nWindow: 312\r\n"), 312, "CRLF");
+  assert.equal(windowTrailer("settlement: sweep\n\nbody line\n\nCo-Authored-By: x <y>\nWindow: 7"), 7, "among other trailers");
+  assert.equal(windowTrailer("Window: 312"), null, "a subject is never a trailer");
+  assert.equal(windowTrailer("settlement: sweep\n\nWindow: 312\n\nmore prose"), null, "not in the last paragraph");
+  assert.equal(windowTrailer("settlement: sweep\n\nWindow: 1\nWindow: 2"), null, "two that disagree name nothing");
+  assert.equal(windowTrailer("settlement: sweep\n\nWindow: 5\nWindow: 5"), 5);
+  assert.equal(windowTrailer("settlement: sweep\n\nWindow: soon"), null);
+  assert.equal(windowTrailer(""), null);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

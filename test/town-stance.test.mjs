@@ -28,20 +28,20 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
-import { CLASS_STANCE, ACTION_STANCE, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
+import { CLASS_STANCE, ACTION_STANCE, __forgetStanceWorldForTest, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
 import {
   TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstCover, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
 } from "../src/town-stance.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-town-stance-"));
+const scratch = tempDir("postmark-town-stance-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────
@@ -753,4 +753,122 @@ test("stancesCountAt: the cutover is a settlement NUMBER; below it nothing count
   assert.match(below.why, /^S10 is below the cutover S11/);
   assert.equal(stancesCountAt(null, { TOWN_STANCE_CUTOVER: "S11" }).counts, false, "a number nobody can read is not known to be after it");
   assert.throws(() => stancesCountAt(11, { TOWN_STANCE_CUTOVER: "yes" }), /names no settlement/, "a cutover is a number, never a yes");
+});
+
+// ── POS-1057 · the inbox's pair work: overlap first, one read per mark, the words by their mark ──
+//
+// Why: from w47 a doorstep cost about 2.7 times more (POS-1064's table, 2026-11-17). The stance inbox weighs every mark against
+// the house's ground, and POS-571 made the seniority question a cell-by-cell read that was asked before the overlap question, of
+// every pair. None of these change an answer; each test holds the answer and the work.
+// FLIPS: (a) put `!elder(g, mark)` back before `!overlaps(g, mark)` in awaitingOf → `asked` holds all three marks;
+// (b) drop the WeakMap in elderByFirstLaid → `reads` counts a read per comparison, not per mark;
+// (c) hand awaitingOf every word again in candidatesFrom → still green (the answer is the same), so (c) is pinned by its two answers only.
+
+test("POS-1057 · seniority is asked only of ground that overlaps, each mark's date is read once, and a word is found by its mark", () => {
+  const box = (id, by, x, date) => ({ id, by, kind: "structure", at: { x, y: 0 }, extent: { w: 2, h: 2 }, date });
+  const touches = (a, b) => Math.abs(a.at.x - b.at.x) < 2;
+  const incoming = box("new/arrival", "new", 0, "2026-11-10");
+  const under = box("old/under-it", "old", 1, "2026-09-01");
+  const marks = [under, box("far/away", "far", 50, "2026-09-01"), box("far2/away", "far2", 90, "2026-09-01")];
+
+  // (a) overlap first
+  const asked = [];
+  const elder = (g, m) => { asked.push(g.id); return Date.parse(g.date) < Date.parse(m.date); };
+  assert.deepEqual(awaitingOf(incoming, { marks, overlaps: touches, elder }), [{ who: "old", ground: ["old/under-it"] }], "the answer the old order gave");
+  assert.deepEqual(asked, ["old/under-it"], "the two marks that touch nothing are never weighed for seniority");
+
+  // (b) one read per mark, however many pairs ask
+  let reads = 0;
+  const dated = (id, date) => ({ id, get date() { reads += 1; return date; } });
+  const a = dated("a/one", "2026-09-01"), b = dated("b/two", "2026-10-01");
+  const byDate = elderByFirstLaid(new Map());
+  for (let i = 0; i < 5; i += 1) { assert.equal(byDate(a, b), true); assert.equal(byDate(b, a), false); }
+  assert.equal(reads, 2, "each mark's date is read once for the life of the comparison");
+  assert.equal(byDate({ id: "a/one", date: "2026-11-01" }, b), false, "a fresh object is read fresh: the same id with a later date is the younger one");
+
+  // (c) the words by their mark: a word on another mark clears nothing, a word on this one clears the house
+  const ask = (words) => candidatesFrom({ mine: [under], all: [incoming, ...marks], overlaps: touches, words }).map((c) => c.mark);
+  assert.deepEqual(ask([]), ["new/arrival"]);
+  assert.deepEqual(ask([{ on: "far/away", by: "old", stance: "neutral" }]), ["new/arrival"], "a word spoken on another mark is not a word on this one");
+  assert.deepEqual(ask([{ on: "new/arrival", by: "old", stance: "neutral" }]), [], "the house's word on this mark takes it off the list");
+});
+
+// ── POS-1057 · the slow half of the stance world is kept until its inputs move ──
+//
+// Why: Darko, 2026-11-17 09:44 EST: "instead of cell by cell, could we just sacrifice big O space instead of time by having
+// everything precomputed? like each settlement it's very clear which marks are new". worldForStances keeps canon's marks and
+// the locked claims' fold per office thread, keyed on the published state, the live ids and the store's print of its locked
+// claims (their count, newest decision and the sum of their row versions), which it reads on every call.
+//
+// The stub answers that print the way the store does: any write to a locked row moves it. `laidReads` counts the first-laid
+// read, which is the read the memo saves.
+// FLIPS, in world-stance.mjs § stanceWorldFor's `is`:
+//   (a) drop `k.print === want.print` → the amend locked between settlements is not seen: the mill is offered nothing (red);
+//   (b) drop `k.liveKey === want.liveKey` → the new sketch's slug is never asked of the first-laid read: `laidReads` stays (red);
+//   (c) answer `slot.built` for any key (drop the whole test) → both of the above red;
+// and in § worldForStances: (d) drop `canonMark &&` from the record cache's set → a live claim's record would outlive its read
+//   (not reachable by a test here: a WeakMap keyed on a fresh object is never found again; kept as a note, not a pin).
+
+test("POS-1057 · the stance world's slow half is kept between reads, equals a fresh build, and a claim locked between settlements is seen on the very next read", async () => {
+  __forgetStanceWorldForTest();
+  let writes = 100, laidReads = 0, printReads = 0, printAnswers = true;
+  __setStancePoolForTest({
+    async query(text, params = []) {
+      if (/sum\(xmin::text::bigint\)/.test(text)) {
+        printReads += 1;
+        if (!printAnswers) throw new Error("this store cannot say");
+        return { rows: [{ n: FIRST.filter((c) => c.status === "locked").length, newest: null, writes: String(writes) }] };
+      }
+      if (/WHERE slug = ANY\(\$1\) AND status = 'locked'\s*$/.test(text)) laidReads += 1;
+      return stancePool.query(text, params);
+    },
+    async end() {},
+  });
+  const storeWrites = (rows) => { FIRST = rows; writes += 1; };   // a write to a locked row moves the print, as xmin does
+  const whole = async (key) => { const i = await stanceInbox(cellRepo, key); return JSON.stringify({ candidates: i.candidates, standing: i.standing, mine: i.mine, scope: i.scope }); };
+  try {
+    // KEPT: two houses read one world, and the first-laid read ran once; the print is read every time
+    storeWrites([ESTATE_ORIGIN, MILL_CLAIM]);
+    CLAIMS = [claim("east/the-estate", "c-estate-0"), claim("miller/the-mill", "c-mill-0")];
+    assert.deepEqual(await offered(east), ["miller/the-mill"], "no history yet: the estate, dated 08-01 as a whole, is offered the mill");
+    assert.deepEqual(await offered(miller), []);
+    assert.equal(laidReads, 1, "the second house's read reused the first's fold");
+    assert.equal(printReads, 2, "and each read asked the store whether its locked claims had moved");
+
+    // A CLAIM LOCKED BETWEEN SETTLEMENTS: the estate's amend locks now, and the very next read sees it
+    storeWrites([ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM]);
+    CLAIMS = [claim("east/the-estate", "c-estate-1"), claim("miller/the-mill", "c-mill-0")];
+    assert.deepEqual(await offered(miller), ["east/the-estate"], "the mill was first on the cells the amend added");
+    assert.deepEqual(await offered(east), [], "and the estate has no word on the mill there");
+    assert.equal(laidReads, 2, "one more fold, for the moved print");
+
+    // EQUAL TO A FRESH BUILD: the kept answer, then the same read with nothing kept
+    const keptAnswers = [await whole(miller), await whole(east), await whole(barner)];
+    assert.equal(laidReads, 2, "all three were kept reads");
+    __forgetStanceWorldForTest();
+    assert.deepEqual([await whole(miller), await whole(east), await whole(barner)], keptAnswers, "byte for byte what a fresh build answers");
+
+    // READS THAT ARRIVE TOGETHER share one build
+    __forgetStanceWorldForTest();
+    const before = laidReads;
+    assert.deepEqual(await Promise.all([offered(miller), offered(east), offered(barner)]), [["east/the-estate"], [], []]);
+    assert.equal(laidReads, before + 1, "three reads at once, one fold");
+
+    // A NEW SKETCH's slug is asked of the first-laid read: the live ids are part of the key
+    const sketchAt = laidReads;
+    LIVE = [{ slug: "walker/a-new-hut", claimant: "walker", status: "draft", at: { x: 125, y: 0 }, extent: { w: 10, h: 10 }, kind: "sited", date: "2026-11-17T00:00:00.000Z", declared_by: "walker" }];
+    assert.ok((await offered(miller)).includes("walker/a-new-hut"), "the sketch on the mill's ground is offered to the mill at once (the-late-welcome)");
+    assert.equal(laidReads, sketchAt + 1, "and the fold was built for the slugs that now include it");
+    LIVE = [];
+
+    // A STORE THAT CANNOT SAY gets no memo: every read builds, and answers the same
+    printAnswers = false;
+    const unsure = laidReads;
+    assert.deepEqual(await offered(miller), ["east/the-estate"]);
+    assert.deepEqual(await offered(miller), ["east/the-estate"]);
+    assert.equal(laidReads, unsure + 2, "nothing is kept when the store's print cannot be read");
+  } finally {
+    LIVE = [];
+    __forgetStanceWorldForTest();
+  }
 });

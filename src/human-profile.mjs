@@ -10,7 +10,7 @@
 //
 // ── ONE RECORD, ONE WRITER, ONE READ ────────────────────────────────────────
 //
-//   the record   `households.human_profile` (migration 098), NULL until a field
+//   the record   `households.human_profile` (migration 101), NULL until a field
 //                is set. PUBLIC by design: the drain prints it into the town's
 //                tools/households.json and GET /households carries it, because
 //                src/registry-public.mjs NAMES it (POS-845's named public list).
@@ -159,7 +159,7 @@ export async function setHumanProfile({ slug, body, ghId } = {},
   if (written === null)
     throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
   if (written.missingColumn)
-    throw bounce(503, "the human's profile is not on this store yet", "the migration world2/schema/098_household_human_profile.sql has not been applied here: nothing was kept");
+    throw bounce(503, "the human's profile is not on this store yet", "the migration world2/schema/101_household_human_profile.sql has not been applied here: nothing was kept");
   if (!written.slug)
     throw bounce(403, `this account does not keep "${s}"`, "the household's record no longer binds this account: nothing was kept");
   const what = [...Object.keys(set).map((f) => `${f} set`), ...clear.map((f) => `${f} cleared`)].join(", ");

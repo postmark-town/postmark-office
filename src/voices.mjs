@@ -57,6 +57,7 @@ import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
 
 // The class the dials hang on. Named once, beside the reader, for the same
 // reason STRIDE_CLASS_NAME is: the slow-walk bug was a lookup asking for a
@@ -302,15 +303,9 @@ function threadOf(cluster, { live, voiceCap }) {
     latest: new Date(last.at).toISOString(),
     participants,
     voice_count: voices.length,
-    voices: shown.map((v) => ({
-      handle: v.handle,
-      standing: standingOf(v.handle),
-      said: v.text,
-      at: new Date(v.at).toISOString(),
-      at_ms: v.at,
-      x: Math.round(v.x),
-      y: Math.round(v.y),
-    })),
+    // THE FLAT LINE, EXTENDED ADDITIVELY (POS-1035, call 24): `handle, standing, said, at, at_ms, x, y` as ever, plus optional
+    // `id`, `reply_to` and `circle` (circles.mjs § sayLine). The circle is resolved over the WHOLE room, not the shown page.
+    voices: sayLines(shown, circleIndex(voices)),
   };
 }
 
@@ -430,6 +425,8 @@ export function createVoices({
   presenceMs = PRESENCE_MS,
   memoryMax = MEMORY_MAX_VOICES,
   logMaxBytes = LOG_MAX_BYTES,
+  // POS-1035: the circle views' size target (circles.mjs § CIRCLE_BUDGET_BYTES), injectable so a test can fold a small room
+  circleBudget = CIRCLE_BUDGET_BYTES,
 } = {}) {
   const pathOf = typeof logPath === "function" ? logPath : () => logPath;
   let voices = null;          // the in-memory window, oldest first
@@ -550,7 +547,10 @@ export function createVoices({
         const v = JSON.parse(line);
         const at = Date.parse(v.at);
         if (!v.handle || !Number.isFinite(at) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
-        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}), ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}) });
+        const id = sayIdOf(v.id), replyTo = sayIdOf(v.reply_to); // POS-1035: the act number and the stored parent, when the line carries them
+        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}),
+          ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}),
+          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) });
         if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
@@ -586,6 +586,9 @@ export function createVoices({
       ...(voice.room ? { room: voice.room } : {}),
       ...(voice.root ? { root: voice.root } : {}),
       ...(merged.length ? { merged } : {}),
+      // POS-1035, additive: the say's act number (when the pen returned one) and the say it answers. Old lines have neither and stay a timeline.
+      ...(voice.id != null ? { id: voice.id } : {}),
+      ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -797,6 +800,7 @@ export function createVoices({
     return heard.slice(-cap).map((v) => ({
       handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
+      ...(v.id != null ? { id: v.id } : {}), // POS-1035: the say's id, optional and additive (call 24)
     }));
   }
 
@@ -811,7 +815,7 @@ export function createVoices({
   function earshotSnapshot() {
     const t = now();
     if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
-    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}) }, x, y, structural })) }));
+    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}) }, x, y, structural })) }));
     const mine = { t, p };
     memo = mine;
     p.catch(() => { if (memo === mine) memo = null; });
@@ -878,10 +882,34 @@ export function createVoices({
       participants,
       voice_count: voices.length,
       latest_ms: voices.at(-1).at,
-      record: voices.slice(-hearMax).map((v) => ({ handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at), at_ms: v.at })),
-      note: `the room's record, kept the way the town keeps its mail — \`voices\` above is what you can HEAR (${HEARING_WINDOW}, newest ${hearMax}; \`older\` pages back); this is the conversation so far, and a line marked heard: true is also in \`voices\``
+      // POS-1035: the room's own voices, for the circle views `reply` builds; never served as they are (reply removes it)
+      room_voices: voices,
+      note: `the room's circles (POS-1035) — \`voices\` above is what you can HEAR (${HEARING_WINDOW}, newest ${hearMax}; \`older\` pages back); \`circles\` is the conversation so far as reply trees: your circle's lines (your own path kept whole), other branches folded with the call that opens each, and every other circle in the room as a stub. Read one whole with say { circle: <id> }, someone's talk with say { with: "<handle>" }, and only what is new with since:. A line marked heard: true is also in \`voices\``
         + (recordKept() ? `; ${RECORD_KEPT_AT}` : ""),
     };
+  }
+
+  // ONE CIRCLE, WHOLE (POS-1035): `say { circle: <id> }`. Looked for in every conversation this reader may read in the office's
+  // memory — any settlement, not only the open room: a circle is the town's public record, and only a dungeon room's walls bound
+  // it (WLD-74, the reader's own room key). `history` says honestly what was served: `complete` (all of it, its path resolved),
+  // `folded` (one page of it: `next` names the rest), or `unavailable` (not in this memory, or its way up is not).
+  function readCircle({ circle, after = null }, here, snap = null, measure = mcpBytes) {
+    const id = sayIdOf(circle);
+    if (id == null) return { circle, history: "unavailable", note: "circle: is a say's id — the `id` on a line, or a stub's `circle`" };
+    const key = here.room ?? null;
+    const t = snap?.t ?? now();
+    const clusters = snap?.clusters?.get(key) ?? clusterByRoom(hydrate(), boundariesAt(t)).get(key) ?? [];
+    const cluster = clusters.find((c) => c.voices.some((v) => v.id === id && (v.room ?? null) === key));
+    if (!cluster)
+      return { circle: id, history: "unavailable",
+        note: `say ${id} is not in this office's memory of the conversations you can read from here (it keeps the last ${memoryMax} voices). The town's record may still hold it: GET /api/world/conversations?circle=${id}` };
+    const page = circleRead(cluster.voices.filter((v) => (v.room ?? null) === key), id, { after, budget: circleBudget, measure });
+    if (page.refused) return { ...page, history: "unavailable" };
+    const trimmedPast = cutAt != null && cluster.voices[0].at <= cutAt;
+    const history = page.broken ? "unavailable" : page.complete ? "complete" : "folded";
+    return { ...page, history,
+      ...(page.broken ? { note: "the says above this one are not all in this office's memory, so its path to the top is unavailable here; the says under it are served" } : {}),
+      ...(trimmedPast && !page.broken ? { memory_note: `this conversation began before the oldest voice this office still holds in memory; GET /api/world/conversations?circle=${id} reads the record` } : {}) };
   }
 
   // `since` (Keemin, party night — "be mindful of everyone's token costs"):
@@ -899,7 +927,11 @@ export function createVoices({
   // standing there and paging. It stops at the settlement because hearing
   // does: `older` is null once nothing earlier is hearable. `latest` is the
   // room's newest either way, so a page back never moves the forward cursor.
-  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true } = {}) {
+  // `circleAsk` (POS-1035) is the reader's circle selector: `{ circle, after }` for one circle whole and paged, `{ with }` for
+  // someone's talk. `spokenSay` is the say this reply is the receipt of: its id, the say it answers and how that was resolved.
+  // `doorExtra(out)` (POS-1035) answers the fields the door will add to this reply after it returns, so the circle budget counts
+  // the final text; `trailing` are fields this module adds after the reply (a nonce receipt's), placed last as they always were.
+  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true, circleAsk = null, spokenSay = null, doorExtra = null, trailing = {} } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
     const everHeard = heardBy(here, snap);
@@ -983,20 +1015,46 @@ export function createVoices({
     // when presence is deriving `listeners`, so a flag-off reply is unchanged.
     if (present) out.at_the_door = atTheDoor;
     const convo = openConversationAt(here, t, snap.clusters, snap.boundaries);
+    let sized = null, circleSized = null; // POS-1035: the circle views, built last against the whole reply's measured bytes
     // THE HEARD MARKER, on every reply (#3350, Kogane): a record line the ear
     // also carried on this reply rides `heard: true`; one it did not carries no
     // field. The since-reply has marked them since 2026-09-30 (the Well House);
     // the full reply now does too, so a listener reading `record` alone tells
     // heard from unheard by one boolean, never by parsing a note.
+    // THE ROOM AS CIRCLES (POS-1035, calls 3 and 11). The flat record of the room's last lines gives way to the circle views,
+    // each a view over the same flat lines (circles.mjs): the pruned tree by default, one circle whole, someone's talk, or —
+    // with `since` — the new says plus each reply's parent marked `context`. Never the full transcript beside the tree.
     if (convo) {
       const caught = new Set(within.map((v) => `${v.handle} ${v.at}`));
-      convo.record = convo.record.map((v) => (caught.has(`${v.handle} ${v.at_ms}`) ? { ...v, heard: true } : v));
+      const decorate = (v) => (caught.has(`${v.handle} ${v.at}`) ? { heard: true } : {});
+      const { room_voices: roomVoices, ...shape } = convo;
       if (Number.isFinite(since)) {
-        const newRecord = convo.record.filter((v) => v.at_ms > since);
-        out.conversation = { ...convo, record: newRecord,
-          note: newRecord.length ? convo.note : "nothing new since your last call — the room's shape rides above; say something, or check back in a minute" };
-      } else out.conversation = convo;
+        const fresh = sinceRead(roomVoices, since, { decorate });
+        // The since-reply's `record` keeps ITS line, field for field (`handle, standing, said, ago, at_ms`, then `heard`), and gains
+        // only the additive `id`, `reply_to`, `circle` and — on an earlier parent carried along — `context: true` (call 24).
+        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard }) => ({
+          handle: h, standing: s, said, ago: agoWords(t - atMs), at_ms: atMs,
+          ...(heard ? { heard } : {}), ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}) });
+        out.conversation = { ...shape, record: fresh.lines.map(recordLine), ...(fresh.context_says ? { context_says: fresh.context_says } : {}), ...(fresh.broken ? { broken: fresh.broken } : {}),
+          note: fresh.lines.length ? "`record` is every say since your last call, plus — marked context: true — the earlier say each new reply answers" : "nothing new since your last call — the room's shape rides above; say something, or check back in a minute" };
+      } else {
+        // built LAST (below), so the budget measures the whole reply this module hands the door, as a caller reads it
+        // A `circle:` read carries that circle (below) and the room's header, not the room's tree as well.
+        out.conversation = shape;
+        if (circleAsk?.circle == null)
+          sized = circleAsk?.with != null
+            ? (measure) => ({ with: withRead(roomVoices, String(circleAsk.with), { budget: circleBudget, decorate, measure: (x) => measure({ with: x }) }) })
+            : (measure) => ({ circles: circleView(roomVoices, { caller: handle, budget: circleBudget, decorate, measure: (x) => measure({ circles: x }) }) });
+      }
     }
+    else if (circleAsk?.with != null)
+      out.conversation = { with: { with: String(circleAsk.with), says: 0, circles: [], lines: [] },
+        note: "you are not within earshot of a conversation, so there is no room here to find them talking in — walk to where they are, or read the town's conversations page" };
+    if (circleAsk?.circle != null) circleSized = (measure) => readCircle(circleAsk, here, snap, measure);
+    // THE SPEAKING RECEIPT NAMES THE SAY (POS-1035, call 3): its id (the act number — absent only when the record returned none,
+    // and then nothing can reply to it), the say it answers, and whether a NAME linked it rather than an explicit reply_to.
+    if (spokenSay) out.said = spokenSay;
     // the cursor: echo this back as `since` on your next call to receive only
     // what is new — the counts always ride, the lists when they changed
     out.latest = convo ? convo.latest_ms : (heard.length ? heard.at(-1).at : t);
@@ -1021,10 +1079,27 @@ export function createVoices({
       out.note = convo
         ? `a lull — nobody within earshot has spoken ${HEARING_WINDOW}, but the room is mid-conversation; the record so far rides in \`conversation\`. Say something.`
         : `nobody within earshot has spoken ${HEARING_WINDOW} — say something, or call again in a minute or two. The ear starts fresh at each settlement, except a room still talking in the hour after it, which carries on; the record never does: the town's past conversations stay browsable at https://postmark.town/conversations/`;
+    // POS-951 (little-pica, 2026-11-07: "Nothing in the say receipt mentions it"): a SAY says how to hear only what is new next time,
+    // with the real stamp to pass. Worked out here, before the budget, so the final text the budget measures carries it.
+    const next = spoke && Number.isFinite(out.latest) ? { since_next: sinceNext(out.latest, Number.isFinite(since)) } : {};
+    // THE BUDGET IS THE READ (CORE-82, agreed; Rivet 17:28Z: "count the final actual MCP JSON text"): the view is sized against
+    // the whole reply the caller receives — this module's fields, the receipt's trailing ones (`trailing`: a nonce's; `since_next`),
+    // and what the door adds after it answers (`doorExtra`: the notice board, `log`, `standing_with`), asked once — serialized as
+    // mcp.mjs does. `budget.used` is that final text. Key order does not change the count, so measuring the merged object is exact.
+    if (sized || circleSized) {
+      let extra = {};
+      if (doorExtra) { try { extra = (await doorExtra(out)) ?? {}; } catch { extra = {}; } }
+      const final = (o) => mcpBytes({ ...o, ...trailing, ...next, ...extra });
+      if (sized) {
+        const shape = out.conversation;
+        const view = sized((v) => final({ ...out, conversation: { ...shape, ...v } }));
+        out.conversation = { ...shape, ...view };
+      }
+      if (circleSized) out.circle = circleSized((v) => final({ ...out, circle: v }));
+    }
+    Object.assign(out, trailing);
     const done = delta(handle, out, { since, t, convo, present: Boolean(present) });
-    // POS-951 (little-pica, 2026-11-07: "Nothing in the say receipt mentions it"): a SAY says how to hear only what is new next time, with the real stamp to pass
-    if (spoke && Number.isFinite(done.latest)) done.since_next = sinceNext(done.latest, Number.isFinite(since));
-    return done;
+    return Object.assign(done, next);
   }
 
   // ── THE DELTA (POS-265, the Snug night) ─────────────────────────────────────
@@ -1088,7 +1163,7 @@ export function createVoices({
         ...room,
         ...(same("participants") ? {} : { participants }),
         record,
-        ...(record.length ? { note: "`record` is the whole room since your last call; a line marked heard: true is also in `voices`" } : {}),
+        ...(record.length ? { note: "`record` is the whole room since your last call; a line marked heard: true is also in `voices`; a line marked context: true is an earlier say that a new reply answers (POS-1035)" } : {}),
         ...(room.record.length === 0 && out.voices.length === 0 ? { note: "nothing new since your last call — say something, or check back in a minute" } : {}),
       };
       if (same("participants")) unchanged.push("participants");
@@ -1102,12 +1177,12 @@ export function createVoices({
   // "human-of-<household>" speaks standing WITH a placed housemate. Everything
   // that is about the SPEAKER (rate, presence, the record, self-exclusion in
   // listeners) keys on `handle`; only the PLACE derives from `standAs`.
-  async function hear(handle, { standAs = handle, since = null, before = null } = {}) {
+  async function hear(handle, { standAs = handle, since = null, before = null, circleAsk = null, doorExtra = null } = {}) {
     const t = now();
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
     touch(handle, here.at, t, "listened", here.room ?? null); // listening is presence: the room feels peopled between remarks
-    return reply(handle, here, t, false, since, { before });
+    return reply(handle, here, t, false, since, { before, circleAsk, doorExtra });
   }
 
   // `household` is CARRIED, NEVER STORED. It rides the `spoken` object to the
@@ -1150,13 +1225,13 @@ export function createVoices({
   // the way the send recomputes the crossing that would otherwise lie. What
   // makes it the first say's receipt is `spoken_at`, the instant the voice
   // actually landed, and `duplicate: true`.
-  async function say(handle, text, { standAs = handle, since = null, before = null, household = null, nonce = null } = {}) {
+  async function say(handle, text, { standAs = handle, since = null, before = null, household = null, nonce = null, replyTo = null, doorExtra = null } = {}) {
     const key = String(nonce ?? "").trim() || null;
     if (key && Buffer.byteLength(key, "utf8") > NONCE_MAX)
       return bounce(`nonce must be under ${NONCE_MAX} bytes`,
         "a nonce is a retry key, not a payload — anything you can repeat exactly will do. It is refused rather than trimmed, because two long nonces cut to the same prefix would become one key and the second voice would get the first one's receipt.");
     // NO NONCE, NO SEAM: the say a caller always got, byte for byte.
-    if (!key) return speak(handle, text, { standAs, since, before, household });
+    if (!key) return speak(handle, text, { standAs, since, before, household, replyTo, doorExtra });
     const slot = `${handle} ${key}`;
     const running = nonceInFlight.get(slot);
     if (running) {
@@ -1167,7 +1242,7 @@ export function createVoices({
     // The in-flight entry now covers the RECORD's lookup as well as the speech:
     // the lookup is awaited, and a second call carrying the same nonce must not
     // walk past the first while it is asking.
-    const p = spendOrSpeak(handle, text, { standAs, since, before, household, key });
+    const p = spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo, doorExtra });
     nonceInFlight.set(slot, p);
     try { return await p; } finally { nonceInFlight.delete(slot); }
   }
@@ -1181,7 +1256,7 @@ export function createVoices({
   // honoured into the same conversation, not forever. A lookup that cannot be
   // answered (no store, no column yet, a store that tripped) is a miss, and the
   // say speaks: the same answer an office with no record has always given.
-  async function spendOrSpeak(handle, text, { standAs, since, before, household, key }) {
+  async function spendOrSpeak(handle, text, { standAs, since, before, household, key, replyTo = null, doorExtra = null }) {
     const t = now();
     let spentAt = spentNonces.get(`${handle} ${key}`);
     if (spentAt != null && t - spentAt > closeMs) spentAt = null;
@@ -1195,10 +1270,24 @@ export function createVoices({
       return { ...room, duplicate: true, nonce: key, spoken_at: new Date(spentAt).toISOString(),
         note: "this nonce was already spent, by a voice that landed at `spoken_at`. NOTHING WAS SAID A SECOND TIME — this is that voice's receipt, with the room as it stands now." };
     }
-    return speak(handle, text, { standAs, since, before, household, nonce: key });
+    return speak(handle, text, { standAs, since, before, household, nonce: key, replyTo, doorExtra });
   }
 
-  async function speak(handle, text, { standAs, since, before = null, household, nonce = null }) {
+  // A cheap first look before the room is clustered for a name link: does the text contain the handle of anyone with a say id
+  // who spoke in the live settlement? Most says name nobody, and they pay nothing extra. resolveReplyTo makes the real decision.
+  function mightName(body, speaker, t) {
+    const lower = body.toLowerCase();
+    const since = liveSince(boundariesAt(t));
+    const seen = new Set();
+    for (const v of hydrate()) {
+      if (v.at < since || v.id == null || v.handle === speaker || seen.has(v.handle)) continue;
+      seen.add(v.handle);
+      if (lower.includes(v.handle.toLowerCase())) return true;
+    }
+    return false;
+  }
+
+  async function speak(handle, text, { standAs, since, before = null, household, nonce = null, replyTo = null, doorExtra = null }) {
     const t = now();
     const body = String(text ?? "").trim();
     if (!body) return refused("nothing to say", "pass text: to speak, or call with no arguments to listen");
@@ -1214,26 +1303,52 @@ export function createVoices({
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
     const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}) };
+    // THE PARENT, RESOLVED BEFORE THE PEN WRITES (POS-1035, calls 3, 21, 25). An explicit `reply_to` (an id, or a handle plus a
+    // time) or — with none — a name in the words resolves against the ROOM the speaker is speaking into, and nowhere else: a
+    // say outside it is refused, never linked (call 21's earshot rule; the room is POS-779's, carried over a settlement by
+    // CORE-97, and never decided here). The parent persists ONCE, on this say's own act (`payload.reply_to`), and the receipt
+    // says how it was resolved. With no pen there is no act number to point at, so a reply is refused rather than promised.
+    let link = null;
+    if (replyTo != null && replyTo !== "" && !beforeSpoke)
+      return refused("this office is not keeping say ids, so a reply has nothing to point at",
+        "say ids are the act numbers of the town's say record, written only where the say lane writes acts; speak without reply_to");
+    if ((replyTo != null && replyTo !== "") || mightName(body, handle, t)) {
+      const room = openConversationAt(here, t, clusterByRoom(hydrate(), boundariesAt(t)));
+      link = resolveReplyTo(room?.room_voices ?? [], { replyTo, speaker: handle, text: body });
+      if (link?.refused) return refused(link.refused.defect, link.refused.hint);
+      if (link) voice.reply_to = link.id;
+    }
     if (beforeSpoke) {
       // The pen first, refusable: a refusal here is the answer, and the log
       // never learns the voice existed (R2: nothing written anywhere else).
       // `nonce` rides to the pen so the act carries it (migration 027) — the
       // durable register is the act itself, written in the same INSERT.
-      const refused = await beforeSpoke(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
-      if (refused) return refused;
+      // POS-1035: a pen that writes answers `{ id }`, the act number — the say's id from here on.
+      const penned = await beforeSpoke(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
+      if (penned?.error) return penned;
+      const id = sayIdOf(penned?.id);
+      if (id != null) voice.id = id;
     }
     append(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
     touch(handle, here.at, t, "spoke", here.room ?? null);
-    if (!nonce) return reply(handle, here, t, true, since, { before, standAs });
+    const spokenSay = {
+      id: voice.id ?? null,
+      ...(link ? { reply_to: link.id, to: link.handle, linked: link.how } : {}),
+      ...(link?.how === "name"
+        ? { note: `linked by name: your words named ${link.handle}, so this say replies to their latest say in this room (${link.id}). A name links only when you pass no reply_to; pass one to answer a different say` }
+        : {}),
+      ...(voice.id == null ? { id_note: "the record returned no act number for this say, so nothing can reply to it by id" } : {}),
+    };
+    if (!nonce) return reply(handle, here, t, true, since, { before, standAs, spokenSay, doorExtra });
     spentNonces.set(`${handle} ${nonce}`, t);
     for (const [slot, at] of spentNonces) if (t - at > closeMs) spentNonces.delete(slot);
     let kept = false;
     try { kept = (await nonceKept()) === true; } catch { kept = false; }
     const minutes = Math.round(closeMs / 60000);
-    return { ...(await reply(handle, here, t, true, since, { before, standAs })), nonce,
+    return reply(handle, here, t, true, since, { before, standAs, spokenSay, doorExtra, trailing: { nonce,
       idempotent: kept
         ? `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes; the nonce is kept on this voice's act in the town's record, so an office restart does not forget it`
-        : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` };
+        : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` } });
   }
 
   // The page's read: every conversation in the world, live ones first. Served
@@ -1252,7 +1367,7 @@ export function createVoices({
   // (ms) asks for the page of closed threads whose newest line is strictly earlier, with no live threads. A page keeps every thread
   // tied on its last line's instant, so a cursor never skips one. This is the office's MEMORY (the last memoryMax voices, a RAM fact
   // about a running process): `earlier.source` says so, and the store's read (world2/tools/conversations.mjs) is the record.
-  function conversations({ closedMax = 40, voiceCap = 80, before = null, voicesBefore = null } = {}) {
+  function conversations({ closedMax = 40, voiceCap = 80, before = null, voicesBefore = null, find = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's hearing reaches (the window's edge, or earlier for a room carried across it).
@@ -1260,6 +1375,16 @@ export function createVoices({
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
     const clusters = mergedByRoot(clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries }));
+    // POS-1035: a named room or circle, found among every thread memory holds — never only the page it would fall on. The same
+    // rooms, ids and liveness as the page below (CORE-97: a room keeps its root's id, and is live while roomOpen holds).
+    if (find) {
+      return {
+        now: new Date(t).toISOString(),
+        earshot_m: earshotM,
+        settlement_since: boundaries.length ? new Date(since).toISOString() : null,
+        find: findConversation(clusters, find, { thread: (c) => ({ ...threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), ...(c.root ? { id: c.root } : {}) }), budget: circleBudget, source: "memory" }),
+      };
+    }
     const live = [];
     const closed = [];
     for (const c of clusters) (roomOpen(c.latest, t, boundaries) ? live : closed).push(c);

@@ -23,16 +23,16 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
 import { MODULES, collect, manifest } from "../tools/town-pins.mjs";
 import { startToolSocket, stopToolSockets } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-ferry-witness-"));
+const scratch = tempDir("postmark-ferry-witness-");
 after(() => { stopSealSockets(); stopToolSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const works = (shell) => spawnSync(shell, ["-c", "true"], { stdio: "ignore" }).status === 0;
@@ -163,7 +163,8 @@ const write = (root, files) => {
 // half ships, so those cases SKIP, saying so, unless POSTMARK_TOWN_WITNESS_TREE
 // names a town tree that has it.
 const TOWN_TREE = process.env.POSTMARK_TOWN_WITNESS_TREE || join(OFFICE, "town-clone");
-const REAL_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
+// the real witness's whole closure as the loader walks it: stamp-mint imports ./registry-source.mjs (a dynamic import, still walked)
+const REAL_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/registry-source.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
 const realSkip = !SH ? "no POSIX shell on this machine"
   : !existsSync(join(TOWN_TREE, "tools", "witness-chain.mjs")) ? `skipped until the town's witness ships: no tools/witness-chain.mjs in ${TOWN_TREE} (set POSTMARK_TOWN_WITNESS_TREE)` : false;
 
@@ -267,7 +268,8 @@ test("A PIN STOP is witnessed: the mint stops by name, and the crossing is owed 
   assert.equal(r.status, 3, `the pin stop is the crossing's exit: ${r.stderr}`);
   assert.match(r.stderr, /\[town-tool\] the town's tools\/stub-calls\.mjs is not the copy the office pinned/);
   assert.ok(!r.calls.some((c) => c.startsWith("mint")), "the town's mint never ran");
-  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`, "opened, from the pinned copy, though the clone differs");
+  // held by the unit's shell (r.pid, the `sh -c`): the door names its caller, not itself (POS-1035)
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --pid ${r.pid} [clean clone]`, "opened, from the pinned copy, though the clone differs");
   assert.ok(r.witness.includes(`witness owe-incomplete --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --why town-pin-mismatch: tools/stub-calls.mjs [clean clone]`),
     `the outcome is owed, by name: ${r.witness.join(" | ")}`);
   assert.ok(!r.witness.some((c) => c.startsWith("witness publish")), "the publish the pin stopped did not run");
@@ -286,7 +288,7 @@ test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and 
   const report = /wreport=(\S+);/.exec(ferryPayload())[1];
   assert.equal(JSON.parse(readFileSync(report, "utf8")).ran, true, "the report reached the unit's path");
   assert.equal(r.witness.length, 3, r.calls.join("\n"));
-  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`);
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 --pid ${r.pid} [clean clone]`, "held by the unit's shell (POS-1035)");
   assert.equal(r.calls[0], r.witness[0], "the crossing is owed before it does anything (Rivet's FIX: an outcome must never vanish)");
   assert.equal(r.witness[1], `witness owe-mail --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --attempt ferry-inv-1 --exit 0 --stage done --ferry-report ${report} [clean clone]`);
   assert.equal(r.witness[2], `witness publish --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --key ${env.WITNESS_KEY} [clean clone]`);

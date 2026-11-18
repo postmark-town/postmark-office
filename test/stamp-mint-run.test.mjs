@@ -27,16 +27,16 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
 import { mintInputsVia, writeMintInputs } from "../src/mint-inputs.mjs";
 import { stampLinesVia, syncStampLinesVia, verifyStampLinesVia } from "../src/stamp-lines.mjs";
-import { pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the fixture town, signed with its own key, pinned to itself
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: the fixture town, signed with its own key, pinned to itself
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLONE = join(ROOT, "town-clone");
@@ -44,7 +44,7 @@ const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSyn
 const skip = hasClone ? false : "no town-clone beside the office: the fixture is built from its files";
 const MAIL_LINES = 3000, STAMP_LINES = 200;
 
-const tmp = mkdtempSync(join(tmpdir(), "stamp-mint-run-"));
+const tmp = tempDir("stamp-mint-run-");
 const A = join(tmp, "a"), B = join(tmp, "b");
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PRIV = privateKey.export({ type: "pkcs8", format: "pem" });
@@ -58,6 +58,8 @@ before(async () => {
   // the fixture town
   cpSync(join(CLONE, "tools"), join(A, "tools"), { recursive: true });
   writeFileSync(join(A, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
+  // and the code a pinned module imports from outside tools/ (town e9cb5e87: witness-chain → ../PROJECTS/the-town-seal/seal.mjs)
+  copyTownModule(CLONE, A, "witness-chain.mjs");
   writeFileSync(keyFile, PRIV);
   for (const e of readdirSync(join(CLONE, "WHITE_PAGES"), { withFileTypes: true })) {
     if (!e.isDirectory()) continue;

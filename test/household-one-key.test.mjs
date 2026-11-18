@@ -14,9 +14,9 @@ import assert from "node:assert/strict";
 import { pinTown, stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town's modules, pinned
 import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 
 import { appendTownJournal, ensureTownJournal, townDrainCursor } from "../src/town-journal.mjs";
@@ -53,7 +53,7 @@ const joinRow = (over = {}) => ({
 function sealedTown({ houses = {}, pins = {}, rooms = [], ledger = [] } = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const pem = privateKey.export({ type: "pkcs8", format: "pem" });
-  const dir = mkdtempSync(join(tmpdir(), "pm-onekey-"));
+  const dir = tempDir("pm-onekey-");
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, REGISTRY_PATH), JSON.stringify({ schema_version: 1, households: houses }, null, 2) + "\n");

@@ -40,13 +40,20 @@ if [ -n "${PGDATABASE:-}" ] && [ "$PGDATABASE" != "$SANDBOX_DB" ]; then
   exit 9
 fi
 
+# THE CLONES ARE MEEPO'S, AND SO IS EVERY GIT STEP ON THEM (POS-940; POS-354 fix e).
+# On 2026-10-10 this ran as root, and the reset and clean left about 9,900
+# root-owned files in the dev clones, so the next freshen (meepo) failed with
+# EACCES until a hand chown. `sudo -u meepo` holds whoever runs the script, root
+# or an operator with sudo, to the clones' own owner.
+as_meepo() { sudo -u meepo "$@"; }
+
 echo "== sandbox reset -> $SEED =="
 sudo systemctl stop postmark-office-dev.service
 for C in "$D/town-clone" "$D/world-clone"; do
-  git -C "$C" fetch origin --tags --force -q
-  git -C "$C" reset --hard "refs/tags/$SEED" -q
-  git -C "$C" clean -fd -q
-  echo "  $(basename "$C") -> $(git -C "$C" rev-parse --short HEAD)"
+  as_meepo git -C "$C" fetch origin --tags --force -q
+  as_meepo git -C "$C" reset --hard "refs/tags/$SEED" -q
+  as_meepo git -C "$C" clean -fd -q
+  echo "  $(basename "$C") -> $(as_meepo git -C "$C" rev-parse --short HEAD)"
 done
 
 # POS-994: dev runs its own pinned town. The freshen moves the stood-back clone onto
@@ -72,7 +79,7 @@ if [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ]; then
   [ "$PGDATABASE" = "$SANDBOX_DB" ] || { echo "REFUSED: $PGDATABASE is not the dev sandbox ($SANDBOX_DB)" >&2; exit 9; }
   # the town index, reseeded at the seed's head (DEPLOY.md § the dev box, step 7:
   # the quest rows fold on the store's stamp chain, STAMP_LINES=store)
-  STAMP_LINES=store node world2/tools/town-index-ingest.mjs --town-repo "$D/town-clone" --sha "$(git -C "$D/town-clone" rev-parse HEAD)" --seed --reseed >/dev/null
+  STAMP_LINES=store node world2/tools/town-index-ingest.mjs --town-repo "$D/town-clone" --sha "$(as_meepo git -C "$D/town-clone" rev-parse HEAD)" --seed --reseed >/dev/null
   echo "  the town index reseeded from the seed (store $PGDATABASE, as $PGUSER)"
   node src/world-hydrate.mjs --world "$D/world-clone" --office "$D" --to-store >/dev/null
   echo "  the world graph snapshot rebuilt from the seed (store $PGDATABASE, as $PGUSER)"

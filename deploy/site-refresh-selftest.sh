@@ -97,7 +97,7 @@ cat > "$SITE_SRC/tools/extract-town.mjs" <<'EOF'
 import { writeFileSync } from "node:fs";
 const town = process.argv[process.argv.indexOf("--town") + 1];
 writeFileSync("public/atelier/postmark/doorstep.md",
-  `town=${town}\ncrossing=${process.env.POSTMARK_CROSSING ?? ""}\n`);
+  `town=${town}\ncrossing=${process.env.POSTMARK_CROSSING ?? ""}\nstate=${process.env.DOORSTEP_STATE_DIR ?? ""}\n`);
 console.log("stub extract-town ran");
 EOF
 cat > "$SITE_SRC/tools/fetch-town.mjs" <<'EOF'
@@ -224,6 +224,8 @@ head_ "2 · THE ONE-RECIPE RULE: the site's own scripts ran, with what they were
 [ -f "$WEBROOT/../../$(basename "$TARGET1")/index.html" ] 2>/dev/null || true
 DOOR="$ROOT/site/public/atelier/postmark/doorstep.md"
 grep -q "town=$ROOT/town" "$DOOR" && ok "extract-town.mjs was handed the box's own town clone" || bad "extract-town.mjs did not see the town clone ($(cat "$DOOR" 2>&1 | head -2))"
+# POS-1086: the doorstep state lives under $ROOT, outside the tree this script resets each pass
+grep -q "^state=$ROOT/doorstep-state$" "$DOOR" && ok "extract-town.mjs was handed a doorstep state dir outside the reset tree" || bad "extract-town.mjs was not handed \$ROOT/doorstep-state ($(grep '^state=' "$DOOR" 2>&1))"
 # THE HONEST NULL. The sandbox's office is a closed port, so the crossing could
 # not be asked — and the whole design says that must arrive as ABSENCE, never as
 # a guess. `Number("")` is 0, and crossing 0 is the town's first ferry in June:
@@ -258,6 +260,12 @@ echo "$OUT" | grep -q "pass 1 —" && ok "a moved town DOES start a build" || ba
 TARGET2="$(readlink -f "$WEBROOT")"
 [ "$TARGET2" != "$BEFORE" ] && ok "and the webroot swung to a new release dir" || bad "the link did not move off $BEFORE"
 grep -q "\"town_sha\": \"$(git -C "$TOWN_SRC" rev-parse HEAD)\"" "$TARGET2/build.json" && ok "carrying the new town commit" || bad "stale town_sha after the move"
+# POS-1087: the second release hard-links what is byte-identical to the one that was serving, and copies what changed.
+# build-env.txt is the same bytes in both builds; index.html differs (it carries the build's nanosecond clock).
+check "the unchanged file has two links, one per release" "$(stat -c %h "$TARGET1/build-env.txt")" "2"
+[ "$(stat -c %i "$TARGET1/build-env.txt")" = "$(stat -c %i "$TARGET2/build-env.txt")" ] && ok "an unchanged file is one inode in both releases (hard-linked)" || bad "build-env.txt was copied, not linked"
+[ "$(stat -c %i "$TARGET1/index.html")" != "$(stat -c %i "$TARGET2/index.html")" ] && ok "a changed file is its own inode in each release" || bad "index.html is shared though its bytes changed"
+cmp -s "$TARGET1/index.html" "$TARGET2/index.html" && bad "the older release's index.html was changed under it" || ok "and the older release still holds its own bytes"
 
 head_ "5 · A NEW RELEASE TAG WAKES IT TOO — the box is the only publisher now"
 # If the key were the town alone, a tag cut on a quiet town would sit unpublished

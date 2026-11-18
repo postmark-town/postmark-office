@@ -24,9 +24,9 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
@@ -38,7 +38,7 @@ process.env.WORLD_CHESTS_CANDY = "1";
 const TOWN = townClone();
 const litter = [];
 after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force: true }); } catch { /* litter */ } } });
-const scratch = (p) => { const d = mkdtempSync(join(tmpdir(), p)); litter.push(d); return d; };
+const scratch = (p) => { const d = tempDir(p); litter.push(d); return d; };
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 // ── the fixtures, BEFORE the office modules load (TOWN_CLONE / WORLD_CLONE are read at load) ──

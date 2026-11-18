@@ -184,11 +184,10 @@ test("D1 · each member is one string: handle · where · last act · what the p
 });
 
 test("D1 · every can act names every field it takes, grouped by intent", async () => {
-  const can = canBlock("resident", "keeminlee");
+  const can = canBlock();
   assert.deepEqual(Object.keys(can), ["answer", "write", "tend", "back", "host", "house"]);
   const text = Object.values(can).join(" · ");
   for (const acts of Object.values(CAN_GROUPS)) for (const act of acts) {
-    if (act === "declare" || act === "begin") { assert.ok(!text.includes(`${act} {`), `${act} is not a resident household's`); continue; }
     assert.ok(text.includes(actFields(act)), `${act} rides with its fields`);
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
@@ -197,10 +196,9 @@ test("D1 · every can act names every field it takes, grouped by intent", async 
   const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
   assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
   assert.match(actFields("profile"), /pronouns\?/);
-  // a berth sees begin and no declare; a caller with no household sees declare and no begin
-  assert.match(canBlock("berth", null).house, /begin \{/);
-  assert.doesNotMatch(canBlock("berth", null).house, /declare \{/);
-  assert.match(canBlock("visitor", null).house, /declare \{/);
+  // CORE-114: no caller's can lists begin, declare or buy-parcel-room: they are offered (the tier's next; first_steps)
+  assert.equal(text.match(/\b(begin|declare|buy-parcel-room) \{/), null);
+  assert.equal(can.house, "add-resident { handle, card }");
 });
 
 test("D2 · the house's human is named by the house, from one function", () => {
@@ -345,6 +343,12 @@ test("happened · D4: hand and for from what the record knows; a route never rec
     assert.ok(!JSON.stringify(r).includes("unknown"));
   }
   assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, after every existing field — never words
+  const reply = happenedRow({ id: "70002", at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay", reply_to: "70001" }, { houseName: "Starforge" });
+  assert.deepEqual(Object.keys(reply), ["at", "hand", "for", "verb", "object", "place", "by", "say"], "the existing fields in their order, then say");
+  assert.deepEqual(reply.say, { id: 70002, reply_to: 70001 });
+  assert.deepEqual(happenedRow({ id: "70003", actor: "rei", action: "say" }).say, { id: 70003 }, "a top say (or old talk): no parent invented");
+  assert.equal("say" in happenedRow({ id: "70004", actor: "rei", action: "walk", reply_to: "70001" }), false, "only a say carries one");
   assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
 });
 
@@ -536,16 +540,40 @@ test("mail that can be acted on: unanswered_14d by the ledger, answered by threa
 test("discovery (as world v2): HOUSEHOLD_READ_SHAPE=v2 makes the glance the MCP door's default; read_shape: \"v1\" still asks for today's read; the card names it", async () => {
   const { doorShape, householdLeanShape } = await import("../src/door-read-shape.mjs");
   assert.equal(doorShape("household", { HOUSEHOLD_READ_SHAPE: "v2" }), "v2");
-  assert.equal(doorShape("household", {}), "h0", "unset is today's read: v1 stays the default until Darko sets the date");
+  assert.equal(doorShape("household", {}), "h0", "unset is still the older read in code: the default is the box's env switch (POS-1094), set at the w48 ship");
   assert.equal(householdLeanShape("v2"), "h0");
   const glance = await householdApex({}, null, { readShape: "v2" });
   assert.equal(glance.read_shape, "v2", "the env's default answers the glance");
   const v1 = await householdApex({ read_shape: "v1" }, null, { readShape: "v2" });
   assert.deepEqual(v1, await householdApex({}, null, {}), "read_shape: \"v1\" is today's read, whatever the default");
   const { HOUSEHOLD_DESCRIPTION } = await import("../src/household-apex.mjs");
-  assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v2" answers your house/);
+  assert.match(HOUSEHOLD_DESCRIPTION, /\(read_shape: "v2", the default read here\)/);
+  assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v1" is the older, fuller read/);
+  assert.doesNotMatch(HOUSEHOLD_DESCRIPTION, /opt-in/);
+  const { HOUSEHOLD_TOOL } = await import("../src/household-apex.mjs");
+  const shapeText = HOUSEHOLD_TOOL.inputSchema.properties.read_shape.description;
+  assert.match(shapeText, /the default at this door/);
+  assert.doesNotMatch(shapeText, /opt-in|Omit it for today's read/, "POS-1094: v2 is no longer opt-in");
   const { DOORSTEP_MORE } = await import("../src/doorstep-apex.mjs");
-  assert.match(DOORSTEP_MORE, /household \{ read_shape: "v2" \} is your house at a glance/, "the doorstep points at it in one line");
+  assert.match(DOORSTEP_MORE, /household \{ \} is your house at a glance/, "the doorstep points at it in one line");
+  assert.doesNotMatch(DOORSTEP_MORE, /read_shape/, "and needs no shape word now that v2 is the default");
+});
+
+test("POS-1094 · the line on the default: the bare glance says v2 is the default and v1 the older read only while v2 IS the door's default", async () => {
+  const { DEFAULT_LINE } = await import("../src/read-grammar.mjs");
+  assert.match(DEFAULT_LINE, /v2 is the default read now; read_shape: "v1" is the older, fuller one/);
+  // the flip: the same call, the default said on and off. Off (unset env), a bare glance asked for by read_shape says nothing of a default.
+  assert.ok(!glanceV2(partsFor(["a"]), { nowMs: NOW }).more.includes(DEFAULT_LINE), "not the default, no line");
+  const on = glanceV2({ ...partsFor(["a"]), isDefault: true }, { nowMs: NOW });
+  assert.ok(on.more.includes(DEFAULT_LINE), `the line rides the more line: ${on.more}`);
+  // and through the door, from the ctx the MCP door hands in
+  const dflt = await householdApex({}, null, { readShape: "v2" });
+  const asked = await householdApex({ read_shape: "v2" }, null, {});
+  assert.ok(String(dflt.more ?? "").includes(DEFAULT_LINE) || dflt.more === undefined, "the door's default glance carries the line (a keyless read has no glance to carry it)");
+  assert.ok(!String(asked.more ?? "").includes(DEFAULT_LINE), "a glance asked for by read_shape under no default does not");
+  // its cost, said not capped (WLD-51's rule): the line is one sentence on one line
+  const cost = JSON.stringify(on).length - JSON.stringify(glanceV2(partsFor(["a"]), { nowMs: NOW })).length;
+  assert.ok(cost > 0 && cost < 120, `the line costs ${cost} characters`);
 });
 
 test("eval round 2 · members run newest act first, with no act yet last", () => {
@@ -727,3 +755,14 @@ test("POS-947/c · the naming is offered in first_steps only while the house nam
   for (const g of [sf, one, full]) assert.equal(offer1(g), NAMING_STEP);
 });
 const offer1 = (g) => g.house.first_steps.find((s) => s.startsWith("invited-by: "));
+
+// POS-1094 (review of #1088; Darko's call-2 ceiling): the default's line is one sentence on one line, and the widest glance with it is inside 10,000.
+// FULL_BUDGET and PART1_BUDGET above stay as the tighter guards on the glance as the building lanes grow it; the line is not counted in them.
+test("POS-1094 · the full household glance as the MCP door's default, with its line, is at or under 10,000 characters", (t) => {
+  const { p, closer, happened, went } = fullStarforge();
+  const base = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
+  const dflt = glanceV2({ ...p, closer, happened, went, isDefault: true }, { nowMs: NOW });
+  t.diagnostic(`Starforge, every block, as the default: ${served(dflt)} characters (${served(dflt) - served(base)} for the line; the tighter guard ${FULL_BUDGET} is for the glance without it)`);
+  assert.ok(served(dflt) > served(base), "the line is there");
+  assert.ok(served(dflt) <= 10000, `the default glance is ${served(dflt)} characters as served`);
+});

@@ -493,3 +493,27 @@ test("wantsEarshot: a bare world read at v2 (by the call or the office's default
   assert.equal(wantsEarshot(call("world", { read_shape: "v2", read: "view" })), false, "a block read has no heard");
   assert.equal(wantsEarshot(call("world_orient", {})), false);
 });
+
+// ── WLD-187: the spectator look is always a v2 read, so it needs the earshot BEFORE the default flip too ─────────────
+test("wantsEarshot: world { at } carries earshot at the office's default shape (v0, v1 or v2), and nothing else about do:/read:/shape changes", async () => {
+  const { wantsEarshot } = await import("../src/read-workers.mjs");
+  const call = (name, args) => [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }];
+  // the defect: before the flip (v0, the office's default) a worker got an at: look without earshot, so its `heard` was "unavailable"
+  for (const shape of ["v0", "v1", "v2", undefined]) {
+    assert.equal(wantsEarshot(call("world", { at: "the town centre" }), shape), true, `a name at default ${shape}`);
+    assert.equal(wantsEarshot(call("world", { at: "220,95" }), shape), true, `a coordinate at default ${shape}`);
+    assert.equal(wantsEarshot(call("world", { at: { x: 1, y: 2 } }), shape), true, `an object at default ${shape}`);
+  }
+  assert.equal(wantsEarshot(call("world", { at: "220,95", read_shape: "v2" }), "v0"), true, "the look's own shape, asked");
+  // controls: no at:, so the shape rule is exactly as it was
+  assert.equal(wantsEarshot(call("world", {}), "v0"), false, "a bare read at v0 still needs none");
+  assert.equal(wantsEarshot(call("world", { at: "" }), "v0"), false, "an empty at: is no at:");
+  assert.equal(wantsEarshot(call("world", { at: null }), "v0"), false);
+  assert.equal(wantsEarshot(call("world", {}), "v2"), true);
+  // the refusals ride unchanged: an act or a shadow with at: is refused at the door, so it needs no earshot
+  assert.equal(wantsEarshot(call("world", { at: "220,95", do: "say" }), "v2"), false);
+  assert.equal(wantsEarshot(call("world", { at: "220,95", read: "say" }), "v2"), false);
+  assert.equal(wantsEarshot(call("world", { at: "220,95", read_shape: "v1" }), "v2"), false, "another shape is refused with at:, so none is needed");
+  // another tool's at is not the look's
+  assert.equal(wantsEarshot(call("world_leave_mark", { at: { x: 1, y: 2 } }), "v2"), false);
+});

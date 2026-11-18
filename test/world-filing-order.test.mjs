@@ -13,8 +13,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { walkOrder, filingDirs, inFilingOrder, filingAt } from "../src/world-filing-order.mjs";
@@ -72,7 +72,7 @@ const hasTag = (() => { try { execFileSync("git", ["-C", WORLD_CLONE, "rev-parse
 const NO_TAG = existsSync(WORLD_CLONE) && hasTag ? false : `needs the world clone with settlement/S93 (${WORLD_CLONE})`;
 
 test("S93: the store-shaped records, in the derived order, are exactly the loader's order", { skip: NO_TAG, timeout: 300000 }, async () => {
-  const scratch = mkdtempSync(join(tmpdir(), "filing-order-"));
+  const scratch = tempDir("filing-order-");
   const W = join(scratch, "w");
   try {
     execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "clone", "-q", "--shared", "--no-checkout",

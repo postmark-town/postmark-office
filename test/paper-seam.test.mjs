@@ -26,11 +26,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -57,7 +57,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 
 /** A town clone with the rooms the paper doors write into, under git. */
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-seam-"));
+  const dir = tempDir("pm-seam-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "HOME"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "WINDOW"), { recursive: true });
@@ -75,7 +75,7 @@ function townClone() {
 
 const homes = [];
 function logHome() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-seam-odb-"));
+  const dir = tempDir("pm-seam-odb-");
   homes.push(dir);
   return join(dir, "oauth.db");
 }
@@ -102,7 +102,7 @@ const flagOn = async (fn) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("P1-P4 · EVERY SKIN LOGS: REST PATCH, household apex, flat tool — one row each", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "pm-seam-srv-"));
+  const tmp = tempDir("pm-seam-srv-");
   const clone = townClone();
   let child;
   try {

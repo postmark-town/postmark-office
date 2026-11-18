@@ -13,8 +13,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import {
@@ -79,7 +79,7 @@ export function loadMarks() {
 `;
 
 function fixture({ log = { 6: [], 7: [] }, meta = { 7: { crossing: 7, covers_from: "2026-08-26T00:00:00.000Z" } } } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "w2seed-"));
+  const dir = tempDir("w2seed-");
   mkdirSync(join(dir, "tools"));
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });
   mkdirSync(join(dir, "STATE", "log"), { recursive: true });

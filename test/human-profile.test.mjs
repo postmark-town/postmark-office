@@ -14,7 +14,7 @@
 //   § 2  the fields: judged as the resident's profile door judges its own, one line of text, and no
 //        text-direction control
 //   § 2b the writer's refusals, in order: any caller but the browser form (403), the fields, then no
-//        such house (404), an unbound account (403), and a store without 098 (503), each keeping nothing
+//        such house (404), an unbound account (403), and a store without 101 (503), each keeping nothing
 //   § 3  the store write, on a real Postgres: merge, clear, nothing left is NULL, another house's
 //        account writes nothing, 098's shape refuses anything else, and the landed probe answers
 //   § 4  the reads: every phrase that names the house's human says the town name, with the house beside it
@@ -216,21 +216,21 @@ test("§ 3 on a real Postgres: one statement merges and clears, a profile left e
 
   const pen = await ix.store.connect("office_api");
   try {
-    // 098's shape, as the office's own pen: nothing but the three fields, each a string, and never an empty object
+    // 101's shape, as the office's own pen: nothing but the three fields, each a string, and never an empty object
     for (const bad of ["{}", '{"name": "Avery"}', '{"town_name": 7}', "[]", '"DARKO"'])
       await assert.rejects(pen.query("UPDATE households SET human_profile = $1::jsonb WHERE slug = 'lantern-row'", [bad]), (e) => e.code === "23514", bad);
     await pen.query(`UPDATE households SET human_profile = '{"pronouns": "they/them"}'::jsonb WHERE slug = 'lantern-row'`);
-    // the landed probe reads this store's 098 as landed
-    const [r] = await landedIn((q) => pen.query(q), ["098_household_human_profile.sql"]);
-    assert.deepEqual(r, { file: "098_household_human_profile.sql", state: "landed" });
+    // the landed probe reads this store's 101 as landed
+    const [r] = await landedIn((q) => pen.query(q), ["101_household_human_profile.sql"]);
+    assert.deepEqual(r, { file: "101_household_human_profile.sql", state: "landed" });
   } finally { await pen.end(); }
 
-  // A STORE WITHOUT 098 (the code can deploy before the box migration): the column taken off this test store by its owner.
+  // A STORE WITHOUT 101 (the code can deploy before the box migration): the column taken off this test store by its owner.
   // Every registry read still answers, the house reading "nothing set", and the writer answers missingColumn rather than throwing.
   const own = await ix.store.connect("world2_owner");
   try { await own.query("ALTER TABLE households DROP COLUMN human_profile"); } finally { await own.end(); }
   const before098 = await house();
-  assert.equal(before098.slug, "lantern-row", "the registry read answers on a store without 098");
+  assert.equal(before098.slug, "lantern-row", "the registry read answers on a store without 101");
   assert.equal(before098.human_profile ?? null, null, "and reads nothing set");
   assert.deepEqual(await setHouseholdHumanProfile({ slug: "lantern-row", set: { town_name: "DARKO" }, clear: [], ghId: KEEPER.id }), { missingColumn: true });
 });

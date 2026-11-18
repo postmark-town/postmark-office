@@ -109,7 +109,7 @@ import { STATE_KEYS as LIKENESS_STATE_KEYS } from "./household-likeness-state.mj
 // ("this house has no former key"); so are a `false` and an absent
 // `provisional` ("this house's key was chosen"). Both render as no key at all,
 // exactly as a NULL `name` does — see the two narrow predicates below.
-// `human_profile` (POS-721, migration 098) is the eighth tail column, appended
+// `human_profile` (POS-721, migration 101) is the eighth tail column, appended
 // last so no standing key moves (described beside NESTED_KEYS below).
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
@@ -185,7 +185,7 @@ export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 // until a household asks, and a NULL renders as no key at all, so nothing moves on the first crossing after the column lands. It is the
 // PRIVATE column: the public print carries only its official-use projection, `likeness_official` (src/registry-public.mjs).
 //
-// `human_profile` (migration 098, POS-721) is the sixth: one object with a FIXED
+// `human_profile` (migration 101, POS-721) is the sixth: one object with a FIXED
 // set of keys (the one writer, src/human-profile.mjs, builds it), the town name
 // first, each key present only while its field is set. NULL when nothing is
 // set, and a NULL renders as no key at all, so nothing moves on the first
@@ -328,7 +328,7 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       likeness_state: rec?.likeness_state ?? (isAbsent(rec?.likeness_official) ? null : { official: rec.likeness_official }),
       // And `hearth` (093, POS-962): no key folds to NULL, "the household chose nothing": the default Hearth.
       hearth: rec?.hearth ?? null,
-      // And `human_profile` (098, POS-721): no key folds to NULL, "nothing set".
+      // And `human_profile` (101, POS-721): no key folds to NULL, "nothing set".
       human_profile: rec?.human_profile ?? null,
     });
   }

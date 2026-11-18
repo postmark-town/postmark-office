@@ -37,8 +37,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -65,7 +65,7 @@ const gitq = (dir, args) => execFileSync("git", ["-C", dir, ...args], {
  * shape on the dev stage and the one a hand-built fixture would never produce.
  */
 function buildWorld() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-loot-"));
+  const dir = tempDir("pm-loot-");
   cpSync(join(WORLD_CLONE, "tools"), join(dir, "tools"), { recursive: true });
 
   const mark = (rel, front, body) => {

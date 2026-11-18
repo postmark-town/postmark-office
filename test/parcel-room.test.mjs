@@ -31,12 +31,12 @@ import { beforeEach as beforeEachPins } from "node:test";
 // starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
 const SUITE_PINS = process.env.TOWN_PINS_DIR;
 beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, roomPastResidentsHeadsUp, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
+import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, parcelRoomOffer, parcelRoomOfferNow, roomPastResidentsHeadsUp, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
 import { foldHouseholds } from "../src/world-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -107,7 +107,7 @@ const registerRows = () => Object.entries(registry.households).map(([slug, rec],
 }));
 /** A town checkout with a ledger and the engine that reads it (the stand-in classifier above). */
 function townWith(lines, { engine = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "parcel-room-town-"));
+  const dir = tempDir("parcel-room-town-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
   if (engine) writeFileSync(join(dir, "tools", "stamp-mint.mjs"),
@@ -359,7 +359,7 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
   const { generateKeyPairSync } = await import("node:crypto");
   const { execFileSync } = await import("node:child_process");
   const { copyTownTools } = await import("./helpers/town-tools.mjs");
-  const repo = mkdtempSync(join(tmpdir(), "parcel-room-exec-"));
+  const repo = tempDir("parcel-room-exec-");
   const env = { STAMP_KEY: process.env.STAMP_KEY, BOT_NAME: process.env.BOT_NAME, BOT_EMAIL: process.env.BOT_EMAIL, TOWN_PUSH: process.env.TOWN_PUSH };
   try {
     copyTownTools(ENGINE_TOWN, repo);
@@ -409,7 +409,7 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
 // (TEST-DESIGN: give the store an answer between the check and the write).
 const RACE = "PARCEL_ROOM_TEST_RACE_LINE";
 function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {}) {
-  const town = mkdtempSync(join(tmpdir(), "parcel-room-retry-"));
+  const town = tempDir("parcel-room-retry-");
   mkdirSync(join(town, "tools"), { recursive: true });
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
   writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(residents)));
@@ -466,7 +466,7 @@ const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.m
   .filter((l) => l.includes("for: parcel:")).map((l) => l.replace(/ · sig: \S+$/, ""));
 /** Run `fn` with the exec's env set (the stand-in key, a lock file outside the town, no push), restoring it after. */
 async function withExecEnv(town, extra, fn) {
-  const lockDir = mkdtempSync(join(tmpdir(), "parcel-room-lock-"));
+  const lockDir = tempDir("parcel-room-lock-");
   const set = { STAMP_KEY: join(town, "stamp-key.pem"), BOT_NAME: "t", BOT_EMAIL: "t@t", TOWN_PUSH: undefined, TOWN_LOCK: join(lockDir, "town.lock"), ...extra };
   const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
   for (const [k, v] of Object.entries(set)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -480,7 +480,7 @@ const KEY3 = { household: "the-rowan", handles: new Set(["ash"]) };
 
 test("10 · a double click burns once: the first click lands while the second waits, and the second answers the first's receipt", async () => {
   const town = standInTown();
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const first = "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan";
     const second = await withExecEnv(town, { [RACE]: first, [`${RACE}_MARK`]: join(markDir, "landed") },
@@ -547,7 +547,7 @@ test("10 · control: a call made after the first purchase is a new purchase, and
 // disk and before its commit, until the second click's entry has read the ledger.
 test("11 · F1's window: a second click entering after the first click's line is on disk, before it answers, burns nothing", async () => {
   const town = standInTown();
-  const pause = mkdtempSync(join(tmpdir(), "parcel-room-pause-"));
+  const pause = tempDir("parcel-room-pause-");
   try {
     await withExecEnv(town, { [`${RACE}_PAUSE_DIR`]: pause }, async () => {
       const a = buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" });
@@ -573,7 +573,7 @@ test("11 · F1's window: a second click entering after the first click's line is
 // the engine at the newest blessing carries `parcelRoomOf`, read through the seam
 // the leave-mark note already reads (world-branches.mjs § importEngineAt).
 function worldRepo(steps) {
-  const repo = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  const repo = tempDir("parcel-room-world-");
   mkdirSync(join(repo, "tools"), { recursive: true });
   const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
   g("init", "-q", "-b", "main");
@@ -642,7 +642,7 @@ test("11 · N1: no settlement tag, the law on main: the gate refuses rather than
 test("11 · N1: a blessing whose engine can't be materialised refuses rather than read the working tree", async () => {
   // settlement/S1 blesses a commit with no tools/ at all (materializeAtRef throws
   // "no files under tools"); the working tree, at main, carries the law
-  const world = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  const world = tempDir("parcel-room-world-");
   const g = (...a) => execFileSync("git", a, { cwd: world, encoding: "utf8" });
   try {
     g("init", "-q", "-b", "main");
@@ -685,7 +685,7 @@ test("12 · control: a house with a resident for the room buys it with no heads-
 
 test("12 · a double click past the residents burns once, and the click that answers the receipt still carries the heads-up", async () => {
   const town = standInTown({ residents: ["ash"] });
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
       () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
@@ -698,7 +698,7 @@ test("12 · a double click past the residents burns once, and the click that ans
 
 test("12 · control: the same double click for a house with a resident each answers a receipt with no heads-up", async () => {
   const town = standInTown();
-  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  const markDir = tempDir("parcel-room-mark-");
   try {
     const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
       () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
@@ -706,4 +706,51 @@ test("12 · control: the same double click for a house with a resident each answ
     assert.equal(second.duplicate, true);
     assert.equal("heads_up" in second, false);
   } finally { rmSync(town, { recursive: true, force: true }); rmSync(markDir, { recursive: true, force: true }); }
+});
+
+// ── 10 · THE OFFER (CORE-114): the glance offers room by the quote's own DATE and ROOM rules, never by the purse ─────────────────
+// parcelRoomOffer and parcelRoomQuote refuse by one copy of those two rules (parcel-room.mjs § THE TWO STAGE RULES), so this walks the
+// cases both ways: whether the house may buy by the date and the room is the same answer from the offer and from the quote, with a
+// purse that always covers the price (affordability is the quote's alone, and the offer must not hide for it).
+test("10 · the offer and the quote agree on who may buy, by the date and the room; the offer never hides for the purse", () => {
+  const rich = [GIFT("ash", 10000), GIFT("oak", 10000), GIFT("mist", 10000)];
+  const cases = [
+    ["declared after the cutoff, no room bought", "the-rowan", "ash", "2026-11-03", []],
+    ["room two bought", "the-rowan", "ash", "2026-11-03", [{ canonical: BUY("birch", 2, "hh:the-rowan") }]],
+    ["room three bought: exhausted", "the-rowan", "ash", "2026-11-03", [{ canonical: BUY("birch", 2, "hh:the-rowan") }, { canonical: BUY("birch", 3, "hh:the-rowan") }]],
+    ["declared on 10-31: keeps three for good", "the-oak", "oak", "2026-11-03", []],
+    ["no declaration day", "no-day", "mist", "2026-11-03", []],
+    ["before the day room is sold from", "the-rowan", "ash", "2026-10-31", []],
+  ];
+  for (const [name, slug, handle, date, purchases] of cases) {
+    const entries = [...rich, ...purchases];
+    const bought = houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), classifyEntry) })[`hh:${slug}`]?.bought ?? 0;
+    const since = registry.households[slug].since?.slice(0, 10) ?? null;
+    const offer = parcelRoomOffer({ slug, since, bought, date, engine: townEngine });
+    const q = parcelRoomQuote({ handle, date, registry, entries, engine: townEngine, townKey: `gh:${handle === "ash" || handle === "birch" ? 101 : 102}` });
+    assert.equal(offer.open, q.error === undefined, `${name}: offer ${JSON.stringify(offer)} vs quote ${JSON.stringify(q.error ?? "quotes")}`);
+  }
+  // the open offer names the room it would sell from; a poor house is still offered (its purse is the quote's refusal, not a hide)
+  assert.deepEqual(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", bought: 1, date: "2026-11-03", engine: townEngine }), { open: true, room: 2 });
+  const poor = parcelRoomQuote({ handle: "ash", date: "2026-11-03", registry, entries: [GIFT("ash", 1)], engine: townEngine, townKey: "gh:101" });
+  assert.match(poor.error.defect, /costs 50 stamps, and ash holds 1 liquid/, "unaffordable is the quote's own refusal");
+  assert.equal(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", bought: 0, date: "2026-11-03", engine: townEngine }).open, true, "and the offer is made all the same");
+  // a town whose ledger does not know a purchase yet sells nothing, so offers nothing; no engine at all is a null from the pure question (parcelRoomOfferNow maps it to not-yet-open: nothing offered)
+  assert.deepEqual(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", date: "2026-11-03", engine: { PARCEL_SETTLED_BY_DAY: "2026-10-31" } }), { open: false });
+  assert.equal(parcelRoomOffer({ slug: "the-rowan", since: "2026-11-02", date: "2026-11-03", engine: null }), null);
+});
+
+test("10 · the offer, now: a house the date closes reads no ledger; an open one reads the burns; a read that cannot be made is unread, never guessed", async () => {
+  const reads = [];
+  const burnLines = (lines) => async () => { reads.push(1); return lines; };
+  const base = { registry, date: "2026-11-03", engine: townEngine };
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "the-oak", burnLines: burnLines([]) }), { open: false });
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "no-day", burnLines: burnLines([]) }), { open: false });
+  assert.equal(reads.length, 0, "declared by the cutoff, or no day on record: closed by the registry row alone, no ledger read");
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: burnLines([]) }), { open: true, room: 1 });
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: burnLines([{ canonical: BUY("birch", 2, "hh:the-rowan") }]) }), { open: true, room: 2 });
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: burnLines([{ canonical: BUY("birch", 2, "hh:the-rowan") }, { canonical: BUY("birch", 3, "hh:rowan-house") }]) }), { open: false },
+    "room three, a purchase filed under the house's old name counted: exhausted");
+  assert.equal(await parcelRoomOfferNow({ ...base, slug: "the-rowan", burnLines: async () => null }), null, "the ledger's lines unreadable: unread");
+  assert.deepEqual(await parcelRoomOfferNow({ ...base, engine: null, slug: "the-rowan", townClone: null }), { open: false }, "no town engine configured: the quote's not-yet-open, so nothing is offered");
 });

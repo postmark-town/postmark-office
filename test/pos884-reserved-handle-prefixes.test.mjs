@@ -17,9 +17,9 @@ import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { RESERVED_HANDLE_PREFIXES, reservedHandlePrefix } from "../vendor/tools/reserved-handles.mjs";
 import { validateResidencyRequest, isResidentHandle, REGISTRY_PATH } from "../src/residency.mjs";
@@ -64,7 +64,7 @@ test("POS-884 · the residency door refuses each reserved prefix with the rule's
 // ── the crossing (town-drain.mjs § planTownDrain) ────────────────────────────
 
 const trash = [];
-const tmp = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const tmp = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 test.after(() => { for (const d of trash.splice(0)) { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* the OS will */ } } });
 
 function townClone() {

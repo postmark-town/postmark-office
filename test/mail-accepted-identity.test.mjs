@@ -6,9 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureKey, fixtureTown } from "./fixture.mjs";
 import { MAIL_ACT, MAIL_DOOR, replayLetter } from "../src/town-mail.mjs";
@@ -18,7 +18,7 @@ import { indexStore } from "./helpers/office-under-test.mjs";
 delete process.env.TOWN_PUSH;
 
 function mailClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-mail-identity-"));
+  const dir = tempDir("pm-mail-identity-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "inbox"), { recursive: true });

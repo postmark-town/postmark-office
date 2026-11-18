@@ -44,8 +44,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,7 +55,7 @@ const IMPORTER = "test/helpers/cli-guard-importer.mjs";
 // Paths that do not exist at all — the refusals below are all "no X at <path>",
 // never a write; the child's cwd is the scratch dir so a tool that did write a
 // default file would write it there, and the after() sweeps it.
-const SCRATCH = mkdtempSync(join(tmpdir(), "cli-guard-"));
+const SCRATCH = tempDir("cli-guard-");
 const NOWHERE = join(SCRATCH, "does-not-exist");
 const NOWHERE_DB = join(SCRATCH, "does-not-exist.db");
 const NOWHERE_OUT = join(SCRATCH, "out.json");
@@ -80,7 +80,7 @@ const TRACKED = git("ls-files", "-z").stdout.split("\0").filter(Boolean);
 assert.ok(TRACKED.length > 0, "the office must be a git checkout with tracked files, or the teardown proof below proves nothing");
 const changedTracked = () => git("status", "--porcelain", "--untracked-files=no").stdout;
 const CHANGED_BEFORE = changedTracked();
-const LINK_DIR = mkdtempSync(join(tmpdir(), "cli-guard-link-"));
+const LINK_DIR = tempDir("cli-guard-link-");
 const LINK = join(LINK_DIR, "office");
 if (process.platform === "win32") {
   const mk = spawnSync("cmd", ["/c", "mklink", "/J", LINK, ROOT], { encoding: "utf8" });
@@ -118,6 +118,8 @@ const ROSTER = {
   "src/stamp-verify-pinned.mjs": { args: [], code: 2, needle: "usage: stamp-verify-pinned.mjs --pinned" }, // POS-994: the pinned verifier, with the pinned key
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
+  // POS-1035: the hosting stake's executor tail (event-sparks.mjs § execMain) — no key, so it answers not-yet-open and touches nothing
+  "src/event-sparks.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
   "src/world-drain.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // world.db is retired (POS-270 lane W 3b): the world tails read the store's
@@ -159,6 +161,7 @@ const ROSTER = {
   "tools/ops-awareness.mjs": { args: ["--by-hand", join(ROOT, "tools", "ops-awareness.mjs")], env: { AWARENESS_OFFLINE: "1", OPS_ROOT: NOWHERE }, code: 2, needle: "is not JSON" },
   "tools/capture-doorstep-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/capture-household-golden.mjs": { args: [], code: 0, needle: "{" },
+  "tools/convert-idea-marks.mjs": { args: [], env: { OFFICE_KEEP: undefined, INVOCATION_ID: undefined }, code: 1, needle: "--town <town-clone> is required" }, // POS-854: bare, it asks for the town clone and reads nothing
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
@@ -228,6 +231,8 @@ const ROSTER = {
   "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
+  // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
+  "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
   "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
@@ -243,6 +248,7 @@ const ROSTER = {
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
   "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
+  "tools/repair-dreaming-household.mjs": { args: ["--bogus"], code: 2, needle: "no arguments but --dry-run" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
   // POS-354: --help only; any other run reads the dev office's env files and dials its store.

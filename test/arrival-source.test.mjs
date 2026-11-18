@@ -24,8 +24,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -48,9 +48,10 @@ test.after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: tru
 
 // ── A1 ──────────────────────────────────────────────────────────────────────
 
-test("A1 · the tag: the issue's fourteen, any case; anything else is nothing", () => {
+test("A1 · the tag: the issue's fourteen and tiktok (POS-1125, for POS-1124's site list), any case; anything else is nothing", () => {
   assert.deepEqual([...FROM_TAGS], ["reddit", "bsky", "x", "discord", "youtube", "substack", "1f3d9", "1f916",
-    "mongoose", "obend", "commons", "delve", "gsb", "harbor"]);
+    "mongoose", "obend", "commons", "delve", "gsb", "harbor", "tiktok"]);
+  assert.equal(fromTag("TikTok"), "tiktok");
   assert.equal(fromTag("Reddit"), "reddit");
   for (const bad of [null, "", "hn", "reddit2", "<b>", "ignore-the-rules"]) assert.equal(fromTag(bad), null, String(bad));
   assert.equal(FROM_KEY, "pm.from", "the site's keep (site src/lib/join-source.mjs)");
@@ -61,7 +62,7 @@ test("A1 · the tag: the issue's fourteen, any case; anything else is nothing", 
 // out the other, so each pins the list's digest to the SAME constant: the site's
 // test/join-source.test.mjs asserts this very number. A tag added on one side
 // reds that side until the digest, and so the other list, moves with it.
-const FROM_TAGS_DIGEST = "0ddea6f74eb32801";
+const FROM_TAGS_DIGEST = "f1cf44a8cdd3c165"; // POS-1125: tiktok appended (the site's mirror, POS-1124, pins this same number)
 test("A1b · the list's digest is the one the site's mirror pins (postmark-site test/join-source.test.mjs)", () => {
   assert.equal(createHash("sha256").update(FROM_TAGS.join(",")).digest("hex").slice(0, 16), FROM_TAGS_DIGEST);
 });
@@ -169,7 +170,7 @@ const PINS = () => ({ wick: { login: "lr-gh", id: 9101, pinned: "2026-08-01" } }
 await seedRegistry(IX.store, REGISTRY(), PINS());
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 function townClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-source-town-"));
+  const dir = tempDir("pm-source-town-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });

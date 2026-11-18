@@ -14,8 +14,8 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -67,7 +67,7 @@ const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); });
 
 function town({ households = HOUSEHOLDS(), pins = PINS(), cardHouse = PARAGRAPH, files = null } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "rekey-"));
+  const dir = tempDir("rekey-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES", "emmett-songbound"), { recursive: true });
