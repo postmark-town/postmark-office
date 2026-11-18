@@ -1844,7 +1844,8 @@ export async function holdingsFor(args = {}, key = null) {
   if (!who) return [];
   try {
     const { storeAttachmentRows } = await import("./world2-guards.mjs");
-    return holdingsOf(await storeAttachmentRows(), who);
+    // POS-1110: timed here, not at the call sites (test/hold-wirings.test.mjs pins `await holdingsFor(` at each one)
+    return holdingsOf(await actSpan("holdings", () => storeAttachmentRows()), who);
   } catch { return []; }
 }
 
@@ -3311,7 +3312,7 @@ async function apexDo(args, key, ctx = {}) {
     const reachIds = (seen.objects ?? []).map((o) => o.id);
     const amb = actSpan("gather", () => gatherActions(store.db, { spineIds, reachIds }));
     const ground = actSpan("gather", () => gatherGroundActions(store.db, { spineIds, reachIds }));
-    const held = gatherHeldActions(store.db, await actSpan("holdings", () => holdingsFor(args, key)));
+    const held = gatherHeldActions(store.db, await holdingsFor(args, key));
     const houseOf = await actSpan("households", () => worldHouseholds()); // POS-350: the store's identities, read once for every ground below
     const kind = actorKindOf(args);
     const { entries, refused: refusedGrants, seated: seatedAt, handoff: handoffSeat } = resolveForActor(
