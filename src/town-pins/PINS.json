@@ -1,7 +1,7 @@
 {
   "town_repo": "postmark-town/postmark",
-  "town_commit": "f391a17e96e5d7b4d665f60fb68bff097141b22d",
-  "read_at": "2026-11-18T09:01:19.027Z",
+  "town_commit": "9b702b6d26b28c6b51e5a685be48248b57086648",
+  "read_at": "2026-11-18T23:40:06.361Z",
   "files": {
     "PROJECTS/the-town-seal/seal.mjs": {
       "blob": "0e2c054bd21d256a2856cfddbc8ed9d3235632b8",
@@ -16,7 +16,7 @@
       ]
     },
     "tools/census-fold.mjs": {
-      "blob": "e4da506474a1b840c3343b3e7a2b718fcdebc93e",
+      "blob": "cb6249e668aa23b1ef4dec6741c8e9b1e2b9f02e",
       "closure": []
     },
     "tools/crossings.mjs": {
@@ -62,7 +62,7 @@
       "closure": []
     },
     "tools/stamp-mint.mjs": {
-      "blob": "606c65d77dce5b25b68f60db1b98fce1f1a6143b",
+      "blob": "dee7b1e141176109abf2ddb58f048266b3bbfac5",
       "closure": [
         "tools/census-fold.mjs",
         "tools/registry-source.mjs"
@@ -73,7 +73,7 @@
       "closure": []
     },
     "tools/stamp-verify.mjs": {
-      "blob": "873af4343c15e7afdf747384294540a73d470d73",
+      "blob": "632ef6d90a1da1027531849c5dfcc78bd8327105",
       "closure": [
         "tools/census-fold.mjs",
         "tools/registry-source.mjs",
@@ -92,7 +92,7 @@
       ]
     },
     "tools/world-stake.mjs": {
-      "blob": "4283db25df616e344ceb5b5d5f184bced43ee9fb",
+      "blob": "72a1c9a69e9b8761ba7858019a94e7d566499bbd",
       "closure": [
         "tools/census-fold.mjs",
         "tools/registry-source.mjs",
