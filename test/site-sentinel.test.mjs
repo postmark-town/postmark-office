@@ -3104,6 +3104,8 @@ test("§17 THE PUBLIC BOARD names no unit, on any probe, acked or not; the post,
     assert.match(posted[0], /DOWN — the box's failed units: 1 unit the roll-call manifest names failed: postmark-world2-backup\.service \(the World 2\.0 durability lane\); 2 units outside the manifest failed: certbot\.service; wright-rerun-s83-1790426624\.service/);
   } else {
     assert.match(posted[0], /…and \d+ more not shown here/);
+    // and the cut is the new meeps probes' doing: their STALE lines are in the post (truey-1113's tightening)
+    assert.match(posted[0], /meeps record/, "the post carries a meeps STALE line ahead of the cut");
   }
   assert.ok(readFileSync(join(dir, "history.jsonl"), "utf8").includes("certbot.service"), "the change log names them");
   assert.match(JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).probes.failed_units.ack.finding, /postmark-world2-backup\.service\|certbot\.service wright-rerun-s83-1790426624\.service/);
