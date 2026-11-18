@@ -276,14 +276,24 @@ cd /srv/postmark-office-dev && sudo bash -c '
 unset, so the line sets it and asserts it before anything writes.
 
 **8. The switch, behind the mint's gate.** First `stamp-mint-parity`, read-only,
-with the dev office's env (POS-341's ruling, 10-04 Q3: before anything mints from
-the store, its key base, deliveries, ledger and replay equal the clone's; prod's
-switch has the same line, § The store mint at the crossing, step 6):
+run as the dev office runs its jobs (POS-341's ruling, 10-04 Q3: before anything
+mints from the store, its key base, deliveries, ledger and replay equal the clone's;
+prod's switch has the same gate, § The store mint at the crossing, step 6). That is
+`dev-seed-advance.sh § as_dev_office`'s binding: meepo, the dev env file, and dev's
+OWN town pins. `TOWN_PINS_DIR` is not in the env file; the dev units take it from
+their drop-in (`deploy/postmark-office-dev.service-dropin-town-pins.conf`), and
+without it the tool checks dev's re-signed clone against the office's pins, which
+a dev clone never equals.
 ```sh
-cd /srv/postmark-office-dev && node --env-file=<(sudo cat /etc/postmark-office-dev.env) world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office-dev/town-clone
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+  node world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office-dev/town-clone
 #   expect: … PARITY (exit 0). A DIFFERENCE stops here: report it, reconcile nothing.
 ```
-A key-base difference is a registry that lags the clone (on 10-10 dev's
+Read a red by what it names, not by its exit code alone. A `TownPinMismatch`
+("… is not the copy the office pinned") is the PINS, not the store: the clone and
+dev's pins disagree, and the remedy is the freshen
+(`sudo systemctl start postmark-dev-freshen.service`, which re-pins), never the
+registry. A key-base difference is a registry that lags the clone (on 10-10 dev's
 `household_pins` was a 09-25 copy, and the rehearsal's mint diverged): refresh it
 as § The dev seed advance, step 3 does, then run the gate again. Only on PARITY,
 add `STAMP_LINES=store` to `/etc/postmark-office-dev.env` (sudoedit), then
