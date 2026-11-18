@@ -127,7 +127,12 @@
 //                 DEGRADED. A record older than 15 min, or none at all, is
 //                 STALE: the watcher or the desktop has stopped, and a silent
 //                 watcher must not read as healthy meeps (Darko 2026-10-10
-//                 13:27, POS-556).
+//                 13:27, POS-556). Two records, one classifier: the desktop's
+//                 is probe `meeps`; the meeps that moved to town-rig have their
+//                 own, /srv/postmark-sentinel/meeps-town-rig.json, probe
+//                 `meeps_town_rig` ("the meeps on town-rig"), landed by the
+//                 watcher on town-rig, same 15-minute window (CORE-72). Neither
+//                 file is ever written by the other host's watcher.
 // 11. SETTLEMENT — the newest sweep receipt (/srv/postmark-harbor/settlement-
 //                 auto.json) settled within the hour: a publishing sweep whose
 //                 world the newest settlement/S<n> tag covers, peeled, by
@@ -383,6 +388,9 @@ export const CONFIG = {
   // missed pushes plus one of ours. The record's own path and freshness are
   // the probe's; what counts as a sick meep is the watcher's (its `status`).
   meeps: { key: "meeps", label: "the meeps", path: "/srv/postmark-sentinel/meeps.json", staleAfterMs: 15 * MINUTE },
+  // §10, second host (CORE-72) — the meeps that moved to town-rig. Its own watcher lands its own file, so it
+  // never overwrites the desktop's. Same classifier, same 15-minute window. A missing file is STALE and barks.
+  meepsTownRig: { key: "meeps_town_rig", label: "the meeps on town-rig", path: "/srv/postmark-sentinel/meeps-town-rig.json", staleAfterMs: 15 * MINUTE, watcherName: "town-rig's watcher (meep-watch.timer, every 5 min over its write-only feed key)" },
 
   // §11 — the settlement. The receipt is the box's own file (owner meepo, which
   // this runs as); the tags are the world's, read over the wire. `unit` is not
@@ -1126,8 +1134,8 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
 // meep must never read as a warning because a field was missing. Only the exact
 // word "warn" counts. A WARN is announced once as a notice (see transition), and
 // composeBoard rolls it up as DEGRADED, never as DOWN.
-export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record" } = {}) {
-  const watcher = "the desktop watcher (starforge-rig's windows/meepops/meep-watch.mjs, every 5 min by scp)";
+export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record", watcherName = null } = {}) {
+  const watcher = watcherName ?? "the desktop watcher (starforge-rig's windows/meepops/meep-watch.mjs, every 5 min by scp)";
   if (raw == null) {
     return { verdict: "STALE", reason: `there is no meeps record at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""} — ${watcher} has not landed one, so nothing is watching the meeps` };
   }
@@ -2732,12 +2740,13 @@ export async function tick({
     probes.push({ key: config.disk.key, label: config.disk.label, kind: "disk", verdict: dk.verdict, reason: dk.reason, ...(dk.detail ? { detail: dk.detail } : {}) });
   }
 
-  // §10 — the meeps. A local read of the record the desktop watcher lands.
-  if (config.meeps) {
+  // §10 — the meeps. A local read of each record a meep watcher lands: the desktop's, then town-rig's (CORE-72).
+  for (const mcfg of [config.meeps, config.meepsTownRig]) {
+    if (!mcfg) continue;
     let raw = null, readError = null;
-    try { raw = readFileSync(config.meeps.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
-    const mp = classifyMeeps({ raw, readError, nowMs, staleAfterMs: config.meeps.staleAfterMs, path: config.meeps.path });
-    probes.push({ key: config.meeps.key, label: config.meeps.label, kind: "meeps", verdict: mp.verdict, reason: mp.reason, ...(mp.detail ? { detail: mp.detail } : {}) });
+    try { raw = readFileSync(mcfg.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
+    const mp = classifyMeeps({ raw, readError, nowMs, staleAfterMs: mcfg.staleAfterMs, path: mcfg.path, watcherName: mcfg.watcherName ?? null });
+    probes.push({ key: mcfg.key, label: mcfg.label, kind: "meeps", verdict: mp.verdict, reason: mp.reason, ...(mp.detail ? { detail: mp.detail } : {}) });
   }
 
   // §12 — the law pen. A local read of the state its unit writes.
