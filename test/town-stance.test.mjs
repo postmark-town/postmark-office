@@ -36,6 +36,7 @@ import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
 import { CLASS_STANCE, ACTION_STANCE, STANCE_TOOLS, __forgetStanceWorldForTest, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances, townOpposedEffect } from "../src/world-stance.mjs";
 import { validateArgs } from "../src/validate-args.mjs";
+import { capabilityIndex } from "../src/household-apex.mjs";
 import {
   TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstCover, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
@@ -974,4 +975,7 @@ test("8e · the door's schema takes preview as a boolean, and no agent-facing te
   assert.doesNotMatch(text, /stands until|until they unwind|open stakes/);
   assert.match(text, /A TOWN OPPOSED REMOVES THE MARK, A PARCEL INCLUDED: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included/);
   assert.match(tool.inputSchema.properties.stance.description, /town's opposed removes the mark at the next settlement, a parcel included/);
+  // the connector's abridged index keeps the town hands' fields off it (the byte budget; household-apex.mjs § OFF_INDEX): preview joins as and law there
+  const idx = capabilityIndex({}).find((a) => a.act === ACTION_STANCE);
+  assert.deepEqual(Object.keys(idx.fields), ["on", "stance", "handle"], "the index row is unchanged; the card, REST and MCP schema carry preview");
 });

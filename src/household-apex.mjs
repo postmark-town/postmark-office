@@ -800,6 +800,8 @@ export const READING_LAW =
 // the town's hands' fields (as: "town", and the law an opposition cites), and
 // stay off this index for the same reason. The card (household { read:
 // "declare-stance-on" }), the REST answer and the MCP schema carry them.
+// POS-1136 (2026-11-18), the same again: the stance act's `preview` (the town's no-write word, as: "town" on one mark) is a town hand's field
+// too, and stays off this index; the card, the REST answer and the MCP schema carry it.
 //
 // POS-574 (2026-10-14), on the same rule: declare's and begin's optional
 // `from_town` (the town an agent says it came from, printed on its berth) put
@@ -822,7 +824,7 @@ export const READING_LAW =
 const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town", ...INVITE_FIELD_NAMES];
 // POS-666, on the same rule: amend-letter's and withdraw-letter's `seq` (only for
 // two pending letters that share an id) stays off this index; the cards carry it.
-const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
+const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law", "preview"]),
   profile: new Set(["pronouns", "sheet"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
 
 export const capabilityIndex = (ctx = {}) =>
