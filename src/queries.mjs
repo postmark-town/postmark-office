@@ -1714,9 +1714,13 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
  * Degrades rather than throws: a checkout too old to carry the onboarding fold
  * yields a null, and the doorstep simply carries no next-steps block.
  */
-export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null } = {}) {
+export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null, pre = null } = {}) {
   try {
     ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+    // THE THREE QUEST READS, ALREADY READ (POS-1129): the doorstep reads the registry, the quest standing and the board's rows in its one
+    // town-index lease and hands them here as `{ v }` / `{ e }` (town-index-store.mjs § doorstepPageFromRows). A failed one throws here, where its
+    // own lease's failure threw, and the block is null as before. With no `pre` (the house read), each is its own read, as it always was.
+    const took = (r) => { if (r.e) throw r.e; return r.v; };
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
     const { paperGapRows, worldSitedFor } = await import("./household-apex.mjs");
@@ -1728,7 +1732,7 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     const worldBlock = (h) => (pending ??= real(h));
 
     // the registry from the index this door reads: the store's town_meta (POS-268)
-    const registry = JSON.parse((await ix.questRegistry()) ?? '{"quests":[]}');
+    const registry = JSON.parse((pre ? took(pre.registry) : await ix.questRegistry()) ?? '{"quests":[]}');
     // ── THE FACTS COME OFF THE FOLD THE INGEST ALREADY WROTE (POS-167) ──
     // (History: POS-167 titled this "the rehydrate"; the town-index ingest has
     // done that fold since the office.db rehydrate was retired (POS-268 5b, POS-656).)
@@ -1764,7 +1768,7 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // Absent means ASK, exactly as before, at exactly the old cost, for exactly
     // that case. (Measured on a fresh index of the live town: 182 of 182 rows
     // carry all six, so this is the deploy window and not the common path.)
-    const facts = onboardingFactsFromStanding(await ix.standing(handle))
+    const facts = onboardingFactsFromStanding(pre ? took(pre.standing) : await ix.standing(handle))
       ?? tools.onboardingFactsFor(clone, handle);
     // THE 08-15 GATE. Keemin's ruling, verbatim: "the gaps are yours to see, not
     // theirs to be seen by." A stranger's read of your doorstep gets exactly
@@ -1799,7 +1803,7 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // invisible; handing it the verdict keeps the gate whole and keeps the whole
     // doorstep to one world open.
     // `givers: false`: the next steps show no pots, so no registry read for them (POS-550)
-    const questBoard = await ix.questBoard(handle, { worldSited, givers: false });
+    const questBoard = pre ? await pre.questBoard({ worldSited, givers: false }) : await ix.questBoard(handle, { worldSited, givers: false });
     // ── WHAT THE COMPOSER IS HANDED, AND WHY IT IS NOT THE BOARD VERBATIM ────
     //
     // `composeNextSteps` writes a step's tail as `(${q.progress}/${q.target}

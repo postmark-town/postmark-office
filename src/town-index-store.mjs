@@ -256,9 +256,17 @@ export async function potBoard(q, extraInvalid = []) {
 
 /** A handle's standing row, or null. */
 export async function standingFor(q, handle) {
-  const row = (await q.query("SELECT json FROM town_quest_standing WHERE handle = $1", [handle])).rows[0];
-  // a bent row (json that does not parse) is null, not a throw
-  try { return row?.json ? JSON.parse(row.json) : null; } catch { return null; }
+  return standingOfJson(await standingJsonFor(q, handle));
+}
+
+/** The SQL half of `standingFor` (POS-1129): the row's json text, or null, so a caller holding the connection parses it after (`standingOfJson`). */
+export async function standingJsonFor(q, handle) {
+  return (await q.query("SELECT json FROM town_quest_standing WHERE handle = $1", [handle])).rows[0]?.json ?? null;
+}
+
+/** `standingJsonFor`'s text, parsed: a bent row (json that does not parse) is null, not a throw. */
+export function standingOfJson(json) {
+  try { return json ? JSON.parse(json) : null; } catch { return null; }
 }
 
 /** The index meta a quest board reads (quest_registry, quest_day, and POS-961's quest_invites), from the store's own town_meta. */
@@ -301,7 +309,7 @@ export async function questIndexRows(q, handle) {
   const rows = { handle, meta: await questMeta(q) };
   if (named) {
     rows.progress = await kept(async () => (await q.query(PROGRESS_SQL, [handle])).rows[0]);
-    rows.standing = await kept(() => standingFor(q, handle));
+    rows.standing = await kept(() => standingJsonFor(q, handle));   // the text; parsed after the connection is back (§ heldQuestSource, POS-1129)
   }
   rows.potIds = await kept(async () => (await q.query("SELECT id FROM town_pots")).rows.map((r) => r.id));
   rows.potRows = await kept(() => potBoardRows(q));
@@ -316,7 +324,7 @@ function heldQuestSource(rows) {
   };
   return {
     progressRow: async (h) => { ours(h, "progress"); return take(rows.progress); },
-    standing: async (h) => { ours(h, "standing"); return take(rows.standing); },
+    standing: async (h) => { ours(h, "standing"); return standingOfJson(take(rows.standing)); },
     pots: async (extraInvalid) => potBoardOf(take(rows.potRows), extraInvalid),
     potIds: async () => take(rows.potIds),
   };
@@ -389,6 +397,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     copy: via((c) => indexCopy(c)),
     // the page's rows under the connection, its composition after it is back (POS-1064; storeAnswer § then)
     doorstep: via((c, handle, _asOf, opts) => doorstepRows(c, handle, opts), (rows, handle, _asOf, opts) => (rows ? doorstepFromRows(rows, handle, opts) : null)),
+    // the doorstep's whole town-index half in that one lease: the core, plus fresh's standing, the copy and the next steps' quest reads (POS-1129)
+    doorstepPage: (handle, _asOf, opts) => doorstepPagePooled(handle, opts, { clone, env }),
     // the house read's per-resident segments: their rows under the connection, their composition after it is back (POS-1081; storeAnswer § then)
     residentSegments: via((c, handle, _fresh, standing) => residentSegmentsRows(c, handle, standing), (rows, handle, fresh, standing) => residentSegmentsFromRows(rows, handle, fresh, standing)),
     hasResident: via((c, handle) => hasResident(c, handle)),
@@ -984,6 +994,117 @@ export async function doorstepRows(q, handle, opts = {}) {
       residents: await one("SELECT COUNT(*) AS n FROM town_residents"),
       deliveries: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
       lastDelivery: (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE kind = 'delivery'`)).rows[0]?.d ?? null,
+    },
+  };
+}
+
+// ── THE WHOLE PAGE'S TOWN-INDEX ROWS, ONE LEASE (POS-1129) ───────────────────────────────────────────────────────────────
+//
+// A keyless doorstep took the pen eleven times (POS-1110's breakdown, 2026-11-18: 275 leases per bulk call of 25): the core above, and then,
+// each on a connection of its own, the freshness ladder's standing, the copy's history, and the next steps' quest registry, quest standing and
+// quest board. Six of the eleven were this index. They are read here in the core's one READ ONLY transaction, and everything is composed after the
+// connection is back (`doorstepPageFromRows`).
+//
+// EACH EXTRA READ KEEPS ITS OWN FAILURE. They were separate transactions, so one that failed cost only its own block (an unreadable standing
+// composes no overlay, an unreadable copy says so, an unreadable quest read drops the next steps). Here each runs under a SAVEPOINT, the
+// SAVEPOINT itself inside the part's `try`, and answers `{ v }` or `{ e }`:
+//   · a FAILED STATEMENT (an SQL error, a statement timeout, a throw between statements) is rolled back to its savepoint, and the reads after it
+//     run in the same transaction;
+//   · a DEAD CONNECTION (the rollback to the savepoint cannot run either) leaves the transaction dead: the part that died is `{ e }`, and every
+//     part after it is marked `{ lone: true }` and read after this transaction on a lease of its own, the road it had before POS-1129
+//     (`readLoneParts`), so it degrades alone as it did then, and the page still answers with only the dead part's block unread.
+// The core is not wrapped: its failure, a dead connection included, is the page's, exactly as before (the reader's own error, which the door
+// answers as it always did).
+const PAGE_PARTS = Object.freeze([
+  ["standing", async (q, handle) => (await import("./standing-store.mjs")).standingRowsVia(q, [handle])],   // the freshness ladder's gate (paper-fresh.mjs § freshFor)
+  ["copy", (q) => indexCopy(q)],                                                                              // the copy block (doorstep-bundle.mjs § copyBlock)
+  ["registry", async (q) => (await questMeta(q)).quest_registry ?? null],                                     // next steps (queries.mjs § nextStepsFor)
+  ["questStanding", (q, handle) => standingJsonFor(q, handle)],                                              // next steps' onboarding facts
+  ["quest", (q, handle) => questIndexRows(q, handle)],                                                        // next steps' quest board
+]);
+
+export async function doorstepPageRows(q, handle, opts = {}) {
+  const core = await doorstepRows(q, handle, opts);
+  if (!core) return null;
+  const rows = { core };
+  let dead = false;
+  for (const [name, read] of PAGE_PARTS) {
+    if (dead) { rows[name] = { lone: true }; continue; }
+    let begun = false;
+    try {
+      await q.query("SAVEPOINT doorstep_part");
+      begun = true;
+      const v = await read(q, handle);
+      // the answer stands only once its RELEASE does: a read that swallowed a failed statement (questIndexRows' `kept`) leaves its subtransaction
+      // aborted, and its own lease could not commit either, so the RELEASE failing is that read's failure, as it was
+      await q.query("RELEASE SAVEPOINT doorstep_part");
+      rows[name] = { v };
+    } catch (e) {
+      try { await q.query("ROLLBACK TO SAVEPOINT doorstep_part"); }
+      catch { dead = true; /* the transaction cannot go on: the parts after this one take their own leases (readLoneParts) */ }
+      // a part whose SAVEPOINT failed never began, and is read alone when the transaction cannot go on (the connection died between two
+      // reads); a read that began and failed is its own `{ e }`
+      rows[name] = begun || !dead ? { e } : { lone: true };
+    }
+  }
+  if (dead) rows.dead = true;
+  return rows;
+}
+
+/**
+ * THE PARTS A DEAD CONNECTION LEFT UNREAD, each on its own lease, one after another (POS-1098), as each was read before POS-1129: its own
+ * store failure or its own error is its own `{ e }`, never the page's.
+ */
+async function readLoneParts(rows, handle, env) {
+  for (const [name, read] of PAGE_PARTS) {
+    if (!rows[name]?.lone) continue;
+    try {
+      const r = await storeAnswer((c) => read(c, handle), { env });
+      rows[name] = r.refused ? { e: new TownIndexUnreachable(r.refused) } : { v: r.out };
+    } catch (e) { rows[name] = { e }; }
+  }
+}
+
+/**
+ * The pooled page (storeIndexPooled § doorstepPage): the rows in one lease, the composition after it. A transaction that died after its core
+ * was read cannot commit, so its read is refused; the rows it had already read are kept, the parts it could not read are read alone, and the
+ * page is composed. A refusal with no dead part (the lease could not be had, or the store failed outside any part) is the page's 503, as before.
+ */
+async function doorstepPagePooled(handle, opts, { clone, env }) {
+  let held = null;
+  const r = await storeAnswer(async (c) => (held = await doorstepPageRows(c, handle, opts)), { env });
+  let rows;
+  if (r.refused) {
+    if (!held?.dead) throw new TownIndexUnreachable(r.refused);
+    rows = held;
+  } else rows = r.out;
+  if (!rows) return null;
+  if (rows.dead) await readLoneParts(rows, handle, env);
+  return doorstepPageFromRows(rows, handle, opts, clone);
+}
+
+/**
+ * THE PAGE, COMPOSED (POS-1129), with no store and no connection: the fresh context from the standing rows and the caller's `freshBase`
+ * (`{ clone, asOf, pendingRows }`, paper-fresh.mjs § freshOf), the core from its rows with that context, and the other reads handed on as
+ * `{ v }` / `{ e }` for the page to finish: `copy` (indexCopy's answer), and `next` (the next steps' registry text, standing object and quest
+ * board, the board composed on demand with the options the next steps choose, by `questBoardOfRows` over `clone`).
+ */
+export async function doorstepPageFromRows(rows, handle, opts = {}, clone = null) {
+  const { freshOf } = await import("./paper-fresh.mjs");
+  const { standingOfRows } = await import("./standing-store.mjs");
+  let standing;
+  if (rows.standing.e) standing = { e: rows.standing.e };
+  else { try { standing = { v: standingOfRows(rows.standing.v).get(handle) ?? null }; } catch (e) { standing = { e }; } }
+  const fresh = freshOf(handle, { ...(opts.freshBase ?? {}), standing });
+  const core = doorstepFromRows(rows.core, handle, { ...opts, fresh });
+  const questStanding = rows.questStanding.e ? rows.questStanding : { v: standingOfJson(rows.questStanding.v) };
+  return {
+    core,
+    copy: rows.copy,
+    next: {
+      registry: rows.registry,
+      standing: questStanding,
+      questBoard: (boardOpts) => (rows.quest.e ? Promise.reject(rows.quest.e) : questBoardOfRows(rows.quest.v, clone, boardOpts)),
     },
   };
 }
