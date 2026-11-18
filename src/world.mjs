@@ -4685,17 +4685,21 @@ export async function markStandsOnOwnGround(clean, canon = null) {
  * Darko: an outline holds at most 256 points, and a resident's mark on common ground is at most 2 km a side. The
  * numbers are the mark class's two properties, read here through classDials and nowhere held; a dial the law has not
  * published is no boundary. Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it
- * answers the same refusal as the write. `prior` is the mark's current declaration on an amendment (an existing
- * footprint over a cap may be kept or shrunk, never grown). A parcel (its own extent dial), a spark (its frame is not
- * ground it stands on) and the town's own marks are not judged by the side cap; the point cap judges any ring.
+ * answers the same refusal as the write. The point cap judges any ring a write carries. The SIDE cap is a resident's
+ * PLACED mark standing on COMMON ground, in the door's own representation: a sited mark (either form; a parcel lineage
+ * and a spark are not), carrying an `at`, whose ground verdict (§ groundMinimumStake, the one the stake door reads) is
+ * commons, not the household's own parcel. An amendment is judged on what it carries, like a leave.
  */
-export function footprintGate(clean, { prior = null } = {}) {
+export async function footprintGate(clean, { canon = canonForGuards() } = {}) {
   if (clean?.points === undefined && clean?.extent === undefined) return;
   const caps = footprintCaps(classDials("mark"));
   if (caps.points == null && caps.side == null) return;
-  const parcelLine = clean.class != null && lineageOf(String(clean.class), classExtendsOf()).includes("parcel");
-  const sideScope = !(clean.kind === "parcel" || clean.kind === "spark" || parcelLine || clean.by === "the-town");
-  const r = footprintRefusal(clean, { caps, prior, sideScope });
+  let sideScope = false;
+  if (caps.side != null && clean.at && isSited(clean, classExtendsOf()) && clean.kind !== "spark") {
+    const line = [clean.kind, clean.class].filter((k) => k != null).flatMap((k) => lineageOf(String(k), classExtendsOf()));
+    if (clean.kind !== "parcel" && !line.includes("parcel")) sideScope = (await groundMinimumStake(clean, canon)).min >= 1;
+  }
+  const r = footprintRefusal(clean, { caps, sideScope });
   if (r) throw Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, hint: r.hint });
 }
 
@@ -4727,7 +4731,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
 
     // ── THE FOOTPRINT CAPS (POS-1126): before the preview answers and before any write, for every caller of this pass —
     // the public door, the event's spark, the town's own amend tools. An amendment is judged against what it supersedes.
-    footprintGate(clean, { prior: amending ? (priorLive ?? priorCanon) : null });
+    await footprintGate(clean, { canon });
 
     // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
@@ -5873,7 +5877,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   let result;
   // THE FOOTPRINT CAPS on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
   // the canon's declaration, before the exec or a preview of it. The journal pass below asks it itself, against the live layer.
-  if (!singleLogEnabled()) footprintGate(clean, { prior: payload.amend === true ? (canonForGuards()?.byId?.get(`${by}/${slug}`) ?? null) : null });
+  if (!singleLogEnabled()) await footprintGate(clean);
   if (singleLogEnabled()) {
     // POS-5 slice 1. The journal door throws its bounces directly (they are the
     // same grammar the exec answers with, one process earlier), so only the

@@ -10,16 +10,15 @@
 // law does not say is an absent boundary, as classDials' own contract has it: this file holds no default, so a
 // fixture that changes a property changes the limit, and until the law publishes them nothing is refused.
 //
-// SCOPE. The point cap judges any ring a write carries. The side cap judges the footprint of a placed mark: its
-// ring's box when it sends one, else its `extent`. Not judged: a parcel (its own dial), a spark (its frame is an
-// event's room or circle, not ground it stands on), the town's own constitutional marks, and a mark that sends no
-// footprint at all. 3D form geometry is a different representation and is not read here.
+// SCOPE. The point cap judges any ring a write carries. The side cap judges the footprint of a resident's placed
+// mark standing on common ground (not the household's own parcel ground, by the door's own ground verdict,
+// world.mjs § groundMinimumStake): its ring's box when it sends one, else its `extent`. Not judged: a parcel (its
+// own dial), a spark, an unplaced mark, a mark on its household's own parcel. 3D form geometry is not read here.
 //
-// EXISTING RECORDS STAY. An amendment may keep or shrink a footprint that already stands over a cap (nine published
-// marks do, WLD-193's census), and is refused only when it carries MORE than the mark's current declaration did on
-// the measure that is over: no resizing is asked of anyone, and nothing grows past the law.
+// A write is judged on what it carries, a leave and an amendment alike. Records already published are not rewritten
+// by this door (no resizing is asked of anyone); an amendment that carries a footprint over a cap is refused like any other.
 //
-// Pure: no I/O. world.mjs § footprintGate wires it in; the caps and the prior are its arguments.
+// Pure: no I/O. world.mjs § footprintGate wires it in and decides whether the side cap's scope holds (sideScope).
 
 import { ringBox } from "./ring-box.mjs";
 
@@ -51,24 +50,20 @@ const metres = (n) => `${Math.round(n * 100) / 100} m`;
 
 /**
  * The refusal for a declaration over a cap, or null. `clean` is the declaration (points, extent); `caps` is
- * `footprintCaps(...)`; `prior` the mark's current declaration when this is an amendment (its footprint is the most
- * the amendment may keep); `sideScope` false exempts the side cap (a parcel, a spark, the town's own mark).
+ * `footprintCaps(...)`; `sideScope` false exempts the side cap (see SCOPE above).
  * `{ code: 422, defect, hint }`, the door's own grammar.
  */
-export function footprintRefusal(clean, { caps, prior = null, sideScope = true } = {}) {
+export function footprintRefusal(clean, { caps, sideScope = true } = {}) {
   const n = pointCount(clean?.points);
   if (caps?.points != null && n != null && n > caps.points) {
-    const was = prior ? pointCount(prior.points) : null;
-    if (!(was != null && n <= was))
-      return { code: 422, defect: `an outline holds at most ${caps.points} points; this one has ${n}`,
-        hint: `the town's law (${FOOTPRINT_PROPERTIES.points} on the mark class) caps a mark's 2D map-footprint outline at ${caps.points} points; it is not a limit on 3D geometry. Smooth shapes need 50 to 100. Nothing was written.` };
+    return { code: 422, defect: `an outline holds at most ${caps.points} points; this one has ${n}`,
+      hint: `the town's law (${FOOTPRINT_PROPERTIES.points} on the mark class) caps a mark's 2D map-footprint outline at ${caps.points} points; it is not a limit on 3D geometry. Smooth shapes need 50 to 100. Nothing was written.` };
   }
   if (caps?.side != null && sideScope) {
     const now = sidesOf(clean);
-    const was = prior ? sidesOf(prior) : null;
     if (now) {
       for (const [axis, word] of [["w", "wide"], ["h", "deep"]]) {
-        if (now[axis] > caps.side && !(was && now[axis] <= was[axis]))
+        if (now[axis] > caps.side)
           return { code: 422, defect: `a mark on common ground is at most ${metres(caps.side)} a side; this one is ${metres(now[axis])} ${word}`,
             hint: `the town's law (${FOOTPRINT_PROPERTIES.side} on the mark class) caps a resident's mark at ${caps.side} m wide by ${caps.side} m deep; a parcel keeps its own extent. Nothing was written.` };
       }

@@ -9,15 +9,14 @@
 // Every house, handle and mark here is INVENTED, except that the amend legs run on a real resident mark of the pinned
 // world clone (the way town-centre-amend.test.mjs does), against an embedded store.
 //
-//   F1  the rule, pure: the boundaries (256/257, 2000/2001 each side), the dial read, the scope exemptions, what an
-//       existing over-cap record may keep, and the words
+//   F1  the rule, pure: the boundaries (256/257, 2000/2001 each side), the dial read, the scope exemptions and the words
 //   F2  THE DOOR, REAL: leave-mark through leaveMarkViaOffice — 257 points, width 2001, depth 2001 refuse with the cap
 //       named; 256 and 2000 pass; `preview: true` answers the SAME refusal and writes nothing (no act, no draft)
 //   F3  NO HIDDEN CONSTANT: the same marks under a changed property default, and under no property at all
-//   F4  AMENDMENTS: a real resident mark amended over the cap refuses (on a lowered law, so the existing record
-//       is itself over it); keeping or shrinking what it already was is allowed; growing is not
-//   F5  THE DIRECT CALLERS: the journal pass refuses for an event's spark-free declaration and a town tool's call the
-//       same way (preview and write), and a parcel, a spark and the town's own mark are not judged by the side cap
+//   F4  AMENDMENTS are judged on what they carry, like a leave: a real resident mark amended over either cap refuses,
+//       and so does one re-sent over a lowered cap (published records are not resized, but nothing re-writes them over it)
+//   F5  THE DIRECT CALLERS: the journal pass refuses the same way (preview and write); the side cap's SCOPE is the door's
+//       ground verdict: a parcel, a spark, an unplaced mark and a mark on the household's own parcel are not judged by it
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test --test-concurrency=1 test/mark-footprint-caps.test.mjs
 
@@ -64,7 +63,7 @@ const box = (w, h, cx = 40000, cy = 40000) => ring(4, w, h, cx, cy);
 
 // ── F1 the rule, pure ───────────────────────────────────────────────────────
 
-test("F1 · the rule: the boundaries, the dial read, the scope, what an existing record may keep, and the words", () => {
+test("F1 · the rule: the boundaries, the dial read, the scope, amendments judged like leaves, and the words", () => {
   const caps = footprintCaps({ "outline-point-cap": 256, "common-ground-side-cap": 2000 });
   assert.deepEqual(caps, { points: 256, side: 2000 });
   assert.deepEqual(footprintCaps({}), { points: null, side: null }, "no property, no boundary: the office holds no number");
@@ -82,14 +81,9 @@ test("F1 · the rule: the boundaries, the dial read, the scope, what an existing
   assert.equal(judge({ extent: { w: 99999, h: 99999 } }, { sideScope: false }), null, "a parcel, a spark and the town's own marks are not judged by the side cap");
   assert.match(judge({ points: ring(257), extent: { w: 99999, h: 99999 } }, { sideScope: false }).defect, /257/, "but the point cap judges any ring");
   assert.equal(judge({ kind: "sited", body: "no footprint at all" }), null);
-  // an existing record over a cap may be kept or shrunk, never grown, on the measure that is over
-  const was = { extent: { w: 3000, h: 3000 } };
-  assert.equal(judge({ extent: { w: 3000, h: 3000 } }, { prior: was }), null, "kept as it is");
-  assert.equal(judge({ extent: { w: 2500, h: 3000 } }, { prior: was }), null, "shrunk");
-  assert.match(judge({ extent: { w: 3001, h: 3000 } }, { prior: was }).defect, /3001 m wide/, "grown");
-  assert.match(judge({ extent: { w: 2001, h: 100 } }, { prior: { extent: { w: 100, h: 100 } } }).defect, /2001/, "a mark that was inside the cap may not leave it");
-  assert.equal(judge({ points: ring(300) }, { prior: { points: ring(300) } }), null);
-  assert.match(judge({ points: ring(301) }, { prior: { points: ring(300) } }).defect, /301/);
+  // an amendment is judged on what it carries: a re-sent over-cap footprint refuses like a new one
+  assert.match(judge({ extent: { w: 3000, h: 3000 } }).defect, /3000 m wide/);
+  assert.match(judge({ points: ring(300) }).defect, /has 300/);
 });
 
 // ── F2 the real door ────────────────────────────────────────────────────────
@@ -148,7 +142,7 @@ test("F3 · NO HIDDEN CONSTANT: a changed property default changes the limit, an
 
 // ── F4 amendments ───────────────────────────────────────────────────────────
 
-test("F4 · AMENDMENTS: over the cap refuses; an existing record over it may be kept or shrunk, never grown", { skip: SKIP }, async () => {
+test("F4 · AMENDMENTS are judged on what they carry: over either cap refuses, kept-over-a-lowered-cap refuses too, inside passes", { skip: SKIP }, async () => {
   const { canonForGuards } = await import("../src/world.mjs");
   const canon = canonForGuards();
   const real = canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && m.extent && Number(m.extent.w) > 20 && Number(m.extent.w) < 1800
@@ -159,25 +153,23 @@ test("F4 · AMENDMENTS: over the cap refuses; an existing record over it may be 
   const amend = (extent, extra = {}) => leave({ slug, by: real.by, at: real.at, extent, amend: true, preview: true, body: `${real.body ?? "a mark"} (amended)`, ...extra }, key);
 
   await lawWith({ points: 256, side: 2000 });
-  await assert.rejects(amend({ w: 2001, h: real.extent.h }), refusal(/this one is 2001 m wide/), "an amendment may not grow a mark past the cap");
+  await assert.rejects(amend({ w: 2001, h: real.extent.h }), refusal(/this one is 2001 m wide/), "an amendment past the cap");
   await assert.rejects(amend({ w: real.extent.w, h: 2001 }), refusal(/2001 m deep/));
   await assert.rejects(leave({ slug, by: real.by, amend: true, preview: true, body: "ring", points: ring(257, 10, 10, real.at.x, real.at.y) }, key), refusal(/at most 256 points; this one has 257/));
   const same = await amend(real.extent);
   assert.equal(same.preview, true, `an amendment inside the cap previews: ${JSON.stringify(same).slice(0, 200)}`);
 
-  // the law is lowered under the mark: its existing record is now OVER the cap, and stays
-  const cap = Math.floor(Number(real.extent.w)) - 1;
+  // the law is lowered under the mark: its published record is OVER the cap and is not touched, but an amendment that carries it is refused like any other
+  const cap = Math.floor(Math.max(Number(real.extent.w), Number(real.extent.h))) - 1;
   await lawWith({ points: 256, side: cap });
-  const kept = await amend(real.extent);
-  assert.equal(kept.preview, true, "an amendment that keeps the footprint it has is allowed: no resizing is asked of anyone");
-  assert.equal((await amend({ w: Number(real.extent.w) - 1, h: real.extent.h })).preview, true, "shrinking it is allowed");
-  await assert.rejects(amend({ w: Number(real.extent.w) + 1, h: real.extent.h }), refusal(new RegExp(`at most ${cap} m a side`)), "growing it is not");
-  assert.equal(canonForGuards().byId.get(real.id).extent.w, real.extent.w, "and the stored record is exactly as it was");
+  await assert.rejects(amend(real.extent), refusal(new RegExp(`at most ${cap} m a side`)), "no keep/shrink allowance: the amendment carries an over-cap footprint");
+  assert.equal((await amend({ w: cap, h: cap })).preview, true, "an amendment that fits the law passes");
+  assert.equal(canonForGuards().byId.get(real.id).extent.w, real.extent.w, "and the published record is exactly as it was");
 });
 
 // ── F5 the direct callers and the scope ─────────────────────────────────────
 
-test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on preview and write; a parcel, a spark and the town's own mark are not judged by the side cap", { skip: SKIP }, async () => {
+test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on preview and write; the side cap's scope is the door's ground verdict", { skip: SKIP }, async () => {
   const { journalLeaveMark, footprintGate } = await import("../src/world.mjs");
   await lawWith();
   const base = { slug: `fp-direct-${process.pid}`, kind: "sited", body: "a direct call", by: "cap-fixture", household: "cap-fixture", date: new Date().toISOString() };
@@ -189,15 +181,28 @@ test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on previ
       (e) => e?.code === 422 && /257/.test(e.defect), `preview ${preview}`);
     assert.equal(await actsCount(), before, `preview ${preview}: nothing written`);
   }
-  // the scope, asked of the gate itself
+  // the scope, asked of the gate itself: the door's own ground verdict (the household's own parcel is not common ground)
   const big = { at: { x: 0, y: 0 }, extent: { w: 9000, h: 9000 } };
-  assert.doesNotThrow(() => footprintGate({ ...base, kind: "parcel", ...big }), "a parcel keeps its own extent dial");
-  assert.doesNotThrow(() => footprintGate({ ...base, kind: "spark", ...big }), "a spark's frame is no ground it stands on");
-  assert.doesNotThrow(() => footprintGate({ ...base, by: "the-town", ...big }), "the town's own constitutional mark");
-  assert.doesNotThrow(() => footprintGate({ ...base, kind: "sited", class: "parcel", ...big }), "the old spelling of a parcel lineage is a parcel");
-  assert.throws(() => footprintGate({ ...base, ...big }), (e) => e.code === 422 && /9000 m wide/.test(e.defect), "a resident's sited mark is");
-  assert.throws(() => footprintGate({ ...base, kind: "parcel", points: ring(257) }), (e) => /257/.test(e.defect), "the point cap judges a parcel's ring too");
-  assert.doesNotThrow(() => footprintGate({ ...base, kind: "predicated", slot: "x", value: "y" }), "a mark with no footprint is not judged");
+  const none = { marks: [], byId: new Map(), ids: new Set() };
+  const gate = (c, canon = none) => footprintGate(c, { canon });
+  await gate({ ...base, kind: "parcel", ...big });
+  await gate({ ...base, kind: "spark", ...big });
+  await gate({ ...base, kind: "sited", class: "parcel", ...big });
+  await gate({ ...base, at: undefined, extent: big.extent });
+  await assert.rejects(gate({ ...base, ...big }), (e) => e.code === 422 && /9000 m wide/.test(e.defect), "a resident's placed sited mark on common ground is judged");
+  await assert.rejects(gate({ ...base, by: "the-town", household: "the-town", ...big }), (e) => /9000 m wide/.test(e.defect), "no author-name exemption: the ground verdict decides");
+  await assert.rejects(gate({ ...base, kind: "parcel", points: ring(257) }), (e) => /257/.test(e.defect), "the point cap judges a parcel's ring too");
+  await gate({ ...base, kind: "predicated", slot: "x", value: "y" });
+  // OWN PARCEL: a mark standing inside its household's own parcel is not common ground. The law is lowered so a parcel-sized mark is over it.
+  await lawWith({ points: 256, side: 10 });
+  const parcel = { id: "cap-fixture/the-plot", by: "cap-fixture", household: "cap-fixture", kind: "parcel", tier: "home", at: { x: 40000, y: 40000 }, extent: { w: 25, h: 25 },
+    points: [[39987.5, 39987.5], [40012.5, 39987.5], [40012.5, 40012.5], [39987.5, 40012.5]] };
+  const owned = { marks: [parcel], byId: new Map([[parcel.id, parcel]]), ids: new Set([parcel.id]) };
+  const shed = { ...base, at: { x: 40000, y: 40000 }, extent: { w: 20, h: 20 } };
+  await gate(shed, owned);
+  await assert.rejects(gate({ ...shed, at: { x: 41000, y: 41000 } }, owned), (e) => /at most 10 m a side; this one is 20 m wide/.test(e.defect), "the same mark off the parcel is common ground");
+  await assert.rejects(gate(shed, none), (e) => /20 m wide/.test(e.defect), "and with no parcel under it");
+  await assert.rejects(gate({ ...shed, by: "someone-else", household: "someone-else" }, owned), (e) => /20 m wide/.test(e.defect), "another household's mark on that parcel is on common ground");
 });
 
 // ── F6 the journal road, through the public door ────────────────────────────
@@ -221,8 +226,7 @@ test("F6 · THE JOURNAL ROAD (WORLD_SINGLE_LOG): the public door reaches the sam
     const amend = (extent) => leave({ slug, by: real.by, at: real.at, extent, amend: true, preview: true, body: `${real.body ?? "a mark"} (amended)` }, key);
     await assert.rejects(amend({ w: 2001, h: real.extent.h }), refusal(/2001 m wide/), "an amendment past the cap");
     assert.equal((await amend(real.extent)).preview, true, "an amendment inside it");
-    await lawWith({ points: 256, side: Math.floor(Number(real.extent.w)) - 1 });
-    assert.equal((await amend(real.extent)).preview, true, "an existing record over the lowered cap is kept");
-    await assert.rejects(amend({ w: Number(real.extent.w) + 1, h: real.extent.h }), refusal(/a side/), "and not grown");
+    await lawWith({ points: 256, side: Math.floor(Math.max(Number(real.extent.w), Number(real.extent.h))) - 1 });
+    await assert.rejects(amend(real.extent), refusal(/a side/), "an amendment carrying an over-cap footprint is refused: no keep/shrink allowance");
   } finally { if (prev == null) delete process.env.WORLD_SINGLE_LOG; else process.env.WORLD_SINGLE_LOG = prev; }
 });
