@@ -1227,7 +1227,7 @@ export async function metricsMail(q, opts = {}) {
 /** The SQL half of metricsMail (the pulse's rows, unfolded: POS-1064). */
 async function metricsMailRows(q) {
   const newest = await ledgerNewest(q);
-  const dayCountRows = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind")).rows;
+  const dayCountRows = (await q.query("SELECT date, kind, COUNT(*) AS n FROM town_ledger WHERE date IS NOT NULL GROUP BY date, kind ORDER BY date COLLATE \"C\", kind COLLATE \"C\"")).rows;
   const totals = {
     deliveries: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
     bounces: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'bounce'"),
@@ -1235,7 +1235,7 @@ async function metricsMailRows(q) {
     threads: await count(q, "SELECT COUNT(*) AS n FROM town_threads"),
     residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
   };
-  const threadJsons = newest ? (await q.query("SELECT json FROM town_threads")).rows.map((t) => t.json) : [];
+  const threadJsons = newest ? (await q.query("SELECT json FROM town_threads ORDER BY root")).rows.map((t) => t.json) : [];
   return { newest, dayCountRows, totals, threadJsons };
 }
 function metricsMailFrom({ newest, dayCountRows, totals, threadJsons }, opts) {

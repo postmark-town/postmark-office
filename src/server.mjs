@@ -53,7 +53,7 @@ import * as townIndexStore from "./town-index-store.mjs"; // the town index, the
 import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index (POS-268)
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
-import { withRev, revOf, splitGlobal, parseKnown } from "./doorstep-rev.mjs"; // POS-1086: a doorstep's content revision, REST doors only
+import { withRev, revOf, splitGlobal, parseKnown, GLOBAL_VERSION } from "./doorstep-rev.mjs"; // POS-1086: a doorstep's content revision, REST doors only
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
@@ -2214,7 +2214,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-1086: each doorstep carries `rev`, its content's hash (doorstep-rev.mjs).
         // `?known=handle:rev,…` answers `{ handle, unchanged: true, rev }` for a handle whose
         // rev still matches, in place of its body, and adds `global` (the five as_of-derived
-        // leaves, once) to the response. Without `known` the response is what it was, plus `rev`.
+        // leaves and the town-wide blocks, once, with `version`) to the response, to a caller that sends `&global=2`.
+        // Without `known` the response is what it was, plus `rev`.
         let known = null;
         if (url.searchParams.has("known")) {
           const p = parseKnown(listParam(url.searchParams, "known"));
@@ -2222,6 +2223,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             return bounce(res, 400, `known takes handle:rev pairs, not "${p.refused}"`, "GET /doorsteps?handles=a,b&known=a:0123456789abcdef,b:fedcba9876543210 (a rev is 16 lowercase hex characters, as each doorstep's `rev` says)");
           known = p.known;
         }
+        // GLOBAL-BLOCKS: `unchanged` is answered only to a caller that says it patches the town-wide blocks
+        // (`&global=2`, doorstep-rev.mjs § GLOBAL_VERSION). Any other caller's `known` is ignored: it is read whole,
+        // with its rev, exactly as with no `known`, so an older site reader can never carry a stale block.
+        if (known && url.searchParams.get("global") !== String(GLOBAL_VERSION)) known = null;
         const ix = townIndexStore.storeIndexPooled(TOWN_CLONE);
         return mapLanes(handles, async (handle) => {
           const d = (await doorstepBundle(handle, { key: null, asOf: AS_OF, clone: TOWN_CLONE, odb, canWrite, ix, conversationsOffset: 0 })) ?? null;

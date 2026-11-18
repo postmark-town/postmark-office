@@ -90,9 +90,16 @@ test("BULLETIN · falsifier per input: a posting added, then a posting deleted",
   const added = bulletinOf(await changed((t) => put(t, "bulletin", { slug: "second-notice", json: JSON.stringify({
     slug: "second-notice", data: { title: "second-notice", posted: "2026-07-01", kind: "guidance" }, body: "# Second\n\nAnother notice." }) })));
   assert.deepEqual(added.map((e) => e.slug), ["second-notice", "settling-in"], "newest posted first");
+  // the LAST-sorting row deleted (slug order is the rows' order): a prefix walk of the shorter `flat` still matches the kept rows, so only the length clause catches it
+  const deletedLast = bulletinOf(await changed((t) => drop(t, "bulletin", (r) => r.slug === "settling-in")));
+  assert.deepEqual(deletedLast.map((e) => e.slug), ["second-notice"]);
+  // put it back (as the edit test above left it), so two rows stand again
+  await changed((t) => put(t, "bulletin", { slug: "settling-in", json: JSON.stringify({
+    slug: "settling-in", data: { title: "settling-in", posted: "2026-06-12", kind: "guidance" }, body: "# Settling in\n\nWelcome to the towm." }) }));
+  // the FIRST-sorting row deleted: the kept rows no longer match at index 0
   const deleted = bulletinOf(await changed((t) => drop(t, "bulletin", (r) => r.slug === "second-notice")));
   assert.deepEqual(deleted.map((e) => e.slug), ["settling-in"]);
-  // FLIP: in bulletinListingsKept, drop the `bulletinKept.rows.length === flat.length` clause and walk `flat` (not the kept rows) in the comparison: the deleted posting is served from the kept list.
+  // FLIP: in bulletinListingsKept, drop the `bulletinKept.rows.length === flat.length` clause and walk `flat` (not the kept rows) in the comparison: the last-sorting deletion above goes red (the shorter flat is a prefix of the kept rows, so the deleted posting is served from the kept list).
 });
 
 test("BULLETIN · the kept listing is handed out frozen: a caller cannot change the next caller's page", async () => {
