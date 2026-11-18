@@ -70,6 +70,7 @@ const ALLOWED = {
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
   "media-sweep.mjs": [5, `${OPERATOR} (the sweep's and the takedown's reports on the box: a source's or storage's refusal, named for the operator who reads last.json)`],
+  "month-close.mjs": [16, `${OPERATOR} (POS-851: the manual monthly close's plan and apply reports, printed to the operator who ran the command and answering no resident: an error's or a child's or git's own words in a refusal or an outcome's detail (x12), and four reads that are not errors: a refusal object's own message (x2) and a spawn result's stderr (x2)); nothing here is an HTTP answer`],
   "oauth.mjs": [2, `${OWN}: SignInUnreadable's why, and the co-sign's unread berth place (POS-740), both of which go to the log`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
   "registry-store.mjs": [1, `${OWN}: a classifier`],
