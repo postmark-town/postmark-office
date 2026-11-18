@@ -969,7 +969,8 @@ test("amend · a housemate may change a post written under the house's account s
 // Scope is ONLY that: no named-place containment, no amendment policy, no general hosting preview, no repair of an old event.
 // Credit: Moose (moose/event-place-0-0-sends-guests-to-the-origin-the-town-s-null-b).
 const ORIGIN_SENTENCE = "an event needs a place: name a mark, or give its x and y";
-const ORIGIN_HINT = /nobody can be said to attend there/;
+// the hint is neutral about the Origin: it says what the Origin is and what a place is, and makes no claim about attendance (#4577 retracted that one)
+const ORIGIN_HINT = /the null bucket of the town, where what has no place is kept, not a place of its own/;
 const nothingWritten = (pen, events, n = 0) => { assert.equal(pen.rows().length, n, "an act was written"); assert.equal(events.size, n, "a post row was written"); };
 
 test("POS-1133 · a new event at no mark and (0, 0) is refused in the ruling's plain words, and no act or post is written", async () => {
@@ -1020,9 +1021,10 @@ test("POS-1133 · an event already on the calendar at (0, 0) stays as it is, and
   assert.deepEqual(amended.amended, ["title"]);
   assert.deepEqual([posts.get(kept.event.id).place_mark, posts.get(kept.event.id).place_x, posts.get(kept.event.id).place_y], [null, 0, 0], "the old row's place is untouched");
   const before = pen.rows().length;
-  // the amendment route's place judgement is the shared judgePlaceShape, deliberately NOT widened by this fix
-  const toOrigin = await hostAtOffice({ event: kept.event.id, place: { at: { x: 2, y: 2 } } }, WRIGHT);
-  assert.deepEqual(toOrigin.amended, ["place"]);
+  // amending that old row's place to the real point (2, 2) works as it always did: the amendment route (the shared judgePlaceShape) is
+  // deliberately not touched by this fix, and no amendment rule is added here
+  const movedToPoint = await hostAtOffice({ event: kept.event.id, place: { at: { x: 2, y: 2 } } }, WRIGHT);
+  assert.deepEqual(movedToPoint.amended, ["place"]);
   assert.equal(pen.rows().length, before + 1);
   assert.equal(events.size, 1);
 });

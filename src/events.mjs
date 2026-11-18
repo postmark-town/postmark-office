@@ -241,7 +241,7 @@ export function judgePlaceShape(place) {
 // already on the calendar at (0, 0) stays as it is, a standing mark that happens to be centred at (0, 0) is a mark (named,
 // with an extent) and stays valid, and a point with only one axis at zero is a real point.
 export const BARE_ORIGIN_DEFECT = "an event needs a place: name a mark, or give its x and y";
-const BARE_ORIGIN_HINT = 'the Origin (0, 0) is where the town keeps what has no place, and nobody can be said to attend there — place: { mark: "<owner>/<slug>" } names a standing mark, or place: { at: { x, y } } gives a real point, such as { at: { x: 120, y: 64 } }';
+const BARE_ORIGIN_HINT = 'the Origin (0, 0) is the null bucket of the town, where what has no place is kept, not a place of its own — place: { mark: "<owner>/<slug>" } names a standing mark, or place: { at: { x, y } } gives a real point, such as { at: { x: 120, y: 64 } }';
 
 /** Is this `place` (as sent) a bare-Origin point: well-formed, no mark, x and y both zero? Never throws. */
 export function isBareOrigin(place) {
