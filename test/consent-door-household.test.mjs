@@ -418,7 +418,7 @@ test("an unknown field bounces BY NAME against the act's own schema", async () =
   const bounced = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed", stanse: "typo" } });
   assert.equal(bounced.code, 422);
   assert.deepEqual(bounced.unknown_fields, ["stanse"]);
-  assert.deepEqual(bounced.allowed, ["on", "stance", "as", "law", "handle"]);
+  assert.deepEqual(bounced.allowed, ["on", "stance", "preview", "as", "law", "handle"]);
 });
 
 test("the two halves are one door: read: \"stances\" names what do: \"declare-stance-on\" answers", async () => {

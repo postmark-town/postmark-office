@@ -34,7 +34,8 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
-import { CLASS_STANCE, ACTION_STANCE, __forgetStanceWorldForTest, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
+import { CLASS_STANCE, ACTION_STANCE, STANCE_TOOLS, __forgetStanceWorldForTest, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances, townOpposedEffect } from "../src/world-stance.mjs";
+import { validateArgs } from "../src/validate-args.mjs";
 import {
   TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstCover, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
@@ -871,4 +872,106 @@ test("POS-1057 · the stance world's slow half is kept between reads, equals a f
     LIVE = [];
     __forgetStanceWorldForTest();
   }
+});
+
+// ── 8 · POS-1136 · the town's opposed removes the mark, a parcel included, and says so ────────────────────────
+//
+// Darko, 2026-11-18 14:53 EST: "the town declaring opposed to something should remove it, even parcels". Wright, 20:38Z: "stamps
+// staked on a town-opposed mark go back to each staker when it leaves, the owner included. Nobody loses stamps because the town
+// removed a mark." The act's answer, its preview and the row it writes SAY that; the fold that does it and the return of the stamps are
+// the World's (WLD-201): this door computes, moves and refunds nothing.
+// FLIP: put the old "an opposed mark with open stakes stands until they unwind" back in declareTownStance → 8a goes red.
+// FLIP: let the preview fall through to writeStanceAct → 8b's no-write assertions go red.
+
+const OPPOSED_WORDS = /the mark leaves at the next settlement, a parcel included, and any stamps staked on it go back to each staker, the owner included$/;
+const OPPED = { as: "town", stance: "opposed", law: ["the-town/the-unmoved-past"] };
+
+test("8a · an opposed town word says the mark leaves at the next settlement, a parcel included, and the staked stamps go back to each staker, the owner included", async () => {
+  for (const [what, on] of [["an ordinary mark", "beta/on-alphas-edge"], ["a parcel", "alpha/alphas-parcel"]]) {
+    const r = await speak({ ...OPPED, on, ...{} }, wright);
+    assert.equal(r.stance, "opposed", what);
+    assert.match(r.effect, OPPOSED_WORDS, `${what}: the answer`);
+    assert.equal(r.effect, townOpposedEffect("the-town/the-unmoved-past"), `${what}: one sentence, built in one place`);
+    assert.doesNotMatch(r.effect, /stands until|unwind|open stakes/, `${what}: the old exception is gone`);
+    const row = written().at(-1);
+    assert.equal(row.object, on);
+    assert.equal(row.effect, r.effect, `${what}: the record says what the answer says`);
+  }
+  // the neutral word, the resident's words, and the cited law are untouched
+  const n = await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral" }, wright);
+  assert.match(n.effect, /clears "awaiting the town" and confers nothing/);
+  const own = await speak({ on: "beta/on-alphas-edge", stance: "opposed" }, alpha);
+  assert.equal(own.stance, "opposed", "a resident's opposed is still a resident's word");
+  assert.ok(!("effect" in own) || !OPPOSED_WORDS.test(own.effect ?? ""), "and does not carry the town's meaning");
+});
+
+test("8b · preview: true runs every town judgment, answers the same effect, and appends NOTHING", async () => {
+  for (const [what, on] of [["an ordinary mark", "beta/on-alphas-edge"], ["a parcel", "alpha/alphas-parcel"]]) {
+    const before = written().length;
+    const p = await speak({ ...OPPED, on, preview: true }, wright);
+    assert.equal(p.preview, true, what);
+    assert.equal(p.would, "declare");
+    assert.deepEqual([p.on, p.stance, p.as, p.by, p.household, p.hand], [on, "opposed", "town", TOWN_SPEAKER, TOWN, "wright"], `${what}: who and what`);
+    assert.match(p.effect, OPPOSED_WORDS, `${what}: the preview says the ruled meaning`);
+    assert.deepEqual(p.law, [{ law: "the-town/the-unmoved-past", law_text: UNMOVED }], "the law is judged and shown verbatim");
+    assert.equal(p.law_sha, MAIN_SHA);
+    assert.ok(!("seq" in p) && !("crossing" in p), "no act was made, so there is no seq");
+    assert.match(p.nothing_written, /no act appended/);
+    assert.equal(written().length, before, `${what}: nothing was appended`);
+    // the real act then says exactly what its preview said
+    const real = await speak({ ...OPPED, on }, wright);
+    assert.equal(real.effect, p.effect, `${what}: the preview and the act answer the same effect`);
+    assert.equal(written().length, before + 1, "and the act writes one row");
+  }
+  // a preview of a word that would replace another says so
+  await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral" }, wright);
+  const p2 = await speak({ ...OPPED, on: "beta/on-alphas-edge", preview: true }, wright);
+  assert.equal(p2.would_supersede?.stance, "neutral");
+  // a neutral preview says the neutral effect
+  const pn = await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral", preview: true }, wright);
+  assert.match(pn.effect, /clears "awaiting the town" and confers nothing/);
+});
+
+test("8c · a preview passes the same refusals as the act, and writes nothing on any of them", async () => {
+  const before = written().length;
+  const refuses = (args, key, code, re) => assert.rejects(() => speak({ ...args, preview: true }, key), (e) => { assert.equal(e.code, code); if (re) assert.match(e.defect, re); return true; });
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed", law: ["the-town/the-unmoved-past"] }, beta, 403, /only the town's hands/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed" }, wright, 422, /cites the law it applies/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed", law: ["the-town/a-market-stall"] }, wright, 422, /is not law/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "welcomed", law: ["the-town/the-unmoved-past"] }, wright, 422, /adoption, and it is reserved/);
+  await refuses({ as: "town", on: "nobody/no-such-mark", stance: "opposed", law: ["the-town/the-unmoved-past"] }, wright, 404, /no published mark/);
+  await refuses({ as: "town", on: "", stance: "opposed", law: ["the-town/the-unmoved-past"] }, wright, 422, /which mark/);
+  assert.equal(written().length, before, "no refusal left a row, and no preview made one");
+});
+
+test("8d · the flag is never accepted and dropped: a resident's stance and a list refuse a preview by name, a non-boolean refuses, false writes as ever", async () => {
+  const before = written().length;
+  await assert.rejects(() => speak({ on: "beta/on-alphas-edge", stance: "opposed", preview: true }, alpha), (e) => e.code === 422 && /a preview is the town's word on one mark/.test(e.defect),
+    "a resident's stance is not previewed, so it never writes under a flag that says it will not");
+  await assert.rejects(() => speak({ on: "beta/on-alphas-edge", stance: "neutral", preview: true }, alpha), (e) => e.code === 422);
+  await assert.rejects(() => speak({ ...OPPED, on: ["beta/on-alphas-edge", "alpha/alphas-parcel"], preview: true }, wright), (e) => e.code === 422 && /a list of marks/.test(e.hint),
+    "nor a list, the town's included");
+  for (const bad of ["true", "yes", 1, {}, []])
+    await assert.rejects(() => speak({ ...OPPED, on: "beta/on-alphas-edge", preview: bad }, wright), (e) => e.code === 422 && /preview is true or false/.test(e.defect), `preview ${JSON.stringify(bad)}`);
+  assert.equal(written().length, before, "none of them wrote");
+  // false and absent write normally, resident and town alike
+  const a = await speak({ ...OPPED, on: "beta/on-alphas-edge", preview: false }, wright);
+  assert.equal(a.stance, "opposed");
+  const b = await speak({ on: "beta/on-alphas-edge", stance: "neutral", preview: false }, alpha);
+  assert.equal(b.stance, "neutral");
+  const l = await speak({ ...OPPED, on: ["beta/on-alphas-edge", "alpha/alphas-parcel"] }, wright);
+  assert.equal(l.landed, 2, "a list of the town's words still writes each");
+  assert.equal(written().length, before + 4);
+  assert.ok(written().filter((r) => r.payload.as === "town" && r.payload.stance === "opposed").every((r) => OPPOSED_WORDS.test(r.effect)), "every written opposed row carries the ruled meaning");
+});
+
+test("8e · the door's schema takes preview as a boolean, and no agent-facing text still says an opposed mark stands while stakes are open", () => {
+  const tool = STANCE_TOOLS[0];
+  assert.equal(tool.inputSchema.properties.preview.type, "boolean");
+  assert.equal(validateArgs(tool, { on: "beta/on-alphas-edge", stance: "opposed", as: "town", preview: true }), null, "the shared grammar accepts the flag at every door");
+  assert.match(validateArgs(tool, { on: "beta/on-alphas-edge", stance: "opposed", preview: "true" })?.defect ?? "", /should be a boolean/);
+  const text = JSON.stringify(tool);
+  assert.doesNotMatch(text, /stands until|until they unwind|open stakes/);
+  assert.match(text, /A TOWN OPPOSED REMOVES THE MARK, A PARCEL INCLUDED: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included/);
+  assert.match(tool.inputSchema.properties.stance.description, /town's opposed removes the mark at the next settlement, a parcel included/);
 });
