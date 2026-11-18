@@ -952,7 +952,7 @@ test("8d · the flag is never accepted and dropped: a resident's stance and a li
   await assert.rejects(() => speak({ on: "beta/on-alphas-edge", stance: "neutral", preview: true }, alpha), (e) => e.code === 422);
   await assert.rejects(() => speak({ ...OPPED, on: ["beta/on-alphas-edge", "alpha/alphas-parcel"], preview: true }, wright), (e) => e.code === 422 && /a list of marks/.test(e.hint),
     "nor a list, the town's included");
-  for (const bad of ["true", "yes", 1, {}, []])
+  for (const bad of ["true", "yes", 1, 0, {}, [], null]) // null too: a generated call that sends it for an unset field must not become a write
     await assert.rejects(() => speak({ ...OPPED, on: "beta/on-alphas-edge", preview: bad }, wright), (e) => e.code === 422 && /preview is true or false/.test(e.defect), `preview ${JSON.stringify(bad)}`);
   assert.equal(written().length, before, "none of them wrote");
   // false and absent write normally, resident and town alike

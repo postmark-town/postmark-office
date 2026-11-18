@@ -1645,12 +1645,12 @@ export const townOpposedEffect = (cites) =>
   `the town opposes it, citing ${cites} — the mark leaves at the next settlement, a parcel included, and any stamps staked on it go back to each staker, the owner included`;
 
 /**
- * THE PREVIEW FLAG (POS-1136). `preview` is true, false or absent. It is the TOWN'S word only (`as: "town"`, one mark): a resident's
+ * THE PREVIEW FLAG (POS-1136). `preview` is true, false or absent; anything else, null included, is refused. It is the TOWN'S word only (`as: "town"`, one mark): a resident's
  * stance and a list of marks refuse it by name and write nothing, so no flag is ever accepted and dropped. Anything else is refused too.
  */
 function judgePreview(args) {
   const p = args.preview;
-  if (p === undefined || p === null || p === false) return false;
+  if (p === undefined || p === false) return false; // absent or false: an ordinary write. null is NOT absent: it refuses below (the household door checks field names, not types)
   if (p !== true) throw bounce(422, "preview is true or false", `got ${JSON.stringify(p)} — nothing was written`);
   return true;
 }

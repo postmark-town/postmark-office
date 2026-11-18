@@ -429,6 +429,13 @@ test("POS-1136 · preview is a field of the act at the household door (not an un
   assert.ok(!refused.unknown_fields, "preview is a field the act's own schema declares");
   assert.match(String(refused.defect ?? refused.result?.defect ?? JSON.stringify(refused)), /a preview is the town's word on one mark/);
   assert.equal(stanceRows().length, before, "and nothing was written");
+  // THE HOUSEHOLD DOOR CHECKS FIELD NAMES, NOT TYPES: a non-boolean preview, null included, reaches the act and must be refused there, never written
+  for (const bad of [null, "true", 1, {}]) {
+    const r = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "opposed", preview: bad } });
+    assert.equal(r.code, 422, `preview ${JSON.stringify(bad)}: ${JSON.stringify(r).slice(0, 200)}`);
+    assert.match(String(r.defect ?? r.result?.defect ?? JSON.stringify(r)), /preview is true or false/, `preview ${JSON.stringify(bad)}`);
+    assert.equal(stanceRows().length, before, `preview ${JSON.stringify(bad)}: no stance row was written`);
+  }
   const listed = await door({ do: ACTION_STANCE, args: { on: ["beta/on-wrights-edge"], stance: "opposed", preview: true } });
   assert.equal(listed.code, 422);
   assert.equal(stanceRows().length, before, "a list under a preview writes nothing either");
