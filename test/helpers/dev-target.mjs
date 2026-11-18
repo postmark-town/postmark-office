@@ -88,6 +88,13 @@ export async function localDevTarget({
     const store = givenStore ?? await startStore({ db });
     if (!givenStore) cleanups.push(() => store.stop());
     const town = scratchClone("town", townSource, join(dir, "town-clone"));
+    // THE STAND-IN'S OWN SEED (POS-940; POS-354, Darko 2026-10-10 14:26:41Z's class fix): the re-sign
+    // reads prod's public key at refs/tags/sandbox/seed (tools/dev-ledger-resign.mjs § SEED_REF). Taken
+    // from the source clone, that tag was the BOX's, which moves, and CI fetches only the tags reachable
+    // at the office's town pin, so a cache miss reddened every run with "the clone has no
+    // refs/tags/sandbox/seed". The stand-in tags its own scratch clone instead: its HEAD, the pinned
+    // town, prod-signed as the box's seed is, before the re-sign, whatever tag the source carries.
+    g(town, "tag", "-f", "sandbox/seed", "HEAD");
     const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
@@ -186,10 +193,15 @@ export async function localDevTarget({
       [name, (tables[name] ?? []).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])))]));
     const { seedTownIndex } = await import("./index-to-store.mjs");
     const { HEAD_KEY } = await import("../../world2/tools/town-index-ingest.mjs");
+    const { writeMintInputs } = await import("../../src/mint-inputs.mjs");
     const w = await store.connect("law_ingester");
     try {
       await w.query("BEGIN");
       await seedTownIndex(w, rows);
+      // and the mint's inputs, town_rooms and town_mail_lines, as the box's seed writes them in the index's
+      // own transaction (town-index-ingest.mjs § seed → mintInputs, DEPLOY.md § The dev rehearsal, step 7):
+      // the preflight's stamp-mint-parity reads them (POS-940), and an empty pair is a seed the box never has
+      await writeMintInputs(w, town);
       await w.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ($1, $2, now()) ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha, ingested_at = now()", [HEAD_KEY, g(town, "rev-parse", "HEAD")]);
       await w.query("COMMIT");
     } finally { await w.end(); }

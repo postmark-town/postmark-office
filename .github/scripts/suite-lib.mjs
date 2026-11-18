@@ -105,11 +105,14 @@ const key = (file, name) => `${file}\u0000${name}`;
 // A row past its `until` is OVERDUE: printed as such, never a failure of the run,
 // because a quarantine's deadline is a question for its owner, not for every PR.
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+// An owner is a Postmark Linear issue: a team key the Linear handler parses
+// (POS, WLD, CORE, CON) and a number (WLD-200).
+export const OWNER_KEY = /^(?:POS|WLD|CORE|CON)-\d+$/;
 export function rowShapeProblems(row) {
   const out = [];
   for (const k of ["file", "name", "reason", "owner", "date", "until"])
     if (typeof row[k] !== "string" || !row[k].trim()) out.push(`no ${k}`);
-  if (typeof row.owner === "string" && row.owner.trim() && !/^POS-\d+$/.test(row.owner)) out.push(`owner "${row.owner}" is not a Linear issue (POS-N)`);
+  if (typeof row.owner === "string" && row.owner.trim() && !OWNER_KEY.test(row.owner)) out.push(`owner "${row.owner}" is not a Linear issue (POS-N, WLD-N, CORE-N or CON-N)`);
   for (const k of ["date", "until"])
     if (typeof row[k] === "string" && row[k].trim() && !DAY.test(row[k])) out.push(`${k} "${row[k]}" is not YYYY-MM-DD`);
   if (DAY.test(row.date ?? "") && DAY.test(row.until ?? "") && row.until < row.date) out.push(`until ${row.until} is before date ${row.date}`);

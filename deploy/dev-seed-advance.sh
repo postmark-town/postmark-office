@@ -36,9 +36,10 @@
 #
 # WHY THE OPEN WINDOW'S CLOSE IS TRUED UP (POS-950). A clearing opens the next
 # window at the cleared one's scheduled close, for 12 hours
-# (world2/tools/clearing-job.mjs § the successor's INSERT), and the rehearsal pulls
-# a close back to now only when it is still ahead (tools/dev-rehearsal.mjs § the
-# clearing step). Dev has no candle between rehearsals, so by the next one the open
+# (world2/tools/clearing-job.mjs § the successor's INSERT). The rehearsal pulled a
+# close back to now only when it was still ahead; since POS-940 (POS-354 fix b) it
+# pulls a past close to now too (tools/dev-rehearsal.mjs § the clearing step), so
+# this step is now a second guard, kept. Dev has no candle between rehearsals, so by the next one the open
 # window's close is days past: clearing it opens a successor whose close is past
 # too, settlements-backfill.mjs § windowFor names that successor as the blessed
 # row's window, and the bless reds. So step 8 moves a past close to 11 hours from

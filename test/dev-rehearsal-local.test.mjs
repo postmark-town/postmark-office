@@ -30,7 +30,8 @@ import assert from "node:assert/strict";
 import { localDevTarget } from "./helpers/dev-target.mjs";
 import { join } from "node:path";
 import { appendFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { PROD_DB, groundOf, groundTakenIn, mistsSafeBox, runRehearsal, renderReport, storeClients, targetFromFiles } from "../tools/dev-rehearsal.mjs";
 import { OVERLAP } from "../world2/tools/overlap.mjs";
@@ -52,6 +53,15 @@ test("the rehearsal refuses a pen pointed at PROD's database before it writes an
   assert.equal(r.setup_failed, true);
   assert.match(lines[0], /^dev-rehearsal: REFUSED, the target store is not the dev office's own: clearing_job names world2_dev, PROD's store/);
   assert.equal(r.steps.length, 0, "no step ran");
+});
+
+test("the stand-in stands on its OWN seed: sandbox/seed is its scratch town's starting commit, never the source clone's moving tag (POS-940; POS-354)", () => {
+  // Darko 2026-10-10 14:26:41Z: the stand-in depended on the box's sandbox/seed, which CI holds only when it is
+  // reachable at the town pin, so a moved seed reddened the re-sign ("the clone has no refs/tags/sandbox/seed").
+  // The source clone's own tag (e1af5b1a on 11-18) is not its HEAD (the pin, e9cb5e87), so this tells the two apart.
+  const rev = (repo, ref) => execFileSync("git", ["-C", repo, "rev-parse", ref], { encoding: "utf8" }).trim();
+  const source = fileURLToPath(new URL("../town-clone", import.meta.url));
+  assert.equal(rev(dev.town, "refs/tags/sandbox/seed^{commit}"), rev(source, "HEAD"), "the stand-in's seed is the commit its scratch clone started on");
 });
 
 test("the preflight goes red on a dev office that does not read the store as prod's does", async () => {
