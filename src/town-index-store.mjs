@@ -1030,15 +1030,21 @@ export async function doorstepPageRows(q, handle, opts = {}) {
   let dead = false;
   for (const [name, read] of PAGE_PARTS) {
     if (dead) { rows[name] = { lone: true }; continue; }
+    let begun = false;
     try {
       await q.query("SAVEPOINT doorstep_part");
+      begun = true;
       const v = await read(q, handle);
+      // the answer stands only once its RELEASE does: a read that swallowed a failed statement (questIndexRows' `kept`) leaves its subtransaction
+      // aborted, and its own lease could not commit either, so the RELEASE failing is that read's failure, as it was
       await q.query("RELEASE SAVEPOINT doorstep_part");
       rows[name] = { v };
     } catch (e) {
-      rows[name] = { e };
       try { await q.query("ROLLBACK TO SAVEPOINT doorstep_part"); }
-      catch { dead = true; /* the connection is gone: the parts after this one take their own leases (readLoneParts) */ }
+      catch { dead = true; /* the transaction cannot go on: the parts after this one take their own leases (readLoneParts) */ }
+      // a part whose SAVEPOINT failed never began, and is read alone when the transaction cannot go on (the connection died between two
+      // reads); a read that began and failed is its own `{ e }`
+      rows[name] = begun || !dead ? { e } : { lone: true };
     }
   }
   if (dead) rows.dead = true;

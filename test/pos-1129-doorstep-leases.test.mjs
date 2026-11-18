@@ -339,6 +339,18 @@ test("5 · LEASE A: an SQL error or a dead connection in any one extra read answ
   }
 });
 
+test("5 · LEASE A: a connection that dies BETWEEN two reads (at a SAVEPOINT) loses nothing: every read not yet made takes its own lease", async () => {
+  const clean = JSON.stringify(await page("wright", TOWN));
+  for (let k = 1; k <= Object.keys(EXTRA_READS).length; k++) {
+    let n = 0;
+    const match = (sql) => /^SAVEPOINT doorstep_part$/.test(sql) && ++n === k;   // the k-th part's SAVEPOINT, before its read begins
+    const head = await injecting(match, "kill", () => page("wright", TOWN));
+    assert.equal(head.hits, 1, `the connection was not killed at part ${k}'s SAVEPOINT: this case tests nothing`);
+    assert.ok(!head.e, `killed before part ${k}: the one-lease page ${said(head)}; the separate leases (no shared transaction to die) answered the clean page`);
+    assert.equal(JSON.stringify(head.v), clean, `killed before part ${k}: a read that never began was lost, where the separate leases lost nothing`);
+  }
+});
+
 test("5 · LEASE A: a dead connection during the CORE answers what the separate leases answered (the page's own failure, as before)", async () => {
   const match = (sql) => /SELECT 1 FROM town_residents WHERE handle = \$1/.test(sql);
   const head = await injecting(match, "kill", () => page("wright", TOWN));
@@ -371,6 +383,13 @@ test("6 · LEASE B on real Postgres: a class that fails (an SQL error, a dead co
     assert.equal(old.filter((x) => x.unavailable).length, 1, `${mode}: the old per-class reading lost ${old.filter((x) => x.unavailable).length} classes: the oracle is off`);
     assert.notDeepEqual(got.v.put_up, clean.put_up, `${mode}: the posts are the clean ones: the failure reached no class`);
   }
+  // the connection dies BETWEEN two classes (at the second class's SAVEPOINT): no class was failing, so none may be lost
+  let n = 0;
+  const between = await injecting((sql) => /^SAVEPOINT posts_class$/.test(sql) && ++n === 2, "kill",
+    () => householdPosts("wright", { now: NOW, townClone: TOWN ?? join(OFFICE_ROOT, "no-town-clone") }));
+  assert.equal(between.hits, 1, "the connection was not killed at the second class's SAVEPOINT");
+  assert.ok(!between.e, `killed between two classes: the posts ${said(between)}`);
+  assert.equal(JSON.stringify(between.v), JSON.stringify(clean), "killed between two classes: a class that was never failing was lost");
 });
 
 // ── THE REAL DOORS: a spawned office, its access line's `timing` ────────────────────────────────────────────────────────────────────────────────────
