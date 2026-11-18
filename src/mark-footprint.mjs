@@ -1,11 +1,13 @@
 // mark-footprint.mjs — the ruled footprint caps of a mark, judged at the writing doors (POS-1126, WLD-193).
 //
 // Darko, 2026-11-17: "yeah 256 is good" (a mark's 2D `points:` outline holds at most 256 points).
-// Darko, 2026-11-18 09:28 EST: "Cap at 2 km a side" (a resident's mark on common ground is at most 2 km wide
-// by 2 km deep; a parcel keeps its own extent dial). Wright's split: World owns the law, Rivet the writing doors.
+// Darko, 2026-11-18 09:28 EST: "Cap at 2 km a side", then, once the census showed nine published marks over it, 13:5x EST:
+// "What are the marks? Set the max to whatever allows them." (Wright 18:58Z: 16000 m a side, strict refusal over it, no
+// grandfathering.) A resident's mark on common ground is at most that wide by that deep; a parcel keeps its own extent
+// dial. Wright's split: World owns the law, Rivet the writing doors.
 //
 // THE LAW'S NUMBERS ARE NOT HELD HERE. They are two direct property nodes of the class `mark` (Bevel, WLD-193,
-// 2026-11-18: `outline-point-cap` = 256, `common-ground-side-cap` = 2000, metres per planar side), read through
+// 2026-11-18: `outline-point-cap` = 256, `common-ground-side-cap` = 16000, metres per planar side), read through
 // the existing law reader (world-classes.mjs § classDials, which follows the ingested-law settlement). A dial the
 // law does not say is an absent boundary, as classDials' own contract has it: this file holds no default, so a
 // fixture that changes a property changes the limit, and until the law publishes them nothing is refused.
@@ -13,10 +15,13 @@
 // SCOPE. The point cap judges any ring a write carries. The side cap judges the footprint of a resident's placed
 // mark standing on common ground (not the household's own parcel ground, by the door's own ground verdict,
 // world.mjs § groundMinimumStake): its ring's box when it sends one, else its `extent`. Not judged: a parcel (its
-// own dial), a spark, an unplaced mark, a mark on its household's own parcel. 3D form geometry is not read here.
+// own dial), a spark, an unplaced mark, a mark on its household's own parcel, and a CONSTITUTION mark (an existing
+// record whose tier is `constitution`: the town's own five; world.mjs § footprintGate asks the canon). 3D form geometry
+// is not read here.
 //
 // A write is judged on what it carries, a leave and an amendment alike. Records already published are not rewritten
-// by this door (no resizing is asked of anyone); an amendment that carries a footprint over a cap is refused like any other.
+// by this door (no resizing is asked of anyone); an amendment that carries a footprint over a cap is refused like any other,
+// with no allowance for what it was before (every published resident mark fits the side cap as ruled).
 //
 // Pure: no I/O. world.mjs § footprintGate wires it in and decides whether the side cap's scope holds (sideScope).
 

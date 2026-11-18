@@ -4688,14 +4688,16 @@ export async function markStandsOnOwnGround(clean, canon = null) {
  * answers the same refusal as the write. The point cap judges any ring a write carries. The SIDE cap is a resident's
  * PLACED mark standing on COMMON ground, in the door's own representation: a sited mark (either form; a parcel lineage
  * and a spark are not), carrying an `at`, whose ground verdict (§ groundMinimumStake, the one the stake door reads) is
- * commons, not the household's own parcel. An amendment is judged on what it carries, like a leave.
+ * commons, not the household's own parcel; and not a CONSTITUTION mark (an existing record whose tier is `constitution`, the
+ * town's own five: the side cap is a resident's, Wright 2026-11-18). An amendment is judged on what it carries, like a leave.
  */
 export async function footprintGate(clean, { canon = canonForGuards() } = {}) {
   if (clean?.points === undefined && clean?.extent === undefined) return;
   const caps = footprintCaps(classDials("mark"));
   if (caps.points == null && caps.side == null) return;
   let sideScope = false;
-  if (caps.side != null && clean.at && isSited(clean, classExtendsOf()) && clean.kind !== "spark") {
+  const constitution = canon?.byId?.get(`${clean.by}/${clean.slug}`)?.tier === "constitution";
+  if (caps.side != null && !constitution && clean.at && isSited(clean, classExtendsOf()) && clean.kind !== "spark") {
     const line = [clean.kind, clean.class].filter((k) => k != null).flatMap((k) => lineageOf(String(k), classExtendsOf()));
     if (clean.kind !== "parcel" && !line.includes("parcel")) sideScope = (await groundMinimumStake(clean, canon)).min >= 1;
   }
