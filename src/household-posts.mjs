@@ -377,9 +377,18 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const whose = (author) => (house.resolve ? house.resolve(author).key : author === h ? mine.key : null);
   // the class list is read at call time: town-posts.mjs imports this module, so a static import would be a cycle
   const classes = Object.keys((await import("./town-posts.mjs")).POST_CLASSES);
-  const [ideas, ...halves] = await Promise.all([
+  // ONE PEN CONNECTION ASKED FOR AT A TIME, PER CALL (POS-1098). The classes were read with `Promise.all`, so one doorstep asked the pen for one connection per
+  // class at once: four asks of a pool of three, from every doorstep in flight on the thread (the site refresh's bulk read runs six). The extra asks wait in the
+  // pool's line for connections that other doorsteps hold, which is the 10 s StoreAcquireTimeout of 2026-11-17 03:35Z. Read one after another, each class is still
+  // its own short READ ONLY transaction (a class that cannot be read is still said alone, § tableRows), and the answer is the same. `ideaRows` takes no pen
+  // connection, so it still runs beside them.
+  const [ideas, halves] = await Promise.all([
     ideaRows(mine.members, whose, { townClone }),
-    ...classes.map((cls) => tableRows(cls, mine.members, now, { env, townClone, backingOf, what: CLASS_WORDS[cls] ?? `the ${cls} posts` })),
+    (async () => {
+      const read = [];
+      for (const cls of classes) read.push(await tableRows(cls, mine.members, now, { env, townClone, backingOf, what: CLASS_WORDS[cls] ?? `the ${cls} posts` }));
+      return read;
+    })(),
   ]);
   // CONVERTED MARKS (POS-854): an idea mark that has become its author's post is the post's `origin.mark`; while
   // the mark still stands (the world half withdraws it at a crossing) it is read once, as the post.
