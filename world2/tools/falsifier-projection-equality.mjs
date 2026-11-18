@@ -194,8 +194,10 @@ async function checkStamps(client, townRepo) {
 
   // ── THE INVARIANT: identities ⊆ town_roll ─────────────────────────────────
   //
-  // EVERY WORLD IDENTITY IS A TOWN RESIDENT. `identities` is the world repo's
-  // `households.json`, projected; `town_roll` is who the town's own WHITE_PAGES
+  // EVERY WORLD IDENTITY IS A TOWN RESIDENT. `identities` has been a VIEW over the
+  // household registry since 055 (`households` + `household_pins`, live in the store),
+  // read here AS OF THE HEAD through this town checkout's own registry files (see
+  // `checkIdentities`); `town_roll` is who the town's own WHITE_PAGES
   // admits. A handle in the first and not the second is a world that has granted
   // standing to somebody the town has never heard of — which is what the
   // `dylan-android-husband` alias was until it was stripped from world main at
@@ -204,7 +206,8 @@ async function checkStamps(client, townRepo) {
   // no world household is simply someone who has not been grouped yet.
   //
   // One line, because it is one sentence of law and it can fail: put any handle
-  // into households.json that WHITE_PAGES does not carry and this reds.
+  // into the head's households.json (or github-ids.json) that WHITE_PAGES does not
+  // carry and this reds.
   //
   // A CANONICAL RENAME IS THE SAME RESIDENT (POS-975). The registry keeps a renamed
   // resident's old key on purpose, retired, with `renamed_to` and the same GitHub
