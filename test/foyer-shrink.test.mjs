@@ -1466,7 +1466,8 @@ test("F7c5d · EVERY CLOCK READ ON THE PAGE IS THREADED — the bare forms are a
     // that answers (the store's, through `ix`), so the instant is pinned where
     // the options are built, and the call must take them.
     [/const opts = \{.*\bnowMs\b.*\};/, null, "the index's PSA window"],
-    [/ix\.doorstep\(\s*handle\s*,\s*asOf\s*,\s*opts\s*\)/, null, "the store's doorstep taking the page's options"],
+    // POS-1129: the page's town-index reads are one lease (`ix.doorstepPage`); until 2026-11-18 this pinned `ix.doorstep(handle, asOf, opts)`.
+    [/ix\.doorstepPage\(\s*handle\s*,\s*asOf\s*,\s*opts\s*\)/, null, "the store's doorstep taking the page's options"],
   ]) {
     assert.match(code, present, `${what} is no longer threaded from the page's one instant`);
     if (absent) assert.ok(!absent.test(code), `${what} is called with no instant somewhere in this file — the default puts the wall clock back`);
