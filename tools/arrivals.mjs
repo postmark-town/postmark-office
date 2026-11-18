@@ -74,7 +74,7 @@ export function tagOf(query) {
   return FROM_TAGS.includes(tag) ? tag : null;
 }
 
-/** A short id as a tagged link carries it: letters, digits, `_` and `-`, 1 to 64 long (a YouTube short's id is 11). Case is kept: ids are case-sensitive. */
+/** A short id as a tagged link carries it: letters, digits, `_` and `-`, 1 to 64 long (a YouTube short's id is 11). Case is kept: ids are case-sensitive. Whitespace around the value is trimmed; inside it, it is not an id. */
 export const SHORT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** The short id a request's query carries in `s=`, or null (none, empty, or not an id). Never read without a listed tag (§ foldLog). */
@@ -109,7 +109,9 @@ export function foldLog(lines, { since = null } = {}) {
     if (tag) {
       bump(visits, day, tag);
       const id = shortOf(r.query);
-      if (id) { const d = (shorts[day] ??= {}); const t = (d[tag] ??= {}); t[id] = (t[id] ?? 0) + 1; }
+      // The id is the VISITOR's string, so its per-tag count map has no prototype: `constructor`, `toString` and `__proto__` are ids
+      // like any other, counted as integers (an ordinary object would start `constructor` from the inherited function).
+      if (id) { const d = (shorts[day] ??= {}); const t = (d[tag] ??= Object.create(null)); t[id] = (t[id] ?? 0) + 1; }
     }
     const ref = referrerHost(r.referrer, r.host);
     if (ref) bump(referrers, day, ref);

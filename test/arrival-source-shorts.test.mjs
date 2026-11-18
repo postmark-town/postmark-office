@@ -62,9 +62,13 @@ const NOT_COUNTED = [
 ];
 const LOG = [...COUNTED, ...NOT_COUNTED];
 const parsed = () => LOG.map(parseLine);
+/** The shorts map as ordinary data (its per-tag maps have no prototype): own enumerable keys only, `__proto__` as a plain key. */
+const asData = (shorts) => Object.fromEntries(Object.entries(shorts).map(([day, tags]) => [day,
+  Object.fromEntries(Object.entries(tags).map(([tag, ids]) => [tag, Object.fromEntries(Object.entries(ids))]))]));
 
 test("S1 · visits per short id, per tag, per ET day: separate ids, separate tags, the same id under two tags, two days", () => {
-  const { shorts } = foldLog(parsed());
+  const { shorts: folded } = foldLog(parsed());
+  const shorts = asData(folded);
   assert.deepEqual(shorts, {
     "2026-10-22": {
       youtube: { AaAa1111111: 4, BbBb2222222: 1 },   // two on the 22nd, the 23:30-EDT one and the 15:03 llms.txt one with the tag spelled YouTube
@@ -79,6 +83,8 @@ test("S2 · what is not counted as a short visit: no tag, an off-list tag, no or
   assert.deepEqual(only.shorts, {}, "nothing in the not-counted set is a short visit");
   assert.equal(shortOf("from=youtube&s=AaAa1111111"), "AaAa1111111");
   for (const bad of ["", "from=youtube", "s=", "s=a b", "s=a%40b.example", "s=%E2%9C%A6", `s=${"x".repeat(65)}`, "s=a/b", "s=a?b"]) assert.equal(shortOf(bad), null, bad);
+  assert.equal(shortOf("s=%20AaAa1111111%20"), "AaAa1111111", "whitespace around the value is trimmed");
+  assert.equal(shortOf("s=Aa%20Aa"), null, "inside it, a space is not an id");
   assert.equal(shortOf(`s=${"x".repeat(64)}`), "x".repeat(64), "64 is the longest");
   assert.match("AaAa1111111", SHORT_ID);
   // a short is only ever read beside a listed tag
@@ -93,7 +99,7 @@ test("S3 · the old read is unchanged: tag and referrer totals, ET days, since, 
   const oldRead = foldLog(parsed().map((r) => (r ? { ...r, query: r.query.replace(/&?s=[^&]*/, "").replace(/^&/, "") } : r)));
   assert.deepEqual(folded.visits, oldRead.visits, "stripping every s= from the log changes no tag total");
   assert.deepEqual(folded.referrers, oldRead.referrers, "nor any referrer total");
-  assert.deepEqual(foldLog(parsed(), { since: new Date("2026-10-23T04:00:00Z") }).shorts, { "2026-10-23": { youtube: { AaAa1111111: 1 }, reddit: { "Zz_9-xYz0Ab": 1 } } }, "since drops older lines from the short counts too");
+  assert.deepEqual(asData(foldLog(parsed(), { since: new Date("2026-10-23T04:00:00Z") }).shorts), { "2026-10-23": { youtube: { AaAa1111111: 1 }, reddit: { "Zz_9-xYz0Ab": 1 } } }, "since drops older lines from the short counts too");
   const rows = report({ ...folded, settled: [{ day: "2026-10-22", tag: "youtube", n: "<3" }, { day: "2026-10-22", tag: "reddit", n: 4 }], agents: [] });
   assert.deepEqual(rows.map((r) => r.day), ["2026-10-23", "2026-10-22"], "newest first");
   assert.deepEqual(rows[1].settled, { youtube: "<3", reddit: 4 }, "the store's folded cell passes through exactly as it was");
@@ -137,8 +143,7 @@ test("S5 · the command as the operator runs it: a log piped in prints the short
   const run = (...flags) => spawnSync(process.execPath, [join(ROOT, "tools", "arrivals.mjs"), "--log", "-", "--days", "400", ...flags],
     { input, encoding: "utf8", env: { ...process.env, WORLD2_PG_URL: "", WORLD2_PG: "" } });
   const j = run("--json");
-  if (j.status !== 0 && /store|connect|ECONN|WORLD2/i.test(j.stderr)) return; // no store in this environment: the in-process legs above are the proof
-  assert.equal(j.status, 0, j.stderr);
+  assert.equal(j.status, 0, `the command must run store-less and exit 0, not pass unchecked: ${j.stderr}`);
   const rows = JSON.parse(j.stdout);
   const d22 = rows.find((r) => r.day === "2026-10-22");
   assert.deepEqual(d22?.shorts?.youtube, { AaAa1111111: 4, BbBb2222222: 1 });
@@ -152,4 +157,35 @@ test("S6 · the id stays out of every other surface: the carrier, the keep's key
   assert.ok(!/shortOf|SHORT_ID|short id|\bshort\b/i.test(source), "src/arrival-source.mjs (park, land, the daily cells, the carrier) never names a short");
   const sql = readFileSync(join(ROOT, "world2", "schema", "086_arrival_sources.sql"), "utf8");
   assert.ok(!/short/i.test(sql), "and the store's table and its <3 fold know none");
+});
+
+test("S7 · PROTOTYPE-NAMED IDS are ordinary ids: constructor, toString, hasOwnProperty, valueOf and __proto__ count as exact integers, own keys, through the fold, the report, the JSON and the text", () => {
+  const NAMES = ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"];
+  const lines = [];
+  for (const [i, id] of NAMES.entries()) for (let k = 0; k <= i; k++) lines.push(L(D22(`17:0${i}:0${k}`), `/join/?from=youtube&s=${id}`)); // constructor 1, toString 2, hasOwnProperty 3, valueOf 4, __proto__ 5
+  lines.push(L(D22("17:30:00"), "/join/?from=tiktok&s=constructor"));
+  const folded = foldLog(lines.map(parseLine));
+  const yt = folded.shorts["2026-10-22"].youtube;
+  assert.deepEqual(Object.keys(yt).sort(), [...NAMES].sort(), "every name is an own key of the per-tag map, __proto__ included");
+  for (const [i, id] of NAMES.entries()) {
+    assert.ok(Object.hasOwn(yt, id), `${id} is an own key`);
+    assert.strictEqual(Object.getOwnPropertyDescriptor(yt, id).value, i + 1, `${id} counted exactly ${i + 1}, an integer and not the inherited member with a count appended`);
+  }
+  assert.strictEqual(Object.getPrototypeOf(yt), null, "the per-tag map has no prototype to inherit from");
+  assert.strictEqual(folded.shorts["2026-10-22"].tiktok.constructor, 1, "and the same name under another tag is its own count");
+  assert.equal(Object.prototype.constructor, Object, "nothing polluted Object.prototype");
+  assert.equal(({}).toString === Object.prototype.toString && ({}).polluted === undefined, true);
+  // the serialized report: JSON carries the exact integers (JSON.parse makes __proto__ an own key)
+  const rows = report({ ...folded });
+  const parsedJson = JSON.parse(JSON.stringify(rows));
+  const back = parsedJson[0].shorts.youtube;
+  for (const [i, id] of NAMES.entries()) assert.strictEqual(Object.getOwnPropertyDescriptor(back, id)?.value, i + 1, `${id} survives the JSON as the integer ${i + 1}`);
+  assert.match(JSON.stringify(rows), /"__proto__":5/);
+  assert.ok(!/native code|function/.test(JSON.stringify(rows)), "no inherited function reached the output");
+  // and the text line
+  const text = printReport(rows);
+  const line = text.split("\n").find((l) => l.startsWith("  shorts"));
+  const cells = line.slice("  shorts    ".length).split(" · ");
+  assert.deepEqual(cells.sort(), ["tiktok/constructor 1", "youtube/__proto__ 5", "youtube/constructor 1", "youtube/hasOwnProperty 3", "youtube/toString 2", "youtube/valueOf 4"].sort());
+  assert.ok(!/native code|function/.test(text));
 });
