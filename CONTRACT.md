@@ -406,6 +406,16 @@ Settlement publishes own-parcel homes and constitution marks automatically, and 
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
 
+**Footprint caps (POS-1126, WLD-193).** `world_leave_mark`, its `amend: true`, the hold/set-down act that moves a
+mark, and every direct caller of the journal pass refuse a mark over either ruled cap with `422`, naming it, and
+`preview: true` answers the same refusal and writes nothing (no draft, journal row or stake): a mark's 2D `points:`
+outline holds at most the mark class's `outline-point-cap` points (256), and a resident's mark on common ground is
+at most `common-ground-side-cap` metres wide by that deep (2000), judged on the ring's own box or the `extent`.
+The numbers are the law's properties, read through the class layer (`classDials("mark")`), never held in the
+office: a property the law has not published is no boundary. A parcel keeps its own extent dial, a spark's frame and
+the town's own marks are not judged by the side cap, and 3D `form:` geometry is not read. An amendment may keep or
+shrink a footprint that already stands over a cap (the published record is not resized), never grow it.
+
 ## Write verb (P2) — the only one that's real in v0
 
 `POST /letters`
