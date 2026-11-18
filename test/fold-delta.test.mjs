@@ -763,6 +763,28 @@ test("WLD-179 · isHoldPrintout reads the printout's cutoff as the store spells 
   assert.equal(isHoldPrintout({ data: JSON.stringify({ _held_through: "51819" }) }), true);
   for (const data of [undefined, null, {}, { _held_through: -1 }, { _held_through: 1.5 }, { _held_through: "x" }, "{"])
     assert.equal(isHoldPrintout({ data }), false, JSON.stringify(data));
+  // lead review FIX: only a number or a string is read as the marker, as the store's `->>` text test reads it
+  const malformed = [
+    { _held_through: [51819] }, { _held_through: ["51819"] }, { _held_through: { n: 51819 } }, { _held_through: true },
+    { _held_through: Object.assign(Object.create(null), { toString: null }) }, { _held_through: { toString: null, valueOf: null } },
+    { _held_through: 1e19 }, { _held_through: Number.NaN }, { _held_through: "51819 " }, [{ _held_through: 51819 }],
+  ];
+  for (const data of malformed) assert.equal(isHoldPrintout({ data }), false, `not a marker: ${String(Object.keys(data))}`);
+  assert.equal(isHoldPrintout({ data: JSON.stringify({ _held_through: [51819] }) }), false, "the array as JSON text too");
+});
+
+test("WLD-179 · a docket row with a malformed marker is an ordinary docket row: it defers, and the fold never throws", async () => {
+  for (const marker of [{ toString: null, valueOf: null }, Object.assign(Object.create(null), { toString: null }), [51819]]) {
+    const client = carryClient({
+      marks: [{ ...markRow(STATION, { window: 185 }), data: { held_by: "lantern-crow", _held_through: marker } }], docketClaims: 1,
+      standing: [standingRow(STATION, { window: 185 })],
+      withdrawnOwed: [owedRow(STATION, { household: "hh:berthy" })],
+    });
+    const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(STATION) });
+    assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [STATION]);
+    assert.deepEqual(out.selection.withdrawn_owed.over_hold_printout, { count: 0, slugs: [] });
+    assert.deepEqual(out.marks.map((m) => m.slug), [STATION]);
+  }
 });
 
 test("WITHDRAWN · an owed withdrawal with no household is NAMED AND SKIPPED", async () => {

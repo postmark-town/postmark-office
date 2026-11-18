@@ -219,8 +219,14 @@ export const WITHDRAWN_OWED_SELECT = `
 export function isHoldPrintout(row) {
   let d = row?.data;
   if (typeof d === "string") { try { d = JSON.parse(d); } catch { return false; } }
-  const t = d && typeof d === "object" ? d._held_through : undefined;
-  return t !== undefined && t !== null && /^[0-9]{1,18}$/.test(String(t));
+  const t = d && typeof d === "object" && !Array.isArray(d) ? d._held_through : undefined;
+  // The marker as state-log-write.mjs reads it (`data->>'_held_through' ~ '^[0-9]{1,18}$'`): a JSON number's
+  // text or a string's own, and nothing else. An array or an object is JSON text there and never matches, so
+  // only those two scalar types are ever turned into text here, and nothing is converted that could throw.
+  const text = typeof t === "string" ? t
+    : typeof t === "number" && Number.isInteger(t) && t >= 0 && !Object.is(t, -0) ? String(t)
+    : null;
+  return text !== null && /^[0-9]{1,18}$/.test(text);
 }
 
 
