@@ -129,14 +129,27 @@ the JavaScript between statements alike). `rid` joins the two threads' records f
 
 **Reads only, classified from the whole request.** A REST read is a GET (a GET `/household` that names `do`, `explain` or `read=letter` is not one; `POST /household` never is). An
 MCP request carries `timing` only when EVERY message in it is a `tools/call` to a household or doorstep read (no `do`, no `explain`, not `read: "letter"`, which clears a
-letter and is a write): a request holding an act, an explain, a letter opening, any other tool or any non-call message has no `timing`, whichever tool is last, so an act
-can never be made to look like a read by a read after it. A batch of reads is one request: its line has `batch` (the number of calls) and no single `read`, its
+letter and is a write): a request holding an act, an explain, a letter opening, any other tool or any non-call message has no READ `timing` (a request holding an act has the
+act's, below; the others have none), whichever tool is last, so an act can never be made to look like a read by a read after it. A batch of reads is one request: its line has `batch` (the number of calls) and no single `read`, its
 `bundle`/`leases` cover the whole request. A line with no `timing` is a request this record does not cover (and, unless `timing_dropped` says otherwise, never one whose
 measurement was cut).
 
+**Acts (POS-1110).** The read doors above stay reads only. A world act (`world { do: "enter" }` and every other act) now carries the same `timing` object, with
+`door` `world-act` / `household-act` / `town-act` (a POST to `/world/apex`, `/household` or `/town/apex` whose body names a `do`) or `mcp-act` (an MCP request holding at
+least one world, household or town act; `batch` is its call count), `route: "main"`, and `act: { seg: { <name>: { n, sum_ms, max_ms } } }`. `admit_ms` / `routed_ms` is
+the act's admission, the credential's resolution included; `exec_ms` is routed → finish. The segments are sums of durations that overlap and nest (a `dispatch` holds the
+apex's own phases and `handler` holds the verb), so read a nested one against its parent: `body` (the body's arrival), `standing`, `law_moved`, `dispatch`, `orient`,
+`eyes`, `ledger_scan` (the enter/exit ledger scan, on the ACTS pool, which `leases` does not cover), `spine`, `gather`, `holdings`, `households`, `nonce_kept`, `handler`,
+`land`, `creatures`; and for enter and exit the crossing's own reads and write: `crossing_law`, `world_state`, `ledger`, `standpoint`, `acts_read`, `lends`,
+`dungeon_locks`, `door_holdings`, `vessel_service`, `walking`, `walk_stop`, `land_write` and `record` (the pen write: the town lock's wait, the child process and the commit
+as ONE segment). Argument validation is not timed. A name that is absent did not run on this act; a name with `n` 0 never appears.
+
+    # where a slow enter or exit spent it: the segments of the ten slowest world acts today
+    jq -s -c '[.[]|select(.timing.door=="world-act" and .call.do=="enter")]|sort_by(-.ms)|.[:10][]|{ms,admit:.timing.admit_ms,exec:.timing.exec_ms,seg:(.timing.act.seg|map_values(.sum_ms))}' access-$(date -u +%F).jsonl
+
 **Do not add these up as wall time.** `bundle` and `leases` are measured inside `exec_ms`, overlap it and each other, and are sums of durations. A bundle's
 time is not SQL time and is never lease time. **`null` is "not measured here"** (no worker ran it: `queue_ms`, `return_ms` and `leases.worker` are null; no bundle ran:
-`bundle` is null), **`0` is a measurement that found zero** (`leases.main.n: 0` on a handed-over read), and **`failed` counts acquisitions that did not produce a
+`bundle` is null; an act's `act.seg` names only the phases that ran), **`0` is a measurement that found zero** (`leases.main.n: 0` on a handed-over read), and **`failed` counts acquisitions that did not produce a
 connection** (the acquire timeout), apart from `n`. **Coverage is the pen pool only** (`cov: "pen"`): the acts, claims and serve pools are not measured. A line that
 had to be shortened (telemetry.mjs, 4,000 bytes) gives up `call` first, named `call_dropped`; only the last resort drops `timing`, and then says `timing_dropped: true`:
 a line with neither is a request this record does not cover.

@@ -397,6 +397,24 @@ test("1 · timedDeps: every injected dep is a named segment, `this` and the resu
   assert.equal(seg.record.n, 2, "a dep that threw was still counted");
 });
 
+test("1 · the gates every act door shares are timed where they are written: standing, the act-law pin check and the body's arrival", async () => {
+  const { standingBounce } = await import("../src/standing.mjs");
+  const { lawForAnAct } = await import("../src/act-law.mjs");
+  const { readBody } = await import("../src/body.mjs");
+  const { out, tm } = await within(async () => [
+    await standingBounce({ handles: new Set() }),                                                     // a key with no handles: good standing, nothing to read
+    await lawForAnAct({ pins: async () => ({ law: {}, graph: {} }), law: async () => ({ behind: null }), graph: async () => ({ behind: null }) }),
+    await readBody({ readableEnded: true }, 1000),                                                    // a body that had already ended: the empty text
+  ]);
+  assert.deepEqual(out, [null, null, ""], "each answers exactly what it answers with no request in scope (null: the act may go on; the empty body)");
+  const seg = lineOf(tm).act.seg;
+  for (const name of ["standing", "law_moved", "body"]) assert.equal(seg[name]?.n, 1, `${name} was timed once`);
+  // and a refusal is still the gate's own refusal, counted
+  const refused = await within(() => lawForAnAct({ pins: async () => ({ law: {}, graph: {} }), law: async () => ({ behind: "the law is behind" }), graph: async () => ({ behind: null }) }));
+  assert.equal(refused.out?.behind, "the law is behind");
+  assert.equal(lineOf(refused.tm).act.seg.law_moved.n, 1);
+});
+
 // ── 5 · the wiring, as text pins (the weakest instrument: they prove the seams are called, not that they time anything) ──────────────────────────────
 
 test("5 · TEXT PINS (weakest): the doors call the classifiers and the one scan is timed where orient and eyes ask for it", () => {
