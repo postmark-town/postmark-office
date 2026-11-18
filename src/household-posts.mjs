@@ -143,11 +143,20 @@ const stateOf = (p, now) => (p.class === EVENT_CLASS ? eventState(p, now) : p.st
  * stand on it, so a reader that keeps a few reads the acts of those few only.
  */
 export async function postRowsOf(client, cls, now, { keep = null } = {}) {
+  return postRowsFrom(await postRowsLoad(client, cls, now, { keep }), now);
+}
+
+/**
+ * THE SQL HALF OF `postRowsOf` (POS-1129): the class's posts, the handles whose responses stand on each, and the acts on the posts kept, as the
+ * store answers them, with nothing parsed or shaped, so a caller holding a pen transaction shapes them after it gives the connection back
+ * (`postRowsFrom`). `keep` decides which posts' acts are read, so it runs here, between the statements: a filter over the rows, no parse.
+ */
+export async function postRowsLoad(client, cls, now, { keep = null } = {}) {
   const { rows: posts } = WINDOWED.has(cls)
     ? await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends > $2 ORDER BY starts, id`,
       [cls, new Date(now - ENDED_LIST_DAYS * DAY_MS).toISOString()])
     : await client.query(`SELECT ${POST_COLUMNS}${BODY_CLASSES.has(cls) ? ", body" : ""} FROM posts WHERE class = $1 ORDER BY id`, [cls]);
-  if (!posts.length) return [];
+  if (!posts.length) return { kept: [], who: new Map(), acts: [] };
   const { rows: responses } = await client.query(
     "SELECT post, handle, state FROM responses WHERE post = ANY($1) ORDER BY post, handle", [posts.map((p) => p.id)]);
   const who = new Map();
@@ -156,12 +165,18 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
     who.set(r.post, [...(who.get(r.post) ?? []), r.handle]);
   }
   const kept = keep ? posts.filter((p) => keep(p, who.get(p.id) ?? [])) : posts;
-  if (!kept.length) return [];
+  if (!kept.length) return { kept: [], who, acts: [] };
   // every act on these posts, oldest first, so the last one kept is the newest:
   // a post, its amends, its RSVPs and its announcements — a handful each
   const { rows: acts } = await client.query(
     "SELECT id, object, action, at FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id",
     [cls, kept.map((p) => p.id)]);
+  return { kept, who, acts };
+}
+
+/** `postRowsLoad`'s rows, shaped: the general rows `postRowsOf` answers, with no store and no connection (POS-1129). */
+export function postRowsFrom({ kept, who, acts }, now) {
+  if (!kept.length) return [];
   const latest = new Map(acts.map((a) => [a.object, { act: ACT_WORD[a.action] ?? a.action, at: new Date(a.at).toISOString() }]));
   return kept.map((p) => ({
     class: p.class,
@@ -202,25 +217,45 @@ const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "
 /** A class whose unreadable half says nothing while the class is closed. */
 const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(env) });
 
-/** One class of the posts table: the house's own posts and the ones it answered. `{ rows }` or `{ unavailable }`. */
-async function tableRows(cls, members, now, { env, what }) {
+/**
+ * EVERY CLASS OF THE POSTS TABLE, ONE LEASE (POS-1129): the house's own posts and the ones it answered, one `{ rows }` or `{ unavailable }` per
+ * class, in `classes`' order. The classes were one pen connection each, one after another (POS-1098); they are one READ ONLY transaction now,
+ * each class under a SAVEPOINT so a class that cannot be read is still said alone and the classes after it are still read. The rows are shaped
+ * after the connection is back. `what(cls)` names a class's half when it cannot be read.
+ */
+async function tableRowsAll(classes, members, now, { env, what }) {
   const house = new Set(members);
+  const keep = (p, who) => house.has(p.author) || who.some((h) => house.has(h));
+  let loaded;
   try {
-    return await officeRead(async (client) => {
-      const rows = await postRowsOf(client, cls, now,
-        { keep: (p, who) => house.has(p.author) || who.some((h) => house.has(h)) });
+    loaded = await officeRead(async (client) => {
+      const out = [];
+      for (const cls of classes) {
+        await client.query("SAVEPOINT posts_class");
+        try { out.push({ raw: await postRowsLoad(client, cls, now, { keep }) }); await client.query("RELEASE SAVEPOINT posts_class"); }
+        catch { await client.query("ROLLBACK TO SAVEPOINT posts_class"); out.push({ failed: true }); }
+      }
+      return out;
+    }, { env });
+  } catch {
+    loaded = classes.map(() => ({ failed: true }));
+  }
+  return classes.map((cls, i) => {
+    const unavailable = { unavailable: `${what(cls)} could not be read from the office's record` };
+    if (loaded[i].failed) return unavailable;
+    try {
       return {
-        rows: rows.map((r) => ({
+        rows: postRowsFrom(loaded[i].raw, now).map((r) => ({
           ...r,
           role: house.has(r.author) ? "author" : "participant",
           stake: 0,
           ours: 0,
         })),
       };
-    }, { env });
-  } catch {
-    return { unavailable: `${what} could not be read from the office's record` };
-  }
+    } catch {
+      return unavailable;
+    }
+  });
 }
 
 // ── THE BACKING, READ ONCE PER LEDGER ───────────────────────────────────────
@@ -338,16 +373,12 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const classes = Object.keys((await import("./town-posts.mjs")).POST_CLASSES);
   // ONE PEN CONNECTION ASKED FOR AT A TIME, PER CALL (POS-1098). The classes were read with `Promise.all`, so one doorstep asked the pen for one connection per
   // class at once: four asks of a pool of three, from every doorstep in flight on the thread (the site refresh's bulk read runs six). The extra asks wait in the
-  // pool's line for connections that other doorsteps hold, which is the 10 s StoreAcquireTimeout of 2026-11-17 03:35Z. Read one after another, each class is still
-  // its own short READ ONLY transaction (a class that cannot be read is still said alone, § tableRows), and the answer is the same. `ideaRows` takes no pen
-  // connection, so it still runs beside them.
+  // pool's line for connections that other doorsteps hold, which is the 10 s StoreAcquireTimeout of 2026-11-17 03:35Z. Then they were read one after another, one
+  // lease each; since POS-1129 they are ONE lease, each class under its own savepoint (a class that cannot be read is still said alone, § tableRowsAll), and the
+  // answer is the same. `ideaRows` takes no pen connection, so it still runs beside them.
   const [ideas, halves] = await Promise.all([
     ideaRows(mine.members, whose, { townClone }),
-    (async () => {
-      const read = [];
-      for (const cls of classes) read.push(await tableRows(cls, mine.members, now, { env, what: CLASS_WORDS[cls] ?? `the ${cls} posts` }));
-      return read;
-    })(),
+    tableRowsAll(classes, mine.members, now, { env, what: (cls) => CLASS_WORDS[cls] ?? `the ${cls} posts` }),
   ]);
   const rows = [...halves.flatMap((x) => x.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
   const list = (role) => {
