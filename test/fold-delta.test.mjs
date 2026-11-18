@@ -38,7 +38,7 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { foldDelta, holdsOwed } from "../world2/tools/fold-delta.mjs";
+import { foldDelta, holdsOwed, isHoldPrintout } from "../world2/tools/fold-delta.mjs";
 import { starvingCheck } from "../src/store-writedown.mjs";
 import { withholdTakenAway } from "../world2/tools/fold-input-cli.mjs";
 // The sha-taking register, built here the way `fold-input-cli.mjs` builds it,
@@ -643,7 +643,7 @@ test("WITHDRAWN · a standing mark whose latest act is a withdraw, and which can
   assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"], "a withdrawal is never written as a mark");
   assert.deepEqual(out.selection.withdrawn_owed, {
     checked: true, count: 1, slugs: [BED], acts: [{ slug: BED, act: 18087, crossing: 250 }],
-    deferred_to_docket: [], retire_only: [], skipped_no_household: [], canon_sha: WORLD_SHA,
+    deferred_to_docket: [], over_hold_printout: { count: 0, slugs: [] }, retire_only: [], skipped_no_household: [], canon_sha: WORLD_SHA,
   });
 });
 
@@ -697,6 +697,94 @@ test("WITHDRAWN · the docket wins its own crossing: a docket slug is deferred, 
   assert.deepEqual(out.marks.map((m) => m.slug), [BED]);
   assert.deepEqual(out.withdrawals, []);
   assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [BED]);
+});
+
+// ── WLD-179: THE MAKER'S WITHDRAWAL WINS A SAME-WINDOW HOLD PRINTOUT ─────────
+// A hold printout is the docket row hold-through.mjs writes for someone's take:
+// in the owner's name, `held_by` and `_held_through` in its data, no maker act.
+const printoutRow = (slug, { window = 185, through = 51819 } = {}) =>
+  ({ ...markRow(slug, { window }), geometry: null, data: { held_by: "lantern-crow", _held_through: through } });
+const STATION = "berthy/station-one";
+
+test("WLD-179 · a maker's withdrawal wins a hold printout on the docket: removed this crossing, and the printout is not also written", async () => {
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 }), printoutRow(STATION)], docketClaims: 2,
+    standing: [standingRow("alpha/one", { window: 185 }), standingRow(STATION, { window: 185 })],
+    withdrawnOwed: [owedRow(STATION, { household: "hh:berthy", act: 53126, crossing: "312" })],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one", STATION) });
+  assert.deepEqual(out.withdrawals, [{ slug: STATION, by: "berthy", household: "hh:berthy" }]);
+  assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"], "one sketchbook never writes and removes one mark");
+  assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, []);
+  assert.deepEqual(out.selection.withdrawn_owed.over_hold_printout, { count: 1, slugs: [STATION] });
+});
+
+test("WLD-179 · a won printout whose file canon no longer holds owes only its retirement", async () => {
+  const client = carryClient({
+    marks: [printoutRow(STATION)], docketClaims: 1,
+    standing: [standingRow(STATION, { window: 185 })],
+    withdrawnOwed: [owedRow(STATION, { household: "hh:berthy" })],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, [STATION]);
+  assert.deepEqual(out.marks, [], "and the printout is not written back");
+  assert.deepEqual(out.selection.withdrawn_owed.over_hold_printout, { count: 1, slugs: [STATION] });
+});
+
+test("WLD-179 · CONTROL: a printout with no owed withdrawal (never withdrawn, or re-declared since) is still the docket's to write", async () => {
+  const client = carryClient({
+    marks: [printoutRow(STATION)], docketClaims: 1,
+    standing: [standingRow(STATION, { window: 185 })],
+    withdrawnOwed: [],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(STATION) });
+  assert.deepEqual(out.marks.map((m) => m.slug), [STATION]);
+  assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.over_hold_printout, { count: 0, slugs: [] });
+});
+
+test("WLD-179 · CONTROL: any other docket entry still wins its own crossing; only a hold printout yields", async () => {
+  for (const data of [{}, { held_by: "lantern-crow" }, { _held_through: "soon" }, { _held_through: null }, "not json"]) {
+    const client = carryClient({
+      marks: [{ ...markRow(STATION, { window: 185 }), data }], docketClaims: 1,
+      standing: [standingRow(STATION, { window: 185 })],
+      withdrawnOwed: [owedRow(STATION, { household: "hh:berthy" })],
+    });
+    const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(STATION) });
+    assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [STATION], `deferred with data ${JSON.stringify(data)}`);
+    assert.deepEqual(out.withdrawals, []);
+    assert.deepEqual(out.marks.map((m) => m.slug), [STATION]);
+  }
+});
+
+test("WLD-179 · isHoldPrintout reads the printout's cutoff as the store spells it, object or JSON text", () => {
+  assert.equal(isHoldPrintout({ data: { _held_through: 51819 } }), true);
+  assert.equal(isHoldPrintout({ data: JSON.stringify({ _held_through: "51819" }) }), true);
+  for (const data of [undefined, null, {}, { _held_through: -1 }, { _held_through: 1.5 }, { _held_through: "x" }, "{"])
+    assert.equal(isHoldPrintout({ data }), false, JSON.stringify(data));
+  // lead review FIX: only a number or a string is read as the marker, as the store's `->>` text test reads it
+  const malformed = [
+    { _held_through: [51819] }, { _held_through: ["51819"] }, { _held_through: { n: 51819 } }, { _held_through: true },
+    { _held_through: Object.assign(Object.create(null), { toString: null }) }, { _held_through: { toString: null, valueOf: null } },
+    { _held_through: 1e19 }, { _held_through: Number.NaN }, { _held_through: "51819 " }, [{ _held_through: 51819 }],
+  ];
+  for (const data of malformed) assert.equal(isHoldPrintout({ data }), false, `not a marker: ${String(Object.keys(data))}`);
+  assert.equal(isHoldPrintout({ data: JSON.stringify({ _held_through: [51819] }) }), false, "the array as JSON text too");
+});
+
+test("WLD-179 · a docket row with a malformed marker is an ordinary docket row: it defers, and the fold never throws", async () => {
+  for (const marker of [{ toString: null, valueOf: null }, Object.assign(Object.create(null), { toString: null }), [51819]]) {
+    const client = carryClient({
+      marks: [{ ...markRow(STATION, { window: 185 }), data: { held_by: "lantern-crow", _held_through: marker } }], docketClaims: 1,
+      standing: [standingRow(STATION, { window: 185 })],
+      withdrawnOwed: [owedRow(STATION, { household: "hh:berthy" })],
+    });
+    const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(STATION) });
+    assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [STATION]);
+    assert.deepEqual(out.selection.withdrawn_owed.over_hold_printout, { count: 0, slugs: [] });
+    assert.deepEqual(out.marks.map((m) => m.slug), [STATION]);
+  }
 });
 
 test("WITHDRAWN · an owed withdrawal with no household is NAMED AND SKIPPED", async () => {
