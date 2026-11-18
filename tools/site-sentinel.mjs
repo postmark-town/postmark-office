@@ -390,7 +390,7 @@ export const CONFIG = {
   meeps: { key: "meeps", label: "the meeps", path: "/srv/postmark-sentinel/meeps.json", staleAfterMs: 15 * MINUTE },
   // §10, second host (CORE-72) — the meeps that moved to town-rig. Its own watcher lands its own file, so it
   // never overwrites the desktop's. Same classifier, same 15-minute window. A missing file is STALE and barks.
-  meepsTownRig: { key: "meeps_town_rig", label: "the meeps on town-rig", path: "/srv/postmark-sentinel/meeps-town-rig.json", staleAfterMs: 15 * MINUTE },
+  meepsTownRig: { key: "meeps_town_rig", label: "the meeps on town-rig", path: "/srv/postmark-sentinel/meeps-town-rig.json", staleAfterMs: 15 * MINUTE, watcherName: "town-rig's watcher (meep-watch.timer, every 5 min over its write-only feed key)" },
 
   // §11 — the settlement. The receipt is the box's own file (owner meepo, which
   // this runs as); the tags are the world's, read over the wire. `unit` is not
@@ -1134,8 +1134,8 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
 // meep must never read as a warning because a field was missing. Only the exact
 // word "warn" counts. A WARN is announced once as a notice (see transition), and
 // composeBoard rolls it up as DEGRADED, never as DOWN.
-export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record" } = {}) {
-  const watcher = "the desktop watcher (starforge-rig's windows/meepops/meep-watch.mjs, every 5 min by scp)";
+export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record", watcherName = null } = {}) {
+  const watcher = watcherName ?? "the desktop watcher (starforge-rig's windows/meepops/meep-watch.mjs, every 5 min by scp)";
   if (raw == null) {
     return { verdict: "STALE", reason: `there is no meeps record at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""} — ${watcher} has not landed one, so nothing is watching the meeps` };
   }
@@ -2745,7 +2745,7 @@ export async function tick({
     if (!mcfg) continue;
     let raw = null, readError = null;
     try { raw = readFileSync(mcfg.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
-    const mp = classifyMeeps({ raw, readError, nowMs, staleAfterMs: mcfg.staleAfterMs, path: mcfg.path });
+    const mp = classifyMeeps({ raw, readError, nowMs, staleAfterMs: mcfg.staleAfterMs, path: mcfg.path, watcherName: mcfg.watcherName ?? null });
     probes.push({ key: mcfg.key, label: mcfg.label, kind: "meeps", verdict: mp.verdict, reason: mp.reason, ...(mp.detail ? { detail: mp.detail } : {}) });
   }
 
