@@ -19,6 +19,9 @@
 //      connection is out when the page is done, and never two at once. The same page composed inside its lease, through the same instrument,
 //      parses under it: the control. (The ballots' and posts' `fields` are jsonb, which the driver parses, so their shaping is moved after the
 //      lease for the law's sake but this instrument cannot see it; their equality is test 2's.)
+//   5. LEASE A FAILURES on real Postgres (an injector replaces one statement with an SQL error or the connection's own death): any one extra
+//      read failing either way answers the page the separate leases answered, byte for byte, never a throw; a dead core answers as it did.
+//   6. LEASE B FAILURES on real Postgres: a class failing either way is said alone, and the classes after it are read.
 //   4. THE LEASES, at the real doors: GET /doorstep/<h> and GET /doorsteps?handles=… on a spawned office, read from the access line's `timing`
 //      (read-timing.mjs), at most 3 per resident; and in process, exactly the three named loads, one connection at a time.
 //
@@ -82,6 +85,8 @@ async function seedPosts(store) {
 }
 
 let IX, pool, tis, pen, doorstepBundle, freshFor, newTiming, runTiming, timingLine, penHeld;
+/** The injection in force, or null: `{ match(sql, params), mode: "error" | "kill", hits }` (§ the pool's `query` wrapper in `before`). */
+let inject = null;
 const checkouts = { open: 0, afterRelease: 0, leases: 0, peak: 0 };
 
 /** The fixture town, plus what the next steps read: an invented one-quest registry and a quest standing row (so the quest reads put steps on the page). */
@@ -112,8 +117,20 @@ before(async () => {
     c.release = (...r) => { checkouts.open -= 1; c.__out = false; return release(...r); };
     if (!c.__wrapped) {
       c.__wrapped = true;
+      c.on?.("error", () => {});   // a connection killed by an injection reports here too; the read that held it answers for it
       const query = c.query.bind(c);
-      c.query = (...q) => { if (!c.__out) checkouts.afterRelease += 1; return query(...q); };
+      c.query = (q, ...r) => {
+        if (!c.__out) checkouts.afterRelease += 1;
+        // THE INJECTOR (lifted from the reviewer's probe, POS-1129 review of db640416d): one statement of one read, matched by its SQL and
+        // parameters, is replaced by a REAL failure on this real Postgres: an SQL error, or the connection's own death.
+        const sql = typeof q === "string" ? q : q?.text ?? "";
+        if (inject && inject.match(sql, r[0])) {
+          inject.hits += 1;
+          if (inject.mode === "error") return query("SELECT * FROM no_such_table_pos1129");
+          if (inject.mode === "kill") return query("SELECT pg_terminate_backend(pg_backend_pid())");
+        }
+        return query(q, ...r);
+      };
     }
     return c;
   };
@@ -282,6 +299,77 @@ test("4 · THE LEASES, in process: exactly the three loads (the town index's pag
     const want = TOWN ? 3 : 2;
     assert.equal(leases.n, want, `${h}: the keyless doorstep took ${leases.n} pen leases; POS-1129 reads it in ${want} (it took 11)`);
     assert.equal(leases.failed, 0);
+  }
+});
+
+// ── FAILURES INSIDE A LEASE, ON REAL POSTGRES (the review of db640416d) ──────────────────────────────────────────────────────────────────────────
+//
+// LAW (Jetto's rulings on that review, 2026-11-18): "a dead connection in lease A must not be worse than the base … the page answers 200 with only
+// the failed block `unavailable`"; "only a death during the core read itself may answer what the base answered for a dead core"; and for each
+// extra read, an SQL error and a dead connection, "the page is byte-identical to the base's separate-lease page under the same injection, and is
+// never a 500". The base's page is `legacyIx` above: the same reads, each on its own lease.
+
+/** The five extra reads of lease A, by a statement only that read issues. */
+const EXTRA_READS = {
+  standing: /FROM standing_acts WHERE handle = ANY/,
+  copy: /FROM town_repo_log/,
+  registry: /FROM town_meta WHERE key IN \('quest_registry'/,
+  quest_standing: /FROM town_quest_standing WHERE handle/,
+  quest_board: /SELECT id FROM town_pots/,
+};
+const injecting = async (match, mode, fn) => {
+  inject = { match, mode, hits: 0 };
+  try { const out = await settle(fn()); return { ...out, hits: inject.hits }; } finally { inject = null; }
+};
+const said = (r) => (r.e ? `threw ${r.e.name}: ${String(r.e.message).slice(0, 80)}` : "answered");
+
+test("5 · LEASE A: an SQL error or a dead connection in any one extra read answers the page the separate leases answered, never a throw", async () => {
+  const clean = JSON.stringify(await page("wright", TOWN));
+  for (const mode of ["error", "kill"]) for (const [read, re] of Object.entries(EXTRA_READS)) {
+    const match = (sql) => re.test(sql);
+    const head = await injecting(match, mode, () => page("wright", TOWN));
+    const base = await injecting(match, mode, () => page("wright", TOWN, true));
+    const where = `${mode} in ${read}`;
+    assert.ok(head.hits > 0 && base.hits > 0, `${where}: the injection never fired (head ${head.hits}, base ${base.hits}): this case tests nothing`);
+    assert.ok(!base.e, `${where}: the separate leases themselves threw (${said(base)}): the oracle is not the degraded page it should be`);
+    assert.ok(!head.e, `${where}: the one-lease page ${said(head)}, which a door answers as a failure; the separate leases answered the page`);
+    assert.notEqual(JSON.stringify(head.v), clean, `${where}: the page is the clean one: the failure did not reach a block`);
+    assert.equal(JSON.stringify(head.v), JSON.stringify(base.v), `${where}: the one-lease page differs from the separate leases' page under the same failure`);
+    assert.equal(JSON.stringify(await page("wright", TOWN)), clean, `${where}: the clean page after this case differs: the pool kept a broken connection`);
+  }
+});
+
+test("5 · LEASE A: a dead connection during the CORE answers what the separate leases answered (the page's own failure, as before)", async () => {
+  const match = (sql) => /SELECT 1 FROM town_residents WHERE handle = \$1/.test(sql);
+  const head = await injecting(match, "kill", () => page("wright", TOWN));
+  const base = await injecting(match, "kill", () => page("wright", TOWN, true));
+  assert.ok(head.hits > 0 && base.hits > 0, "the core's injection never fired");
+  assert.ok(base.e, "the separate leases answered a page with no core: the oracle is not the failure it should be");
+  assert.ok(head.e, `the one-lease page answered with its core dead: ${said(head)}`);
+  assert.equal(head.e.name, base.e.name, `a dead core: the one-lease page ${said(head)}, the separate leases ${said(base)}`);
+  assert.equal(head.e instanceof tis.TownIndexUnreachable, base.e instanceof tis.TownIndexUnreachable, "a dead core is a refusal on one road and the reader's error on the other");
+});
+
+test("6 · LEASE B on real Postgres: a class that fails (an SQL error, a dead connection) is said alone, and the classes after it are read", async () => {
+  const { householdPosts } = await import("../src/household-posts.mjs");
+  const { POST_CLASSES } = await import("../src/town-posts.mjs");
+  const classes = Object.keys(POST_CLASSES);
+  const failed = classes[0];
+  assert.ok(classes.indexOf("bug") > 0, "the bug class is not read after the failed one: the fixture's later post cannot show the classes after it were read");
+  const clean = await householdPosts("wright", { now: NOW, townClone: TOWN ?? join(OFFICE_ROOT, "no-town-clone") });
+  for (const mode of ["error", "kill"]) {
+    const match = (sql, params) => /FROM posts WHERE class = \$1/.test(sql) && params?.[0] === failed;
+    const got = await injecting(match, mode, () => householdPosts("wright", { now: NOW, townClone: TOWN ?? join(OFFICE_ROOT, "no-town-clone") }));
+    const old = [];
+    inject = { match, mode, hits: 0 };
+    try { for (const cls of classes) old.push(await OLD_classRows(cls, ["wright", "limen"], NOW)); } finally { inject = null; }
+    assert.ok(got.hits > 0, `${mode}: the injection never fired`);
+    assert.ok(!got.e, `${mode}: the posts ${said(got)}`);
+    const gaps = (got.v.unavailable ?? []).filter((u) => /could not be read from the office's record/.test(u));
+    assert.equal(gaps.length, 1, `${mode} in the ${failed} class: ${gaps.length} classes were said unreadable, not one: ${JSON.stringify(got.v.unavailable)}`);
+    assert.ok(got.v.put_up.rows.some((r) => r.class === "bug"), `${mode} in the ${failed} class: the bug class, read after it, is missing: the classes after a failure were not read`);
+    assert.equal(old.filter((x) => x.unavailable).length, 1, `${mode}: the old per-class reading lost ${old.filter((x) => x.unavailable).length} classes: the oracle is off`);
+    assert.notDeepEqual(got.v.put_up, clean.put_up, `${mode}: the posts are the clean ones: the failure reached no class`);
   }
 });
 

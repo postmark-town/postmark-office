@@ -247,6 +247,10 @@ const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(en
  * class, in `classes`' order. The classes were one pen connection each, one after another (POS-1098); they are one READ ONLY transaction now,
  * each class under a SAVEPOINT so a class that cannot be read is still said alone and the classes after it are still read. The rows are shaped
  * after the connection is back. `what(cls)` names a class's half when it cannot be read.
+ *
+ * A DEAD CONNECTION (the rollback to the savepoint cannot run either) ends the shared transaction: the class that died is unread, the classes
+ * already read keep their rows, and each class after it is read on a lease of its own, one after another, as before POS-1129. The transaction
+ * cannot commit then, so its refusal is not the classes' answer.
  */
 async function tableRowsAll(classes, members, now, { env, what, townClone = TOWN_CLONE, backingOf = null }) {
   const house = new Set(members);
@@ -266,19 +270,31 @@ async function tableRowsAll(classes, members, now, { env, what, townClone = TOWN
     const heldBy = heldByOf(cls);
     return (p, who) => house.has(p.author) || who.some((h) => house.has(h)) || heldBy(p.id).some((h) => house.has(h.handle));
   };
-  let loaded;
+  let loaded = null, dead = false;
   try {
-    loaded = await officeRead(async (client) => {
-      const out = [];
+    await officeRead(async (client) => {
+      loaded = [];
       for (const cls of classes) {
-        await client.query("SAVEPOINT posts_class");
-        try { out.push({ raw: await postRowsLoad(client, cls, now, { keep: keepOf(cls) }) }); await client.query("RELEASE SAVEPOINT posts_class"); }
-        catch { await client.query("ROLLBACK TO SAVEPOINT posts_class"); out.push({ failed: true }); }
+        if (dead) { loaded.push({ lone: true }); continue; }
+        try {
+          await client.query("SAVEPOINT posts_class");
+          const raw = await postRowsLoad(client, cls, now, { keep: keepOf(cls) });
+          await client.query("RELEASE SAVEPOINT posts_class");
+          loaded.push({ raw });
+        } catch {
+          loaded.push({ failed: true });
+          try { await client.query("ROLLBACK TO SAVEPOINT posts_class"); } catch { dead = true; }
+        }
       }
-      return out;
     }, { env });
   } catch {
-    loaded = classes.map(() => ({ failed: true }));
+    // the lease could not be had, or the transaction failed outside any class: every class unread, as before. A dead one keeps what it read.
+    if (!dead) loaded = classes.map(() => ({ failed: true }));
+  }
+  for (let i = 0; i < classes.length; i++) {
+    if (!loaded[i]?.lone) continue;
+    try { loaded[i] = { raw: await officeRead((client) => postRowsLoad(client, classes[i], now, { keep: keepOf(classes[i]) }), { env }) }; }
+    catch { loaded[i] = { failed: true }; }
   }
   return classes.map((cls, i) => {
     const unavailable = { unavailable: `${what(cls)} could not be read from the office's record` };
