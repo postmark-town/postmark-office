@@ -62,11 +62,11 @@ const DRAFT = "current/a-draft-that-never-crossed";
 const FIREPLACE = "kino/the-fireplace";
 const IDS = { bed: "d0000000-0000-4000-8000-000000000001", garland: "d0000000-0000-4000-8000-000000000002", fireplace: "d0000000-0000-4000-8000-000000000003" };
 const REGISTRY = {
-  households: { current: "hh:current", mari: "hh:mari", kino: "hh:kino" },   // the real export's spelling (hh:<slug>), the same house the pinned account binds
-  logins: { "current-hub": "gh:7", "mari-hub": "gh:8", "kino-hub": "gh:9" },
+  households: { current: "hh:current", mari: "hh:mari", kino: "hh:kino", berthy: "hh:berthy" },   // the real export's spelling (hh:<slug>), the same house the pinned account binds
+  logins: { "current-hub": "gh:7", "mari-hub": "gh:8", "kino-hub": "gh:9", "berthy-hub": "gh:10" },
   // WLD-122 (the S158 world's sweep): a `gh:<id>` login binds a house only through the registry's `pinned_ids` table, and an
   // account the table does not hold is "known but pinned to no household", which publishes and withdraws nothing
-  pinned_ids: { 7: "hh:current", 8: "hh:mari", 9: "hh:kino" },
+  pinned_ids: { 7: "hh:current", 8: "hh:mari", 9: "hh:kino", 10: "hh:berthy" },
 };
 const record = (by, x, body) =>
   `---\nkind: sited\nby: ${by}\ndate: 2026-10-14\nat: { x: ${x}, y: 10 }\nextent: { w: 3, h: 3 }\n---\n\n${body}\n`;
@@ -116,8 +116,8 @@ async function seed() {
   });
 }
 
-/** A world the real sweep will accept: its own tools, the frame, and both published marks. */
-function world(t) {
+/** A world the real sweep will accept: its own tools, the frame, and both published marks (and any `extra` [slug, text]). */
+function world(t, extra = []) {
   const repo = mkdtempSync(join(scratch, "world-"));
   cpSync(join(WORLD, "tools"), join(repo, "tools"), { recursive: true });
   const put = (p, text) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, text); };
@@ -128,6 +128,7 @@ function world(t) {
   put(`WORLD/marks/${BED}/mark.md`, record("current", 10, "The flat's bed under the eaves, never made."));
   put(`WORLD/marks/${GARLAND}/mark.md`, record("mari", 30, "A garland for the first night."));
   put(`WORLD/marks/${FIREPLACE}/mark.md`, record("kino", 50, "A fireplace with a kettle on the hob."));
+  for (const [slug, text] of extra) put(`WORLD/marks/${slug}/mark.md`, text);
   put("WORLD/households.json", `${JSON.stringify(REGISTRY, null, 2)}\n`);
   put("package.json", JSON.stringify({ name: "world-fixture", type: "module" }));
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -233,6 +234,95 @@ test("THE RETRY · a retire that refused at N leaves the row owed, the carry nev
 
   const three = await cross(w);
   assert.deepEqual(three.input.selection.withdrawn_owed.retire_only, [], "owed once, retired once");
+});
+
+// ── WLD-179: THE MAKER'S WITHDRAWAL WINS A SAME-WINDOW HOLD PRINTOUT ─────────
+//
+// Berthillon's six sorbet stations, in invented names: a crow takes berthy's
+// stations, the clearing prints the take (hold-through.mjs: a locked docket row
+// in the owner's name with `held_by` and `_held_through`, no maker act), and in
+// the same window berthy withdraws both. Station one stays withdrawn; station
+// two berthy leaves again afterwards, so its latest word is the re-declaration.
+const STATION = "berthy/station-one";
+const RELEFT = "berthy/station-two";
+const HELD_IDS = { station: "d0000000-0000-4000-8000-000000000004", releft: "d0000000-0000-4000-8000-000000000005" };
+
+/** The two held stations on top of `seed()`: published at 249, printed held at 250's clearing, withdrawn at 250. */
+async function seedHeld() {
+  await owner(async (c) => {
+    const opened = Date.UTC(2026, 9, 14, 5, 45, 40);
+    const printout = (id, slug, x) => c.query(
+      `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+       VALUES ($1, $2, 'sited', 'berthy', 'gh:10', $3, NULL, NULL, 'standing', 250, $4)`,
+      [id, slug, `${slug}, as it stood.`,
+        JSON.stringify({ by: "berthy", date: "2026-10-14", held_by: "crow", _placed: { at: { x, y: 10 }, extent: { w: 3, h: 3 } }, _held_through: 20 })]);
+    await printout(HELD_IDS.station, STATION, 70);
+    await printout(HELD_IDS.releft, RELEFT, 90);
+    const act = (id, crossing, actor, action, object, cls, payload) => c.query(
+      `INSERT INTO acts (at, crossing, actor, action, object, class, payload, household)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [new Date(opened + id * 1000).toISOString(), crossing, actor, action, object, cls, JSON.stringify(payload), actor === "berthy" ? "gh:10" : null]);
+    await act(11, 249, "berthy", "leave-mark", STATION, "mark", { by: "berthy", slug: "station-one" });
+    await act(12, 249, "berthy", "leave-mark", RELEFT, "mark", { by: "berthy", slug: "station-two" });
+    await act(13, 249, "crow", "take", STATION, "holding", { thing: STATION, holder: "crow", policy: "cascade", made_by: "berthy", previous_holder: null });
+    await act(14, 249, "crow", "take", RELEFT, "holding", { thing: RELEFT, holder: "crow", policy: "cascade", made_by: "berthy", previous_holder: null });
+    await act(15, 250, "berthy", "withdraw", STATION, "mark", { by: "berthy", slug: "station-one", was_published: true });
+    await act(16, 250, "berthy", "withdraw", RELEFT, "mark", { by: "berthy", slug: "station-two", was_published: true });
+    await act(17, 250, "berthy", "leave-mark", RELEFT, "mark", { by: "berthy", slug: "station-two" });
+  });
+}
+const STATIONS = [[STATION, record("berthy", 70, "Station one, by the glass doors.")], [RELEFT, record("berthy", 90, "Station two, under the lemon tree.")]];
+
+test("WLD-179 · a maker's withdrawal wins a same-window hold printout: out of canon at N, retired, its history kept; a re-declared held mark stays", { skip }, async (t) => {
+  await seed();
+  await seedHeld();
+  const w = world(t, STATIONS);
+  const one = await cross(w);
+  const owed = one.input.selection.withdrawn_owed;
+
+  assert.deepEqual(owed.slugs, [BED, STATION].sort(), JSON.stringify(owed));
+  assert.deepEqual(owed.over_hold_printout, { count: 1, slugs: [STATION] }, "the withdrawal won the crow's printout");
+  assert.deepEqual(owed.deferred_to_docket, [], "and nothing waits a crossing behind it");
+  const offered = one.input.marks.map((m) => m.slug);
+  assert.ok(!offered.includes(STATION), "the printout it won is not also written");
+  assert.ok(offered.includes(RELEFT), "the re-declared station's printout is still the docket's to write");
+  assert.ok(!owed.slugs.includes(RELEFT) && !owed.retire_only.includes(RELEFT), "a later re-declaration still wins");
+
+  assert.ok(ids(one.sweep.withdrawn).includes(STATION), `the sweep carried it: ${JSON.stringify(one.sweep)}`);
+  assert.equal(onMain(w, STATION), false, "canon let it go at the next crossing");
+  assert.equal(onMain(w, RELEFT), true, "the re-declared held station stays in canon");
+
+  const run = retire(one.sweepPath);
+  assert.equal(run.code, 0, run.raw);
+  assert.ok(run.out.withdrawn.retired.some((r) => r.slug === STATION && r.cause === "settlement-withdraw"), JSON.stringify(run.out));
+  const [station] = await read("SELECT status, retired_cause FROM marks WHERE slug = $1", [STATION]);
+  assert.deepEqual(station, { status: "retired", retired_cause: "settlement-withdraw" });
+  assert.equal((await read("SELECT status FROM marks WHERE slug = $1", [RELEFT]))[0].status, "standing");
+  // its whole life stays in the record: the leave, the crow's take and the withdraw
+  assert.deepEqual((await read("SELECT action FROM acts WHERE object = $1 ORDER BY id", [STATION])).map((r) => r.action),
+    ["leave-mark", "take", "withdraw"]);
+});
+
+test("WLD-179 · a docket that is only an overtaken printout, with escrow standing, publishes the removal; it is not a starving crossing", { skip }, async (t) => {
+  await seed();
+  await seedHeld();
+  await owner(async (c) => {
+    // window 250's docket is the one printout, and its claim is the one the candle locked
+    await c.query("UPDATE marks SET locked_window = 249 WHERE slug = $1", [RELEFT]);
+    await c.query(
+      `INSERT INTO claims (window_id, slug, class, claimant, household, status, decided_at, body, stake, data)
+       VALUES (250, $1, 'sited', 'berthy', 'gh:10', 'locked', now(), 'printout', 0, $2)`,
+      [STATION, JSON.stringify({ held_by: "crow", _held_through: 20 })]);
+  });
+  const w = world(t, STATIONS);
+  const one = await cross(w);
+  assert.equal(one.input.selection.docket_claims, 1);
+  assert.deepEqual(one.input.selection.withdrawn_owed.over_hold_printout, { count: 1, slugs: [STATION] });
+  assert.ok(!one.input.marks.some((m) => m.slug === STATION));
+  assert.equal(one.writeDown.starving_check.starving, false, JSON.stringify(one.writeDown.starving_check));
+  assert.equal(one.writeDown.starving_check.overtaken_by_withdrawal, 1);
+  assert.ok(ids(one.sweep.withdrawn).includes(STATION));
+  assert.equal(onMain(w, STATION), false);
 });
 
 test("THE AUTHOR'S WORD ONLY · a withdraw by the town on a resident's standing mark is not owed, and the mark stays in canon", { skip }, async (t) => {

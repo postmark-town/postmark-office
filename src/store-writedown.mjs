@@ -921,6 +921,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
  */
 export function starvingCheck({
   marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, holdOwed = 0, window = null, withheldBySettlement = 0,
+  overtakenByWithdrawal = 0,
 } = {}) {
   const staked = stakes.filter((s) => Number(s.n) > 0);
   const stakedMarks = new Set(staked.map((s) => s.mark));
@@ -1024,12 +1025,30 @@ export function starvingCheck({
   // window whose only claim was opposed is a lawful crossing, never a starving
   // one. A count, or nothing (0), by the shared test.
   const withheld = isDocketCount(withheldBySettlement) ? withheldBySettlement : 0;
+  // THE SIXTH INPUT: DOCKET HOLD PRINTOUTS A MAKER'S WITHDRAWAL WON (WLD-179).
+  // A maker's withdrawal beats another actor's same-window hold printout
+  // (fold-delta.mjs § THE THIRD TERM): that docket row DID materialize, and the
+  // crossing removes the mark instead of writing it. So it answers the docket as
+  // surely as a written mark, and is named apart from R11's withheld rows and
+  // from withdrawals in general. Absent is 0 (no fold input before it carried
+  // one); anything present and not a count refuses, as the carry's does.
+  const overtakenRaw = overtakenByWithdrawal ?? 0;
+  if (!isDocketCount(overtakenRaw)) {
+    throw new FoldInputRefusal(
+      "fold-input-shape",
+      `\`selection.withdrawn_owed.over_hold_printout.count\` is ${JSON.stringify(overtakenByWithdrawal)}, which is not a `
+      + "count. It says how many of this window's docket rows a maker's withdrawal removed rather than wrote, and a value "
+      + "that coerces to a number would let an empty docket offer pass as one the withdrawals answered.",
+    );
+  }
+  const overtaken = overtakenRaw;
   const counts = {
     offered,
     docket_offered: docketOffered,
     carried_absent: carried,
     hold_owed: owedHolds,
     ...(withheld ? { withheld_by_settlement: withheld } : {}),
+    ...(overtaken ? { overtaken_by_withdrawal: overtaken } : {}),
     docket_claims: docket,
     staked_marks: stakedMarks.size,
     staked_positions: staked.length,
@@ -1042,6 +1061,13 @@ export function starvingCheck({
     return {
       starving: false, ...counts, quiet: false,
       why: `this window's docket materialized ${withheld} mark(s) and the settlement opposes every one, so none is written down`,
+    };
+  }
+  if (overtaken > 0) {
+    return {
+      starving: false, ...counts, quiet: false,
+      why: `this window's docket materialized ${overtaken} hold printout(s), and each one's maker withdrew the mark, `
+        + "so the crossing removes them rather than writing them",
     };
   }
 
@@ -1260,6 +1286,7 @@ export function storeWriteDown({
     carriedAbsent: normalized.selection?.carried_absent?.count ?? 0,
     holdOwed: normalized.selection?.hold_owed?.count ?? 0,
     withheldBySettlement: normalized.selection?.settlement?.withheld_from_docket ?? 0,
+    overtakenByWithdrawal: normalized.selection?.withdrawn_owed?.over_hold_printout?.count ?? 0,
     window: normalized.as_of.window,
   });
 
