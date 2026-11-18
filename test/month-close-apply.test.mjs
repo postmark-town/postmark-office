@@ -212,6 +212,21 @@ test("FAILPOINT, the town's close: a signer that cannot sign, a close that write
   assert.equal(differs.pots[0].outcome, "not-landed");
 });
 
+test("THE IN-LOCK PREFIX GUARD: a ledger that moved after the plan is refused by name before the town's close runs, not discovered by the rows check", { skip }, async () => {
+  const t = await freshTown();
+  const p = await plan(t);
+  const before = await state(t);
+  let ran = false;
+  const res = await apply(t, p.fingerprint, {
+    runClose: (a) => { ran = true; return runCloseDefault(a); },
+    hooks: { beforeWrite: () => { t.M.appendSigned(t.dir, [t.M.potReceiptLine({ date: "2026-10-26", pot: "darko-fund", rail: "stripe", usd: 1, from: "dee", ref: "t-moved" })], t.pem); } },
+  });
+  assert.deepEqual([res.status, outcomes(res)], ["partial", [["darko-fund", "not-landed"]]]);
+  assert.match(res.pots[0].detail, /the ledger is not the prefix the plan stood on/);
+  assert.equal(ran, false, "the town's close never ran over a moved ledger");
+  assert.deepEqual(await state(t), before, "and the moved line was put back");
+});
+
 test("FAILPOINT, the head moves: another writer records a stamp row between the plan and the landing; nothing lands and the clone is put back", { skip }, async () => {
   const t = await freshTown();
   const p = await plan(t);

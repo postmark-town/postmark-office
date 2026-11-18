@@ -164,8 +164,8 @@ export function withEntry(data, entry) {
 }
 
 const refOf = (att) => `ref: ${att.ref}`;
-/** Does an existing entry say what this attestation says? The amount and the reference (which rides in `why`). */
-const sameAttested = (e, att) => e.usd === att.usd && String(e.why ?? "").includes(refOf(att));
+/** Does an existing entry say what this attestation says? The amount, and the reference EXACTLY: it is the whole trailing `(ref: X)` of `why`, so `inv-10` never matches `inv-1`. */
+const sameAttested = (e, att) => e.usd === att.usd && String(e.why ?? "").endsWith(`(${refOf(att)})`);
 
 // ── reading the town ────────────────────────────────────────────────────────
 

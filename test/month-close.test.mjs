@@ -233,6 +233,10 @@ test("STARFORGE: replay and conflict. A matching entry for a closed month is alr
   assert.equal(byPot(await run(provisionalFile([]), []), "keeping-ec2").status, "already-complete", "closed with nothing attested: reported complete");
   assert.deepEqual((await run(provisionalFile([entry({ usd: 41 })]), att)).refusals.map((r) => r.code), ["provisional-conflict"], "a different amount");
   assert.deepEqual((await run(provisionalFile([entry({ why: "someone else's payment (ref: other)" })]), att)).refusals.map((r) => r.code), ["provisional-conflict"], "a different reference");
+  const ref10 = { pot: "keeping-ec2", usd: 40, ref: "inv-10" };
+  assert.deepEqual((await run(provisionalFile([entry({ why: "operator-attested Starforge contribution (ref: inv-10)" })]), att)).refusals.map((r) => r.code), ["provisional-conflict"], "stored inv-10, attested inv-1: a reference that merely starts with the attested one is a different payment");
+  assert.deepEqual((await run(provisionalFile([entry()]), [ref10])).refusals.map((r) => r.code), ["provisional-conflict"], "stored inv-1, attested inv-10: the other direction");
+  assert.deepEqual((await run(provisionalFile([entry({ why: "operator-attested Starforge contribution (ref: inv-10)" })]), [ref10])).refusals, [], "and the same reference, inv-10 against inv-10, still matches");
   assert.deepEqual((await run(provisionalFile([entry(), entry()]), att)).refusals.map((r) => r.code), ["provisional-conflict"], "two entries for one pot-month");
   assert.deepEqual((await run(provisionalFile([]), att)).refusals.map((r) => r.code), ["closed-without-provisional"], "closed, attested, no entry: a reconciliation, not an append");
   const open = (M, { gift, stake, receipt }) => [M.rulesLine("2026-06-12"), gift("ana", 20), gift("bo", 100), gift("wright", 100), stake("bo", "keeping-ec2", 40), receipt("keeping-ec2", "ana", 150, "t-ana-ec2")];
