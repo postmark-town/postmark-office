@@ -40,9 +40,9 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 // ── ISOLATION, BEFORE THE FIRST `../src` IMPORT ─────────────────────────────
 // The office caches the world ENGINE under a machine-global directory keyed on
@@ -50,8 +50,8 @@ import { tmpdir } from "node:os";
 // same sha in every run — world-apex.test.mjs § ISOLATION measured the
 // collision. Redirecting TEMP gives this process its own cache root, and it has
 // to happen before the constants are computed at module load.
-const repo = mkdtempSync(join(tmpdir(), "postmark-consent-"));
-const tmpHome = mkdtempSync(join(tmpdir(), "postmark-consent-tmp-"));
+const repo = tempDir("postmark-consent-");
+const tmpHome = tempDir("postmark-consent-tmp-");
 process.env.TEMP = process.env.TMP = process.env.TMPDIR = tmpHome;
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* litter */ } };
 after(() => { sweep(repo); sweep(tmpHome); });
@@ -427,6 +427,8 @@ test("the two halves are one door: read: \"stances\" names what do: \"declare-st
   assert.equal(inbox.stances_awaiting, 1);
   assert.equal(inbox.awaiting[0].mark, "beta/on-wrights-edge");
   assert.deepEqual(inbox.awaiting[0].on_your_ground, ["wright/wrights-parcel"]);
+  // POS-812: the household door's read is the doorstep bundle's segment, so it carries no edge words (F7c5)
+  assert.equal(inbox.awaiting[0].edge, undefined);
   // Speak, and the same read empties itself.
   await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed" } });
   const after2 = await door({ read: "stances" });

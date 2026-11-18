@@ -88,19 +88,7 @@ const refused = (v) => Boolean(v && typeof v === "object" && v[CANNOT_ANSWER]);
 // sitting right beside it.
 
 let _snap = null;
-let _generation = 0;
-
-/**
- * How many times a snapshot has been loaded in this process. A caller that
- * caches derived answers watches this to know when its cache died.
- *
- * The fold's own place-word cache is cleared by `world()` rebuilding — but in
- * serve mode `world()` is never called, so a rehydration would otherwise leave
- * the office repeating place words from a store snapshot it no longer holds,
- * forever, with nothing to invalidate them. Zero until something loads, so an
- * office with the flags off never clears anything.
- */
-export const storeGeneration = () => _generation;
+let _generation = 0; // snapshots loaded (or reset) in this process; a caller reads it through `storeEpoch`
 
 /**
  * The generation a derived cache should key itself to — re-statting the store
@@ -217,13 +205,14 @@ const GEOMETRIC = (m, graph) => isSited(m, lineageIn(graph));
  *     bbox, so no answer changes outside one) and complete (both the point test
  *     and the nest's `marksContain` go analytic once no irregular mark is in
  *     range). This is the fall-through that actually fires; the honest fix is a
- *     hydrator that stores the ring, and that is Stage 1's next commit, not this
- *     one's.
+ *     hydrator that stores the ring, and that has not been built: the hydrator
+ *     still records only the vertex count.
  *
  *   equal-extent-tie  `containmentChain` sorts the containing marks by extent
  *     AREA and V8's sort is stable, so two containing marks of equal area leave
  *     the innermost decided by ITERATION ORDER. The fold's order is its loader's
- *     and the store's is SQLite's, and neither promises the other anything.
+ *     and the store's is the order its rows were stored in, and neither promises
+ *     the other anything.
  *
  *   nearest-tie  The place-word FALLBACK — the branch that runs only when
  *     nothing contains the point — picks the nearest sited mark with a strict
@@ -343,7 +332,7 @@ export function servedCanonSha(repo) { return blessed(repo).sha; }
  * May this read be answered from the store? Returns `{ ok, reason, snap, sha }`.
  *
  * RULING 9 FIRST. `draftRefForKey` returning a ref means the caller passed a
- * household key; world.db does not index sketchbooks, so the store is not
+ * household key; the world graph does not index sketchbooks, so the store is not
  * consulted — not even in shadow. Since §1c no read tier folds a sketchbook, so
  * this is a belt rather than a mirror (see the header): no live caller reaches
  * it, and it exists so that a keyed read added to this lane fails safe.
@@ -400,7 +389,7 @@ const RECENT = [];
 
 const fingerprintOf = (v) => createHash("sha256").update(stable(v)).digest("hex").slice(0, 16);
 function stable(v) {
-  if (v === undefined) return " undefined";
+  if (v === undefined) return "\u0000undefined";
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
   return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;

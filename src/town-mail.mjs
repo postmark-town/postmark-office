@@ -68,7 +68,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 import { appendTownJournal, pendingRows, townLogEnabled, NONCE_MAX, rowSpendingNonce } from "./town-journal.mjs";
 import { LADDER_NOTE, TENSE } from "./paper-fresh.mjs"; // the three words, borrowed rather than re-coined
@@ -276,16 +276,15 @@ export function replayLetter(row, { doors, key, db, clone }) {
 // law owns what the FERRY will judge, which is the half the office was
 // previously guessing at from a projection.
 
-const engines = new Map(); // clone path -> the town's envelope module, or null
 
 async function envelopeLaw(clone) {
   if (!clone) return null;
-  if (engines.has(clone)) return engines.get(clone);
-  let mod = null;
-  try { mod = await import(pathToFileURL(join(clone, "tools", "envelope.mjs"))); }
-  catch { mod = null; } // a clone without the law (a test fixture, a bare checkout) simply has no pre-flight
-  engines.set(clone, mod);
-  return mod;
+  // A clone without the law (a test fixture, a bare checkout) simply has no
+  // pre-flight. A clone WITH it runs the office's pinned copy, checked against
+  // the clone on every call (POS-994): a pin stop is thrown by name, never
+  // read as "no law", and is never cached.
+  if (!existsSync(join(clone, "tools", "envelope.mjs"))) return null;
+  return importTownTool(clone, "envelope.mjs");
 }
 
 /**
@@ -410,7 +409,7 @@ export { NONCE_MAX }; // one cap for every retry key; it lives beside the rows (
 const inFlight = new Map();
 
 const inFlightSlot = (key, from, nonce) =>
-  `${String(key?.household ?? "")} ${String(from ?? "")} ${nonce}`;
+  `${String(key?.household ?? "")}\u0000${String(from ?? "")}\u0000${nonce}`;
 
 /**
  * THE ORIGINAL RECEIPT, handed back — not a new one, and not a bare refusal.
@@ -490,11 +489,38 @@ async function sendRow(args, key, db, clone, odb, nonce) {
 
   const plan = validateLetter(args, key, db); // the office's own fence, unchanged and first
 
+  // A RESEND (POS-1027): this letter stands in for one of the sender's that bounced. Judged AFTER the fence (so the key holds the sender before anything about a
+  // letter is confirmed) and AFTER the nonce lookup above (so a retry ends where the first call ended). The original is never touched: the link is this row's own
+  // arguments, kept verbatim in the log (letter-resend.mjs).
+  let resendOf = null;
+  if (args?.resend !== undefined && args?.resend !== null && args?.resend !== "") {
+    const { judgeResend } = await import("./letter-resend.mjs");
+    const { storeIndexPooled } = await import("./town-index-store.mjs");
+    try { resendOf = await judgeResend(args, { from: plan.from, ix: storeIndexPooled(clone), odb, logOn: true }); }
+    catch (e) { if (e?.name === "TownIndexUnreachable") throw Object.assign(new Error(e.refused.defect), { code: 503, defect: e.refused.defect, hint: e.refused.hint }); throw e; }
+  }
+
   const bad = await preflightEnvelope(clone, plan);
   if (bad) { const e = new Error(bad.defect); Object.assign(e, bad); throw e; }
 
+  // ONE SLUG PER CORRESPONDENT PER DAY, STANDING LETTERS INCLUDED (postmark#4447).
+  // `validateLetter`'s 409 reads the settled index, so a second letter with the
+  // same id written before the crossing was given a receipt, and the drain's
+  // resume check then took its row as already sent. The sender's own standing
+  // letters are the half the index cannot see. The lookup is `hotLetters`, as
+  // `spentNonce` uses, so the scope stays the mail law's. A withdrawn letter is
+  // not standing, so its id is free again; an amended one still holds it. The
+  // drain replays through `enqueueLetter`, so a replayed row never meets this.
+  const twin = (await hotLetters(odb, key, { handle: plan.from })).find((r) => r?.payload?.id === plan.id);
+  if (twin) {
+    const defect = "a letter with this id already exists today";
+    const e = new Error(defect);
+    Object.assign(e, { code: 409, defect, hint: "change the title, or write tomorrow — one slug per correspondent per day" });
+    throw e;
+  }
+
   const file = outboxRelPath(plan.from, plan.date, plan.to, plan.slug);
-  const seq = await logLetter(odb, { args, key, from: plan.from, id: plan.id, file });
+  const seq = await logLetter(odb, { args: resendOf ? { ...args, resend: resendOf.id } : args, key, from: plan.from, id: plan.id, file });
   return {
     letter_id: plan.id,
     // NOTHING IS COMMITTED, and the field says so rather than going missing:
@@ -527,5 +553,7 @@ async function sendRow(args, key, db, clone, odb, nonce) {
     ...(nonce ? { nonce, idempotent: "retry this exact call with the same nonce and you will get this receipt back rather than a second letter — until the crossing takes it, after which the letter id is the guard" } : {}),
     // A thread the office's copy does not hold yet is accepted and said (POS-332, write.mjs § threadNoteFor).
     ...(plan.threadUnseen ? { thread_note: threadNoteFor(plan.thread) } : {}),
+    // Only when one was named (POS-1027): which bounce this letter stands in for, and what that does and does not mean
+    ...(resendOf ? { resend: resendOf.id, resend_note: (await import("./letter-resend.mjs")).resendNote(resendOf.id) } : {}),
   };
 }

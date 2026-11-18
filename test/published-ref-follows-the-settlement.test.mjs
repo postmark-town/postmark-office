@@ -11,7 +11,7 @@
 //    the DESCENDANT when the two disagree; a truly diverged pair falls to
 //    origin, because published truth is what the world can clone."
 //
-// and, on the ref the tick moves (`deploy/office-tick.sh:37-42`):
+// and, on the ref the tick moves (`deploy/office-keep.sh § under the lock`):
 //
 //   "The world clone gets FETCH, never pull: its checkout is the write pen's
 //    (ensureDraftCheckout reseats it per-write) … Reads only need origin refs
@@ -26,8 +26,9 @@
 // feature" for six hours, until the crossing-save's 12:02Z pull moved
 // `refs/heads/main`; and the SAME answer stamped `law.as_of_world` with the
 // newer sha, because `world.db` is hydrated `--ref origin/main`
-// (`deploy/office-tick.sh:73`). One object, two sources, and the fresh one
-// certified the stale one. postmark-town/postmark#2526.
+// (`deploy/office-tick.sh:73`, then; deleted in POS-268 5b). One object, two
+// sources, and the fresh one certified the stale one.
+// postmark-town/postmark#2526.
 //
 // Three readers of one fact is how they drift, so the last three tests here
 // BIND them: across all four states a clone can be in, `freshestMainRef` and
@@ -37,14 +38,14 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { freshestMainRef, mainRef, publishedState, publishedSkeleton } from "../src/world-branches.mjs";
 import { publishedMainSha } from "../src/world-serve.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-published-ref-"));
+const repo = tempDir("postmark-published-ref-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });

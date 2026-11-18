@@ -187,11 +187,12 @@ test("v2: the view's places are v1's nearby, in the engine's rank, grouped by be
   const v1 = await bareAt("v1");
   const v2 = await v2At();
   const groups = Object.entries(v2.view).filter(([k]) => k !== "how");
-  assert.deepEqual(groups.flatMap(([, rows]) => rows.map((r) => r.id)).sort(), v1.nearby.map((o) => o.id).sort(), "the same places");
+  // POS-933: a parcel rides under its house (`parcel`), so it is a place of the view but no row of its own
+  assert.deepEqual(groups.flatMap(([, rows]) => rows.flatMap((r) => [r.id, ...(r.parcel ? [r.parcel.id] : [])])).sort(), v1.nearby.map((o) => o.id).sort(), "the same places");
   const rank = new Map(v1.nearby.map((o, i) => [o.id, i]));
   for (const [b, rows] of groups)
     for (let i = 1; i < rows.length; i++) assert.ok(rank.get(rows[i - 1].id) < rank.get(rows[i].id), `${b} keeps the rank`);
-  const firsts = groups.map(([, rows]) => rank.get(rows[0].id));
+  const firsts = groups.map(([, rows]) => Math.min(...rows.flatMap((r) => [rank.get(r.id), ...(r.parcel ? [rank.get(r.parcel.id)] : [])]))); // a parcel under its house still seats its group
   assert.deepEqual(firsts, [...firsts].sort((a, b) => a - b), "each group sits at its best member's rank");
 });
 
@@ -207,9 +208,14 @@ test("v2: no url anywhere in a bare read, and a picture is a flag", { skip: !HAV
 // Wright's word, until the read outgrew it as law granted acts (the consume card,
 // +58; POS-697's field tails, ~+250): 8,069 on CI. The cap is a guard against
 // runaway growth, not a target.
-test("v2: within the budget as the MCP door serves it, at the rig's standpoint (10k, Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("v2: within the budget as the MCP door serves it, at the rig's standpoint (10k, Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async (t) => {
   const served = JSON.stringify(await v2At(), null, 1).length; // mcp.mjs § the answer's text block
+  t.diagnostic(`v2 served ${served} characters`);
   assert.ok(served <= 10000, `v2 served is ${served} characters`);
+  // POS-1094: the same read as the door's default, carrying the line on the default, still inside the ceiling
+  const asDefault = JSON.stringify(await worldApex({ handle: WHO }, KEY, { readShape: "v2" }), null, 1).length;
+  t.diagnostic(`v2 as the default, with its line: ${asDefault} characters`);
+  assert.ok(asDefault <= 10000, `v2 as the default is ${asDefault} characters`);
 });
 
 test("v2: every mark the bare read shows carries its whole body (Darko 22:33)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -384,10 +390,11 @@ test("v1: the description says the lean read and its size, and cards takes \"ful
   for (const shape of ["v1"]) {
     setEnv("WORLD_READ_SHAPE", shape);
     try {
-      assert.match(APEX_TOOL.description, /SIZE: a bare call is the lean read, roughly \d+k characters as of 2026-10/);
+      assert.match(APEX_TOOL.description, /SIZE: a bare call is the lean read, roughly \d+k characters as of 2026-11/);   // POS-896: the sentence's as-of month moves with the measurement it states (16,009 / 16,290 chars, 2026-11)
       assert.doesNotMatch(APEX_TOOL.description, /50–80k/);
       assert.doesNotMatch(APEX_TOOL.description, /the full mark record/);
-      assert.match(APEX_TOOL.description, /read_shape: "v2" is the compact read, at about half this size: opt-in per call, while the default stays as it is/, "POS-687: the SIZE sentence names v2");
+      assert.match(APEX_TOOL.description, /read_shape: "v2" is the compact read, at about half this size, and the door's default once it is set so/, "POS-687: the SIZE sentence names v2; POS-1094: it no longer calls v2 opt-in");
+      assert.doesNotMatch(APEX_TOOL.description, /opt-in/);
       assert.deepEqual(APEX_TOOL.inputSchema.properties.cards.enum, ["names", "full"]);
     } finally { setEnv("WORLD_READ_SHAPE", undefined); }
   }
@@ -436,7 +443,12 @@ test("leave-mark's ≤150 and 1✦ are the door's own: the body cap and the comm
 test("v2: the description says the v2 read and its size, and read_shape is on every shape's schema", () => {
   setEnv("WORLD_READ_SHAPE", "v2");
   try {
-    assert.match(APEX_TOOL.description, /SIZE: a bare call is the world read v2, roughly 5k characters/);
+    // POS-1094: true size (8,315 served at the rig, 8,389 with the line on the default), the default, and v1 callable
+    assert.match(APEX_TOOL.description, /SIZE: a bare call is the world read v2, the default read, roughly 8k characters/);
+    assert.match(APEX_TOOL.description, /read_shape: "v1" is the older, fuller read/);
+    assert.doesNotMatch(APEX_TOOL.description, /opt-in/);
+    assert.match(APEX_TOOL.inputSchema.properties.read_shape.description, /default/);
+    assert.doesNotMatch(APEX_TOOL.inputSchema.properties.read_shape.description, /opt-in|Omit it for the older/);
   } finally { setEnv("WORLD_READ_SHAPE", undefined); }
   assert.deepEqual(APEX_TOOL.inputSchema.properties.read_shape.enum, ["v1", "v2"], "W1: a caller picks v1 or v2; v0 stays the REST cockpit's and the env's");
 });
@@ -459,7 +471,12 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
 // kogane on the CI world pin: before WLD-29 (train 13a9c24f, ddc8cdd2) v1
 // 14,200 chars; with the digest (5db0d39f) 16,362; the pointer model 14,055.
 // On train/2026-w43 of 10-17 (world pin daef8487) v1 measures 15,613, so
-// SIZE_LEAN keeps the train's own ~15k. The stated number must stay within
+// SIZE_LEAN kept the train's own ~15k. SIZE_LEAN states what the read measures
+// without the digest and never a budget, and it is kept factual (POS-896): v1
+// measures 16,009 chars at world pin 7f5f61c8 and 16,290 at 8ed486ed (kogane's
+// standpoint, measured 2026-11-05), the same keys and the same 19 records, the growth
+// being two more `not_yours` rows (data in an existing field, no new field), so
+// it says roughly 16k. The stated number must stay within
 // 85–108% of the measured read: the old 17k text fails it, and so does a dials
 // table put back on the read (the control below proves the check can see one).
 // v2 is the world read v2 since POS-632 (world-read-v2.mjs § shapeV2), its own
@@ -487,4 +504,65 @@ test("NO DIGEST AT ANY VERSION: v0, v1 and v2 carry no `dials` and no `activity`
     const back = shapeRead({ ...full, dials: table }, { shape, paceKmPerCrossing: 60, within: full.within.map((m) => m.id), named: [...full.within, ...full.nearby].map((m) => m.id) });
     assert.ok(JSON.stringify(back).length > stated(shape) * 1.08, `${shape}: a dial table back on the read (${JSON.stringify(back).length}) would not be seen`);
   }
+});
+
+// ── POS-745 / POS-811: the pointers the doors hand out lead somewhere ───────
+
+test("POS-745 F1: every world.<read> the doorstep hands out answers when followed", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { herePart } = await import("../src/doorstep-apex.mjs");
+  const glance = await v2At();
+  // the real glance gives world.you and world.who; a synthetic happening_here gives the third pointer
+  const items = herePart({ ...glance, happening_here: [{ what: "a gathering", kind: "event", phase: "underway", place: { id: "kogane/the-well-house-parcel" } }] });
+  const froms = items.map((it) => it.from).filter((f) => /^world\./.test(f));
+  for (const want of ["world.you", "world.who", "world.happening"]) assert.ok(froms.includes(want), "the doorstep hands out " + want);
+  for (const from of new Set(froms)) {
+    const r = await worldApex({ handle: WHO, read: from.slice("world.".length), read_shape: "v2" }, KEY, {});
+    assert.ok(!r.error, from + " is followed to a 200, not " + JSON.stringify(r).slice(0, 200));
+    assert.equal(r.read, from.slice("world.".length));
+  }
+  const you = await worldApex({ handle: WHO, read: "you", read_shape: "v2" }, KEY, {});
+  assert.deepEqual(you.you, glance.you, "read: \"you\" is the glance's own you, whole (the houses in within keep their lit flags)");
+});
+
+test("POS-745 F2: the bounce's readable_here lists the v2 blocks, and each listed block answers", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { BLOCK_READS } = await import("../src/world-read-v2.mjs");
+  const bounced = await worldApex({ handle: WHO, read: "no-such-act" }, KEY, {});
+  assert.equal(bounced.code, 422);
+  for (const b of Object.keys(BLOCK_READS)) {
+    assert.ok(bounced.readable_here.includes(b), "readable_here lists " + b);
+    assert.ok(bounced.hint.split("readable too, each whole: ")[1]?.split(/[,.]\s*/).includes(b), "the hint says " + b);
+    const r = await worldApex({ handle: WHO, read: b }, KEY, {});
+    assert.ok(!r.error, "following " + b + " from the bounce answers: " + JSON.stringify(r).slice(0, 160));
+  }
+  assert.ok(bounced.readable_here.includes("say"), "the acts are still listed");
+});
+
+test("POS-745 F3: world_note names the read that gives the note back, and that read answers", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const note = toolList().find((t) => t.name === "world_note");
+  assert.ok(note, "world_note is listed");
+  assert.doesNotMatch(note.description, /world_orient/, "no tool by that name is listed");
+  const m = /world \{ read: "([a-z-]+)" \}/.exec(note.description);
+  assert.ok(m, "it names a world read: " + note.description.slice(0, 300));
+  assert.ok(!toolList().some((t) => t.name === "world_orient"), "the old name is not a listed tool");
+  const r = await worldApex({ handle: WHO, read: m[1] }, KEY, {});
+  assert.ok(!r.error, JSON.stringify(r).slice(0, 200));
+  assert.ok("note" in r, "the read answers { note }");
+});
+
+test("POS-811: a say receipt's latest (milliseconds) passed as since on a world read says what it is", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const latest = 1792022882579; // what voices.mjs hands back as 'latest'
+  setEnv("WORLD_MOVEMENT_V2", "1");
+  try {
+    for (const args of [{ since: latest }, { since: String(latest) }, { since_crossing: latest }, { read: "happened", since_crossing: latest }, { read: "happened", since: latest }, { read: "who", since: String(latest) }]) {
+      const r = await v2At(args);
+      assert.equal(r.code, 422, JSON.stringify(args) + " bounces");
+      assert.match(r.defect, /say timestamp \(milliseconds\), not a cursor/);
+      assert.match(r.hint, /read: "say"/, "it says where the stamp belongs");
+      assert.match(r.hint, /the cursor the v2 read handed you/, "and what since takes");
+    }
+    // what since DOES take still answers: the v2 read's own cursor, and an old crossing number
+    const first = await v2At();
+    assert.ok(!(await v2At({ since: first.cursor })).error);
+    assert.ok(!(await v2At({ since: 250 })).error);
+  } finally { setEnv("WORLD_MOVEMENT_V2", undefined); }
 });

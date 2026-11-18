@@ -21,16 +21,16 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 
 const store = await startStore({ db: "resident_notes_test" });
 after(() => store.stop?.());
 const skip = store.skip ?? false;
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-resident-notes-"));
+const scratch = tempDir("postmark-resident-notes-");
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const repo = join(scratch, "world");
 const origin = join(scratch, "origin.git");

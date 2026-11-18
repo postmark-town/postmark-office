@@ -23,9 +23,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
 import {
@@ -48,8 +48,8 @@ import { draftDeltaForKey } from "../src/world-branches.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-journal-repo-"));
-const scratch = mkdtempSync(join(tmpdir(), "postmark-journal-db-"));
+const repo = tempDir("postmark-journal-repo-");
+const scratch = tempDir("postmark-journal-db-");
 after(() => { sweep(repo); sweep(scratch); });
 
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -1177,6 +1177,9 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
         // fixture's case and the honest answer for a store with no session.
         if (/current_setting\('app\.household_keys'/i.test(sql)) return { rows: [{ keys: null }] };
         if (/^UPDATE claims/i.test(sql.trim())) return { rows: [], rowCount: 0 };
+        // WLD-138 B: the withdraw door asks whether the mark is a full set-down holder (its newest hold row,
+        // set-down-return.mjs § setDownHolderOf). This fixture keeps no hold lane, so there is none.
+        if (/FROM acts\s+WHERE class = \$1 AND object = ANY\(\$2\) AND action = ANY\(\$3\)/i.test(sql)) return { rows: [] };
 
         throw new Error(`the hand-built store was asked something it does not know: ${sql.slice(0, 80)}`);
       },
@@ -1521,7 +1524,7 @@ test("postmark#3528 — preview, write, publish note and the candle agree about 
 // asking by a real commit happened to evict it. THE FLIP: key the cache on the
 // `sha` argument again and both halves of this red.
 test("THE FILING CACHE follows main: asked by name after main moves, the new commit answers", () => {
-  const r = mkdtempSync(join(tmpdir(), "postmark-filing-cache-"));
+  const r = tempDir("postmark-filing-cache-");
   after(() => sweep(r));
   const g = (...args) => execFileSync("git", ["-C", r, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const write = (path, text) => { mkdirSync(dirname(join(r, path)), { recursive: true }); writeFileSync(join(r, path), text); };

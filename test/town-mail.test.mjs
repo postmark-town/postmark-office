@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -24,6 +25,7 @@ import {
   hotLetters, hotMailBlock, logLetter, MAIL_ACT, MAIL_DOOR,
   preflightEnvelope, replayLetter, sendLetterAsRow, STANDING,
 } from "../src/town-mail.mjs";
+import { withdrawLetterAtOffice } from "../src/letter-amend.mjs";
 import {
   appendTownJournal, pendingRows, TOWN_CLASSES, townLogEnabled,
 } from "../src/town-journal.mjs";
@@ -463,6 +465,57 @@ test("two letters are two letters — a later one never supersedes an earlier on
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
+// postmark#4447: one slug per correspondent per day holds for standing letters
+// too. Before the fix the second send below was given a receipt and a row, and
+// the drain then took that row as already sent, so it was never delivered.
+test("a second standing letter with the same id is refused at the door, and the first stands untouched", async () => {
+  const o = odb();
+  const clone = mailClone();
+  try {
+    await flagOn(async () => {
+      const first = await sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nThe first one." }, fixtureKey, db, clone, o);
+      await assert.rejects(
+        () => sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nA different one." }, fixtureKey, db, clone, o),
+        (e) => e.code === 409 && e.defect === "a letter with this id already exists today" && /one slug per correspondent per day/.test(e.hint));
+      const mine = await hotLetters(o, fixtureKey, { handle: "wright" });
+      assert.equal(mine.length, 1, "the refused letter wrote no row");
+      assert.equal(mine[0].payload.id, first.letter_id);
+      assert.equal(mine[0].payload.args.body, "Limen,\n\nThe first one.", "the first letter is the one that stands");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("a withdrawn letter frees its id: the same title can be sent again that day", async () => {
+  const o = odb();
+  const clone = mailClone();
+  const lock = async (fn) => fn();
+  try {
+    await flagOn(async () => {
+      const first = await sendLetterAsRow({ ...ok, title: "hello" }, fixtureKey, db, clone, o);
+      await withdrawLetterAtOffice({ id: first.letter_id }, fixtureKey, { odb: o, lock });
+      const again = await sendLetterAsRow({ ...ok, title: "hello", body: "Limen,\n\nThe one I meant." }, fixtureKey, db, clone, o);
+      assert.equal(again.letter_id, first.letter_id);
+      const mine = await hotLetters(o, fixtureKey, { handle: "wright" });
+      assert.equal(mine.length, 1, "only the second letter stands");
+      assert.equal(mine[0].payload.args.body, "Limen,\n\nThe one I meant.");
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("the same title from two different senders on one day is two ids, and each stands in its own sender's view", async () => {
+  const o = odb();
+  const clone = mailClone();
+  try {
+    await flagOn(async () => {
+      const a = await sendLetterAsRow({ ...ok, title: "hello" }, fixtureKey, db, clone, o);
+      const b = await sendLetterAsRow({ ...ok, from: "limen", to: "wright", title: "hello", body: "Wright,\n\nHello back." }, limenKey, db, clone, o);
+      assert.notEqual(a.letter_id, b.letter_id);
+      assert.equal((await hotLetters(o, fixtureKey, { handle: "wright" })).length, 1);
+      assert.equal((await hotLetters(o, limenKey, { handle: "limen" })).length, 1);
+    });
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
 // ── THE DRAIN: OUTBOX ONLY, THROUGH THE PEN ─────────────────────────────────
 
 test("THE DRAIN REPLAYS THROUGH THE DOOR — one implementation, second caller", async () => {
@@ -600,6 +653,7 @@ test("PRE-FLIGHT: a clone with no envelope law simply has no pre-flight — the 
 
 test("PRE-FLIGHT RUNS THE CLONE'S OWN FILE — the verdict comes from the town, not from here", async () => {
   const clone = mailClone();
+  let pinsBefore;
   try {
     // A MARKER law, not a fork of the real one: it answers with a string no
     // office code could invent. If that string comes back out of the door, the
@@ -611,23 +665,32 @@ test("PRE-FLIGHT RUNS THE CLONE'S OWN FILE — the verdict comes from the town, 
       + "export const collectHandles = () => ({ handles: new Set(['limen']) });\n"
       + "export const parseLedgerText = () => ({ deliveredIds: new Set(), deliveredTo: new Map() });\n"
       + "export const remedyFor = () => 'MARKER-REMEDY';\n");
+    // POS-994: the office runs its PINNED copy of the clone's law, checked byte-equal
+    // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
+    pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinTown(clone);
     const plan = validateLetter(ok, fixtureKey, db);
     const bad = await preflightEnvelope(clone, plan);
     assert.equal(bad.defect, "MARKER-FROM-THE-CLONE",
       "the defect string is the clone's file speaking — the office never classifies an envelope itself");
     assert.equal(bad.hint, "MARKER-REMEDY", "and the remedy is the law's too, not a paraphrase");
     assert.equal(bad.code, 422);
-  } finally { rmSync(clone, { recursive: true, force: true }); }
+  } finally { rmSync(clone, { recursive: true, force: true }); if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
 });
 
 test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's own vocabulary", async () => {
   const clone = mailClone();
+  let pinsBefore;
   try {
     writeFileSync(join(clone, "tools", "envelope.mjs"),
       "export const classify = () => globalThis.__pmDefect;\n"
       + "export const collectHandles = () => ({ handles: new Set(['limen']) });\n"
       + "export const parseLedgerText = () => ({ deliveredIds: new Set(), deliveredTo: new Map() });\n"
       + "export const remedyFor = () => null;\n");
+    // POS-994: the office runs its PINNED copy of the clone's law, checked byte-equal
+    // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
+    pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinTown(clone);
     const plan = validateLetter(ok, fixtureKey, db);
     globalThis.__pmDefect = "duplicate id";
     assert.equal((await preflightEnvelope(clone, plan)).code, 409);
@@ -636,7 +699,7 @@ test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's
     globalThis.__pmDefect = "missing required field: date";
     assert.equal((await preflightEnvelope(clone, plan)).code, 422);
     delete globalThis.__pmDefect;
-  } finally { rmSync(clone, { recursive: true, force: true }); }
+  } finally { rmSync(clone, { recursive: true, force: true }); if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
 });
 
 // The REAL law, from the office's own town checkout. The repo's idiom for a
@@ -773,7 +836,10 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // (POS-666, 2026-10-22) — household { do: "amend-letter" | "withdraw-letter" |
   // "block" | "unblock" }, born delisted behind the household apex. The counts
   // moved in the same commit.
-  assert.equal(names.length, 64, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // 64 → 66: read_feed, read_pair (POS-1027, 2026-11-13) — town { read: "feed" | "pair" }, born
+  // delisted behind the town apex. 66 → 67: discover_town (POS-497, 2026-11-03, merged onto the train) — town { read: "discover" }, born
+  // delisted behind the town apex. The counts moved in the same commits.
+  assert.equal(names.length, 67, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",

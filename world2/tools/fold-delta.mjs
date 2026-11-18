@@ -182,6 +182,23 @@ import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 // by the docket and is not also removed; its withdrawal is owed, and carried,
 // at the next crossing. One sketchbook never writes and removes one mark.
 //
+// EXCEPT A HOLD PRINTOUT: THE MAKER'S WITHDRAWAL WINS IT (WLD-179). Darko,
+// 2026-11-16: "Withdrawal wins is the correct short-term solution"; Wright's
+// build: "a maker's verified withdrawal wins over another actor's same-window
+// holding change, at the next settlement; a later re-declaration by the maker
+// still wins". A hold printout (hold-through.mjs § writeHoldThrough, the docket
+// row whose data carries `_held_through`) is no act of the maker's: it prints
+// someone's take, give or drop. Deferring the withdrawal behind it held
+// Berthillon's six sorbet stations a settlement past "canon lets it go at the
+// next crossing" (S172; S173 retired them). So an owed withdrawal on a docket
+// slug whose docket row is a hold printout goes on as if the docket had not
+// named it: removed (or `retire_only` when canon no longer holds it), and the
+// printout leaves `marks`, so the one-sketchbook rule above still holds. Any
+// other docket entry keeps the deferral. A later re-declaration still wins
+// because the owed predicate asks for the owner's LATEST mark act. Retiring
+// keeps the mark's whole life in the record; nothing here moves ownership or
+// reads anyone's stakes (that question is filed for a sitting).
+//
 // The rows go to the write-down as `withdrawals`, beside `marks`, and become
 // removals on the household's sketchbook. The sweep's withdrawal law judges
 // them exactly as it judged a drained deletion: the town wall, authorship,
@@ -198,6 +215,68 @@ export const WITHDRAWN_OWED_SELECT = `
    WHERE m.status = 'standing' AND latest_mark_act.action = 'withdraw'
    ORDER BY m.slug`;
 
+/** A docket row a hold printout wrote (hold-through.mjs § writeHoldThrough: `data._held_through`, the hold act it printed through). PURE. */
+export function isHoldPrintout(row) {
+  let d = row?.data;
+  if (typeof d === "string") { try { d = JSON.parse(d); } catch { return false; } }
+  const t = d && typeof d === "object" && !Array.isArray(d) ? d._held_through : undefined;
+  // The marker as state-log-write.mjs reads it (`data->>'_held_through' ~ '^[0-9]{1,18}$'`): a JSON number's
+  // text or a string's own, and nothing else. An array or an object is JSON text there and never matches, so
+  // only those two scalar types are ever turned into text here, and nothing is converted that could throw.
+  const text = typeof t === "string" ? t
+    : typeof t === "number" && Number.isInteger(t) && t >= 0 && !Object.is(t, -0) ? String(t)
+    : null;
+  return text !== null && /^[0-9]{1,18}$/.test(text);
+}
+
+
+// ── THE FOURTH TERM: A TOWN-SIGNED HOLD CANON HAS NOT PRINTED (WLD-5) ────────
+//
+// THE DEFECT. A hold lands in the docket at the window that locks it, and ONLY
+// there. If the settlement does not print it at that crossing (the write-down
+// holds it out, or the sweep leaves it drafted), the mark is in canon and in the
+// store and they disagree about who holds it, and no later docket names it: the
+// docket is by window, the second term is by absence, the third by withdrawal.
+// The first run-through of the heist lost a key's hold exactly so (held out at
+// S137, absent from S138's fold), and a key's hold has no hand path: a key that
+// keeps cannot be given again.
+//
+// THE TERM. Every STANDING mark the TOWN signed whose store holder (`held_by`) or
+// owner (`owned_by`) differs from what canon carries for it. State, not a window:
+// it is carried by every crossing that looks until the print lands, and the mark
+// leaves the set when a print that canon carries makes the two agree. That bounds
+// it only where the difference is one the write-down will print (an eligible
+// hand-off); a difference it will not print stays visibly held out and offered
+// again at each crossing, with no promise it ends. Both values travel as the JSON
+// they are stored as (`->`, not `->>`), so a stored false or object reads as no
+// holder on both sides, exactly as `townHoldsOf` reads canon. Canon-absent
+// marks are the second term's, withdrawn ones the third's, and a docket mark is
+// written by the docket, so none of those is offered twice.
+//
+// TOWN-SIGNED ONLY, ON PURPOSE. A resident's held mark has the same defect, but
+// the set of resident holds the sweep has left drafted over the weeks is unknown
+// and would be re-offered whole by the first crossing that carried it. The town's
+// things are few; widening the term is its own decision after that count is read.
+//
+// `canonRegister.holds` (canon-register.mjs § townHoldsOf) is the canon side. A
+// register built before it existed answers `checked: false`, never an empty set:
+// "owed nothing" and "never looked" differ.
+export const TOWN_HOLDS_SELECT = `
+  SELECT slug, data->'held_by' AS held_by, data->'owned_by' AS owned_by
+    FROM marks WHERE owner = 'the-town' AND status = 'standing' ORDER BY slug`;
+
+/** The town's slugs whose holder or owner in the store differs from canon's. PURE. */
+export function holdsOwed(storeRows, canonHolds, skip = new Set()) {
+  const v = (x) => (typeof x === "string" && x.trim() ? x.trim() : null);
+  const out = [];
+  for (const r of storeRows) {
+    if (skip.has(r.slug)) continue;
+    const canon = canonHolds.get(r.slug);
+    if (!canon) continue;                       // not in canon at all: the second term's
+    if (v(r.held_by) !== canon.held_by || v(r.owned_by) !== canon.owned_by) out.push(r.slug);
+  }
+  return out;
+}
 
 /**
  * WHAT COUNTS AS A DOCKET COUNT — one rule, one home, two readers.
@@ -416,13 +495,19 @@ export async function foldDelta(
   const withdrawals = [];
   const withdrawnSkippedNoHousehold = [];
   const withdrawnDeferred = [];
+  const withdrawnOverHold = [];
   const retireOnly = [];
   if (canonRegister) {
     const docketSlugs = new Set(rows.map((r) => r.slug));
+    // the docket rows a hold printout wrote: a maker's withdrawal wins them (WLD-179)
+    const holdPrinted = new Set(rows.filter(isHoldPrintout).map((r) => r.slug));
     const owed = await client.query(WITHDRAWN_OWED_SELECT);
     const withdrawnLatest = new Set(owed.rows.map((r) => r.slug));
     for (const r of owed.rows) {
-      if (docketSlugs.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+      if (docketSlugs.has(r.slug)) {
+        if (!holdPrinted.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+        withdrawnOverHold.push(r.slug);
+      }
       // the file has left canon and the row still stands: the retirement is owed
       if (!canonRegister.slugs.has(r.slug)) { retireOnly.push(r.slug); continue; }
       if (!r.household) { withdrawnSkippedNoHousehold.push(r.slug); continue; }
@@ -476,6 +561,40 @@ export async function foldDelta(
         carriedRows.push(r);
       }
       carriedSlugs = carriedRows.map((r) => r.slug);   // the query ordered by slug already
+    }
+  }
+
+  // A HOLD PRINTOUT A WITHDRAWAL WON (WLD-179) leaves the docket's write, so no
+  // sketchbook writes and removes one mark: only once the withdrawal is really
+  // removed or retire-only, never when it was skipped (that printout still prints).
+  const removedOverHold = new Set([...withdrawals.map((x) => x.slug), ...retireOnly].filter((s) => withdrawnOverHold.includes(s)));
+  const docketRows = rows.filter((r) => !removedOverHold.has(r.slug));
+
+  // § THE FOURTH TERM: a town-signed hold canon has not printed.
+  let holdSlugs = [];
+  let holdRows = [];
+  const holdSkippedNoHousehold = [];
+  const holdChecked = Boolean(canonRegister && canonRegister.holds instanceof Map);
+  if (holdChecked) {
+    const docketSlugs = new Set(rows.map((r) => r.slug));
+    const skip = new Set([...docketSlugs, ...carriedSlugs, ...withdrawals.map((x) => x.slug), ...retireOnly]);
+    const town = await client.query(TOWN_HOLDS_SELECT);
+    const wanted = holdsOwed(town.rows, canonRegister.holds, skip);
+    if (wanted.length) {
+      const got = await client.query(
+        `SELECT ${MARK_COLUMNS} FROM marks WHERE slug = ANY($1::text[]) ORDER BY slug`, [wanted]);
+      if (got.rows.length !== wanted.length) {
+        const have = new Set(got.rows.map((r) => r.slug));
+        throw new Error(
+          `carried-mark-vanished: the hold-owed read named ${wanted.length} slug(s) and the mark read returned `
+          + `${got.rows.length} — missing ${wanted.filter((x) => !have.has(x)).join(", ")}. Two reads of \`marks\` in one `
+          + "crossing disagreed about which rows exist.");
+      }
+      for (const r of got.rows) {
+        if (!r.household) { holdSkippedNoHousehold.push(r.slug); continue; }   // named and skipped, as the carry does
+        holdRows.push(r);
+      }
+      holdSlugs = holdRows.map((r) => r.slug);
     }
   }
 
@@ -545,8 +664,20 @@ export async function foldDelta(
         slugs: withdrawals.map((w) => w.slug),
         acts: withdrawals.map((w) => ({ slug: w.slug, act: w.act, crossing: w.crossing })),
         deferred_to_docket: withdrawnDeferred,
+        // WLD-179: docket hold printouts a maker's withdrawal won; each is in `slugs` or `retire_only`, never in
+        // `marks`. The count is the write-down's starvation guard's: these docket rows materialized and are removed.
+        over_hold_printout: { count: removedOverHold.size, slugs: [...removedOverHold].sort() },
         retire_only: retireOnly,
         skipped_no_household: withdrawnSkippedNoHousehold,
+        canon_sha: canonRegister ? canonRegister.sha : null,
+      },
+      // THE FOURTH TERM (WLD-5): town-signed holds canon has not printed. `checked: false`
+      // when the register carries no holds (never looked), as the terms above say it.
+      hold_owed: {
+        checked: holdChecked,
+        count: holdSlugs.length,
+        slugs: holdSlugs,
+        skipped_no_household: holdSkippedNoHousehold,
         canon_sha: canonRegister ? canonRegister.sha : null,
       },
       // `note: null` is not decoration. There is one selector now and no
@@ -559,7 +690,7 @@ export async function foldDelta(
     // order is the structure: a keeper scrolling the fold sees this crossing's
     // own window, then the rows it swept up behind it, in the same shape
     // `written_by_locked_window` reports downstream.
-    marks: [...rows, ...carriedRows].map((r) => ({
+    marks: [...docketRows, ...carriedRows, ...holdRows].map((r) => ({
       slug: r.slug,
       kind: r.kind,
       by: r.owner,

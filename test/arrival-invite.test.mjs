@@ -23,8 +23,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { stageTownTools } from "./helpers/pinned-town.mjs"; // POS-994: no engine-folder switch; the clone carries the town modules
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -92,7 +99,13 @@ test("I1 · the name is trimmed, loses one leading @ and its case; a blank or ab
   assert.ok("invited_by" in DECLARE_SCHEMA.properties, "the declaration takes it");
   assert.equal(DECLARE_SCHEMA.required.includes("invited_by"), false, "and it is optional");
   assert.match(INVITE_FIELDS.invited_by.description, /public credit/, "the form says it is public");
-  assert.match(INVITE_FIELDS.invited_by.description, /the founders' household \(it never earns invitation stamps\)/, "and names the founders (POS-576/e)");
+  // THE JOIN TEXT, AS RULED (POS-816/c, Darko 2026-11-03 09:31 EDT: "B"), whole. Until 2026-11-03 this
+  // asserted the founders' clause (POS-576/e: "the founders' household (it never earns invitation stamps)")
+  // and the old promise "they get 10 when you write your first letter or claim your home parcel within 30
+  // days", which names no week and no hold.
+  assert.equal(INVITE_FIELDS.invited_by.description,
+    "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. You get 10 stamps instead of 5 when your household settles. Theirs gets 10 a week after your first letter or home (within 30 days), unless the town holds it for review. Your own household, the town's own household, a meep or a name the town doesn't know records nothing, and your join goes through either way.");
+  assert.doesNotMatch(INVITE_FIELDS.invited_by.description, /founders|home parcel|always with a reason/, "no founders' clause (POS-816/d), none of the old promise, none of option A's words");
 });
 
 test("I2 · a resident's handle credits their HOUSEHOLD, and a household's own slug credits it", () => {
@@ -113,13 +126,13 @@ test("I2b · THE COLLISION (B1): a bare name is a resident's handle first; hh:<s
 test("I3 · refused by name, crediting nobody: your own household, the town's own, a meep, a name the town does not know", () => {
   assert.deepEqual(judge("new-hearth"), { refused: "own", named: "new-hearth" }, "the house this join founds");
   assert.deepEqual(judge("kindling"), { refused: "own", named: "kindling" }, "its own first resident");
-  assert.deepEqual(judge(TOWN_HOUSE), { refused: "founders", named: TOWN_HOUSE, house: TOWN_HOUSE }, "the town is a founders' house: one word");
-  assert.deepEqual(judge("town-pen"), { refused: "founders", named: "town-pen", house: TOWN_HOUSE }, "a resident of the town's own house");
+  assert.deepEqual(judge(TOWN_HOUSE), { refused: "town", named: TOWN_HOUSE }, "the town's own house; until 2026-11-03 this read \"founders\" (POS-576/e), a word the founders' household no longer shares (POS-816/d)");
+  assert.deepEqual(judge("town-pen"), { refused: "town", named: "town-pen" }, "a resident of the town's own house");
   for (const reserved of ["postmaster", "office", "ferry"]) assert.equal(judge(reserved).refused, "town", reserved);
   assert.deepEqual(judge("ember-lamp"), { refused: "meep", named: "ember-lamp" }, "a meep, though its house is real");
   assert.deepEqual(judge("nobody-here"), { refused: "unknown", named: "nobody-here" });
   assert.deepEqual(judge("hh:new-hearth"), { refused: "own", named: "hh:new-hearth" }, "your own house, by its house key");
-  assert.deepEqual(judge("hh:the-town"), { refused: "founders", named: "hh:the-town", house: TOWN_HOUSE });
+  assert.deepEqual(judge("hh:the-town"), { refused: "town", named: "hh:the-town" });
   for (const law of [undefined, null]) assert.deepEqual(judge("wick", { isMeep: law }), { refused: "law", named: "wick" },
     "THE LAW FAILS CLOSED: unread, nothing is credited");
   // A house already holding the founding slug (a join that names the house it is
@@ -128,29 +141,56 @@ test("I3 · refused by name, crediting nobody: your own household, the town's ow
     { refused: "own", named: "wick" });
 });
 
-test("I3c · THE FOUNDERS NEVER EARN (POS-576/e): ?invite=wright resolves into starforge and is refused with its own reason, logged like a miss", async () => {
+test("I3d · a reserved name the meep law also names gets the MEEP line, not the town-house one (POS-885, review note 1)", () => {
+  // LAW (POS-655, the receipt): a meep named in an invite "is one of the town's meeps". The postmaster and the ferry are both reserved
+  // names and meeps, and the reserved-name rule used to answer first with the town-house sentence.
+  const meepsAlso = (h) => isMeep(h) || h === "postmaster" || h === "ferry";
+  for (const name of ["postmaster", "ferry"]) {
+    const judged = judge(name, { isMeep: meepsAlso });
+    assert.deepEqual(judged, { refused: "meep", named: name }, name);
+    assert.match(inviteReceipt(judged), /is one of the town's meeps/, name);
+  }
+  // CONTROLS: a reserved name that is no meep stays the town's; the law unread still fails closed as the town's, and a
+  // non-reserved meep still reads meep.
+  assert.deepEqual(judge("office", { isMeep: meepsAlso }), { refused: "town", named: "office" });
+  assert.deepEqual(judge("postmaster", { isMeep: null }), { refused: "town", named: "postmaster" });
+  assert.deepEqual(judge("ember-lamp", { isMeep: meepsAlso }), { refused: "meep", named: "ember-lamp" });
+});
+
+test("I3c · THE FOUNDERS PAY LIKE ANY OTHER (POS-816/d): ?invite=wright credits starforge as ?invite=wick credits lantern-row; a meep of that house, and the town's own, are still refused", async () => {
+  // Until 2026-11-03 this asserted POS-576/e ("No, never", Darko 2026-10-22 22:07): ?invite=wright resolved into
+  // starforge and was refused as "founders", logged like a miss, nothing written. Darko 2026-11-03 09:31 EDT:
+  // "this should pay like any other under the new NOMOS".
   const judged = judge("wright");
-  assert.deepEqual(judged, { refused: "founders", named: "wright", house: "starforge" });
-  assert.deepEqual(judge("hh:starforge"), { refused: "founders", named: "hh:starforge", house: "starforge" });
-  // NEVER A `by` (the follow-up review of #751): `by` is what a credit pays, so a refusal must not carry one
-  for (const n of ["wright", "hh:starforge", "the-town", "hh:the-town", "town-pen"]) assert.equal("by" in judge(n), false, n);
-  for (const n of ["wright", "the-town"]) assert.match(inviteReceipt(judge(n)), /names the founders' household/, n);
-  assert.equal(inviteReceipt(judged),
-    "Not recorded: \"wright\" names the founders' household, which never earns invitation stamps, so this invitation pays neither side. Your join is unaffected.");
-  const logs = [];
+  assert.deepEqual(judged, { by: "starforge", named: "wright" });
+  assert.deepEqual(judge("hh:starforge"), { by: "starforge", named: "hh:starforge" });
+  assert.deepEqual(judge("starforge"), { by: "starforge", named: "starforge" }, "a bare slug no resident holds is the house");
+  assert.equal(inviteReceipt(judged, { kept: true }), "Recorded publicly: invited by starforge (wright).");
+  // the credit is written, as for any house, and nothing is logged as a miss
   const writes = [];
-  const out = await recordInvite({ slug: "new-hearth", judged, at: AT, write: async (w) => { writes.push(w); return { slug: "new-hearth" }; }, log: (l) => logs.push(l) });
-  assert.deepEqual(out, { kept: false, why: "founders" });
-  assert.deepEqual(writes, [], "nothing is written");
-  assert.deepEqual(logs, ["[arrival-invite] new-hearth: not kept (by starforge, named wright, at 2026-10-22T12:00:00.000Z) — the founders never earn invitation stamps (POS-576/e)"]);
+  const out = await recordInvite({ slug: "new-hearth", judged, at: AT, write: async (w) => { writes.push(w); return { slug: "new-hearth" }; }, log: () => assert.fail("a founders' credit is no miss") });
+  assert.equal(out.kept, true);
+  assert.deepEqual(writes, [{ slug: "new-hearth", invitedBy: { by: "starforge", named: "wright", at: AT.toISOString() } }]);
+  // MEEPS STAY OUT (POS-655): the Starforge household lists meeps, and naming one by handle is refused, with the meep line
+  const wide = { ...REGISTRY(), households: { ...REGISTRY().households, starforge: { ...REGISTRY().households.starforge, residents: ["wright", "architect"] } } };
+  const meep = judgeInvite({ invited_by: "architect" }, { registry: wide, own: OWN, isMeep: (h) => h === "architect" });
+  assert.deepEqual(meep, { refused: "meep", named: "architect" });
+  assert.equal(inviteReceipt(meep), "\"architect\" is one of the town's meeps, so this invitation doesn't earn stamps: you get the standard 5. Your join is unaffected.");
+  // the town's own house still earns nothing; NEVER A `by` (the follow-up review of #751): `by` is what a credit pays
+  for (const n of ["the-town", "hh:the-town", "town-pen"]) {
+    assert.equal(judge(n).refused, "town", n);
+    assert.equal("by" in judge(n), false, n);
+    assert.match(inviteReceipt(judge(n)), /^Not recorded: ".*" names the town's own house, which is not credited for invitations\. Your join is unaffected\.$/, n);
+  }
 });
 
 test("I3b · the meep law is the town's own: read from its ledger through its own stamp-mint tool (the instrument declare-exec asks)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-meeplaw-"));
+  const dir = tempDir("pm-invite-meeplaw-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(dir);
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-07-25 · rules: stamps-v3 · meeps: ember-lamp · friendship: 5:5,10:10 · sig: invented\n");
   const lawOf = await meepLawAtOffice(dir);
   assert.equal(lawOf("ember-lamp"), true, "the law line names the meep");
@@ -160,13 +200,14 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
   assert.equal((await meepLawAtOffice(dir, { strict: true }))("ember-lamp"), true, "strict reads the same law");
 
   // STRICT FAILS CLOSED: no tool, no ledger, or a ledger with no law line throws; the lenient read keeps its old answer.
-  const bare = mkdtempSync(join(tmpdir(), "pm-invite-nolaw-"));
+  const bare = tempDir("pm-invite-nolaw-");
   dirs.push(bare);
   mkdirSync(join(bare, "tools"), { recursive: true });
   mkdirSync(join(bare, "WHITE_PAGES"), { recursive: true });
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: no WHITE_PAGES\/stamp-ledger\.md/);
   assert.equal((await meepLawAtOffice(bare))("ember-lamp"), false, "the fund page's lenient read is unchanged");
-  copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(bare, "tools", "stamp-mint.mjs"));
+  copyTownModule(TOWN_CLONE, bare, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+  process.env.TOWN_PINS_DIR = pinTown(bare);
   writeFileSync(join(bare, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-07-01 · MINT → wick · 5 · for: welcome · sig: invented\n");
   await assert.rejects(meepLawAtOffice(bare, { strict: true }), /the meep law is unreadable: the ledger holds no law line/);
 });
@@ -174,15 +215,19 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
 // ── I4 the record ───────────────────────────────────────────────────────────
 
 test("I4 · invited_by is the tail column; absent renders no key, present renders in template order, and folds back", () => {
-  assert.equal(HOUSEHOLD_KEYS.at(-1), "invited_by");
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-3), ["invited_by", "likeness_state", "hearth"], "the tail before POS-726 slice B's likeness_state (092), then POS-962's hearth (093)");
   const rows = rowsFromRegistry(REGISTRY(), PINS());
   assert.ok(rows.households.every((r) => r.invited_by === null), "no key folds to NULL");
   assert.equal(renderRegistry(rows).households.includes("invited_by"), false, "an uninvited registry prints exactly as before");
   // jsonb hands keys back sorted by (length, bytes); the render puts them back.
   rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   const printed = JSON.parse(renderRegistry(rows).households).households["quill-hall"];
-  assert.deepEqual(Object.keys(printed.invited_by), [...INVITED_BY_KEYS]);
-  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at"]);
+  assert.deepEqual(Object.keys(printed.invited_by), ["by", "named", "at"], "a credit named at joining prints exactly as before POS-947");
+  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at", "backfill"]);
+  // a credit named after joining (POS-947) carries backfill, last, in template order whatever jsonb hands back
+  rows.households[1].invited_by = { backfill: true, at: "2026-12-01T15:00:00.000Z", by: "lantern-row", named: "wick" };
+  assert.deepEqual(Object.keys(JSON.parse(renderRegistry(rows).households).households["quill-hall"].invited_by), ["by", "named", "at", "backfill"]);
+  rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   assert.equal(Object.keys(printed).at(-1), "invited_by");
   assert.equal(rowsFromRegistry(JSON.parse(renderRegistry(rows).households), PINS()).households[1].invited_by.by, "lantern-row",
     "the printed credit folds back: the round trip holds");
@@ -236,17 +281,21 @@ test("I6 · the receipt: one sentence, public when kept, the reason when refused
   assert.equal(inviteReceipt({ by: "lantern-row", named: "lantern-row" }, { kept: true }), "Recorded publicly: invited by lantern-row.");
   assert.match(inviteReceipt({ by: "lantern-row", named: "wick" }, { kept: false }), /could not be written.*Your join is unaffected/);
   assert.equal(inviteReceipt({ by: "moth", named: "hh:moth" }, { kept: true }), "Recorded publicly: invited by moth.");
-  for (const [refused, words] of [["own", /your own household/], ["town", /town's own house/], ["meep", /meep/], ["unknown", /nobody the town knows/], ["law", /meep law is unreadable/]]) {
+  for (const [refused, words] of [["own", /your own household/], ["town", /town's own house/], ["unknown", /nobody the town knows/], ["law", /meep law is unreadable/]]) {
     const line = inviteReceipt({ refused, named: "x" });
     assert.match(line, words, refused);
     assert.match(line, /^Not recorded: "x" .*Your join is unaffected\.$/, refused);
   }
+  // THE MEEP LINE (POS-816/d, Darko 2026-11-03 09:31 EDT; the founders' option A, in the meeps' words). Until
+  // 2026-11-03 this was `Not recorded: "x" names a meep, and meeps can't be credited for invitations. ...`
+  assert.equal(inviteReceipt({ refused: "meep", named: "x" }),
+    "\"x\" is one of the town's meeps, so this invitation doesn't earn stamps: you get the standard 5. Your join is unaffected.");
 });
 
 // ── I7 begin parks it ───────────────────────────────────────────────────────
 
 test("I7 · begin parks the named inviter with the declaration (the co-sign runs it), and a stranger's name refuses nothing", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-begin-"));
+  const dir = tempDir("pm-invite-begin-");
   dirs.push(dir);
   const odb = openOauthDb(join(dir, "oauth.db"));
   await mintBerth(odb, "lantern-guest");
@@ -255,7 +304,10 @@ test("I7 · begin parks the named inviter with the declaration (the co-sign runs
   assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
   assert.equal(r.result.invited_by.named, "wick", "the answer says what was parked");
   assert.match(r.result.invited_by.note, /publicly/);
-  assert.match(r.result.invited_by.note, /the founders' household \(it never earns invitation stamps\)/, "begin's parked note names the founders (POS-576/e)");
+  // Until 2026-11-03 this asserted the note named "the founders' household (it never earns invitation stamps)" (POS-576/e);
+  // the founders pay like any other now (POS-816/d), so the note must not tell a newcomer the opposite.
+  assert.match(r.result.invited_by.note, /unless it names your own household, the town's own household, a meep or nobody the town knows/);
+  assert.doesNotMatch(r.result.invited_by.note, /founders/);
   const parked = JSON.parse(odb.prepare("SELECT card FROM berths WHERE slug = 'lantern-guest'").get().card);
   assert.equal(parked.invited_by, "wick", "it rides the parked declaration, which the co-sign runs");
   const none = await householdApex({ do: "begin", args: { household: "The Guest Room", card: "Again." } }, key, { odb });
@@ -284,7 +336,7 @@ const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "u
 // read the same real ledger. `law: false` leaves the clone with no ledger.
 const ENGINE = await import(pathToFileURL(join(TOWN_CLONE, "tools", "stamp-mint.mjs")).href);
 const LAW_KEYS = generateKeyPairSync("ed25519");
-const KEY_DIR = mkdtempSync(join(tmpdir(), "pm-invite-key-"));
+const KEY_DIR = tempDir("pm-invite-key-");
 dirs.push(KEY_DIR);
 const STAMP_KEY = join(KEY_DIR, "stamp-key.pem");
 writeFileSync(STAMP_KEY, LAW_KEYS.privateKey.export({ type: "pkcs8", format: "pem" }));
@@ -293,12 +345,13 @@ function sealedLedger(lines) {
   return "# the stamp ledger\n\n" + lines.map((l, i) => `${l} · sig: ${sign(null, Buffer.from(seals[i], "utf8"), LAW_KEYS.privateKey).toString("base64url")}`).join("\n") + "\n";
 }
 function townClone({ law = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-town-"));
+  const dir = tempDir("pm-invite-town-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "HARBOR", "berths"), { recursive: true });
   if (law) {
-    copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+    copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(dir);
     writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), LAW_KEYS.publicKey.export({ type: "spki", format: "pem" }));
     mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), sealedLedger([
@@ -325,7 +378,7 @@ function declareExec(args, key, { at = clone } = {}) {
   const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({ args, key })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: at, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(at, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, `declare-exec answers rather than trips: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split("\n").at(-1));
@@ -378,7 +431,8 @@ test("I8d · the meep law on the real road: the sealed ledger's meep is refused;
   const meep = declareExec({ handle: "taper", household: "Taper House", card: "Lit from another's flame.", invited_by: "ember-lamp" },
     { ghId: 5162, ghLogin: "taper-gh", handles: [] });
   assert.equal(meep.error, undefined, JSON.stringify(meep.error));
-  assert.match(meep.invite, /^Not recorded: "ember-lamp" names a meep/);
+  assert.equal(meep.invite, "\"ember-lamp\" is one of the town's meeps, so this invitation doesn't earn stamps: you get the standard 5. Your join is unaffected.",
+    "the meep line (POS-816/d); until 2026-11-03 this was `Not recorded: \"ember-lamp\" names a meep, ...`");
   assert.equal((await rowOf("taper-house")).invited_by, null);
   const blind = declareExec({ handle: "dusk", household: "Dusk House", card: "Wick sent me.", invited_by: "wick" },
     { ghId: 5163, ghLogin: "dusk-gh", handles: [] }, { at: lawless });
@@ -387,22 +441,26 @@ test("I8d · the meep law on the real road: the sealed ledger's meep is refused;
   assert.equal((await rowOf("dusk-house")).invited_by, null, "an unread law credits nobody, and the join still landed");
 });
 
-test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-576/e): ?invite=wright lands the join, writes no credit, names the reason, and logs by and named", async () => {
+test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-816/d): ?invite=wright lands the join AND the credit, like any other house", async () => {
+  // Until 2026-11-03 this asserted POS-576/e: the join landed with no credit, the reason "names the founders'
+  // household, which never earns invitation stamps", and a log line "the founders never earn invitation stamps".
   const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({
     args: { handle: "foundling-guest", household: "Guest Of The Founders", card: "Wright sent me.", invited_by: "wright" },
     key: { ghId: 5164, ghLogin: "guest-gh", handles: [] } })], {
     encoding: "utf8",
     env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
-      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+      STAMP_KEY, TOWN_PINS_DIR: pinTown(stageTownTools(clone, TOWN_CLONE)) },
   });
   assert.equal(r.status, 0, r.stderr);
   const out = JSON.parse(r.stdout.trim().split("\n").at(-1));
   assert.equal(out.error, undefined, JSON.stringify(out.error));
   assert.equal(out.settled, true, "the invitee settles as anyone does");
-  assert.match(out.invite, /^Not recorded: "wright" names the founders' household, which never earns invitation stamps/);
-  assert.equal((await rowOf("guest-of-the-founders")).invited_by, null, "no credit, so nothing to pay either side");
-  assert.equal("invited_by" in housesIn(out.commit)["guest-of-the-founders"], false);
-  assert.match(r.stderr, /guest-of-the-founders: not kept \(by starforge, named wright, at [^)]+\) — the founders never earn invitation stamps/);
+  assert.equal(out.invite, "Recorded publicly: invited by starforge (wright).");
+  const row = await rowOf("guest-of-the-founders");
+  assert.equal(row.invited_by.by, "starforge", "the credit is on the row: the pass has something to pay both sides from");
+  assert.equal(row.invited_by.named, "wright");
+  assert.deepEqual(housesIn(out.commit)["guest-of-the-founders"].invited_by, row.invited_by, "and in the same commit, the public record");
+  assert.doesNotMatch(r.stderr, /guest-of-the-founders: not kept/, "and no miss is logged for it");
 });
 
 test("I8b · a refused invite lands the join with no credit and says why; no invite, no line", async () => {
@@ -427,8 +485,18 @@ test("I8b · a refused invite lands the join with no credit and says why; no inv
 
 // ── I9 Wright's read ────────────────────────────────────────────────────────
 
-test("I9 · the read groups invited households by the sweep that closes their window, and names the inviter as it is called now", async () => {
-  const { windowOf, planInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
+// THE READ IS THE PASS'S PLAN NOW (POS-816, Darko 2026-10-28 and 2026-11-03):
+// tools/invites.mjs prints src/invite-pay.mjs § planInvitePay, the plan
+// deploy/invite-pass.mjs pays from, read against the town's ledger. Until
+// 2026-11-03 these tests pinned the hand-mint list (a window per sweep, "the
+// invitee's 10 is due" on an ashore record, the cap counted in the month each
+// inviter's 10 fell due by becoming real, the eleventh "not owed"). The rows,
+// the rename, the 30 days and the founders keep their tests below; the cap's
+// month is Darko's "Month paid" (POS-816/b).
+const EMPTY_LEDGER = () => ({ welcomes: new Map(), invitedPaid: new Map(), inviterPaid: new Map(), paidInMonth: new Map() });
+
+test("I9 · the read lists every invitation oldest first, names the inviter as it is called now, and reads each side off the ledger", async () => {
+  const { windowOf, readInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
   assert.equal(windowOf("2026-10-22T05:59:59.000Z"), "2026-10-22T06:00:00.000Z");
   assert.equal(windowOf("2026-10-22T06:00:00.000Z"), "2026-10-22T06:00:00.000Z", "a sweep's own instant is in its window");
   assert.equal(windowOf("2026-10-22T06:00:01.000Z"), "2026-10-22T18:00:00.000Z");
@@ -437,92 +505,111 @@ test("I9 · the read groups invited households by the sweep that closes their wi
   const rows = [
     row("b-house", "lantern-row", "2026-10-22T07:00:00.000Z", "wick"),
     row("a-house", "old-lantern", "2026-10-22T01:00:00.000Z"),
-    { slug: "plain", residents: ["p"], invited_by: null },
   ];
   // THE INVITER RENAMED: lantern-row was old-lantern when a-house named it
-  const current = currentSlugOf([{ slug: "lantern-row", formerly: ["old-lantern"] }, { slug: "quill-hall", formerly: [] }]);
+  const houses = [{ slug: "lantern-row", residents: ["wick"], formerly: ["old-lantern"] }, { slug: "quill-hall", residents: ["quill"], formerly: [] }];
+  const current = currentSlugOf(houses);
   assert.equal(current("old-lantern"), "lantern-row");
-  assert.equal(current("quill-hall"), "quill-hall");
   assert.equal(current("gone-house"), "gone-house", "a name the registry never held stays as written");
-  const plan = planInvites(rows, { current, ashore: new Map([["b-house-r", "2026-10-22T07:00:05.000Z"]]), rolled: new Set(["a-house-r"]) });
-  assert.deepEqual(plan.map((p) => [p.household, p.window, p.invited_by, p.invited_by_was ?? null]), [
-    ["a-house", "2026-10-22T06:00:00.000Z", "lantern-row", "old-lantern"],
-    ["b-house", "2026-10-22T18:00:00.000Z", "lantern-row", null],
-  ], "every invited household, not the plain one, under the inviter's name now");
-  // SETTLED is the invitee's own 10: the store's ashore record, else an address in the roll
-  assert.deepEqual(plan[0].settled, { yes: true, at: null, by: "an address in the town's roll" });
-  assert.deepEqual(plan[1].settled, { yes: true, at: "2026-10-22T07:00:05.000Z", by: "the store's ashore record" });
-  assert.deepEqual(planInvites([row("c-house", "quill-hall", "2026-10-22T09:00:00.000Z")])[0].settled, { yes: false });
-  const printed = printInvites(plan);
-  assert.match(printed, /a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
-  assert.match(printed, /b-house "b-house" · invited by lantern-row \(named wick\)/);
-  assert.match(printed, /SETTLED 2026-10-22T07:00:05\.000Z \(the store's ashore record\): the invitee's 10 is due/);
-  assert.match(printInvites(planInvites([row("c-house", "quill-hall", "2026-10-22T09:00:00.000Z")])), /NOT SETTLED .*: the invitee's 10 waits/);
-  assert.deepEqual(planInvites(rows, { current }, { since: "2026-10-22T02:00:00.000Z" }).map((p) => p.household), ["b-house"], "--since lists only the newer ones");
-  assert.match(printInvites([]), /no household has joined with an invitation/);
+  const ledger = EMPTY_LEDGER();
+  ledger.welcomes.set("b-house", { handle: "b-house-r", key: "hh:b-house", date: "2026-10-22" });
+  const store = { rows, houses, facts: { ashore: new Map([["b-house", "2026-10-22T07:00:05.000Z"]]) }, holds: new Map() };
+  const read = readInvites(store, { ledger, now: new Date("2026-10-23T00:00:00.000Z") });
+  assert.deepEqual(read.invitations.map((p) => [p.household, p.invited_by, p.invited_by_was ?? null, p.invited_side.status]), [
+    ["a-house", "lantern-row", "old-lantern", "waiting"],
+    ["b-house", "lantern-row", null, "owed"],
+  ], "every invitation under the inviter's name now; the 5 more is owed once its welcome is on the ledger");
+  assert.equal(read.invitations[1].invited_side.to, "b-house-r", "to the welcome's own recipient");
+  const printed = printInvites(read);
+  assert.match(printed, /invite:a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
+  assert.match(printed, /invite:b-house "b-house" · invited by lantern-row \(named wick\) · at 2026-10-22T07:00:00\.000Z · ashore 2026-10-22T07:00:05\.000Z/);
+  assert.match(printed, /the invited side: OWED 5 to b-house-r/);
+  assert.match(printed, /the invited side: WAITING: its welcome bundle is not on the ledger yet/);
+  assert.deepEqual(readInvites(store, { ledger, since: "2026-10-22T02:00:00.000Z" }).invitations.map((p) => p.household), ["b-house"], "--since lists only the newer ones");
+  assert.match(printInvites(readInvites({ rows: [], houses, facts: {}, holds: new Map() })), /NOT READ AGAINST THE LEDGER[\s\S]*no household has joined with an invitation/);
 });
 
-test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS REAL INVITES ONLY, in the month each 10 falls due on Darko's clock", async () => {
-  const { realOf, planInvites, printInvites, monthET } = await import("../tools/invites.mjs");
+test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS PAYOUTS IN THE MONTH THEY ARE PAID (POS-816/b, \"Month paid\")", async () => {
+  const { activationOf, readInvites, printInvites } = await import("../tools/invites.mjs");
   const at = "2026-10-01T12:00:00.000Z";
   const now = new Date("2026-10-20T00:00:00.000Z");
-  assert.deepEqual(realOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
-    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-10-31T12:00:00.000Z", status: "real", at: "2026-10-03T00:00:00.000Z" },
-    "the earlier of the two decides");
-  assert.equal(realOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "real", "the 30th day's own instant is within");
-  assert.equal(realOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "late");
-  assert.equal(realOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
-  assert.equal(realOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "lapsed");
-  // US-EASTERN: 2026-11-01T03:00Z is still October 31 in New York
-  assert.equal(monthET("2026-11-01T03:00:00.000Z"), "2026-10");
-  assert.equal(monthET("2026-11-01T05:00:00.000Z"), "2026-11");
-  // twelve invited by quill-hall: eleven become real in October (ET), one never does
+  assert.deepEqual(activationOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
+    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-11-01T04:00:00.000Z", status: "activated", at: "2026-10-03T00:00:00.000Z", through: "first home" },
+    "the earlier of the two decides; the 30 days end where the 31st town day (11-01) begins, midnight EDT");
+  // THE 30 DAYS ARE TOWN DAYS, the town judge's own count (Wright, on Darko's behalf, 2026-11-03). Until 2026-11-03 this
+  // asserted 30×24 hours: 10-31T12:00:01Z read late and 2026-11-01T00:00Z read lapsed. Both are town day 10-31, the 30th.
+  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "activated", "the 30th day's own instant is within");
+  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "activated", "still the 30th town day");
+  assert.equal(activationOf({ at, letter: "2026-11-01T04:00:00.000Z", now }).status, "late", "the 31st town day's first instant");
+  assert.equal(activationOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
+  assert.equal(activationOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "waiting", "still town day 10-31");
+  assert.equal(activationOf({ at, now: new Date("2026-11-01T04:00:00.000Z") }).status, "lapsed");
+  // twelve invited by quill-hall: eleven activate in October, one never does;
+  // read on 2026-11-20 every week has passed, so all eleven are due in November.
   const rows = Array.from({ length: 12 }, (_, i) => ({ slug: `h${String(i).padStart(2, "0")}`, residents: [`r${i}`],
     invited_by: { by: "quill-hall", named: "quill", at: `2026-10-0${1 + (i % 9)}T12:00:00.000Z` } }));
   const letters = new Map(rows.slice(0, 11).map((r, i) => [r.slug, `2026-10-${String(10 + i).padStart(2, "0")}T12:00:00.000Z`]));
-  letters.set("h10", "2026-11-01T03:00:00.000Z"); // the eleventh real one: October 31 in New York
-  const plan = planInvites(rows, { letters }, { now });
-  const never = plan.find((p) => p.household === "h11");
-  assert.equal(never.real.status, "waiting");
-  assert.equal(never.paid, null, "an invite that is not real takes no place in the cap");
-  const paid = plan.filter((p) => p.paid).sort((a, b) => a.paid.nth - b.paid.nth);
-  assert.deepEqual(paid.map((p) => p.paid.nth), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  assert.ok(paid.every((p) => p.paid.month === "2026-10"), "all eleven fall due in October, ET");
-  assert.equal(paid.at(-1).household, "h10");
-  assert.equal(paid.at(-1).paid.over_cap, true, "the eleventh REAL one is over the cap");
-  assert.ok(paid.slice(0, 10).every((p) => !p.paid.over_cap));
-  const printed = printInvites(plan);
-  assert.match(printed, /h10 "?.*REAL: the inviter's 10 is owed, quill-hall's paid invite 11 in 2026-10 \(ET\), OVER the 10-a-month cap: not owed/s);
-  assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · REAL: the inviter's 10 is owed, quill-hall's paid invite 1 in 2026-10 \(ET\)\n/);
+  const houses = [{ slug: "quill-hall", residents: ["quill"], formerly: [] }];
+  const read = readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: EMPTY_LEDGER(), now: new Date("2026-11-20T12:00:00.000Z") });
+  const by = (s) => read.invitations.find((p) => p.household === s).inviter_side;
+  assert.equal(by("h11").status, "lapsed", "invited 10-03 and read 11-20, no letter or home: it never activated, and takes no place in the cap");
+  const owed = read.invitations.filter((p) => p.inviter_side.status === "owed");
+  assert.equal(owed.length, 10, "ten are paid in the month they are paid in");
+  assert.deepEqual(owed.map((p) => p.inviter_side.nth_this_month).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(by("h10").status, "over-cap", "the eleventh, due last, waits for a month with room");
+  assert.equal(by("h10").month, "2026-11");
+  // the same eleven when October's ten are already on the ledger: November has room for all of them again
+  const paidOct = EMPTY_LEDGER(); paidOct.paidInMonth.set("quill-hall|2026-10", 10);
+  assert.equal(readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: paidOct, now: new Date("2026-11-20T12:00:00.000Z") })
+    .invitations.filter((p) => p.inviter_side.status === "owed").length, 10, "a month already full counts against itself, never against the month paid");
+  const printed = printInvites(read);
+  assert.match(printed, /invite:h10[\s\S]*?the inviter side: OVER THE CAP: quill-hall has been paid 10 in 2026-11, at most 10 a month; it waits for a month with room/);
+  assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · ACTIVATED 2026-10-10T12:00:00\.000Z \(first letter\)/);
 });
 
-test("I9e · the read shows a founders' row as REFUSED (founders): no place in the cap, nothing owed to either side", async () => {
-  const { planInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
-  const now = new Date("2026-10-20T00:00:00.000Z");
+test("I9e · the read plans a founders' row like any other (POS-816/d), and still shows the town's own house as REFUSED", async () => {
+  // Until 2026-11-03 this asserted POS-576/e: a starforge row read REFUSED (founders) on both sides, "even with its
+  // welcome paid and a letter in time", and took no place in the cap.
+  const { readInvites, printInvites } = await import("../tools/invites.mjs");
   const rows = [
     { slug: "by-hand", residents: ["bh"], invited_by: { by: "starforge", named: "wright", at: "2026-10-02T12:00:00.000Z" } },
     { slug: "ordinary", residents: ["or"], invited_by: { by: "quill-hall", named: "quill", at: "2026-10-03T12:00:00.000Z" } },
+    { slug: "town-row", residents: ["tr"], invited_by: { by: "the-town", named: "pen", at: "2026-10-04T12:00:00.000Z" } },
   ];
-  const letters = new Map([["by-hand", "2026-10-04T00:00:00.000Z"], ["ordinary", "2026-10-05T00:00:00.000Z"]]);
-  const plan = planInvites(rows, { letters, current: currentSlugOf([{ slug: "starforge", formerly: [] }]) }, { now });
-  const founders = plan.find((p) => p.household === "by-hand");
-  assert.equal(founders.refused, "founders");
-  assert.equal(founders.paid, null, "never a place in the cap, even with a letter in time");
-  assert.equal(plan.find((p) => p.household === "ordinary").paid.nth, 1, "the founders' row did not take place 1");
-  const printed = printInvites(plan);
-  assert.match(printed, /REFUSED \(founders\): starforge never earns invitation stamps \(POS-576\/e\)\. Nothing is owed to either side/);
-  assert.doesNotMatch(printed.split("by-hand")[1].split("ordinary")[0], /owed, |due/, "no mint line for it");
+  const letters = new Map([["by-hand", "2026-10-04T00:00:00.000Z"], ["ordinary", "2026-10-05T00:00:00.000Z"], ["town-row", "2026-10-06T00:00:00.000Z"]]);
+  const ledger = EMPTY_LEDGER();
+  ledger.welcomes.set("by-hand", { handle: "bh", key: "hh:by-hand", date: "2026-10-02" });
+  ledger.welcomes.set("town-row", { handle: "tr", key: "hh:town-row", date: "2026-10-04" });
+  const read = readInvites({ rows, houses: [{ slug: "starforge", residents: ["wright"] }, { slug: "quill-hall", residents: ["quill"] }, { slug: "the-town", residents: ["pen"] }], facts: { letters }, holds: new Map() },
+    { ledger, now: new Date("2026-10-20T00:00:00.000Z") });
+  const hand = read.invitations.find((p) => p.household === "by-hand");
+  assert.equal(hand.refused, undefined);
+  assert.deepEqual([hand.invited_side.status, hand.inviter_side.status], ["owed", "owed"], "both sides, with its welcome paid and a letter in time");
+  assert.deepEqual([hand.invited_side.to, hand.inviter_side.to, hand.inviter_side.nth_this_month], ["bh", "wright", 1]);
+  assert.equal(read.invitations.find((p) => p.household === "ordinary").inviter_side.nth_this_month, 1, "each inviting house keeps its own count");
+  const town = read.invitations.find((p) => p.household === "town-row");
+  assert.equal(town.refused, "town");
+  assert.deepEqual([town.invited_side.status, town.inviter_side.status], ["refused", "refused"], "the town's own house pays neither side, welcome paid and letter in time");
+  const printed = printInvites(read);
+  const block = (slug, next) => printed.split(`invite:${slug}`)[1].split(`invite:${next}`)[0];
+  assert.match(block("by-hand", "ordinary"), /the invited side: OWED 5 to bh/);
+  assert.match(block("by-hand", "ordinary"), /the inviter side: OWED 10 to wright/);
+  assert.doesNotMatch(block("by-hand", "ordinary"), /REFUSED/);
+  assert.match(printed.split("invite:town-row")[1], /the invited side: REFUSED \(the town's own house\): nothing is owed to either side; the invitee has the ordinary bundle/);
+  assert.doesNotMatch(printed.split("invite:town-row")[1], /OWED/, "no mint line for it");
 });
 
-test("I9b · the read, run as Wright runs it, on the real store: it lists the households I8a and I8c invited and nothing it didn't", () => {
-  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env } });
+test("I9b · the read, run as the operator runs it, on the real store: it lists the households I8a, I8c and I8e invited and nothing it didn't", () => {
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env, TOWN_CLONE: "" } });
   assert.equal(r.status, 0, r.stderr);
-  const plan = JSON.parse(r.stdout);
-  assert.deepEqual(plan.map((p) => [p.household, p.invited_by, p.named, p.first_resident]), [
-    ["new-hearth", "lantern-row", "wick", "kindling"], ["lamplight-rooms", "rookery-row", "moth", "lamplight"], ["candlewick-den", "moth", "hh:moth", "candlewick"]]);
-  assert.equal(plan[0].settled.yes, true);
-  assert.match(plan[0].settled.at ?? "", /^\d{4}-\d\d-\d\dT/, "and when it came ashore, by the store's own record");
-  assert.equal(plan[0].real.status, "waiting", "no letter and no home yet");
+  const read = JSON.parse(r.stdout);
+  assert.equal(read.ledger_read, false, "no town clone: it says it did not read the ledger");
+  assert.equal(read.holds_read, true, "087 is in the store");
+  assert.deepEqual(read.invitations.map((p) => [p.household, p.invited_by, p.named]), [
+    ["new-hearth", "lantern-row", "wick"], ["lamplight-rooms", "rookery-row", "moth"], ["candlewick-den", "moth", "hh:moth"],
+    ["guest-of-the-founders", "starforge", "wright"]]);   // I8e's: until 2026-11-03 the founders' join recorded no credit and was not listed
+  assert.match(read.invitations[0].ashore ?? "", /^\d{4}-\d\d-\d\dT/, "when it came ashore, by the store's own record");
+  assert.equal(read.invitations[0].activation.status, "waiting", "no letter and no home yet");
 });
 
 test("I9d · the read's 30-day facts come from the store: a delivered letter by any resident, and a parcel locked in the house's name", async () => {
@@ -539,11 +626,11 @@ test("I9d · the read's 30-day facts come from the store: a delivered letter by 
     await c.query(`INSERT INTO marks (id, slug, kind, owner, household, geometry, bbox, locked_window)
       VALUES (gen_random_uuid(), 'kindling/hearth-ground', 'parcel', 'kindling', 'hh:new-hearth', '{}', box(point(9000,9000), point(9010,9010)), 9901)`);
   } finally { await c.end(); }
-  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env } });
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env, TOWN_CLONE: "" } });
   assert.equal(r.status, 0, r.stderr);
-  const [p] = JSON.parse(r.stdout);
-  assert.equal(p.real.first_letter, later, "the delivered letter counts; the undelivered one does not");
-  assert.equal(p.real.first_home, soon, "the parcel's home is the close of the window that locked it");
-  assert.equal(p.real.at, soon, "the earlier of the two");
-  assert.equal(p.real.status, "real");
+  const [p] = JSON.parse(r.stdout).invitations;
+  assert.equal(p.activation.first_letter, later, "the delivered letter counts; the undelivered one does not");
+  assert.equal(p.activation.first_home, soon, "the parcel's home is the close of the window that locked it");
+  assert.equal(p.activation.at, soon, "the earlier of the two");
+  assert.equal(p.activation.status, "activated");
 });

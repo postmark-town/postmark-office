@@ -27,6 +27,10 @@
 // read once for the house; behind WORLD_POSITIONS that roll is the kept
 // projection, position-projection.mjs).
 //
+// AND TWO PUBLIC COMPANIONS PER DECLARED MEMBER (POS-1070; POS-1061, Darko 2026-11-15 17:25 EST): `outboxes[<handle>]` and `quests[<handle>]`, what the Hearth's readHouse()
+// asked `GET /mail/<h>?box=outbox` and `GET /quests/<h>` for, so one office read returns all of a house's resident data (house-companions.mjs). Always anonymous, even
+// on the house's own key, and keyed by every DECLARED member, not only those ashore.
+//
 // THE OWNERSHIP GATE IS THE DOORSTEP'S, CALLED, NOT COPIED: each resident is
 // finished by `doorstep-bundle.mjs § ownerGate`, so `own = key.handles.has(h)`
 // decides the owner-only blocks here exactly as it does on the morning page.
@@ -42,7 +46,7 @@
 
 
 import { DOORSTEP_STANCES } from "./queries.mjs";
-import { ownerGate } from "./doorstep-bundle.mjs";
+import { ownerGate, holdsBlock } from "./doorstep-bundle.mjs"; // POS-1084: holdsBlock is the doorstep's own `holds` producer
 import { unreadFor } from "./unread-store.mjs";
 import { hotMailBlock } from "./town-mail.mjs";
 import { nextCrossingForDoorstep, currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "./crossings.mjs";
@@ -51,7 +55,10 @@ import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { stampRows, LAST_ACTIVE_MEANS } from "./last-active.mjs"; // last_active, once for the house (POS-481)
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { houseCompanions } from "./house-companions.mjs"; // POS-1070: each declared member's public outbox and quest board
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { bundleSpan } from "./read-timing.mjs"; // POS-1064/b: the bundle call, timed (measurement only)
+import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states (pure; its readers load late)
 
 /** The doorstep keys that are the same on every resident's page: carried once, at the top. */
 export const HOUSE_ONCE = Object.freeze(["clocks", "psa", "town", "bulletin", "town_pulse"]);
@@ -88,17 +95,22 @@ export function isoEvents(events = []) {
  * never held. A store this office cannot ask is now a refusal (houseMembers'
  * 503), never the printout's answer.
  *
- * FRESH, NOT THE PROCESS MEMO. `houseRows()` folds once per process until a
- * writer IN THAT PROCESS clears it; the house read is served by read workers,
- * where no ceremony ever writes, so a memo there would answer with the town
- * from boot for as long as the worker lived. Three small reads per call.
+ * FRESH, NOT THE THREAD'S COPY. `houseRows()` folds once per time-to-live
+ * (`household-deriver.mjs § HOUSE_CACHE_TTL_MS`). The ceremony's clear reaches
+ * only the thread that wrote (the main thread); every other thread, a read
+ * worker among them, sees a change by age alone, within the time-to-live. The
+ * house read is served by read workers, where no ceremony ever writes, so a
+ * copy there would answer with the town as it stood up to a time-to-live ago.
+ * This read takes none. Three small reads per call.
  */
 export async function registryFor(clone, readers = {}) {
   if (readers.registry) return { ...readers.registry, from: readers.registry.from ?? "injected" };
   let rows;
   try { rows = await loadRegistryRows(); } catch { return null; }
   if (!rows) return null;
-  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), from: "the registry store" };
+  // `ords`: the order the town recorded households (`households.ord`), which the registry's rendering does not carry
+  // (POS-947/b: "joined before" is this order, never `since`)
+  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), ords: new Map(rows.households.map((r) => [r.slug, r.ord])), from: "the registry store" };
 }
 
 /**
@@ -122,7 +134,7 @@ export async function houseMembers({ household, key, clone, readers = {} }) {
     if (!slug) return { refused: [422, "which household?", "pass household: <slug> — or call with a key that holds a declared house"] };
   }
   const rec = houses[slug] ?? {};
-  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from };
+  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from, registry: reg.registry, ords: reg.ords ?? null };
 }
 
 // ── THE READERS, EACH ASKED ONCE FOR THE HOUSE ───────────────────────────────
@@ -197,9 +209,35 @@ async function alertsOf(handles, { nowMs, readers = {} }) {
   catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the house's alerts")})` }] }; }
 }
 
-async function stakesOf(handles, { nowMs, readers = {} }) {
+async function stakesOf(handles, { nowMs, readers = {}, holds = true }) {
   const { stakesFor } = readers.stakesFor ? { stakesFor: readers.stakesFor } : await import("./doorstep-stakes.mjs");
-  return stakesFor(handles, { now: new Date(nowMs) });
+  // POS-1100 (Wright 2026-11-17): everything the house has stamps behind is the house's own view. This read's public half, for any house, carries
+  // the marks only (as before this PR); the aggregate rides only a key that holds one of the house's residents.
+  return stakesFor(handles, { now: new Date(nowMs), ...(holds ? {} : { allocationPage: false }) });
+}
+
+/**
+ * EVERY RESIDENT'S OWN WAITING-STANCE COUNT (POS-1084), the doorstep's `stances.stances_awaiting` and its ground, for the whole house in ONE pass per
+ * world-household (world-stance.mjs § stanceCountsForHandles): every resident of one house is counted from the same candidate list, so the house is asked
+ * once, never once per resident (that was 5.0 s → 56.6 s for Starforge on dev). The count is whole (the length of the candidates, not of a page); the rows
+ * stay in `household { read: "stances", handle }`. Answers `{ [handle]: block }`; a read that could not be made says `unavailable` and carries no count, never 0.
+ */
+export async function stanceCountsOf(handles, { readers = {} } = {}) {
+  const block = (handle, answer) => ({ serves: "household.stances", args: { handle }, ...answer });
+  let counts;
+  try {
+    const { stanceCountsForHandles } = readers.stanceCounts ? { stanceCountsForHandles: readers.stanceCounts } : await import("./world-stance.mjs");
+    counts = await stanceCountsForHandles(handles);
+  } catch (e) {
+    const unavailable = `the consent inbox could not be read (${plainReason(e, "record", "the house's stance counts")})`;
+    return Object.fromEntries(handles.map((h) => [h, block(h, { unavailable })]));
+  }
+  return Object.fromEntries(handles.map((h) => {
+    const c = counts?.get?.(h);
+    if (c?.unavailable || !Number.isFinite(c?.stances_awaiting))
+      return [h, block(h, { unavailable: c?.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" })];
+    return [h, block(h, { stances_awaiting: c.stances_awaiting, ...(c.stances_awaiting_ground !== undefined ? { stances_awaiting_ground: c.stances_awaiting_ground } : {}) })];
+  }));
 }
 
 /** The REST skin's inbox bound: the house read has no connector abridgement. */
@@ -241,7 +279,9 @@ export const ashoreVia = async (ix, handles) => {
  * are per-person cuts it does not take. Returns the answer or
  * `{ refused: [code, defect, hint] }`.
  */
-export async function houseBundle({ household = null } = {}, ctx = {}) {
+// POS-1064/b: the call is timed under its request (read-timing.mjs § bundleSpan); the answer is the body's own, unchanged.
+export async function houseBundle(ask = {}, ctx = {}) { return bundleSpan(() => houseBundleOf(ask, ctx)); }
+async function houseBundleOf({ household = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -259,13 +299,13 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
     ashore,
     ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
-    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep.",
+    shape: "one answer for the house: the blocks every resident's doorstep repeats are carried once here at the top under the doorstep's own names, stances/outcomes/stakes are asked once for the whole house, and each resident's own segments sit under residents[<handle>] under the doorstep's names. A resident's owner-only blocks ride only a key that holds that resident, exactly as on the doorstep. `outboxes[<handle>]` and `quests[<handle>]` are each declared member's PUBLIC outbox (the bare array GET /mail/<handle>?box=outbox answers) and quest board (GET /quests/<handle>), the same for every caller, the house's own key included; null is a read that could not be made, [] an outbox read and found empty. `residents[<handle>].stances` is that resident's OWN waiting-stance count, the doorstep's `stances.stances_awaiting` (and `stances_awaiting_ground`): the count of the read household { read: \"stances\", handle } answers for that one resident, never the house-wide `stances` block's count and never derived from a page of candidates; `unavailable` (and no count) when the consent inbox could not be read. `residents[<handle>].holds` is the doorstep's own `holds` block (what the resident holds, public, outside the owner gate): absent when the chests/candy feature is off here or the resident holds nothing, as on the doorstep; `unavailable` when it is on and could not be read.",
   };
 
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(ashore, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
@@ -286,6 +326,9 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     ? await unreadFor(held, { ix }).then((rows) => ({ rows }), (error) => ({ error }))
     : null;
 
+  // POS-1084: each resident's own waiting count, one stance pass per world-household for the whole house
+  const stanceCounts = await stanceCountsOf(ashore, { readers });
+
   const residents = {};
   for (const h of ashore) {
     const fresh = await freshFor(h, { odb, clone, asOf });
@@ -298,11 +341,17 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     const d = { handle: h, ...(await ix.residentSegments(h, fresh, standing)) };
     await ownerGate(d, h, { clone, key, odb, asOf, unread, ix, pendingMail });
     d.stands = stands.byHandle[h] ?? null;
+    // POS-1084: the two per-resident facts the doorstep carries and the house's own blocks cannot give (a house scope's count is not each resident's), public, outside the gate
+    d.stances = stanceCounts[h];
+    const heldBlock = await holdsBlock(h, { readers });
+    if (heldBlock) d.holds = heldBlock;
     residents[h] = d;
   }
   // LAST ACTIVE, ONCE FOR THE HOUSE (POS-481): one store read for every
   // resident here, never one per resident (last-active.mjs).
   const lastActiveUnavailable = await stampRows(Object.values(residents), { find: (handles) => ix.lastActiveFor(handles) });
+  // THE PUBLIC COMPANIONS, for every DECLARED member (not only those ashore), the legacy public doors' own reads and never keyed (house-companions.mjs)
+  const { outboxes, quests } = await houseCompanions(house.members, { ix });
 
   return {
     ...out,
@@ -317,6 +366,8 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
     last_active: `per resident, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
     ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
     residents,
+    outboxes,
+    quests,
   };
 }
 
@@ -400,7 +451,8 @@ export function pageBounds(limit, offset) {
  * The house, paged: the default answer of household { read: "house" }. Same
  * `ctx` as houseBundle. Returns the answer or `{ refused: [code, defect, hint] }`.
  */
-export async function housePage({ household = null, limit = null, offset = null } = {}, ctx = {}) {
+export async function housePage(ask = {}, ctx = {}) { return bundleSpan(() => housePageOf(ask, ctx)); }
+async function housePageOf({ household = null, limit = null, offset = null } = {}, ctx = {}) {
   const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
   const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
   const house = await houseMembers({ household, key, clone, readers });
@@ -418,7 +470,7 @@ export async function housePage({ household = null, limit = null, offset = null 
   // walkers roll is read once, for the page.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(page, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
@@ -480,9 +532,11 @@ export async function housePage({ household = null, limit = null, offset = null 
       serves: "household.stakes", scope: ashore,
       published: stakes.count ?? (stakes.rows ?? []).length,
       at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
+      // POS-1100: everything the house has stamps behind (marks, ideas, bounties, pots, votes), as the aggregate; the list is the read below
+      ...(stakes.allocation ? { allocation: stakes.allocation } : {}),
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
-      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident',
+      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident. ' + SNAPSHOT_LIMIT,
     },
     stands: { from: "the walkers roll (GET /world/walkers), read once for the page", at: stands.at ?? null,
       null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
@@ -567,8 +621,19 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
+  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended in sparks recounted from
+  // their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: every spark of the recorded collection, or a free event's private drafts, until each one's recounting is rewritten or it is
+  // gone). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
+  let recountings;
+  try {
+    const rows = readers.recountingsAwaiting
+      ? await readers.recountingsAwaiting(mine)
+      : await (await import("./event-sparks.mjs")).recountingsAwaitingAtOffice(mine);
+    recountings = { rows: rows ?? [] };
+  } catch { recountings = { rows: [], unavailable: "the house's completed events could not be read, so whether one waits on your recounting is unknown, not none" }; }
+
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
-    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
+    ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
 
   // ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's, in the doorstep's
@@ -580,7 +645,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
+  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length + recountings.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -602,7 +667,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     alerts,
     ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable
+    // said only when one waits or the read failed (POS-1035), as takes_awaiting is: every other house's page keeps its shape
+    ...(recountings.rows.length || recountings.unavailable ? { recountings_awaiting: recountings } : {}),
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable && !recountings.unavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

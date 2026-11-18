@@ -62,14 +62,16 @@ export function settlementsFrom(rows, { limit = RECENT_MAX } = {}) {
 
 // ── the newest blessing, from ONE git spawn ─────────────────────────────────
 //
-// `readSettlementTags` above spends two spawns per tag (71 tags = 143 spawns)
-// and is right for a door asked a few times an hour. The READ tier asks "which
-// settlement do I serve" on every request, so it gets a reader shaped like
-// `freshestMainRef`: one `git for-each-ref` over `refs/tags/settlement/`, parsed
-// here. The format is `%(refname:short) %(objectname) %(*objectname)` — the
-// peeled atom LAST because it is EMPTY for a lightweight tag, and split on
-// whitespace (for-each-ref does not share `log --format`'s escape dialect;
-// measured 2026-09-04, a `%x1f` separator came through as four literal bytes).
+// `readSettlementTags` below (the whole list, with dates; POS-272) is also one
+// `git for-each-ref` now. It used to spend two spawns per tag (71 tags = 143
+// spawns). The READ tier asks "which settlement do I serve" on every request and
+// wants only the newest number and its commit, so it gets a reader shaped like
+// `freshestMainRef`: one `git for-each-ref` over `refs/tags/settlement/` in the
+// narrower format below, with no dates, parsed here. The format is
+// `%(refname:short) %(objectname) %(*objectname)` — the peeled atom LAST because
+// it is EMPTY for a lightweight tag, and split on whitespace (for-each-ref does
+// not share `log --format`'s escape dialect; measured 2026-09-04, a `%x1f`
+// separator came through as four literal bytes).
 export const NEWEST_SETTLEMENT_FORMAT = "%(refname:short) %(objectname) %(*objectname)";
 
 /** Parse `for-each-ref` lines in NEWEST_SETTLEMENT_FORMAT into the newest `{ n, tag, sha }`, or null. */

@@ -803,8 +803,24 @@ export async function publishedMarkFrom(client) {
 // holder, one eaten from hand, and one set down as its maker's draft. All are hold-lane faces of
 // the one edge: a make is held from its first act; a consume and a set-down end the holding
 // (policy detach, with no place: the set-down's place is its draft's, never a hold row's).
-export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down"]);
+// `put-back` (WLD-138 B, Wright 2026-11-04T16:00:21Z): a full holder set down and withdrawn
+// before it published, back in the hold it came from. Restoration only: its one writer is the
+// withdrawal's own transaction (src/set-down-return.mjs § putBackGuard); it carries the make's
+// own record (`made`, so the made fold re-registers it), and the holder is held again (cascade).
+// `withdraw` (POS-992, Wright 2026-11-11 14:47Z: "each hold face names the act that happened"): a thing
+// made in hand, withdrawn by its maker from their own hands. It ends the holding as a consume does (policy
+// detach, with no place), and it is ended for good: no put-back revives it (src/set-down-return.mjs).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down", "put-back", "withdraw"]);
 export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
+/**
+ * WHICH CLASS AN ATTACHMENT ROW IS (POS-992). A face name is not unique across `acts`: `withdraw` is the
+ * hold lane's face and also the action every mark withdrawal (class `mark`) and creature ending (class
+ * `creature`) writes. So the live faces are read in class `holding` only, the class every live hold writer
+ * uses. The legacy arm is kept exactly as it was: `legacy:attachment` rows came in by the seed import
+ * (world2/tools/seed-import.mjs § LEGACY_CLASS, class `legacy`), and no class is imposed on that history. Malformed holding
+ * rows are still refused by name (attachmentRowOf, strict).
+ */
+export const ATTACHMENT_CLASS_SQL = "(action = 'legacy:attachment' OR class = 'holding')";
 
 /**
  * The ORDER clause every holder read must carry.
@@ -974,8 +990,23 @@ export function assertAttachmentOrder(rows) {
  * `target` is offered and pushed into SQL for that reason and no other.
  */
 export async function pgAttachmentsFor(client, { target = null, until = null, strict = true, afterId = null } = {}) {
+  return attachmentsFromRows(await pgAttachmentRows(client, { target, afterId }), { until, strict });
+}
+
+/**
+ * THE COMPOSITION HALF of `pgAttachmentsFor` (POS-1098): the rows hydrated, the strict refusal, and `readAttachments`' own `until`. No store: a reader that holds a
+ * pen connection takes `pgAttachmentRows` under it, lets the connection go, and calls this after.
+ */
+export function attachmentsFromRows(rows, { until = null, strict = true } = {}) {
+  const read = attachmentRecords(rows, { strict });
+  // `readAttachments`' own `until`, verbatim: `rows.filter((a) => Date.parse(a.born_at) <= until)`.
+  return until == null ? read : { ...read, rows: read.rows.filter((a) => Date.parse(a.born_at) <= until) };
+}
+
+/** THE SQL HALF of `pgAttachmentsFor` (POS-1098): the holding acts in `ATTACHMENT_ORDER_SQL`'s order, as the store holds them, nothing hydrated. */
+export async function pgAttachmentRows(client, { target = null, afterId = null } = {}) {
   const args = [ATTACHMENT_ACTIONS];
-  let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1)`;
+  let sql = `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1) AND ${ATTACHMENT_CLASS_SQL}`;
   if (target != null) {
     args.push(target);
     sql += ` AND COALESCE(payload->'payload'->>'target', payload->>'thing') = $${args.length}`;
@@ -985,10 +1016,7 @@ export async function pgAttachmentsFor(client, { target = null, until = null, st
     args.push(Number(afterId));
     sql += ` AND id > $${args.length}`;
   }
-  const { rows } = await client.query(`${sql} ${ATTACHMENT_ORDER_SQL}`, args);
-  const read = attachmentRecords(rows, { strict });
-  // `readAttachments`' own `until`, verbatim: `rows.filter((a) => Date.parse(a.born_at) <= until)`.
-  return until == null ? read : { ...read, rows: read.rows.filter((a) => Date.parse(a.born_at) <= until) };
+  return (await client.query(`${sql} ${ATTACHMENT_ORDER_SQL}`, args)).rows;
 }
 
 // ── THE HOLDING JOURNAL, over `acts` (POS-162) ──────────────────────────────
@@ -1221,13 +1249,23 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  *
  * `madeBy` (POS-138, 2026-09-24) narrows to the things a set of handles MADE —
  * the author is the `<by>` half of the thing's id, which is the same reading
- * `world-hold.mjs § whereThingStands` and `world-stance.mjs § setDownFor` make
- * (`id.split("/")[0]`). It is how the author's stances read finds the
- * set-downs waiting on its word without asking about every thing in town: the
- * rows it returns are the holding acts on the house's own things and no others.
+ * `world-hold.mjs § whereThingStands` and `ownership.mjs § makerOf` make
+ * (`id.split("/")[0]`). It was written so the author's stances read could find
+ * the set-downs waiting on its word without asking about every thing in town:
+ * the rows it returns are the holding acts on the house's own things and no
+ * others. No `src/` caller passes it now (that read folds the hold record,
+ * world-stance.mjs § wordsAwaiting); test/owners-word-at-the-door.test.mjs does.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
-export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {
+export async function pgHoldingRows(client, opts = {}) {
+  return holdingRowsFrom(await pgHoldingRawRows(client, opts));
+}
+
+/** THE COMPOSITION HALF of `pgHoldingRows` (POS-1098): the store's rows as the holding journal's records. No store. */
+export function holdingRowsFrom(rows) { return rows.map(holdingRowOf); }
+
+/** THE SQL HALF of `pgHoldingRows` (POS-1098): the same statement, the rows as the store holds them. */
+export async function pgHoldingRawRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {
   const args = [CLASS_HOLDING];
   let sql = `SELECT id, at, crossing, actor, action, object,
                     at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household
@@ -1263,8 +1301,7 @@ export async function pgHoldingRows(client, { thing = null, since = null, until 
     args.push(Number(afterId));
     sql += ` AND id > $${args.length}`;
   }
-  const { rows } = await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args);
-  return rows.map(holdingRowOf);
+  return (await client.query(`${sql} ${HOLDING_ORDER_SQL}`, args)).rows;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

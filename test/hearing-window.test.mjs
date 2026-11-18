@@ -8,13 +8,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { createHearingWindow, publishedSettlementAt, publishedSettlementsAt, blessedSettlementAt, hearable } from "../src/hearing-window.mjs";
 
 function world() {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-hearing-"));
+  const repo = tempDir("postmark-hearing-");
   const git = (args, date = null) => execFileSync("git", ["-C", repo, ...args], {
     encoding: "utf8",
     env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
@@ -121,4 +121,22 @@ test("an earlier instant opens at its own settlement, read off the same sweeps",
   const old = h.read(Date.parse("2026-10-17T12:00:00Z"));
   assert.equal(old.since, null);
   assert.match(old.disclosure, /older than the 3 settlements/);
+});
+
+test("settlements(): every published sweep the reader keeps, ascending — where a conversation splits (POS-779)", async () => {
+  const w = world();
+  w.commit("settlement: sweep 3 published", "2026-09-27T18:00:34Z");
+  w.commit("settlement: sweep 12 published", "2026-09-28T06:00:51Z");
+  w.commit("crossing-save 217", "2026-09-28T12:02:47Z");
+  w.commit("settlement: sweep 13 published", "2026-09-28T18:00:20Z");
+  const h = createHearingWindow({ repo: w.repo });
+  await h.refresh();
+  assert.deepEqual(h.settlements().map((ms) => new Date(ms).toISOString()),
+    ["2026-09-27T18:00:34.000Z", "2026-09-28T06:00:51.000Z", "2026-09-28T18:00:20.000Z"],
+    "the crossing-save is no settlement");
+  // and an unreadable world answers an empty list, never a throw
+  const none = createHearingWindow({ repo: "unused", published: async () => { throw new Error("stuck"); },
+    blessed: async () => { throw new Error("stuck"); }, history: async () => { throw new Error("stuck"); } });
+  await none.refresh();
+  assert.deepEqual(none.settlements(), []);
 });

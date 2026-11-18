@@ -1,0 +1,67 @@
+-- 092 — households.likeness_state: A HOUSEHOLD'S LIKENESS REQUEST AND ITS READ-ONLY OFFICIAL POINTER (POS-726 slice B, w47)
+--
+-- THE DESIGN (Rei's CON-5, shaped with Iris 2026-11-05; Darko ruled "Build as designed (rec)"). Wright's authoritative cut, 2026-11-09 12:43Z:
+-- "the household's likeness answer (yes/no/unanswered, unchanged as the one authority), the request record, and the current-official pointer
+-- as a read-only field with no writer in B, plus the office read and the household page's render (it shows nothing official until a
+-- pointer exists). No selectProof, and no write path that can publish any media URL. depicts is never free text: it holds resident handles
+-- from the household's own roster, validated on write ... Nothing from a request is copied into a public key."
+--
+--   § 3  the existing household likeness answer (081) stays the ONE authority. The request sits BESIDE it, not in a second consent ledger.
+--        Household no/unanswered blocks.
+--   § 4  one versioned current-official pointer beside the household record. The later CON-5 service establishes the offered proof and the
+--        household's actual selection BEFORE it publishes that pointer; none of that is built here.
+--   § 6  no hidden rejected-draft gallery, no copies of source images: nothing here holds a picture, only references.
+--
+-- ── THE SHAPE ────────────────────────────────────────────────────────────
+--
+--   NULL                                       nothing asked
+--   { "request":  { "at", "by", "gh_id", "depicts" },        the household's ask. depicts: a LIST of this household's own resident
+--                                                            handles, validated on write; never free text. PRIVATE.
+--     "official": { "version", "proof", "since", "depicts" } the CURRENT official pointer: READ-ONLY, no writer in this slice. Its own
+--                                                            depicts names the residents it is for.
+--     "history":  [ { "version", "proof", "since", "until", "ended" } ]   reserved for that later service; read-only.
+--   }
+--
+-- ── WHO WRITES IT ──────────────────────────────────────────────────────────
+--
+-- ONE writer, `src/likeness.mjs § requestLikenessState`, and it writes `request` only, reached ONLY from the signed-in form the office renders
+-- after a GitHub sign-in (`/oauth/likeness`, 081's own road): an account the household's row binds, the same test the store repeats in the
+-- statement that writes. No key reaches it; no resident token and no Iris delegation gains a setter. The store write
+-- (`src/registry-store.mjs § setLikenessRequest`) is one UPDATE that names the slug, the binding account, the state it was computed from
+-- (two writers at once cannot both win: STORE-CONCURRENCY compare-and-swap, retried), a yes in the row, the roster, and that the pointer and
+-- history it writes equal the row's own: no statement the office runs can set, change or remove `official` or `history`.
+--
+-- Not in registry-store.mjs's `COLUMNS`, for 050's and 081's reason: a ceremony's upsert rebuilds a row from what it knew and would reset it.
+-- The request and the history are PRIVATE: the public registry (`GET /households` and the town's printed file) carries only
+-- `likeness_official`, a projection of `official` that exists while the household's answer is yes and the pointer is well formed
+-- (src/registry-public.mjs); a no, or no answer, withdraws future official use without touching the stored pointer.
+--
+-- THE SOURCE-OF-TRUTH GUARD: an operator tool that moves a household between stores must refuse a source row carrying `likeness_state`
+-- (POS-726 shape ruling; carried by the sibling tool PR #985, not here).
+--
+-- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
+--
+--   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
+--     -c "SET ROLE world2_owner;" -f world2/schema/092_household_likeness_state.sql
+--
+-- THE PRODUCTION MIGRATION IS THE OPERATOR'S BOX ACT, on Darko's go; nothing in the code lane applies it. Until it lands, every registry
+-- read answers as before (the column is read through the row's own jsonb, like `likeness` and `invited_by`), and a write refuses 503
+-- by name rather than pretending.
+--
+-- ── HOW TO PROVE IT LANDED ──────────────────────────────────────────────────
+--
+--   SELECT column_name, data_type, is_nullable FROM information_schema.columns
+--    WHERE table_name = 'households' AND column_name = 'likeness_state';   -- likeness_state | jsonb | YES
+--   SELECT count(*) FROM households WHERE likeness_state IS NOT NULL;      -- 0 until the first request
+--   node tools/registry-drain.mjs --check                                  -- still byte-equal
+--
+-- 081 is the likeness answer; 090 and 091 are other open lanes'; 092 is this.
+--
+-- No new grants: `office_api` already holds UPDATE on `households` (019). The notary and `snapshot_reader` read no household column
+-- this adds.
+
+BEGIN;
+
+ALTER TABLE households ADD COLUMN IF NOT EXISTS likeness_state jsonb;
+
+COMMIT;

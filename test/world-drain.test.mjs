@@ -24,9 +24,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { openDynamic } from "../src/dynamic-store.mjs";
 import { markRecord } from "../src/mark-record.mjs";
@@ -47,7 +47,7 @@ import { seedJournalRow } from "./journal-seed.mjs";
 import { DRAIN_CURSOR, drain, drainStatus, fileFramer, logLine, planDrain, writeJournalWindow } from "../src/world-drain.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-drain-"));
+const scratch = tempDir("postmark-drain-");
 after(() => sweep(scratch));
 
 process.env.WORLD_SINGLE_LOG = "1";

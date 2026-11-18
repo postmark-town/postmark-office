@@ -87,6 +87,8 @@ import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 // Same module, same predicate, same rewrite. One owner, now four readers.
 import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
+import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
+import { acceptedSparksOfCircle } from "./event-sparks.mjs"; // POS-1035: the accepted sparks under a circle
 import * as apex from "../world2/tools/apex-reads.mjs";
 import * as stakeRead from "../world2/tools/stake-reads.mjs";
 import * as portfolio from "../world2/tools/portfolio-reads.mjs";
@@ -95,8 +97,8 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, heldPlaced } from "./world.mjs";
-import { hearable } from "./hearing-window.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
+import { hearable, roomOpen, ROOM_GRACE_MS } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -105,7 +107,7 @@ import { backedRow } from "./world-stake.mjs";
 // rather than restated; see § THE SETTLEMENTS TWIN below.
 import { settlementsFrom } from "./settlements.mjs";
 import { askedCrossing, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
-import { myMarksRefused } from "./claim-effects.mjs";
+import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs";
 import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
 // WLD-29: a shown house's porch light, from the office's shared activity answer
@@ -201,6 +203,10 @@ export async function world2MyDrafts(key) {
   };
 }
 
+// What the portfolio says on `locked_unavailable` when no settled window can be read (POS-865): which standing marks a settlement has
+// carried cannot be told, so none is presented as carried by an established fact.
+const CARRIAGE_UNKNOWN = "the newest window a settlement closed could not be read, so which of your standing marks a settlement has carried cannot be told: a mark under `published` may still be waiting to be carried, and a locked one may not be listed here. That is not the same as every one being on the world.";
+
 /**
  * GET /world2/my-marks — the portfolio, out of rows. The SECOND key-scoped door
  * in this tier, and it is here beside `world2MyDrafts` for that function's own
@@ -218,7 +224,7 @@ export async function world2MyDrafts(key) {
  * `tree_only`; see that module's header for why each is absent rather than
  * approximated.
  */
-export async function world2MyMarks(key, { offset = 0, p: injected = null, refusedReader = myMarksRefused } = {}) {
+export async function world2MyMarks(key, { offset = 0, p: injected = null, refusedReader = myMarksRefused, lockedReader = myMarksLocked } = {}) {
   const p = injected ?? await pool();
   const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
 
@@ -284,12 +290,53 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     .map((row) => backedRow(row, { mark: byId.get(row.mark), belongs }))
     .sort((a, b) => a.id.localeCompare(b.id) || a.holder.localeCompare(b.holder));
 
+  // WHICH STANDING MARKS A SETTLEMENT HAS CARRIED, by the receipt's own window rule (§ CARRIED, NOT MERELY STANDING; POS-865, bug post #4014).
+  // The reasoning is with the locked shelf below.
+  let settled = null;
+  try { settled = await storeSettlements(p); } catch { settled = null; }
+  const windowKnown = Boolean(settled) && Number.isFinite(settled.settledWindow);
+  const notYetCarried = (row) => windowKnown && row.locked_window != null && Number.isFinite(Number(row.locked_window)) && Number(row.locked_window) > settled.settledWindow;
+  const uncarriedIds = new Set(markRows.filter(notYetCarried).map((r) => r.slug));
+  const carriedRows = canonRows.filter((m) => !uncarriedIds.has(m.id));
+
+  // A standing mark no settlement has carried is not ON THE WORLD (POS-865): it is on the locked shelf below, once.
   const published = canonRows
-    .filter((m) => residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
+    .filter((m) => !uncarriedIds.has(m.id) && residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
 
+  // ── THE LOCKED SHELF (bug post #4014, POS-865) ───────────────────────────────
+  //
+  // The same one function 1.0 calls (claim-effects.mjs § myMarksLocked), handed
+  // this door's roster: every handle the household has, not only the authors of
+  // standing marks, so a household's first claim is not invisible. The shelf's
+  // rows, counts, pager, label and disclosure are 1.0's own.
+  //
+  // WHAT "CANON" IS HERE (Wright, POS-865, 2026-11-05: "the twin adopts the
+  // receipt's window rule"). 1.0's canon is the world at the newest blessing, so a
+  // locked claim is not in it until a settlement carries it. THIS door's `marks`
+  // table is written at the lock (world2/schema/001: "Materialized cleared state.
+  // Writer: clearing_job only, inside the window transaction"), before any
+  // settlement carries it, so "standing in `marks`" alone would call a locked mark
+  // ON THE WORLD. The twin therefore reads CARRIED the way its own receipt does
+  // (§ CARRIED, NOT MERELY STANDING): a standing mark locked at a window beyond the
+  // newest window a settlement closed (`storeSettlements().settledWindow`, beside
+  // `marks.locked_window`) has not been carried, so it is not `published`; it
+  // is kept out of the shelf's canon, and the shelf lists it from its claim event.
+  // A mark at or before the settled window is carried and stays on its ordinary shelf.
+  //
+  // UNKNOWN IS NOT ESTABLISHED. When no settled window can be read (the table
+  // cannot be read, or names no window) carriage cannot be told, and the answer
+  // says so on the existing `locked_unavailable` rather than presenting every
+  // standing mark as carried; the marks stay where this door has always put them.
+  //
+  // Left alone, and not this rule's: a mark locked, carried, then withdrawn inside
+  // the two crossings is retired in `marks`, so it leaves `canonRows` and its
+  // `claim-locked` event puts it back on this shelf, while this file's receipt
+  // (`carriedGone`) says it left after it was ruled.
+  const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(carriedRows.map((m) => m.id)) });
+
   const body = portfolio.portfolioAnswerFrom({
-    household, residents, live: liveMarks, published, backed, offset, pager: markPage,
+    household, residents, live: liveMarks, locked: lockedBlock.rows, published, backed, offset, pager: markPage,
   });
 
   return {
@@ -302,6 +349,9 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     // 1.0's own `refused`, from the same one derivation (claim-effects.mjs §
     // myMarksRefused), handed this door's roster as 1.0 is handed its own.
     refused: await refusedReader(residents, { key }),
+    // An unread docket is not an empty shelf — 1.0's own disclosure, on the
+    // failing path only (world.mjs § worldMyMarks `locked_unavailable`).
+    ...(lockedBlock.unavailable || !windowKnown ? { locked_unavailable: [lockedBlock.unavailable, windowKnown ? null : CARRIAGE_UNKNOWN].filter(Boolean).join(" ") } : {}),
     // NAMED, NOT SILENT — and `backed` says which absence it is, because a
     // refusal and an empty ledger are different facts.
     ...(stakeRows == null ? { backed_unavailable:
@@ -718,7 +768,96 @@ export const spokenInRoom = (row) => {
 };
 const interiorBounce = (hint) => ({ code: 503, body: { error: "bounce", defect: "the marks cannot be sorted into inside and outside just now", hint } });
 
-export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
+/**
+ * WHERE A CONVERSATION SPLITS (POS-779): the settlements the box PUBLISHED (hearing-window.mjs: the crossing's sweep commit on
+ * world main), ascending, at or before `ms`: the reader's kept history plus the window open at that instant. Never the 06:00/18:00Z
+ * heartbeat (a refused crossing publishes nothing) and never only the blessed tags (they lag the sweep).
+ */
+function publishedEdges({ settlements, hearingWindow, ms }) {
+  let list = [];
+  try { list = settlements() ?? []; } catch { list = []; }
+  let since = null;
+  try { since = hearingWindow(ms)?.since ?? null; } catch { since = null; }
+  return [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => Number.isFinite(m) && m <= ms).sort((a, b) => a - b);
+}
+
+/**
+ * The conversations page's read, from the record (`acts`): one thread per place per settlement, a thread splitting only at a
+ * published settlement. `/world2/conversations` serves it whole; `/world/conversations?before=` serves the page of closed threads
+ * behind a cursor (the page's "show earlier"), so the reader can reach history the office's memory no longer holds.
+ *
+ * `?closed=` and `?voices=` are the caller's two dials (page size, lines per thread); `?before=<ISO or ms>` is the cursor (the
+ * `earlier.before` of the page before), and a page behind it carries no live threads. `?at=` evaluates the answer at an instant.
+ *
+ * ELIGIBILITY COMES FIRST: a say spoken inside a dungeon room (`spokenInRoom`, WLD-74) is dropped from the raw rows before anything
+ * is grouped, counted or paged, so a private voice can neither bridge two public circles nor displace a public thread.
+ *
+ * THE MARKS READ IS FOR THE ANCHORS, not for the marks. A live say stores the witnessed line (anchor + offset), so composing it back
+ * to a point needs the anchor mark's centre. Every mark the store holds, retired ones too: a say happened where its anchor stood at
+ * the time. A say whose anchor is in no row at all is left out and disclosed by count; it never fails the read (#351).
+ */
+async function conversationsFromRecord(p, searchParams, { settlements = settlementsKnown, hearingWindow = hearingWindowAt } = {}) {
+  const at = clockOf(searchParams);
+  if (at.error) return at.error;
+  const n = (k, d) => { const v = Number(searchParams?.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
+  const rawBefore = searchParams?.get("before");
+  const before = rawBefore == null || rawBefore === "" ? null : (/^\d+$/.test(rawBefore) ? Number(rawBefore) : Date.parse(rawBefore));
+  if (before != null && !Number.isFinite(before)) {
+    return { code: 422, body: { error: "bounce", defect: `"${rawBefore}" is not a cursor`, hint: "?before=<the earlier.before of the page before, an ISO-8601 instant>" } };
+  }
+  // POS-951: `voices_before` pages a thread's voices back, as on the memory feed (an unreadable one is no cursor)
+  const rawVoicesBefore = searchParams?.get("voices_before");
+  const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
+  const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
+  const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
+    p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
+    p.query(talk.ANCHOR_MARKS_SQL),
+  ]);
+  const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
+  const centres = talk.anchorCentres(markRows);
+  const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
+  let derived;
+  try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
+  catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
+  const edges = publishedEdges({ settlements, hearingWindow, ms: at.ms });
+  // a voice older than the oldest published settlement sits in an epoch whose start is unknown: it is left out and said, never grouped
+  const grouped = edges.length ? derived.voices.filter((v) => v.at >= edges[0]) : derived.voices;
+  const ungrouped = derived.voices.length - grouped.length;
+  const body = talk.conversationsOf(grouped, {
+    now: at.ms,
+    earshotM: dials.earshot_m.value,
+    boundaries: edges,
+    fadeMs: dials.fade_min.ms,
+    closedMax: n("closed", 40), voiceCap: n("voices", 80),
+    before, voicesBefore,
+    find: findOf(searchParams), // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
+  });
+  if (body.find?.refused) return { code: 422, body: { error: "bounce", ...body.find.refused } };
+  // POS-1035 (CORE-82): a circle read carries the ACCEPTED sparks under it — standing marks only, by the spine (on it / below it)
+  if (body.find?.circle_read) {
+    try { body.find.sparks = await acceptedSparksOfCircle(p, body.find.circle); }
+    catch { body.find.sparks = null; body.find.sparks_note = "the sparks under this circle could not be read just now; this is not a circle with none"; }
+  }
+  const ungroupedLine = ungrouped
+    ? `${ungrouped} of the ${derived.voices.length} voices come before the oldest settlement this office has read (${new Date(edges[0]).toISOString()}), so their settlement is unknown and they are not grouped`
+    : null;
+  const fellBack = talk.sayDialsDisclosure(dials);
+  const unplacedLine = talk.unplacedDisclosure(derived.unplaced);
+  return { code: 200, body: {
+    what: "every conversation in the world, live ones first — a thread is a derivation over the record, not an object",
+    evaluated_at: new Date(at.ms).toISOString(),
+    voices: derived.voices.length, eras: derived.eras,
+    dials: Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }])),
+    ...body,
+    ...(unplacedLine ? { unplaced_says: { count: derived.unplaced.length,
+      example: { act_id: derived.unplaced[0].act_id, anchor: derived.unplaced[0].anchor } } } : {}),
+    disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
+      ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : []), ...(ungroupedLine ? [ungroupedLine] : [])],
+  } };
+}
+
+export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, settlements = settlementsKnown, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
 
@@ -1282,20 +1421,42 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     try { win = hearingWindow(at.ms); } catch { win = null; }
     const since = Number.isFinite(win?.since) ? win.since : null;
     // each voice carries its speaker's standing (POS-739): "visitor" for a berth, "resident" otherwise
-    const emissions = live.emissionsOfClass(rows).filter((e) => hearable(Date.parse(e.born_at), at.ms, since))
+    // CORE-97: a room still open across the settlement edge is heard whole. The rows are clustered with the ONE room policy
+    // (hearing-window.mjs roomOpen, through talk.clusterVoices) on the published edges; a row of an open room that began before
+    // the window's edge is hearable too. The 13 h bound still cuts what it cuts: a carried room can reach behind it, so a read that carried
+    // one says so in read_bound_disclosed, and hearable_since names the earliest row actually returned (`conversations` keeps the published edge).
+    const sounds = live.emissionsOfClass(rows);
+    const edges = publishedEdges({ settlements, hearingWindow: () => win, ms: at.ms }); // the window already read: one ask per instant
+    const carried = new Set();
+    let maybeCarried = false;
+    if (since != null && edges.length) {
+      const spoken = sounds.map((e) => ({ at: Date.parse(e.born_at), x: e.x, y: e.y, aboard: Boolean(e.props?.aboard), e }));
+      const prevEdge = edges.filter((m) => m < since).at(-1) ?? null;
+      for (const c of talk.clusterVoices(spoken, { earshotM: dials.earshot_m.value, boundaries: edges })) {
+        // a room open now whose first row this read holds sits just after the edge: it may have begun before it, behind the read's bound, when the read
+        // does not reach back to the previous settlement (a room carried across the edge was talking in the epoch before it)
+        if (c.voices[0].at >= since && c.voices[0].at - since <= ROOM_GRACE_MS && roomOpen(c.latest, at.ms, edges) && (prevEdge == null || readFrom > prevEdge)) maybeCarried = true;
+        if (c.voices[0].at >= since || !roomOpen(c.latest, at.ms, edges)) continue;
+        for (const v of c.voices) carried.add(v.e);
+      }
+    }
+    const emissions = sounds.filter((e) => hearable(Date.parse(e.born_at), at.ms, since) || (carried.has(e) && Date.parse(e.born_at) <= at.ms))
       .map((e) => ({ ...e, standing: standingOf(e.source) }));
+    const reachMs = emissions.length && since != null ? Math.min(since, Date.parse(emissions[0].born_at)) : since;
+    const carriedRead = since != null && sounds.some((e) => carried.has(e) && Date.parse(e.born_at) <= at.ms);
     const fellBack = talk.sayDialsDisclosure(dials);
     const body = {
-      what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), the same window the live ear hears. A query, never a delete`,
+      what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), and the whole of a room still talking across that settlement (it carries on for an hour after it, and for as long as anyone adds to it), the same hearing the live ear has. A query, never a delete`,
       evaluated_at: new Date(at.ms).toISOString(),
-      hearable_since: since != null ? new Date(since).toISOString() : null,
+      hearable_since: reachMs != null ? new Date(reachMs).toISOString() : null,
       ...(win?.disclosure || since == null
         ? { hearing_window_disclosed: win?.disclosure ?? "the last settlement could not be read, so hearing reaches back 13 h, as far as this read holds (SAY_READ_SQL)" } : {}),
       // THE READ'S BOUND, SAID WHERE IT CUTS (POS-694): when the window opens
       // earlier than the 13 h this read holds (no settlement read, or an older
       // blessed one standing in), hearing reaches the bound, not the window.
-      ...(since == null || since < readFrom
-        ? { read_bound_disclosed: `this read holds only what was said in the 13 h before the instant asked (SAY_READ_SQL), so hearing reaches back to ${new Date(readFrom).toISOString()}${since == null ? "" : `, not to the window's opening at ${new Date(since).toISOString()}`}` } : {}),
+      ...(since == null || since < readFrom || carriedRead || maybeCarried
+        ? { read_bound_disclosed: `this read holds only what was said in the 13 h before the instant asked (SAY_READ_SQL), so hearing reaches back to ${new Date(readFrom).toISOString()}${since == null || since >= readFrom ? "" : `, not to the window's opening at ${new Date(since).toISOString()}`}`
+            + ((carriedRead || maybeCarried) ? "; a room carried across the settlement is heard from the earliest of its voices this read holds, and any of it said before that is cut (the conversations read keeps it)" : "") } : {}),
       total_in_the_air: emissions.length,
       earshot_rule: mode === "current"
         ? `one radius for the whole answer (${radiusM} m), the way voices.mjs's live ear reads it`
@@ -1312,60 +1473,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       heard: live.earshotAt(emissions, near, { radiusM, mode }).sort((a, b) => a.distance_m - b.distance_m) } };
   }
 
-  if (path === "/world2/conversations") {
-    // D4's READ PORT. 1.0 serves `/world/conversations` out of
-    // `voices-log.jsonl` — a box-local file, never git, backed up by nothing —
-    // and that file dies at cutover. This is the same page's answer, derived
-    // from `acts`: the crystallized emission record the seed imported, plus the
-    // live `say` acts the lane hook has mirrored since 2026-08-28.
-    //
-    // `?closed=` and `?voices=` are the 1.0 caller's own two dials
-    // (`closedMax`, `voiceCap`); `?at=` evaluates the whole answer at an instant,
-    // like every other read in this tier — a thread is "live" relative to a
-    // clock, and this door can be asked about any of them.
-    //
-    // THE MARKS READ IS FOR THE ANCHORS, not for the marks. A live say stores
-    // the witnessed line (anchor + offset), so composing it back to a point
-    // needs the anchor mark's centre — world.mjs's own
-    // `(id) => marks.find((m) => m.id === id)?.at`. Every mark the store holds,
-    // retired ones too: a say happened where its anchor stood at the time. A say
-    // whose anchor is in no row at all is left out and disclosed by count; it
-    // never fails the read (#351: 187 of them 500'd every caller on prod).
-    const at = clockOf(searchParams);
-    if (at.error) return at.error;
-    const n = (k, d) => { const v = Number(searchParams?.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
-    const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
-      p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-                WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
-      p.query(talk.ANCHOR_MARKS_SQL),
-    ]);
-    const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
-    const centres = talk.anchorCentres(markRows);
-    const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
-    let derived;
-    try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
-    catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
-    const body = talk.conversationsOf(derived.voices, {
-      now: at.ms,
-      earshotM: dials.earshot_m.value,
-      closeMs: dials.conversation_lull_min.ms,
-      fadeMs: dials.fade_min.ms,
-      closedMax: n("closed", 40), voiceCap: n("voices", 80),
-    });
-    const fellBack = talk.sayDialsDisclosure(dials);
-    const unplacedLine = talk.unplacedDisclosure(derived.unplaced);
-    return { code: 200, body: {
-      what: "every conversation in the world, live ones first — a thread is a derivation over the record, not an object",
-      evaluated_at: new Date(at.ms).toISOString(),
-      voices: derived.voices.length, eras: derived.eras,
-      dials: Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }])),
-      ...body,
-      ...(unplacedLine ? { unplaced_says: { count: derived.unplaced.length,
-        example: { act_id: derived.unplaced[0].act_id, anchor: derived.unplaced[0].anchor } } } : {}),
-      disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
-        ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : [])],
-    } };
-  }
+  if (path === "/world2/conversations") return conversationsFromRecord(p, searchParams, { settlements, hearingWindow });
 
   if (path === "/world2/occupancy") {
     // The containment stack, folded from the crossings. P-036's door: the
@@ -1518,8 +1626,13 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
   // This door assembled the whole world and read it from any point, so it listed a room's contents to anyone standing near it.
   if (typeof eng.verbs.standpointSight === "function") world = eng.verbs.standpointSight(world, {});
   const state = { x: near.x, y: near.y };
-  const oriented = eng.verbs.orient(state, world, { crossing: n });
-  const seen = eng.verbs.openYourEyes(state, world, { crossing: n });
+  // THE CLASS LAW THE ENGINE ASKS A THING'S LINEAGE OF (WLD-74 K1, Wright 2026-11-05 04:48): a keyed world carries the
+  // town's class marks, and these rows carry none (marks-ingest skips kind: class), so a halloween-candy-bowl would not
+  // read as a thing here. The accepted class law at this pin (law-ingest's declarations) is handed to the two readers,
+  // as the class marks it is; the marks the law half and the nearby rows read are left as they were.
+  const eyesWorld = { ...world, marks: [...world.marks, ...lawRows.filter((r) => r.kind === "class").map((r) => ({ ...r.data, kind: "class", by: r.data?.by ?? "the-town", class: r.data?.class ?? r.key }))] };
+  const oriented = eng.verbs.orient(state, eyesWorld, { crossing: n });
+  const seen = eng.verbs.openYourEyes(state, eyesWorld, { crossing: n });
 
   const spine = oriented.you?.within ?? [];
   const markById = new Map(world.marks.map((m) => [m.id, m]));

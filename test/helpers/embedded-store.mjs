@@ -62,7 +62,8 @@ const FLOOR_DB = "floor";
 /** The words a test fails with when it cannot have its store. */
 export const NO_STORE = "this test needs the suite's store, a real Postgres from the embedded-postgres devDependency, and could not start one";
 
-const freePort = () => new Promise((ok, no) => {
+/** A port the OS says is free now (bound on 127.0.0.1, then released). Also dev-target.mjs's and world-apex.test.mjs's. */
+export const freePort = () => new Promise((ok, no) => {
   const s = createServer();
   s.unref();
   s.on("error", no);

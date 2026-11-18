@@ -161,7 +161,7 @@ const markIn = (w, id) => w.marks.find((m) => m.id === id) ?? null;
  * A whole office in a closure — the crossings suite's harness, plus the two
  * reads the portal added: this actor's journal rows, and what a class lends.
  */
-async function officeWith({ standing = { x: -1380, y: -2543 }, ledger = "", at = 200, nowMs = Date.UTC(2026, 8, 19, 20, 0, 0), world = null, lends = {} } = {}) {
+async function officeWith({ standing = { x: -1380, y: -2543 }, ledger = "", at = 200, nowMs = Date.UTC(2026, 8, 19, 20, 0, 0), world = null, lends = {}, linesInPayload = false } = {}) {
   const worldState = world ?? vehicleWorld();
   const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
   const thresholds = mod.parseEnterExitLedger ? mod : { ...mod, parseEnterExitLedger: mod.parseThresholdLedger };
@@ -194,8 +194,9 @@ async function officeWith({ standing = { x: -1380, y: -2543 }, ledger = "", at =
       }
       written.push(...lines);
       text += lines.join("\n") + "\n";
+      // `linesInPayload` (POS-943): the act carries its ledger lines and summary, as crossing-exec writes every one
       journal.push({ actor: handle, action: act, object: mark,
-        payload: { ...(via ? { via } : {}), ...(set_down_at ? { set_down_at } : {}), ...(arrived == null ? {} : { arrived }) } });
+        payload: { ...(linesInPayload ? { lines, summary: entry.summary ?? null } : {}), ...(via ? { via } : {}), ...(set_down_at ? { set_down_at } : {}), ...(arrived == null ? {} : { arrived }) } });
       const acts = thresholds.parseEnterExitLedger(text).acts;
       return { lines, within: thresholds.occupancyAt(acts, at).get(handle) ?? [], commit: "deadbeef", pushed: false, seq: journal.length };
     },
@@ -642,6 +643,173 @@ test("the exit's journal row carries set_down_at and arrived as FIELDS", { skip:
   const row = o.journal.filter((j) => j.action === "exit").at(-1);
   assert.equal(row.object, SHIP);
   assert.deepEqual(row.payload, { set_down_at: SNUG, arrived: true });
+});
+
+// == POS-943 . AN ENTER IS A BOARDING ONLY IF IT BOARDED HER ==
+//
+// finch (2026-11-07) boarded her through the Snug Jetty (act 46971, payload.via the jetty, its line "enters
+// the-town/the-post-office"), and seven seconds later asked to enter her again the ordinary way while she stood at
+// the quay (46973). She was already held, so that act's lines enter only the town centre and the quay reach
+// (which 46975 and 46976 later exited); it names no stop, and its object is still her, the mark asked for. The
+// deposit's fold read it as a fresh boarding with no stop, so the exit (46978) wrote no `set_down_at` and no
+// landing, and his next walk started about 100 km out. The rider below is invented; the doors, the sequence and
+// the row shapes are finch's (the harness keeps each act's lines, as crossing-exec writes them).
+test("POS-943: boarded through the Snug Jetty, entered again the ordinary way while aboard, no ride, exit: set down at the jetty", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const w = vehicleWorld();
+  const po = markIn(w, SHIP);
+  const jetty = markIn(w, SNUG);
+  const o = await officeWith({ standing: { x: jetty.at.x, y: jetty.at.y }, linesInPayload: true });
+  await enterViaOffice(CLONE, { mark: SNUG, handle: "wren", accept: true }, key("wren"), o.deps);
+  const first = o.journal.at(-1);
+  assert.deepEqual([first.action, first.object, first.payload.via], ["enter", SHIP, SNUG], "the boarding names its stop, as 46971 does");
+  assert.ok(first.payload.lines.some((l) => l.includes(` · enters ${SHIP} · `)), "and its line enters her, as 46971's does");
+  // aboard, she stands at the quay; the rider asks to enter her the ordinary way
+  o.standAt({ x: po.at.x, y: po.at.y });
+  await enterViaOffice(CLONE, { mark: SHIP, handle: "wren", accept: true }, key("wren"), o.deps);
+  const second = o.journal.at(-1);
+  assert.deepEqual([second.action, second.object, second.payload.via], ["enter", SHIP, undefined], "a second enter act, object her, no stop: 46973's shape");
+  assert.deepEqual(second.payload.lines.map((l) => / · enters (\S+) · /.exec(l)?.[1]), ["the-town/the-town-centre", "the-town/the-quay-reach"],
+    "its lines enter the quay's rooms only, not her: 46973's lines exactly");
+
+  const out = await exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), o.deps);
+  assert.equal(out.set_down?.at, SNUG, "the exit sets the rider down at the stop she boarded through, never nowhere");
+  assert.equal(out.set_down.arrived, false);
+  const exitRow = o.journal.filter((j) => j.action === "exit" && j.object === SHIP).at(-1).payload;
+  assert.deepEqual([exitRow.set_down_at, exitRow.arrived], [SNUG, false], "the exit act names the deposit, as 46978 never did");
+  const anchor = anchorOfStop(SNUG, await serviceOf(o.worldState));
+  assert.deepEqual(o.stops.at(-1), { who: "wren", x: anchor.x, y: anchor.y, via: SNUG, why: "deposit", ...(o.stops.at(-1).exit ? { exit: true } : {}) },
+    "one landing at the jetty's anchor, through the land pen");
+});
+
+// THE CONTROL, RESIDENT-REPORTED (Little Bird's household, Discord 2026-11-07 17:27 EST, relayed by Wright 22:27Z):
+// little-bird boarded at her home berth, the-town/the-post-office (act 47045), took no ride, and stepped off
+// (47049): "you step off at the-town/the-post-office, the stop you came in through", landed (47050) at
+// (-7.8, 21.5). It worked before POS-943's fix, and must still. The rider is invented; the sequence is hers.
+test("POS-943, the control: boarded at her home berth, no ride, exit: set down at the berth's own ashore point, as little-bird was", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const w = vehicleWorld();
+  const po = markIn(w, SHIP);
+  const o = await officeWith({ standing: { x: po.at.x, y: po.at.y }, linesInPayload: true });
+  await enterViaOffice(CLONE, { mark: SHIP, handle: "lark", accept: true }, key("lark"), o.deps);
+  const boarded = o.journal.filter((j) => j.action === "enter" && j.object === SHIP).at(-1);
+  assert.equal(boarded.payload.via, SHIP, "boarding at the quay is boarding through her own berth");
+  const out = await exitViaOffice(CLONE, { mark: SHIP, handle: "lark" }, key("lark"), o.deps);
+  assert.deepEqual([out.set_down?.at, out.set_down?.arrived], [SHIP, false], "set down at the stop she came in through");
+  const service = await serviceOf(o.worldState);
+  const vessel = await import(`file:///${join(CLONE, "tools", "vessel.mjs").replace(/\\/g, "/")}`);
+  const ashore = depositPointFor(SHIP, service, { ashore: vessel.ashoreOf });
+  assert.ok(ashore && Number.isFinite(ashore.x), "her berth's ashore point, from the world's own engine");
+  const landed = o.stops.at(-1);
+  assert.deepEqual([landed.x, landed.y, landed.via, landed.why], [ashore.x, ashore.y, SHIP, "deposit"], "one landing there, little-bird's 47050");
+  assert.deepEqual([Math.round(landed.x * 10) / 10, Math.round(landed.y * 10) / 10], [-7.8, 21.5], "on this world, the very point her landing records");
+});
+
+// finch's rows as the store holds them, payloads VERBATIM (46971 and 46973 to 46978 as read on the box, Jetto,
+// POS-943, 22:01Z and 22:2xZ), for the fold alone
+const BOARDED_46971 = { action: "enter", object: SHIP, payload: { via: SNUG, lines: ["- 2026-11-07T21:01:28.260Z · finch · enters the-town/the-post-office · ferry 297.7520 · word welcomed"], ledger: "WORLD/enter-exit-ledger.md", summary: "enters the-town/the-post-office via current-the-reader/the-snug-jetty", arrival_of: "46968" } };
+const AGAIN_46973 = { action: "enter", object: SHIP, payload: { lines: ["- 2026-11-07T21:01:35.732Z · finch · enters the-town/the-town-centre · ferry 297.7522 · word neutral", "- 2026-11-07T21:01:35.732Z · finch · enters the-town/the-quay-reach · ferry 297.7522 · word neutral"], ledger: "WORLD/enter-exit-ledger.md", summary: "enters the-town/the-town-centre, the-town/the-quay-reach" } };
+const OUT_46975 = { action: "exit", object: "the-town/the-quay-reach", payload: { lines: ["- 2026-11-07T21:01:59.443Z · finch · exits the-town/the-quay-reach · ferry 297.7527"], ledger: "WORLD/enter-exit-ledger.md", summary: "exits the-town/the-quay-reach" } };
+const OUT_46976 = { action: "exit", object: "the-town/the-town-centre", payload: { lines: ["- 2026-11-07T21:02:11.006Z · finch · exits the-town/the-town-centre · ferry 297.7530"], ledger: "WORLD/enter-exit-ledger.md", summary: "exits the-town/the-town-centre" } };
+const EXIT_46978 = { action: "exit", object: SHIP, payload: { lines: ["- 2026-11-07T21:02:18.859Z · finch · exits the-town/the-post-office · ferry 297.7532"], ledger: "WORLD/enter-exit-ledger.md", summary: "exits the-town/the-post-office" } };
+
+test("POS-943, the fold over finch's own rows: 46973 entered other marks, not her, so the jetty stands until 46978; an enter that did board her reads as before", () => {
+  const finch = [BOARDED_46971, AGAIN_46973, OUT_46975, OUT_46976];
+  assert.deepEqual(rideStateFrom(finch, { vesselId: SHIP }), { entryStop: SNUG, standingRide: null }, "at the exit, the stop he boarded through: the deposit is owed there");
+  assert.equal(depositAt({ ...rideStateFrom(finch, { vesselId: SHIP }), nowMs: Date.now() }).stop, SNUG);
+  assert.deepEqual(rideStateFrom([...finch, EXIT_46978], { vesselId: SHIP }), { entryStop: null, standingRide: null }, "and the exit ends it");
+  const ride = { action: "ride", object: SHIP, payload: { origin: SNUG, to: PANDO, distance_m: 1, pace_km_per_crossing: 405, declared_at: "t", arrives_at: "t2" } };
+  assert.equal(rideStateFrom([BOARDED_46971, ride, AGAIN_46973], { vesselId: SHIP }).standingRide?.to, PANDO, "a ride stands through it too");
+  // an enter that boarded her is a boarding, as before
+  const oldWay = { action: "enter", object: SHIP, payload: { lines: ["- 2026-11-07T22:00:00.000Z · finch · enters the-town/the-town-centre · ferry 297.80 · word neutral", "- 2026-11-07T22:00:00.000Z · finch · enters the-town/the-quay-reach · ferry 297.80 · word neutral", "- 2026-11-07T22:00:00.000Z · finch · enters the-town/the-post-office · ferry 297.80 · word neutral"], summary: "enters …" } };
+  assert.equal(rideStateFrom([BOARDED_46971, EXIT_46978, oldWay], { vesselId: SHIP }).entryStop, null, "the old-way boarding at the quay (her line, no stop) owes no deposit, as always");
+  assert.equal(rideStateFrom([BOARDED_46971, ride, oldWay], { vesselId: SHIP }).standingRide, null, "and starts the state again");
+  assert.equal(rideStateFrom([BOARDED_46971, { ...AGAIN_46973, payload: { ...AGAIN_46973.payload, via: WHARF } }], { vesselId: SHIP }).entryStop, WHARF, "an enter naming a stop is a boarding");
+  assert.equal(rideStateFrom([BOARDED_46971, { action: "enter", object: SHIP, payload: {} }], { vesselId: SHIP }).entryStop, null, "an act with no lines reads as it always did");
+  assert.equal(rideStateFrom([BOARDED_46971, { action: "enter", object: SHIP, payload: { lines: [] } }], { vesselId: SHIP }).entryStop, null);
+});
+
+// WRIGHT'S CHECK (POS-943, 22:19Z; starstory-2e's flag): does the repair land's `within: null` change how finch's
+// "within spar/the-doubled-coast" reads? Measured: no. Occupancy is the enter/exit ledger's fold, built from the
+// acts the live read selects (PASSAGE_ACTIONS: enter and exit, legacy and live) through their ledger lines; a land
+// is not among them and carries no lines. A departure's `within` is the walk's ARRIVAL EXTENT (`targetExtent`, the
+// walk line's "· within W,H"), which every land writes null. Rows: finch's verbatim from 46971 on; the earlier
+// Doubled Coast and Snug Harbour lines are invented in their shape (the enters 45803/45804, the exit 46966).
+test("POS-943, the within check: a land with within: null leaves the Doubled Coast's occupancy exactly as the enters and exits made it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { journalLinesIn, deriveEnterExitLedger } = await import("../src/enter-exit-ledger.mjs");
+  const { PASSAGE_ACTIONS } = await import("../world2/tools/live-reads.mjs");
+  const mod = await import(`file:///${join(CLONE, "tools", GRAMMAR).replace(/\\/g, "/")}`);
+  const parse = mod.parseEnterExitLedger ?? mod.parseThresholdLedger;
+  const line = (iso, verb, mark, ferry) => ({ lines: [`- ${iso} · finch · ${verb} ${mark} · ferry ${ferry}${verb === "enters" ? " · word welcomed" : ""}`], ledger: "WORLD/enter-exit-ledger.md" });
+  const COAST = "spar/the-doubled-coast", HARBOUR = "current-the-reader/the-snug-harbour";
+  const rows = [
+    { action: "enter", object: HARBOUR, payload: { lines: [...line("2026-11-07T01:12:52.000Z", "enters", COAST, "295.1000").lines, ...line("2026-11-07T01:12:52.000Z", "enters", HARBOUR, "295.1000").lines], ledger: "WORLD/enter-exit-ledger.md" } },
+    { action: "exit", object: HARBOUR, payload: line("2026-11-07T21:00:00.000Z", "exits", HARBOUR, "297.7400") },
+    BOARDED_46971, AGAIN_46973, OUT_46975, OUT_46976, EXIT_46978,
+  ].map((r, i) => ({ ...r, seq: i + 1 }));
+  const land47122 = { seq: rows.length + 1, action: "land", object: SNUG, payload: { from: { x: -415, y: 4905 }, toward: { x: -415, y: 4905 }, pace: null, within: null, to: null, via: SNUG, why: "deposit", declared_by: "the-town" } };
+  const within = (all) => {
+    const live = all.filter((r) => PASSAGE_ACTIONS.includes(r.action));   // the live read's WHERE action = ANY(PASSAGE_ACTIONS)
+    const text = deriveEnterExitLedger({ header: "", journal: journalLinesIn(live) });
+    return [...(mod.occupancyAt(parse(text).acts, 400).get("finch") ?? [])];
+  };
+  assert.ok(!PASSAGE_ACTIONS.includes("land"), "a land is never read as a passage");
+  assert.deepEqual(within(rows), [COAST], "before the repair: within the Doubled Coast, by his enter and no exit of it");
+  assert.deepEqual(within([...rows, land47122]), [COAST], "after it: the same; the land's within: null touches no passage");
+  assert.deepEqual(journalLinesIn([land47122]), [], "and even handed to the ledger, a land carries no line");
+  // what a departure's `within` is: the arrival extent, null on every landing
+  const { departureRecordOf } = await import("../world2/tools/live-reads.mjs");
+  const rec = departureRecordOf({ id: "47122", at: new Date("2026-11-07T22:18:22.913Z"), crossing: "297.86", actor: "finch", action: "land", payload: land47122.payload });
+  assert.equal(rec.record.targetExtent, null);
+  assert.deepEqual([rec.record.from, rec.record.toward], [{ x: -415, y: 4905 }, { x: -415, y: 4905 }]);
+});
+
+/** The office, a rider boarded through the jetty and entered again at the quay, as finch was; then `exit` is asked. */
+async function finchsBoat(overrides = {}) {
+  const w = vehicleWorld();
+  const po = markIn(w, SHIP), jetty = markIn(w, SNUG);
+  const o = await officeWith({ standing: { x: jetty.at.x, y: jetty.at.y }, linesInPayload: true });
+  await enterViaOffice(CLONE, { mark: SNUG, handle: "wren", accept: true }, key("wren"), o.deps);
+  o.standAt({ x: po.at.x, y: po.at.y });
+  await enterViaOffice(CLONE, { mark: SHIP, handle: "wren", accept: true }, key("wren"), o.deps);
+  Object.assign(o.deps, overrides);
+  return { o, before: { journal: o.journal.length, text: o.text(), stops: o.stops.length, within: o.within("wren") } };
+}
+const unchanged = (o, before) => {
+  assert.equal(o.journal.length, before.journal, "no act was written");
+  assert.equal(o.text(), before.text, "no ledger line was written");
+  assert.equal(o.stops.length, before.stops, "no landing was written");
+  assert.deepEqual(o.within("wren"), before.within, "she is still aboard");
+};
+
+test("POS-943: an unreadable boarding history refuses the exit, writing nothing, never an exit to nowhere", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { o, before } = await finchsBoat({ actsStrict: async () => { throw new Error("connect ECONNREFUSED"); } });
+  await assert.rejects(exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), o.deps),
+    (e) => e.code === 503 && /^the office could not read how you boarded her, so it cannot say where to set you down/.test(e.defect) && /nothing was written: you are still aboard/.test(e.hint));
+  unchanged(o, before);
+});
+
+test("POS-943: an unreadable timetable refuses the vessel's exit, writing nothing; a world with no timetable at all exits as it always did", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { o, before } = await finchsBoat({ service: async () => ({ service: null, unreadable: true }) });
+  await assert.rejects(exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), o.deps),
+    (e) => e.code === 503 && /could not read the Post Office's timetable/.test(e.defect));
+  unchanged(o, before);
+  // the engine-unreadable answer vesselServiceFrom gives on its own
+  const e2 = await finchsBoat({ service: async () => ({ service: null, errors: [{ mark: "(engine)", error: "x" }] }) });
+  await assert.rejects(exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), e2.o.deps), (e) => e.code === 503);
+  unchanged(e2.o, e2.before);
+  // the control: a timetable READ that holds no service is no refusal; the exit is written, with no deposit, as before
+  const none = await finchsBoat({ service: async () => ({ service: null, errors: [], reason: "no mark in this world carries `mechanic: timetable`" }) });
+  const out = await exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), none.o.deps);
+  assert.equal(out.set_down, undefined);
+  assert.equal(none.o.journal.at(-1).action, "exit");
+});
+
+test("POS-943: a stop the office names but cannot place refuses the exit, never a guessed point", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { o, before } = await finchsBoat();
+  const real = await serviceOf(o.worldState);
+  o.deps.service = async () => ({ service: { ...real, stops: real.stops.map((s) => (s.markId === SNUG ? { ...s, at: null } : s)) } });
+  await assert.rejects(exitViaOffice(CLONE, { mark: SHIP, handle: "wren" }, key("wren"), o.deps),
+    (e) => e.code === 503 && /could not read where current-the-reader\/the-snug-jetty stands/.test(e.defect));
+  unchanged(o, before);
 });
 
 test("exiting with no ride and no `via` writes NO deposit — the crossing made before the portal existed still reads", { skip: !HAVE_CLONE && WHY_NOT }, async () => {

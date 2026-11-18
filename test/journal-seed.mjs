@@ -8,14 +8,15 @@
 //
 // G1 deleted the general journal INSERT. `appendJournal` writes the RECORD now,
 // so a suite that built its population by calling it no longer puts anything in
-// this table — and two things still READ it:
+// this table — and readers remain: `src/world-drain.mjs`, `readJournal` and
+// `journalHead` (src/world-journal.mjs), `dynamicHealth` (src/dynamic-store.mjs)
+// and `tools/g1-dev-proof.mjs`. (The arena's fold went when the arena closed on
+// 2026-09-30.) In detail, the drain:
 //
 //   · `src/world-drain.mjs` — the drain and its photograph. Its retirement is
 //     G2's, and `world2-acts.mjs` schedules it there in its own words ("its
 //     replacement exists (state-log-from-store.mjs); the retirement is G2's").
 //     Until then it is live code with live behaviour and it is owed tests.
-//   · `src/arena.mjs` — the fold, over the rows `appendArenaRow` still writes.
-//     Exempt by ruling (DEC-1/P-143).
 //
 // ⚑ THIS IS A SEEDER, NOT A PEN, AND THE DIFFERENCE IS THE POINT. A test-only
 // writer into a table the office no longer writes would be scaffolding that
@@ -30,8 +31,8 @@
 // (`world-journal.mjs § normalizeRow`). A fixture with its own shape would
 // prove the drain reads a row nobody writes.
 //
-// For the arena's own rows, use `appendArenaRow` instead — that IS the live pen
-// for that class, and a suite about the arena should exercise it.
+// There is no pen left for the arena's own rows: `appendArenaRow` closed with
+// the arena on 2026-09-30 (src/arena.mjs).
 
 import { normalizeRow } from "../src/world-journal.mjs";
 

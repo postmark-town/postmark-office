@@ -71,6 +71,26 @@ test("22 · take shows only with a takeable in reach and a slot to carry it", ()
   assert.deepEqual(canVerbs(pairsOf({ marks: [fixedBowl, mk("ana/a-lamp")], units: [make("ana/bowl", 3), make("cy", 24, "thing")] })), ["give"], "24 of 24 carried: nothing more is taken (the bowl may still be given into)");
 });
 
+// WLD-79 (Darko, 2026-10-19 18:49 EDT: "(b), 60 m, one rule for give and take"): the edge of the take's reach, both sides of it.
+// Until now the one distance pinned was a 400 m miss, so a 60 m rule could drift to 50 or 100 and stay green here.
+test("22 · WLD-79: take is listed at 10, 59 and 60 m, and absent at 61 m (the matrix and the door's standsWithin say one number)", () => {
+  for (const d of [10, 59, 60]) {
+    const lamp = mk("ana/a-lamp", { at: { x: d, y: 0 } });
+    assert.deepEqual(canVerbs(pairsOf({ marks: [lamp] })), ["take"], `${d} m: in reach`);
+    assert.deepEqual(canOn(pairsOf({ marks: [lamp] }), lamp.id), ["take"], `${d} m: the lamp's own column`);
+    assert.equal(standsWithin(HERE, lamp).stands, true, `${d} m: the door's test agrees`);
+  }
+  const far = mk("ana/a-lamp", { at: { x: 61, y: 0 } });
+  assert.deepEqual(canVerbs(pairsOf({ marks: [far] })), [], "61 m: out of reach");
+  assert.deepEqual(canOn(pairsOf({ marks: [far] }), far.id), [], "61 m: no column");
+  assert.equal(standsWithin(HERE, far).stands, false, "61 m: the door's test agrees");
+  // a holder with something in it, the same band
+  for (const [d, can] of [[10, ["take"]], [60, ["take"]], [61, []]]) {
+    const pouch = mk("ana/pouch", { at: { x: d, y: 0 }, holder: true, portable: false });
+    assert.deepEqual(canOn(pairsOf({ marks: [pouch], units: [make("ana/pouch", 3)] }), pouch.id), can, `a pouch holding three, ${d} m off`);
+  }
+});
+
 test("22 · B3: a whole mark inside an open holder in reach carries its own take (11:55)", () => {
   const bowl = mk("ana/bowl", { kind: "halloween-candy-bowl", portable: false });
   const p = pairsOf({ marks: [bowl, mk("ana/a-lamp", { at: { x: 900, y: 900 } })], attachments: [held("ana/a-lamp", "ana/bowl")] });

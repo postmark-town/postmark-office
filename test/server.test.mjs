@@ -590,7 +590,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // block_household and unblock_household — household { do: "amend-letter" |
   // "withdraw-letter" | "block" | "unblock" }. Born delisted behind the
   // household apex. The counts moved in the same commit.
-  assert.equal(names.length, 64);
+  // 64 -> 66 (POS-1027, 2026-11-13): read_feed and read_pair — town { read: "feed" | "pair" }.
+  // 66 -> 67 (POS-497, 2026-11-03, merged onto the train): discover_town — town { read: "discover" }, discovery's first slice.
+  // Both born delisted behind the town apex. The counts moved in the same commits.
+  assert.equal(names.length, 67);
+  assert.ok(names.includes("discover_town"), "the discovery read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("world_describe"), "the describe act has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_docs"), "the docs read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_posts"), "the posts read has a flat definition, delisted only while the apex serves it");
@@ -1019,6 +1023,11 @@ test("GET /posts takes a class: none → 422 naming it; an idea is a post class 
   const ideas = await idea.json();
   assert.deepEqual([ideas.class, ideas.finished, ideas.total, ideas.posts], ["idea", ["shipped", "declined", "duplicate"], 0, []],
     "this office holds no idea post, and says so rather than refusing the class");
+  // POS-732: the plain REST list keeps its whole answer when it names no page (the site's snapshot readers make one request and follow nothing)
+  assert.equal(["shown", "limit", "offset", "complete"].some((k) => k in ideas), false, `GET /posts with no page is the unpaged answer: ${Object.keys(ideas)}`);
+  // …and naming a limit pages it, so the flag above is what held it whole
+  const paged = await (await get("/posts?class=idea&limit=5", null)).json();
+  assert.deepEqual([paged.shown, paged.limit, paged.complete], [0, 5, true]);
   const one = await get("/posts/postmark-pen/first-idea?class=bounty", null);
   assert.equal(one.status, 422);
   assert.match((await one.json()).defect, /"bounty" is not a post class/);

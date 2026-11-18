@@ -28,6 +28,10 @@ import { appendTownJournal } from "../src/town-journal.mjs";
 import { houseBundle, housePage, memberRow, pageBounds, HOUSE_PAGE, HOUSE_PAGE_MAX, needsYou, isoAt, isoEvents, HOUSE_ONCE } from "../src/house-bundle.mjs";
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
+
+// WLD-51 (Wright, 2026-11-03 19:25 EST): every place the at-risk warning is shown states its frame, in these words.
+// Spelled here rather than imported, so a change to the words (or a surface that stops saying them) reds a test.
+const FRAME_LIMIT = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { putValues, emptyTown } from "./fixture.mjs";
@@ -168,6 +172,7 @@ test("ONCE: the town-wide blocks ride at the top and on no resident", async () =
 test("ASKED ONCE: stances, stakes and the walkers roll are one call each for the whole house", async () => {
   const { readers, calls } = worldReaders();
   const h = await houseBundle({ household: HOUSE }, ctx({ readers }));
+  // the house's consent inbox is one call for the house scope; each resident's OWN waiting count (POS-1084) is one pass per world-household (stanceCountsForHandles, test/pos-1084-one-pass.test.mjs), never a call per resident
   assert.deepEqual(calls.stances, [["r000", "r001", "r002"]]);
   assert.deepEqual(calls.stakesFor, [["r000", "r001", "r002"]]);
   assert.equal(calls.walkers, 1);
@@ -314,6 +319,9 @@ test("NEEDS-YOU: every row names its cause, and a key ask never carries its co-s
   assert.equal(n.count, 4);
   for (const group of ["stances_awaiting", "unplaced_bounces", "key_asks", "stakes_at_risk"])
     for (const row of n[group].rows) assert.ok(typeof row.cause === "string" && row.cause.length > 10, `${group} row names its cause`);
+  // WLD-51: the warning says what it was read from — Wright's words, spelled out here (not imported)
+  assert.ok(n.stakes_at_risk.rows[0].cause.endsWith(`sweeps it first. ${FRAME_LIMIT}`), `the at-risk cause states its frame: ${n.stakes_at_risk.rows[0].cause}`);
+  assert.ok(n.stakes_at_risk.rows[0].cause.startsWith("r001/shed is a commons mark holding ✦0 — the next settlement ("), "and the words it had are as they were");
 });
 
 test("NEEDS-YOU (WLD-51 part 3): an at-risk row carries the stakes row whole, its mark's body included", async () => {
@@ -380,6 +388,56 @@ test("NEEDS-YOU (WLD-83): the likeness question is a row of its own, counted, an
   const quiet = await needsYou({}, ctx({ readers, key }));
   assert.deepEqual(quiet.likeness_question, { rows: [] });
   assert.equal(youPart({ needs: quiet }).some((i) => /likeness question/.test(JSON.stringify(i))), false);
+});
+
+// POS-1035 (ruled 21:55/21:57Z; route settled by Rivet): an event the house's resident hosted ended and became a spark recounted
+// from their invitation — they are asked to write what happened. One list, read through needs-you's readers seam, counted.
+test("NEEDS-YOU (POS-1035): the host is asked to write what happened — a waiting row is counted and its cause named; empty keeps the page; unreadable or no record is unknown, never 'nothing waits'", async () => {
+  const { readers } = worldReaders();
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const row = { event: "r000/tea", title: "Tea", sparks: ["r000/tea"], host: "r000", completed_at: "2026-09-26T20:00:00.000Z",
+    cause: "your event \"Tea\" ended and became the spark r000/tea; its recounting is your invitation's words (or its title) — write what actually happened",
+    act: "world_leave_mark { slug: \"tea\", amend: true, … } — the spark as it stands, with properties: { recounting: \"<what happened>\" }" };
+  const asked = [];
+  readers.recountingsAwaiting = async (handles) => { asked.push([...handles]); return [row]; };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(asked, [["r000", "r001"]], "asked for the residents this key holds, and no one else");
+  assert.deepEqual(n.recountings_awaiting, { rows: [row] });
+  assert.ok(n.recountings_awaiting.rows[0].cause.length > 10, "the row names its cause");
+  assert.equal(n.count, 3 + 1, "it counts beside the stances, the bounces and the at-risk mark");
+  assert.equal(n.shown, 3 + 1);
+  const { youPart } = await import("../src/doorstep-apex.mjs");
+  assert.ok(youPart({ needs: n }).some((i) => /ended in sparks — write what happened.*r000\/tea/.test(i.what) && i.from === "household.needs-you"), "the doorstep's YOU names it");
+
+  // held-resident scope: a key holding one resident asks for that one only
+  asked.length = 0;
+  await needsYou({}, ctx({ readers, key: { household: "fixture", handles: new Set(["r000"]) } }));
+  assert.deepEqual(asked, [["r000"]], "mine, never the whole house");
+
+  // empty: read and nothing waits — the page keeps the shape it had, and the count is unchanged
+  readers.recountingsAwaiting = async () => [];
+  const quiet = await needsYou({}, ctx({ readers, key }));
+  assert.equal("recountings_awaiting" in quiet, false);
+  assert.equal(quiet.count, 3);
+
+  // a house with nothing anywhere: the quiet note, but only when this list was READ empty
+  const empty = { ...readers,
+    stances: async () => ({ stances_awaiting: 0, awaiting: [], standing: [], cursor: null, complete: true, set_downs_awaiting: [] }),
+    stakesFor: async () => ({ next_settlement: { at: "2026-09-28T00:00:00.000Z" }, count: 0, at_risk: 0, rows: [] }),
+    mailAwaiting: () => ({ unplaced_bounces: [] }), alertsFor: async () => ({ alerts: [], unread: [] }),
+    likenessNeed: async () => ({ rows: [] }), claimState: async () => null };
+  const none = await needsYou({}, ctx({ readers: empty, key }));
+  assert.equal(none.count, 0);
+  assert.match(none.note ?? "", /nothing waits on you/, "an explicitly empty reader is known empty");
+
+  // unreadable, and an office pointed at no record (the pen's own NoRecordError): unknown — said, uncounted, and no "nothing waits"
+  for (const e of [new Error("the record did not answer"), Object.assign(new Error("this office is not pointed at a record"), { name: "NoRecordError" })]) {
+    const blind = await needsYou({}, ctx({ readers: { ...empty, recountingsAwaiting: async () => { throw e; } }, key }));
+    assert.match(blind.recountings_awaiting?.unavailable ?? "", /unknown, not none/, `${e.name}: unavailable`);
+    assert.deepEqual(blind.recountings_awaiting.rows, []);
+    assert.equal(blind.count, 0);
+    assert.equal("note" in blind, false, `${e.name}: never "nothing waits" over a list that could not be read`);
+  }
 });
 
 // ── the door ────────────────────────────────────────────────────────────────
@@ -466,6 +524,8 @@ test("THE PAGE (POS-720): stances and stakes are counts with their reads named; 
   assert.ok(!("awaiting" in p.stances && Array.isArray(p.stances.awaiting)), "a count, never the rows");
   assert.deepEqual([p.stakes.published, p.stakes.at_risk], [2, 1]);
   assert.match(p.stakes.read, /household \{ read: "stakes" \}/);
+  assert.ok(p.stakes.read.endsWith(` ${FRAME_LIMIT}`), `the house page's at_risk count states its frame: ${p.stakes.read}`); // WLD-51
+  assert.deepEqual(Object.keys(p.stakes), ["serves", "scope", "published", "at_risk", "next_settlement", "read"], "no new field: the frame rides the existing `read` prose");
   assert.ok(!("rows" in p.stakes));
   assert.deepEqual(calls.stances, [["r000", "r001", "r002"]], "asked once, for the whole house");
   assert.deepEqual(calls.stakesFor, [["r000", "r001", "r002"]]);
@@ -686,6 +746,8 @@ test("read: \"waiting\" and read: \"marks\" answer through the store: needs-you 
     assert.equal("next_offset" in m[k], !m[k].complete);
   }
   assert.ok("decided" in m && Array.isArray(m.at_risk.rows));
+  assert.ok(m.note.endsWith(` at_risk: ${FRAME_LIMIT}`), `the marks read's note states the at_risk frame: ${m.note}`); // WLD-51
+  assert.ok(m.note.startsWith("drafts are your residents' own; pending is on the public docket;"), "and the note's own words are as they were");
   const one = await householdApex({ read: "marks", args: { state: "standing" } }, key, ctx);
   assert.deepEqual(["drafts", "pending", "standing"].filter((k) => k in one), ["standing"], "state: narrows to one list");
   const bad = await householdApex({ read: "marks", args: { state: "retired" } }, key, ctx);

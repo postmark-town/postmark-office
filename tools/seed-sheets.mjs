@@ -26,8 +26,7 @@
 //
 // The manifest: { "plate": { "file", "source" }, "sheets": [{ "handle", "file", "source" }] }
 
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
@@ -94,17 +93,22 @@ if (isMain) {
 
   if (DRY) for (const k of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) if (!process.env[k]) process.env[k] = "dry-run";
   const { uploadMedia, mediaConfigured } = await import("../src/media.mjs");
-  const { openOauthDb, oauthSchema } = await import("../src/oauth.mjs");
-  const { openPaper } = await import("../src/paperwork.mjs");
+  const { openLedger } = await import("./backfill-home-shelf.mjs");
   const { keepDepiction } = await import("../src/depictions.mjs");
   const { likenessRegistry } = await import("../src/likeness.mjs");
   if (!DRY && !mediaConfigured()) { console.error("the media door has no credentials here — run this on the box"); process.exit(2); }
   const reg = await likenessRegistry();
   if (!reg) { console.error("seed-sheets: this office is not pointed at the record (WORLD2_PG=1 and WORLD2_PG_URL), so no handle can be checked — nothing seeded"); process.exit(2); }
 
-  let dbPath = OAUTH_DB, tmp = null;
-  if (DRY) { tmp = mkdtempSync(join(tmpdir(), "seed-sheets-")); dbPath = join(tmp, "oauth.db"); if (existsSync(OAUTH_DB)) copyFileSync(OAUTH_DB, dbPath); }
-  const odb = DRY ? openOauthDb(dbPath) : await openPaper(OAUTH_DB, { schema: oauthSchema });
+  // The media ledger, opened as home-picture-carry.mjs opens it (POS-271,
+  // backfill-home-shelf § openLedger): --apply the way the server does,
+  // --dry-run the same real state with nothing kept (a throwaway copy of the
+  // file, or, switched, the store inside one transaction rolled back at the
+  // end). A copy of the file on a switched office would be empty once the
+  // files are deleted.
+  const ledger = await openLedger({ path: OAUTH_DB, dry: DRY });
+  const odb = ledger.odb;
+  console.log(`  media ledger: ${ledger.where}`);
   const put = DRY ? async () => {} : undefined;
   const keep = DRY ? async () => ({ kept: true }) : (row) => keepDepiction(row);
 
@@ -115,6 +119,6 @@ if (isMain) {
     onEntry: (e) => console.log(e.ok ? `  ${e.already ? "=" : "✓"} ${e.subject}  ${e.kind}  ${e.file} → ${e.url} (${e.bytes} B)` : `  ✗ ${e.subject}  ${e.code ?? "-"}: ${e.why}`),
   });
   console.log(`\n${DRY ? "[dry-run] would keep" : "kept"} ${kept.length}; already kept ${already.length}; refused ${refused.length}`);
-  if (tmp) rmSync(tmp, { recursive: true, force: true });
+  await ledger.done();
   process.exit(refused.length ? 1 : 0);
 }

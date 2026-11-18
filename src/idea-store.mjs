@@ -22,7 +22,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
+import { officeWrite, officeRead, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
 import { rungWords } from "./post-words.mjs";
 import { apiUrl } from "./public-base.mjs";
@@ -64,12 +64,6 @@ export async function ideaRow(client, id) {
   return rowOf(rows[0]);
 }
 
-/** Is this id an idea post? For the class router; a store that cannot be read answers no. */
-export async function isIdeaPost(id, { env = process.env } = {}) {
-  try { return Boolean(await officeRead((client) => ideaRow(client, String(id)), { env })); }
-  catch { return false; }
-}
-
 function actRow({ action, actor, object, payload, now }) {
   return {
     written_at: new Date(now).toISOString(), crossing: currentCrossing(now),
@@ -96,7 +90,7 @@ async function mustIdea(client, id) {
  * A slug the caller chose is theirs or refused; one minted from the title takes
  * `-2`, `-3`, … while held.
  */
-async function mintIdeaId(client, author, { slug, title }) {
+async function mintIdeaId(client, author, { slug, title, base: given = null }) {
   const { rows: posts } = await client.query("SELECT id FROM posts WHERE id LIKE $1", [`${author}/%`]);
   const { rows: marks } = await client.query("SELECT slug FROM marks WHERE slug LIKE $1", [`${author}/%`]);
   const held = new Set([...posts.map((r) => r.id), ...marks.map((r) => r.slug)]);
@@ -105,7 +99,7 @@ async function mintIdeaId(client, author, { slug, title }) {
     if (held.has(id)) throw refuse(409, `"${id}" is taken`, "an id is never reused, and a Think Tank mark holds some — choose another slug, or leave slug off and the title names it", { field: "slug" });
     return id;
   }
-  const base = slugFromTitle(title);
+  const base = slugFromTitle(title) || given;   // `given`: the conversion's explicit base for a title with no letters (convertMarkToIdeaPost)
   if (!base) throw refuse(422, "the title mints no id", "an idea's id is <author>/<slug>, from the title's letters and digits — give the title at least one, or send slug", { field: "title" });
   if (!held.has(`${author}/${base}`)) return `${author}/${base}`;
   for (let n = 2; n < 1000; n++) if (!held.has(`${author}/${base}-${n}`)) return `${author}/${base}-${n}`;
@@ -137,6 +131,43 @@ export async function postIdea(fields, key, { now = Date.now(), env = process.en
     return { post: answerOf(row), act_id: actId, ...(hand ? { hand } : {}),
       receipt: `posted: ${id} (an idea), by ${author}${hand ? `, put up by ${hand}'s hand` : ""}. It stands posted; the town's hands (${IDEA_HANDS.join(", ")}) move it along, and anyone may sign up to build a part with town { do: "sign-up", args: { post: "${id}", piece } }. It is a post, not a mark: it is in the Think Tank now, and it never crosses the settlement.`,
       read: readHint(id) };
+  }, env);
+}
+
+// ── convert (POS-854) ───────────────────────────────────────────────────────
+
+/**
+ * Carry one Think Tank idea MARK across as its author's idea post: ONE `post` act and ONE `posts` row, in one
+ * transaction, the author the actor and the town's hand named in the payload (the `for` path's own shape), with
+ * the mark's provenance on the row (`fields.origin`: the mark's id, kind, date, author and the body's digest).
+ * The conversion tool's step, run by an operator; it is no door.
+ *
+ *   · IDEMPOTENT BY PROVENANCE: a post whose `fields.origin.mark` is this mark is returned as `existed`, and
+ *     nothing is written, so a rerun never makes a second post and never mints a new suffix.
+ *   · THE PLANNED ID OR NOTHING: `planned` is the id the reviewed plan named. The pen's own mint is asked, and
+ *     must answer the same id, else the step refuses (the store moved since the plan was read).
+ *   · THE BODY IS THE MARK'S, WHOLE: judged by the idea law's own limit and never cut.
+ */
+export async function convertMarkToIdeaPost(m, { now = Date.now(), env = process.env, hand = "wright", planned = null, roll = null, wrote = write } = {}) {
+  on(env);
+  if (!IDEA_HANDS.includes(hand)) throw refuse(403, `${hand} is not one of the town's hands`, `the conversion is put up by ${IDEA_HANDS.join(", ")}`);
+  const t = judgeIdeaText({ title: m.title, body: m.body });
+  // an author the residents' roll does not hold is refused here, by name: the mark stays, unwithdrawn, for a person to resolve
+  const author = judgeHandleField("author", m.by, roll);
+  const origin = m.origin;
+  if (!origin || origin.mark !== m.mark) throw refuse(422, "a converted idea names the mark it was", "origin: { mark, kind, date, author, body_sha256 }");
+  return wrote(async (client) => {
+    const { rows: had } = await client.query("SELECT id FROM posts WHERE class = $1 AND fields->'origin'->>'mark' = $2", [IDEA_CLASS, m.mark]);
+    if (had.length) return { existed: true, post: had[0].id, mark: m.mark };
+    const id = await mintIdeaId(client, author, { title: t.title, base: m.id_base ?? null });
+    if (planned && id !== planned) throw refuse(409, `the pen mints "${id}" for ${m.mark}, and the reviewed plan named "${planned}"`, "the store moved since the plan was read: run the dry run again and review it");
+    const payload = { post: id, class: IDEA_CLASS, title: t.title, body: t.body, state: STATE_POSTED, fields: { origin }, ...(m.place ? { place: m.place } : {}), hand };
+    const actId = await insertAct(client, actRow({ action: ACT_POST, actor: author, object: id, payload, now }));
+    const household = await householdKeyFor(client, author);
+    const row = applyPostAct({ posts: new Map(), responses: new Map() },
+      { id: actId, action: ACT_POST, actor: author, object: id, payload, household });
+    await insertPost(client, row);
+    return { existed: false, post: id, mark: m.mark, act_id: actId, hand, author };
   }, env);
 }
 
@@ -305,6 +336,42 @@ export async function awardAtTown(fields, key, { now = Date.now(), env = process
   }, env);
 }
 
+// ── the first-idea fact, from the posts (POS-854) ───────────────────────────
+
+/**
+ * The idea posts these handles wrote, as `[{ by, date }]`: the day each stood. A post that was a Think Tank mark
+ * carries that mark's own date (`fields.origin.date`), so carrying a mark across never moves a day; any other post
+ * stands from its first `post` act. `[]` while the class is closed (off means today's marks, unchanged). A store
+ * that cannot be read THROWS: the caller says so rather than answering "none".
+ */
+export async function ideaPostDatesBy(handles, { env = process.env } = {}) {
+  if (!ideaPostsOn(env)) return [];
+  const list = [...new Set([...handles].map(String))];
+  if (!list.length) return [];
+  const iso = (v) => (v == null ? null : new Date(v).toISOString());
+  return officeRead(async (client) => {
+    const { rows: posts } = await client.query("SELECT id, author, fields FROM posts WHERE class = $1 AND author = ANY($2) ORDER BY id", [IDEA_CLASS, list]);
+    if (!posts.length) return [];
+    // each post's first `post` act, oldest first (the acts' own order), for a post that was never a mark
+    const { rows: acts } = await client.query("SELECT id, object, action, at FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [IDEA_CLASS, posts.map((p) => p.id)]);
+    const firstAt = new Map();
+    for (const a of acts) if (a.action === ACT_POST && !firstAt.has(a.object)) firstAt.set(a.object, a.at);
+    return posts.map((r) => {
+      const f = typeof r.fields === "string" ? JSON.parse(r.fields) : (r.fields ?? {});
+      return { by: r.author, date: f.origin?.date ?? iso(firstAt.get(r.id)) };
+    });
+  }, { env, by: "ideaPostDates" });
+}
+
+/** Every idea post's author and id, `[{ by, id }]`; `[]` while the class is closed; throws when the store cannot be read. */
+export async function standingIdeaPosts({ env = process.env } = {}) {
+  if (!ideaPostsOn(env)) return [];
+  return officeRead(async (client) => {
+    const { rows } = await client.query("SELECT id, author FROM posts WHERE class = $1 ORDER BY id", [IDEA_CLASS]);
+    return rows.map((r) => ({ by: r.author, id: r.id }));
+  }, { env, by: "standingIdeaPosts" });
+}
+
 // ── the read's joins ────────────────────────────────────────────────────────
 
 /** The idea read's own joins, on the caller's read: each post's body, and its build and stake responses. */
@@ -329,7 +396,7 @@ export async function ideaExtrasVia(client, ids) {
 export async function ideaPostsForTank({ env = process.env } = {}) {
   try {
     const { postsAtOffice } = await import("./town-posts.mjs");
-    const r = await postsAtOffice({ class: IDEA_CLASS }, { env, pointer: false }); // the tank is the one asking
+    const r = await postsAtOffice({ class: IDEA_CLASS }, { env, pointer: false, whole: true }); // the tank is the one asking
     return r.total ? { posts: r.posts, ...(r.unavailable ? { posts_unavailable: r.unavailable } : {}) } : {};
   } catch (e) {
     // Off, an office that never opened the class answers as it always did,

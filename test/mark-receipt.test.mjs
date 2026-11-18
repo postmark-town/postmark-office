@@ -17,9 +17,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { receiptFrom, causeOf, checkNameOf, CAUSE_WORDS, RECEIPT_CLOCK, settlementThatCarried } from "../src/mark-receipt.mjs";
 
@@ -238,11 +238,21 @@ test("causeOf maps every check it knows into the bulletin's five, and nothing el
 // premise here was a vocabulary nobody had read.
 //
 // EVERY WRITER EMITS `<name>: <detail>`. These eight are copied VERBATIM from
-// the two files that write the column, with the line each came from, so the leg
-// cannot drift into asserting a shape this file invented:
+// the files that write the column, each row labelled with where it came from, so
+// the leg cannot drift into asserting a shape this file invented. One row has
+// drifted since: the insufficient-stamps literal below predates the `held` term
+// (the writer now emits `staked N, held M, liquid L at town …`). It is left as
+// it was because `causeOf` keys on the prefix before the colon, so the detail
+// text does not change what the row asserts. The source
+// now cites its steps rather than its lines; the step each row below comes from
+// (the label strings in the third column keep the line numbers the table was
+// written with, and those lines have since moved):
 //
-//   world2/tools/clearing-job.mjs  lines 129, 131, 141, 158, 176, 190-191
-//   world2/tools/review-rule.mjs   line  247, 248
+//   world2/tools/clearing-job.mjs  step 1 (duplicate), step 2 (superseded),
+//                                  step 4 (parcel-overlap), step 5 (counterclaim)
+//   world2/tools/escrow-presence.mjs § unbackedStakesAmong  (insufficient-stamps,
+//                                  which clearing-job.mjs step 3 calls)
+//   world2/tools/review-rule.mjs § main  (review-ruling, refused and granted)
 //
 // If a writer gains a ninth prefix, this table does not know about it and the
 // receipt answers `null` — which is the honest failure and is asserted below.
@@ -374,7 +384,7 @@ test("`held` is now reachable ONLY from held_review — the word names one state
 // the `settlement/S<n>` tags that contain that commit. The fixture below is a
 // world repo with three settlements and a mark that landed at the middle one.
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-carried-"));
+const repo = tempDir("postmark-carried-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
@@ -436,7 +446,7 @@ test("a path the repo never held answers null, and does not throw out of a read"
 // Both flags are needed and each fixes a different case: `--follow` fixes the
 // move, oldest-add fixes the re-leave.
 
-const lives = mkdtempSync(join(tmpdir(), "postmark-carried-lives-"));
+const lives = tempDir("postmark-carried-lives-");
 after(() => rmSync(lives, { recursive: true, force: true }));
 const lgit = (...a) => execFileSync("git", ["-C", lives, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 const lput = (p, t) => { const f = join(lives, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };

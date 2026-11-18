@@ -39,6 +39,7 @@
 #   extract-town.mjs --town               same
 #   fetch-town.mjs --town                 same
 #   sync-renditions.mjs --town            same
+#   sync-hearths.mjs --town               same
 #   commit + push to main                 NOT DONE — see "no commit" below
 #
 #   deploy.yml (release lane)             this script
@@ -82,6 +83,25 @@
 # they would sit unpublished until the town happened to change. The key is:
 #
 #   town origin/main · site origin/main · newest release/* tag · settlement tags
+#   · the office's town-index version (POS-1034)
+#
+# THE OFFICE INDEX IS A FIFTH INPUT (POS-1034). The site builds its resident and
+# household lists from the office's API (tools/fetch-town.mjs walks GET
+# /api/residents), and the office answers from its own town index, which a timer
+# refreshes on its own clock (:05, :20, :35, :50). The index can therefore CATCH
+# UP while the town, site main, the tag and the world stand still: a resident who
+# joined just after a refresh was in the town repo but not yet in the index the
+# 20:10 tick read (Meddy, 2026-11-13), and with a key that ignored the index the
+# next tick said "nothing moved" until the town's next commit, hours away on a
+# quiet night. So the key carries the local API's `x-postmark-town-index-as-of`
+# header, asked the way crossing_now() asks for the crossing (the box door,
+# bounded, keyless). UNKNOWN (unreachable, no header, an unreadable value) is not a
+# moved input: it keeps whatever the key last carried (nothing, for an office that
+# has never answered it: the old key byte for byte), so a blip is never a refresh
+# storm, and it is never stamped as a version (the stamp says unknown). The version a pass SURVEYED is the one it hands the
+# stamper (BUILD_TOWN_INDEX_AS_OF -> build.json's town_index_as_of), not a later
+# look; an index that advances during a build is one more moved input for the
+# convergence loop below, inside its same pass and time budgets.
 #
 # Site main is in the key for the transition: while sync-atlas.yml is still
 # enabled it commits every 30 minutes, so main moves every tick and the quiet
@@ -114,9 +134,11 @@
 #
 # Env (unit): SITE_REFRESH_ROOT, SITE_WEBROOT, SITE_REMOTE, TOWN_REMOTE,
 #             WORLD_REMOTE, POSTMARK_API, SITE_REFRESH_REPORT,
-#             SITE_REFRESH_KEEP, SITE_REFRESH_MAX_PASSES, GH_TOKEN (optional).
+#             SITE_REFRESH_KEEP, SITE_REFRESH_MAX_PASSES,
+#             SITE_REFRESH_MAX_MINUTES, GH_TOKEN (optional).
 # Cwd: irrelevant — every path is absolute.
-# Exit: 0 published / quiet / stood down behind the lock · 1 the build failed.
+# Exit: 0 published / quiet / stood down behind the lock · 1 the build failed
+#       · 143 stopped by the unit's TERM (the board says so first).
 #
 # ── INSTALL (Wright's hand; this script never touches the box itself) ────────
 #
@@ -241,8 +263,20 @@ WORLD_REMOTE="${WORLD_REMOTE:-https://github.com/postmark-town/postmark-world.gi
 # there is not charged (src/bouncer.mjs boxLocal).
 API="${POSTMARK_API:-http://127.0.0.1:4390}"
 OUT="${SITE_REFRESH_REPORT:-/srv/postmark-harbor/site-refresh.json}"
+# A HAND BUILD FOR DEV (POS-986; Darko, 2026-11-09 16:13 EST: dev's site built on the box by hand, one run per
+# carry, against dev's office and the walk's branches). SITE_REFRESH_CODE_REF builds that site BRANCH instead of
+# the newest release/* tag, and SITE_REFRESH_SITE_BRANCH extracts the data from that branch instead of main.
+# Prod's unit sets neither, so prod builds exactly as before.
+CODE_BRANCH="${SITE_REFRESH_CODE_REF:-}"
+DATA_BRANCH="${SITE_REFRESH_SITE_BRANCH:-main}"
 KEEP="${SITE_REFRESH_KEEP:-5}"
 MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
+# THE TIME BUDGET (STAR-135), beside the pass budget and under the unit's
+# TimeoutStartSec=45min. A busy evening's pass takes 12-20 min, so three passes
+# can outrun the unit, and on 2026-11-05 one did: systemd killed the run at 45:00
+# and no report was written. Another pass starts only when the run's elapsed time
+# plus the last pass's duration still fits inside this many minutes.
+MAX_MINUTES="${SITE_REFRESH_MAX_MINUTES:-40}"
 
 TOWN="$ROOT/town"          # our own town clone — never the office's, never locked
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # where this script and its helpers live (POS-601)
@@ -253,7 +287,10 @@ STATE="$ROOT/state.json"
 LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-TOWN_SHA=""; SITE_MAIN=""; TAG=""; PUBLISHED=""; PASSES=0
+RUN_START="$(date -u +%s)"   # the time budget's clock (STAR-135)
+TOWN_SHA=""; SITE_MAIN=""; TAG=""; CODEREF=""; PUBLISHED=""; PASSES=0; INDEX_AS_OF=""
+# The index version the KEY last carried: what the last build's key held (state.json), kept while the version cannot be read (see survey()).
+INDEX_KEYED="$( [ -f "$STATE" ] && sed -n 's/.*"key": ".* index:\([^" ]*\)".*/\1/p' "$STATE" | head -1 || true )"
 
 mkdir -p "$ROOT" "$RELEASES" "$(dirname "$OUT")"
 
@@ -305,6 +342,25 @@ die() { report failed "$1"; echo "[site-refresh] FAILED: $1" >&2; exit 1; }
 on_err() { local rc=$?; report failed "the run stopped unexpectedly at line $1 (exit $rc) — see journalctl -u postmark-site-refresh"; echo "[site-refresh] FAILED at line $1 (exit $rc)" >&2; exit 1; }
 trap 'on_err $LINENO' ERR
 
+# A TERM WRITES THE BOARD TOO (STAR-135). systemd stops the unit with SIGTERM at
+# TimeoutStartSec, and the ERR trap does not see a signal. On 2026-11-05 a
+# three-pass run was killed at exactly 45:00, no report was written, and the
+# board kept the previous run's "quiet" stamp until the sentinel read STALE over
+# a site that was fresh. A run that published before the stop says "published"
+# and names the release; one that published nothing says "failed". Either way
+# it exits 143, as a TERM'd process does.
+on_term() {
+  trap - ERR TERM
+  if [ -n "$PUBLISHED" ]; then
+    report published "stopped at the unit's limit after $PASSES pass(es); last published $(basename "$PUBLISHED") — the next tick takes the rest"
+  else
+    report failed "stopped at the unit's limit after $PASSES pass(es); nothing was published this run — the standing release keeps serving"
+  fi
+  echo "[site-refresh] STOPPED: TERM at the unit's limit after $PASSES pass(es)" >&2
+  exit 143
+}
+trap on_term TERM
+
 # PREFLIGHT (POS-601): the pin helper travels beside this script. Missing, every
 # publish would stop at the pin step, so say so at the top of every tick, by name,
 # before any fetch or build is spent.
@@ -328,20 +384,47 @@ fi
 [ -d "$TOWN/.git" ] || { say "first run: cloning the town"; git clone -q "$TOWN_REMOTE" "$TOWN"; }
 [ -d "$SITE/.git" ] || { say "first run: cloning the site"; git clone -q "$SITE_REMOTE" "$SITE"; }
 
+# ── the office index's version, as the office's own door states it ──────────
+# `x-postmark-town-index-as-of` rides every index read (src/server.mjs); GET
+# /residents?limit=1 is the cheapest of them and the very route the site's fetch
+# walks. Asked of the box door ($API, loopback, never charged), keyless, bounded
+# like crossing_now(). It prints the version, or NOTHING: unreachable, no header, a
+# non-2xx answer and a value that is not a plain token are all "unknown", and this
+# function cannot fail the run (the `|| true`s are the pipefail guard, not decoration).
+index_as_of() {
+  local v
+  v="$(curl -fsS --max-time 10 -D - -o /dev/null "$API/residents?limit=1" 2>/dev/null \
+    | tr -d '\r' | awk '/^HTTP\// { good = ($2 ~ /^2/) } { n = index($0, ":"); if (good && n > 0 && tolower(substr($0, 1, n - 1)) == "x-postmark-town-index-as-of") { v = substr($0, n + 1); sub(/^[ \t]+/, "", v); print v; exit } }' || true)"
+  # the stamper's own rule for a version: one plain token (build-stamp.mjs, townIndexAsOf)
+  if printf '%s' "$v" | grep -Eq '^[A-Za-z0-9._:+-]{1,80}$'; then printf '%s' "$v"; fi
+  return 0
+}
+
 # ── what the world looks like right now ─────────────────────────────────────
 survey() {
   git -C "$TOWN" fetch -q --prune origin
   TOWN_SHA="$(git -C "$TOWN" rev-parse origin/main)"
   git -C "$SITE" fetch -q --prune --tags --force origin
-  SITE_MAIN="$(git -C "$SITE" rev-parse origin/main)"
+  SITE_MAIN="$(git -C "$SITE" rev-parse "origin/$DATA_BRANCH")"
   # Newest release tag, by the same rule deploy.yml uses (creatordate, newest
   # first). No tag at all is deploy.yml's own sleeping case, not an error.
-  TAG="$(git -C "$SITE" tag -l 'release/*' --sort=-creatordate | head -1)"
+  # A dev hand build names its branch instead (SITE_REFRESH_CODE_REF, above).
+  if [ -n "$CODE_BRANCH" ]; then
+    TAG="$CODE_BRANCH"; CODEREF="refs/remotes/origin/$CODE_BRANCH"
+  else
+    TAG="$(git -C "$SITE" tag -l 'release/*' --sort=-creatordate | head -1)"; CODEREF="refs/tags/$TAG"
+  fi
   # The settlement listing, hashed. One ls-remote, no clone: enough to notice a
   # blessing, cheap enough to spend on every quiet tick. The real decision (the
   # three guardrails) is still resolve-world-pin.mjs's, inside the build.
   WORLD_TAGS="$(git ls-remote "$WORLD_REMOTE" 'refs/tags/settlement/*' 2>/dev/null | sha1sum | cut -d' ' -f1)"
-  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS"
+  # POS-1034: the office index's version, when it can be read. UNREADABLE keeps the version the key last carried (INDEX_KEYED), so a blip of the local API
+  # (a 10 s timeout, a restart) is not a moved input: a tick that cannot read it decides on the other four inputs exactly as the old key did, and a later tick that
+  # reads the SAME version stays quiet instead of rebuilding twice for one blip. It never claims a version it did not read: the STAMP gets INDEX_AS_OF, which is
+  # empty when unknown (build_once), and a script that has never read one (an office without the header) keeps the old key byte for byte.
+  INDEX_AS_OF="$(index_as_of)"
+  [ -z "$INDEX_AS_OF" ] || INDEX_KEYED="$INDEX_AS_OF"
+  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "$CODEREF^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS${INDEX_KEYED:+ index:$INDEX_KEYED}"
 }
 
 survey
@@ -354,7 +437,7 @@ fi
 LAST="$( [ -f "$STATE" ] && sed -n 's/.*"key": "\(.*\)".*/\1/p' "$STATE" || true )"
 if [ "$KEY" = "$LAST" ]; then
   report quiet "nothing moved since the last build (town $(echo "$TOWN_SHA" | cut -c1-8), $TAG)"
-  say "quiet: town, site main, $TAG and the settlement tags are all where the last build left them"
+  say "quiet: town, site main, $TAG, the settlement tags and the office index are all where the last build left them"
   exit 0
 fi
 
@@ -420,6 +503,8 @@ crossing_now() {
 # ── one build pass ──────────────────────────────────────────────────────────
 build_once() {
   PASSES=$((PASSES + 1))
+  # THE INDEX VERSION THIS PASS SURVEYED (POS-1034): taken here, before anything in the pass runs, so the stamp names what the pass saw first and never a later look.
+  local index_seen="$INDEX_AS_OF"
   say "pass $PASSES — town $(echo "$TOWN_SHA" | cut -c1-8) · site main $(echo "$SITE_MAIN" | cut -c1-8) · code $TAG"
 
   # THE TOWN AT A PINNED SHA. Detached at exactly the sha the key names, so the
@@ -449,7 +534,13 @@ build_once() {
   say "extract: the checkout-coupled half (media, atlas, daily, works, doorstep bundles)"
   # POSTMARK_API named here, not inherited from the unit: the doorsteps are
   # read from the same office the rest of the pass reads (2026-10-13).
-  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_API="$API" POSTMARK_CROSSING="$crossing" node tools/extract-town.mjs --town "$TOWN" ) \
+  # DOORSTEP_STATE_DIR (POS-1086): the extractor keeps each resident's last
+  # office answer and its `rev` there, so the next pass can send `known=` and
+  # carry an unchanged doorstep over. It sits under $ROOT, beside
+  # letter-cache.json, because this script resets and cleans $SITE at the top of
+  # every pass: state kept in the tree would be wiped, and every pass would stay
+  # a full one. One pass at a time holds $LOCK, so the directory has one writer.
+  ( cd "$SITE" && GH_TOKEN="${GH_TOKEN:-}" POSTMARK_API="$API" POSTMARK_CROSSING="$crossing" DOORSTEP_STATE_DIR="$ROOT/doorstep-state" node tools/extract-town.mjs --town "$TOWN" ) \
     || die "extract-town.mjs tripped"
   say "extract: the API-fed half"
   # fetch-town.mjs also writes /data/pin.json (the site's tools/lib/world-pin-publish.mjs),
@@ -470,6 +561,11 @@ build_once() {
   say "extract: approved renditions"
   ( cd "$SITE" && node tools/sync-renditions.mjs --town "$TOWN" ) \
     || die "sync-renditions.mjs tripped"
+  # sync-atlas.yml's "Sync registered Hearth entries" (POS-959): merged entries into
+  # src/data/postmark/hearths.json, which the overlay below carries into the build.
+  say "extract: registered Hearth entries"
+  ( cd "$SITE" && node tools/sync-hearths.mjs --town "$TOWN" ) \
+    || die "sync-hearths.mjs tripped"
 
   # ── the build tree: site @ the newest release tag ─────────────────────────
   #
@@ -487,10 +583,10 @@ build_once() {
   git -C "$SITE" worktree prune >/dev/null 2>&1 || true
   if [ ! -e "$BUILD/.git" ]; then
     rm -rf "$BUILD"   # a killed run can leave a half-made tree that `add` refuses
-    git -C "$SITE" worktree add -f --detach "$BUILD" "refs/tags/$TAG" >/dev/null \
+    git -C "$SITE" worktree add -f --detach "$BUILD" "$CODEREF" >/dev/null \
       || die "could not make the build worktree at $BUILD"
   fi
-  git -C "$BUILD" checkout -qf --detach "refs/tags/$TAG" || die "could not check out $TAG in the build tree"
+  git -C "$BUILD" checkout -qf --detach "$CODEREF" || die "could not check out $TAG in the build tree"
   git -C "$BUILD" clean -qfd -e node_modules
 
   # THE OVERLAY — deploy.yml's `git checkout origin/main -- public/atelier/postmark
@@ -629,6 +725,7 @@ build_once() {
       BUILD_TOWN_DATA_SHA="$SITE_MAIN" \
       BUILD_TOWN_SHA="$TOWN_SHA" \
       BUILD_CROSSING="$crossing" \
+      BUILD_TOWN_INDEX_AS_OF="$index_seen" \
       BUILD_WORLD_REF="$world_ref" \
       node tools/build-stamp.mjs --out dist-town/build.json ) || die "the build stamp tripped"
   fi
@@ -670,7 +767,37 @@ build_once() {
   rel="$base"; n=0
   while [ -e "$rel" ]; do n=$((n + 1)); rel="$base.$n"; done
   mkdir -p "$rel"
-  rsync -a --delete "$BUILD/dist-town/" "$rel/"
+
+  # HARD-LINK WHAT DID NOT CHANGE (POS-1087). A release is ~1.5 GB, and most of
+  # it is byte-identical to the one being served. --link-dest makes the new
+  # release a hard link to the serving release's copy of every file whose
+  # CONTENT matches, so a publish writes only the files that changed. Three
+  # choices carry it:
+  #  * --checksum, not the quick check: every build stamps fresh mtimes, so a
+  #    time-and-size check links nothing, and a same-size same-second edit would
+  #    be linked wrongly. Content decides.
+  #  * no -t (-rlpgoD, not -a): with times preserved a linked file's mtime would
+  #    have to equal the new build's, which it never does, and rsync then copies
+  #    it. Unchanged files keep the mtime of the release they came from, which
+  #    also keeps their ETag and Last-Modified stable for nginx and browsers.
+  #  * the previous release is the one the webroot SERVES, and only if it sits in
+  #    $RELEASES (before the INSTALL cutover the webroot is a plain directory, and
+  #    its bytes are never linked into a release).
+  # Nothing writes into a release after this rsync (the state file, the pin and
+  # build.json are written before it or beside it; nginx and box-rollcall only
+  # read), so a shared inode is never changed under an older release. Prune is
+  # unchanged: rm -rf of an old release drops its links; a file's bytes go when
+  # its last link does. No previous release, or a link-dest run that fails (a
+  # filesystem that refuses hard links): the whole-copy rsync that ran before.
+  local prev
+  prev="$(readlink -f "$WEBROOT" 2>/dev/null || true)"
+  case "$prev" in "$RELEASES"/*) [ -d "$prev" ] || prev="";; *) prev="";; esac
+  if [ -n "$prev" ] && [ "$prev" != "$rel" ]; then
+    rsync -rlpgoD --checksum --delete --link-dest="$prev" "$BUILD/dist-town/" "$rel/" \
+      || { say "link-dest publish failed; copying every file instead"; rsync -a --delete "$BUILD/dist-town/" "$rel/"; }
+  else
+    rsync -a --delete "$BUILD/dist-town/" "$rel/"
+  fi
 
   # ATOMICITY, and why it is a rename and not `ln -sfn`. `ln -sfn` over an
   # existing symlink unlinks and re-links: there is a window, however short, in
@@ -686,8 +813,8 @@ build_once() {
   PUBLISHED="$rel"
   say "published: $link -> $rel ($(du -sh "$rel" | cut -f1))"
 
-  printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
-    "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
+  printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "index_as_of": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
+    "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$index_seen" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
 
   # Prune, never the one being served. readlink -f resolves through the symlink
   # we just swapped, so "current" is read from the world rather than remembered.
@@ -711,7 +838,9 @@ build_once() {
 # worse than one that lands a minute late; the next tick picks up the remainder.
 while :; do
   BUILT_TOWN="$TOWN_SHA"; BUILT_KEY="$KEY"
+  PASS_START="$(date -u +%s)"
   build_once
+  PASS_SECS=$(( $(date -u +%s) - PASS_START ))
   survey
   if [ "$KEY" = "$BUILT_KEY" ]; then
     report published "converged after $PASSES pass(es) at town $(echo "$BUILT_TOWN" | cut -c1-8)"
@@ -721,6 +850,14 @@ while :; do
   if [ "$PASSES" -ge "$MAX_PASSES" ]; then
     report published "published at town $(echo "$BUILT_TOWN" | cut -c1-8); the town moved again mid-build and $MAX_PASSES passes are spent — the next tick takes it"
     say "the town moved again and the pass budget is spent — the next tick converges"
+    break
+  fi
+  # The time budget (STAR-135): a pass that would end past it is not started,
+  # so the run ends on its own report rather than on the unit's kill.
+  RUN_SECS=$(( $(date -u +%s) - RUN_START ))
+  if [ $(( RUN_SECS + PASS_SECS )) -gt $(( MAX_MINUTES * 60 )) ]; then
+    report published "published at town $(echo "$BUILT_TOWN" | cut -c1-8); the town moved again mid-build and the run's time is spent ($((RUN_SECS / 60)) min gone, the last pass took $((PASS_SECS / 60)), the budget is $MAX_MINUTES) — the next tick takes it"
+    say "the town moved again and the time budget is spent — the next tick converges"
     break
   fi
   say "the town moved during the build ($(echo "$BUILT_TOWN" | cut -c1-8) -> $(echo "$TOWN_SHA" | cut -c1-8)) — building once more"

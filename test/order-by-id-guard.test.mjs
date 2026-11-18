@@ -18,17 +18,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/**
- * Known and fixed elsewhere: plumb-combat's branch (wld25/encounter-nerve, on the
- * w44 train) orders these two by `acts.id` already. A main-side edit to the same
- * lines would only conflict when the train takes main, so they wait for it.
- * Each is named by its file and constant, never by a line number.
- */
-const FIXED_ON_THE_TRAIN = Object.freeze([
-  { file: "src/creatures.mjs", constant: "LIVING_SQL" },
-  { file: "src/creatures.mjs", constant: "LIVING_BOOT_SQL" },
-]);
-
 /** Every SQL string in `text` that selects id as text and orders by the bare alias: [{ line, constant, sql }]. */
 export function textOrderedReads(text) {
   const out = [];
@@ -53,7 +42,7 @@ test("no read in src/, world2/tools/ or deploy/ sorts act ids by their text", ()
     for (const f of names) {
       const file = `${dir}/${f}`;
       for (const hit of textOrderedReads(readFileSync(join(ROOT, file), "utf8")))
-        if (!FIXED_ON_THE_TRAIN.some((k) => k.file === file && k.constant === hit.constant)) found.push(`${file}:${hit.line} ${hit.constant ?? ""} ${hit.sql}`);
+        found.push(`${file}:${hit.line} ${hit.constant ?? ""} ${hit.sql}`);
     }
   }
   assert.deepEqual(found, [], `order these by the table's column (acts.id), never the id::text alias:\n${found.join("\n")}`);

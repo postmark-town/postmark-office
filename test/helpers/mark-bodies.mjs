@@ -6,7 +6,8 @@
 //   · a place NAMED inside place words ("<inner>, <outer>", "near <place>") with
 //     no row of that name beside the words, in `within` or `near`. A name in a
 //     sentence is invisible to the first two (review-559, 10-14, Addendum 3).
-// `exempt` names keys whose string values are not marks (an event's post id).
+// `exempt` names keys whose string values are not marks (an event's post id; a resident's
+// profile `pronouns`, which are words like "he/him" that wear a mark id's shape: POS-953).
 // `words` names the keys that hold place words (world.mjs § placeWordsFrom).
 
 export const MARK_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9-]*$/;
@@ -19,7 +20,7 @@ export function placeNames(words) {
   return w.split(", ");
 }
 
-export function unbodied(answer, { exempt = ["event"], words = ["here", "where"] } = {}) {
+export function unbodied(answer, { exempt = ["event", "pronouns"], words = ["here", "where"] } = {}) {
   const out = [];
   const walk = (v, path, key) => {
     if (typeof v === "string") {

@@ -32,6 +32,7 @@
 // the inner call adds its rows to it. The hook picks one trigger per call.
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the creatures' answer, timed under the act's request (measurement only)
 
 const watch = new AsyncLocalStorage();
 let awake = false;
@@ -67,7 +68,7 @@ export async function perceived(run) {
   if (!s.rows.length) return result;
   try {
     const { creaturesAnswer } = await import("./creatures-hook.mjs");
-    return await creaturesAnswer(s.rows, result);
+    return await actSpan("creatures", () => creaturesAnswer(s.rows, result)); // POS-1110: the creatures' answer is part of the act's wait; timed under its request
   } catch (e) {
     console.error(`[creatures] the hook tripped; the act answers without them (${String(e?.message ?? e).slice(0, 200)})`);
     return result;

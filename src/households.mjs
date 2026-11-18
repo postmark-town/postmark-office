@@ -61,7 +61,7 @@
 // a per-process fold would answer with the town from before the ceremony in
 // every other process for as long as it lived.
 
-import { loadRegistryRows } from "./registry-store.mjs";
+import { loadRegistryRows, registryRowsVia } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { isResidentHandle } from "./residency.mjs"; // one definition of what a handle is
 import { resolveHouse, keyOfSlug } from "./household-deriver.mjs";
@@ -136,6 +136,37 @@ export async function householdLookup(env = process.env) {
   try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
   if (rows === null) return null;
   return householdLookupOf(registryFromRows(rows), pinsFromRows(rows));
+}
+
+/**
+ * POS-1094: a key's handles in their household's own order, first joined first (the registry row's `residents`
+ * array, as the register keeps it; it names no primary handle). A handle the house does not list goes after
+ * those it does, in the order it came; null when the registry could not be read, so the caller keeps its own order.
+ */
+export async function residentOrder(handles = [], env = process.env) {
+  let rows;
+  try { rows = await loadRegistryRows(env); } catch (e) { warnOnce(e); return null; }
+  if (rows === null) return null;
+  return residentOrderOf(registryFromRows(rows), pinsFromRows(rows), handles);
+}
+
+/** PURE: the order `residentOrder` gives, over one registry read. */
+export function residentOrderOf(registry, pins, handles = []) {
+  const list = [...(handles ?? [])].map(String);
+  const slug = list.map((h) => resolveHouse(h, registry, pins).slug).find(Boolean);
+  const order = slug ? (registry?.households?.[slug]?.residents ?? []).map(String) : [];
+  const at = (h) => { const i = order.indexOf(h); return i < 0 ? Infinity : i; };
+  return list.map((h, i) => ({ h, i })).sort((x, y) => at(x.h) - at(y.h) || x.i - y.i).map(({ h }) => h);
+}
+
+/**
+ * The block for one handle, from the store the caller is ALREADY HOLDING (a client inside a transaction): the same registry, pins and lookup as `householdOf`, read on
+ * that client (registry-store.mjs § registryRowsVia) instead of on the module's acts pool. A reader inside the pen's transaction must use this and not `householdOf`:
+ * waiting on a second pool while its own connection sits idle in a transaction is how the server's idle-transaction timeout ended one (POS-963).
+ */
+export async function householdOfVia(q, handle) {
+  const rows = await registryRowsVia(q);
+  return householdLookupOf(registryFromRows(rows), pinsFromRows(rows))(handle);
 }
 
 /** The block for one handle, from the store; null when the store could not be asked. */

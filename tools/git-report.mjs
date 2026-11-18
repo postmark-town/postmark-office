@@ -360,11 +360,6 @@ const mergedTotal = prs.filter((p) => p.merged_at).length;
 const witnessShare = mergedTotal ? data.totals.witness_merged / mergedTotal : 0;
 const oldest = Math.max(0, ...open.map(ageDays));
 
-// The share the witness cleared THIS week — the number that says whether the
-// door is working now, as opposed to how it has worked since June.
-const clearedNow = certWin.cur + routedWin.cur ? certWin.cur / (certWin.cur + routedWin.cur) : 0;
-const clearedPrev = certWin.prev + routedWin.prev ? certWin.prev / (certWin.prev + routedWin.prev) : 0;
-
 // LANDED FIRST (2026-08-11, Keemin: "im less interested in current open prs and
 // more the auto merges and commits that took place"). The row opens on what
 // went in; "open now" is still here — it is the operator's to-do — but it is no

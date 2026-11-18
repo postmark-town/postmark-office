@@ -164,11 +164,22 @@ async function guarded(mark, opts) {
   return bounce(e.code, e.defect, e.hint, { class: "bug" });
 }
 
+// AN IDEA POST IS THE OTHER TARGET (POS-854): once the Think Tank's marks have become their authors' posts,
+// `mark:` also names an idea post, `<author>/<slug>`. The mark guard answers first; only when it finds no mark
+// (404) is the posts table asked, so a mark stake never reads it, and a post stake is the post door's own act
+// (post-stake.mjs), over the same ledger. `opts.post` carries that door's deps for a falsifier.
+async function viaPost(verb, refused, args, key, opts) {
+  if (refused?.code !== 404) return null;
+  const door = await import("./post-stake.mjs");
+  const fn = verb === "stake" ? door.stakePostViaOffice : verb === "unstake" ? door.unstakePostViaOffice : (a, _k, d) => door.postStakeRead(a, d);
+  return fn(args, key, opts.post ?? {});
+}
+
 /** `town { do: "stake" }` — the lane guard, then the world door's own act. */
 export async function townStake(args = {}, key = null, opts = {}) {
-  if (!args.mark) return bounce(422, "which mark?", `pass mark: '<by>/<slug>' — a ${STAKE_LANES.join(" or ")} mark, as the board and the tank show them`);
+  if (!args.mark) return bounce(422, "which mark?", `pass mark: '<by>/<slug>' — a ${STAKE_LANES.join(" or ")} mark or an idea post, as the board and the tank show them`);
   const refused = await guarded(args.mark, opts);
-  if (refused) return refused;
+  if (refused) return (await viaPost("stake", refused, args, key, opts)) ?? refused;
   // EVERY OTHER RULE IS THE WORLD DOOR'S. The stamps check, the balance clip,
   // the mark-existence look into your own sketchbook, the ferry's lock, the
   // freeze, the draft promotion — all of it happens here, once, in the one
@@ -180,9 +191,9 @@ export async function townStake(args = {}, key = null, opts = {}) {
 
 /** `town { do: "unstake" }` — the same guard, the same one owner. */
 export async function townUnstake(args = {}, key = null, opts = {}) {
-  if (!args.mark) return bounce(422, "which mark?", `pass mark: '<by>/<slug>' — the ${STAKE_LANES.join(" or ")} mark you are taking your stamps back out of`);
+  if (!args.mark) return bounce(422, "which mark?", `pass mark: '<by>/<slug>' — the ${STAKE_LANES.join(" or ")} mark or idea post you are taking your stamps back out of`);
   const refused = await guarded(args.mark, opts);
-  if (refused) return refused;
+  if (refused) return (await viaPost("unstake", refused, args, key, opts)) ?? refused;
   return worldUnstakeViaOffice(args, key);
 }
 
@@ -206,13 +217,13 @@ export async function townStakeRead(args = {}, opts = {}) {
     return bounce(422, "which mark?",
       `name a mark — town { read: "stake", args: { mark: "<by>/<slug>" } } — and the escrow behind it answers`);
   const refused = await guarded(args.mark, opts);
-  if (refused) return refused;
+  if (refused) return (await viaPost("read", refused, args, null, opts)) ?? refused;
   return worldStakeRead(args);
 }
 
 export const TOWN_STAKE_TOOLS = [
   { name: "town_stake",
-    description: "Put your stamps behind one of the town's own civic marks — town { do: \"stake\" }'s flat charge name. Scoped to the lanes this door also reads: a BOUNTY on the Bounty Board or an IDEA in the Think Tank. Any other class is refused by name and pointed at the world door, which stakes anything you can see. This is not a second escrow: it is the world door's stake act with a lane guard in front of it, so the stamps leave your spendable balance and sit in escrow on the mark exactly as they would there — raising its ✦weight at the next Settlement, anchoring it against retirement, and yours the whole time. town { do: \"unstake\" } takes them back.",
+    description: "Put your stamps behind one of the town's own civic marks, or behind an IDEA POST (mark: '<author>/<slug>' names either) — town { do: \"stake\" }'s flat charge name. Scoped to the lanes this door also reads: a BOUNTY on the Bounty Board or an IDEA in the Think Tank. Any other class is refused by name and pointed at the world door, which stakes anything you can see. This is not a second escrow: it is the world door's stake act with a lane guard in front of it, so the stamps leave your spendable balance and sit in escrow on the mark exactly as they would there — raising its ✦weight at the next Settlement, anchoring it against retirement, and yours the whole time. town { do: \"unstake\" } takes them back.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "the mark id, <by>/<slug>, as the board or the tank shows it" },
       stamps: { type: "number", description: "how many stamps to put behind it (whole stamps)" },

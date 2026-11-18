@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
-  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS } from "../src/household-read-v2.mjs";
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS, FIRST_STEPS_NOTE, FIRST_STEPS_NAMING_NOTE } from "../src/household-read-v2.mjs";
 import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -184,23 +184,21 @@ test("D1 · each member is one string: handle · where · last act · what the p
 });
 
 test("D1 · every can act names every field it takes, grouped by intent", async () => {
-  const can = canBlock("resident", "keeminlee");
+  const can = canBlock();
   assert.deepEqual(Object.keys(can), ["answer", "write", "tend", "back", "host", "house"]);
   const text = Object.values(can).join(" · ");
   for (const acts of Object.values(CAN_GROUPS)) for (const act of acts) {
-    if (act === "declare" || act === "begin") { assert.ok(!text.includes(`${act} {`), `${act} is not a resident household's`); continue; }
     assert.ok(text.includes(actFields(act)), `${act} rides with its fields`);
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
-  assert.equal(actFields("send"), "send { from, to, title, body, thread? }");
+  assert.equal(actFields("send"), "send { from, to, title, body, thread?, resend? }");   // POS-1027: resend?, the bounced letter this one replaces
   // profile's fields are read from their one owner (edit.mjs § PROFILE_FIELD_DOC), pronouns included (#677)
   const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
   assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
   assert.match(actFields("profile"), /pronouns\?/);
-  // a berth sees begin and no declare; a caller with no household sees declare and no begin
-  assert.match(canBlock("berth", null).house, /begin \{/);
-  assert.doesNotMatch(canBlock("berth", null).house, /declare \{/);
-  assert.match(canBlock("visitor", null).house, /declare \{/);
+  // CORE-114: no caller's can lists begin, declare or buy-parcel-room: they are offered (the tier's next; first_steps)
+  assert.equal(text.match(/\b(begin|declare|buy-parcel-room) \{/), null);
+  assert.equal(can.house, "add-resident { handle, card }");
 });
 
 test("D2 · the house's human is named by the house, from one function", () => {
@@ -307,7 +305,9 @@ test("closer · pairs with everyone outside the house, a multi-recipient letter 
   const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
   const rows = closerRows(letters, { mine: HOUSE9, houseOf, mints: new Map([["l1", 1], ["l2", 1], ["l4", 1]]), milestones: new Map([["damaris", [{ by: "wright", rung: 1 }]]]) });
   assert.deepEqual(rows.map((r) => [r.with, r.of, r.letters]), [["damaris", "Mayflower", 2], ["isabella-cognita", "Casa Cognita", 1], ["kai", "Kai's House", 1]]);
-  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "milestones", "stamps_between", "last_at"]);
+  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "house_members", "milestones", "stamps_between", "last_at"]);
+  // POS-1027: which of the house's residents wrote with each correspondent (a pair read's `a`)
+  assert.deepEqual(rows.map((r) => [r.with, r.house_members]), [["damaris", ["rei", "wright"]], ["isabella-cognita", ["mari"]], ["kai", ["mari"]]]);
   assert.equal(rows[0].stamps_between, 2);
   assert.equal(rows[0].last_at, "2026-10-19T12:06:00.000Z");
   assert.ok(!rows.some((r) => "says" in r), "D6: no says");
@@ -325,8 +325,8 @@ test("went and mints · read by the ledger's own grammar: a giver of ours is wen
     { canonical: "- 2026-10-19 · damaris → stake:world-mark/x/y · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
   ];
   assert.deepEqual(wentRows(lines, HOUSE9), [
-    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, via: "api" },
-    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, for: "correction:abc" },
+    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, kind: "mark", via: "api" },   // POS-1027: each row gains its kind
+    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, kind: "burn", for: "correction:abc" },
   ]);
   assert.deepEqual([...mintsByLetter(lines, HOUSE9)], [["augie-2026-10-19-to-mari-the-view", 1]]);
 });
@@ -343,6 +343,12 @@ test("happened · D4: hand and for from what the record knows; a route never rec
     assert.ok(!JSON.stringify(r).includes("unknown"));
   }
   assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, after every existing field — never words
+  const reply = happenedRow({ id: "70002", at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay", reply_to: "70001" }, { houseName: "Starforge" });
+  assert.deepEqual(Object.keys(reply), ["at", "hand", "for", "verb", "object", "place", "by", "say"], "the existing fields in their order, then say");
+  assert.deepEqual(reply.say, { id: 70002, reply_to: 70001 });
+  assert.deepEqual(happenedRow({ id: "70003", actor: "rei", action: "say" }).say, { id: 70003 }, "a top say (or old talk): no parent invented");
+  assert.equal("say" in happenedRow({ id: "70004", actor: "rei", action: "walk", reply_to: "70001" }), false, "only a say carries one");
   assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
 });
 
@@ -355,7 +361,8 @@ test("happened · D4: hand and for from what the record knows; a route never rec
 // the four mail-parity acts join can.write (amend-letter { id, body } · withdraw-letter { id } · block { household }
 // · unblock { household }) and put the full stack at 6,784, 64 over 6,720.
 const FULL_BUDGET = 6848;
-test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
+// The every-block fixture, built once for the H2 test below and POS-947/c's.
+function fullStarforge() {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
   // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)
   const stream = (by, over, n, body) => Array.from({ length: n }, (_, i) => ({ mark: `${by}/a-mark-of-theirs-${String(i).padStart(2, "0")}`, by, kind: "sited",
@@ -370,6 +377,10 @@ test("H2 with every block · Starforge's glance with closer and happened stays b
     action: "leave-mark", object: `${STARFORGE[i % STARFORGE.length]}/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
   happened[1] = happenedRow({ at: new Date(NOW - 3_600_000).toISOString(), actor: "rei", hand: "human", for_handle: "rei", route: "site", action: "home", object: "rei/home" }, { houseName: "Starforge" });
   const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
+  return { p, closer, happened, went };
+}
+test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
+  const { p, closer, happened, went } = fullStarforge();
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
   t.diagnostic(`Starforge, every block: ${served(g)} characters (${Object.entries(g).map(([k, v]) => `${k} ${served(v)}`).join(", ")})`);
   assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
@@ -529,16 +540,40 @@ test("mail that can be acted on: unanswered_14d by the ledger, answered by threa
 test("discovery (as world v2): HOUSEHOLD_READ_SHAPE=v2 makes the glance the MCP door's default; read_shape: \"v1\" still asks for today's read; the card names it", async () => {
   const { doorShape, householdLeanShape } = await import("../src/door-read-shape.mjs");
   assert.equal(doorShape("household", { HOUSEHOLD_READ_SHAPE: "v2" }), "v2");
-  assert.equal(doorShape("household", {}), "h0", "unset is today's read: v1 stays the default until Darko sets the date");
+  assert.equal(doorShape("household", {}), "h0", "unset is still the older read in code: the default is the box's env switch (POS-1094), set at the w48 ship");
   assert.equal(householdLeanShape("v2"), "h0");
   const glance = await householdApex({}, null, { readShape: "v2" });
   assert.equal(glance.read_shape, "v2", "the env's default answers the glance");
   const v1 = await householdApex({ read_shape: "v1" }, null, { readShape: "v2" });
   assert.deepEqual(v1, await householdApex({}, null, {}), "read_shape: \"v1\" is today's read, whatever the default");
   const { HOUSEHOLD_DESCRIPTION } = await import("../src/household-apex.mjs");
-  assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v2" answers your house/);
+  assert.match(HOUSEHOLD_DESCRIPTION, /\(read_shape: "v2", the default read here\)/);
+  assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v1" is the older, fuller read/);
+  assert.doesNotMatch(HOUSEHOLD_DESCRIPTION, /opt-in/);
+  const { HOUSEHOLD_TOOL } = await import("../src/household-apex.mjs");
+  const shapeText = HOUSEHOLD_TOOL.inputSchema.properties.read_shape.description;
+  assert.match(shapeText, /the default at this door/);
+  assert.doesNotMatch(shapeText, /opt-in|Omit it for today's read/, "POS-1094: v2 is no longer opt-in");
   const { DOORSTEP_MORE } = await import("../src/doorstep-apex.mjs");
-  assert.match(DOORSTEP_MORE, /household \{ read_shape: "v2" \} is your house at a glance/, "the doorstep points at it in one line");
+  assert.match(DOORSTEP_MORE, /household \{ \} is your house at a glance/, "the doorstep points at it in one line");
+  assert.doesNotMatch(DOORSTEP_MORE, /read_shape/, "and needs no shape word now that v2 is the default");
+});
+
+test("POS-1094 · the line on the default: the bare glance says v2 is the default and v1 the older read only while v2 IS the door's default", async () => {
+  const { DEFAULT_LINE } = await import("../src/read-grammar.mjs");
+  assert.match(DEFAULT_LINE, /v2 is the default read now; read_shape: "v1" is the older, fuller one/);
+  // the flip: the same call, the default said on and off. Off (unset env), a bare glance asked for by read_shape says nothing of a default.
+  assert.ok(!glanceV2(partsFor(["a"]), { nowMs: NOW }).more.includes(DEFAULT_LINE), "not the default, no line");
+  const on = glanceV2({ ...partsFor(["a"]), isDefault: true }, { nowMs: NOW });
+  assert.ok(on.more.includes(DEFAULT_LINE), `the line rides the more line: ${on.more}`);
+  // and through the door, from the ctx the MCP door hands in
+  const dflt = await householdApex({}, null, { readShape: "v2" });
+  const asked = await householdApex({ read_shape: "v2" }, null, {});
+  assert.ok(String(dflt.more ?? "").includes(DEFAULT_LINE) || dflt.more === undefined, "the door's default glance carries the line (a keyless read has no glance to carry it)");
+  assert.ok(!String(asked.more ?? "").includes(DEFAULT_LINE), "a glance asked for by read_shape under no default does not");
+  // its cost, said not capped (WLD-51's rule): the line is one sentence on one line
+  const cost = JSON.stringify(on).length - JSON.stringify(glanceV2(partsFor(["a"]), { nowMs: NOW })).length;
+  assert.ok(cost > 0 && cost < 120, `the line costs ${cost} characters`);
 });
 
 test("eval round 2 · members run newest act first, with no act yet last", () => {
@@ -583,7 +618,7 @@ test("marks: the house's building in counts and two rows; the last crossing is t
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
   assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its holder has not welcomed it)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked"], "what happens and why, by mark id");
+  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, last-settlement risk; stake to keep"], "the exact snapshot-qualified risk row, by mark id");
   // Darko 18:04: the call that keeps one is named once, in the key
   assert.match(MARKS_KEY, /keep: world \{ do: "stake", args: \{ mark, stamps: 1, preview: true \} \}/);
   const many = marksBlock({ ...MARKS_MIX, atRisk: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }, { mark: "a/z", escrow: 0 }] }).at_risk;
@@ -658,4 +693,76 @@ test("waiting.marks_at_risk and marks.at_risk agree on the same house: one sourc
   const odd = glanceV2({ ...p, marks: { ...p.marks, atRisk: [] }, needs: { ...p.needs, stakes_at_risk: { rows: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }] } } }, { nowMs: NOW });
   assert.equal(odd.waiting.marks_at_risk, 2);
   assert.equal(odd.marks.at_risk.length, 2);
+});
+
+// ── WLD-51 (Wright 2026-11-04T12:01:08.880Z and 13:59:41.951Z) · the exact snapshot-qualified risk row at two rows ─────
+//
+// The glance's definite forecast became the exact row `<mark>: ✦<escrow>, last-settlement risk; stake to keep`, in the same
+// slot, with no frame appended. "It's a budget for that fixture, not a contract that every composition fits": the budgets
+// above are the ones the existing fixtures were sized for and they did not move; this case holds the row's CONTENT at two
+// at-risk rows (the fixture's own and an invented second) and part 1's budget at that cardinality. It adds no every-block
+// assertion at two rows and caps nothing.
+const SECOND_RISK = { mark: "mari/a-second-commons-lantern", escrow: 0, act: 'world { do: "stake", args: { mark: "mari/a-second-commons-lantern", stamps: 1 } }' };
+const TWO_RISKS = { ...MARKS_MIX, atRisk: [...MARKS_MIX.atRisk.map((r) => ({ ...r, escrow: 0 })), SECOND_RISK] };
+const EXACT_RISK_ROWS = ["illuminator/a-commons-lantern: ✦0, last-settlement risk; stake to keep", "mari/a-second-commons-lantern: ✦0, last-settlement risk; stake to keep"];
+
+test("WLD-51 · the exact risk row reaches the glance's marks block at two at-risk rows, and part 1 stays inside its budget there", (t) => {
+  const sf = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] }, marks: TWO_RISKS }), { nowMs: NOW });
+  const one = glanceV2(partsFor(["kai"], { waiting: 3, marks: TWO_RISKS }), { nowMs: NOW });
+  for (const [name, g] of [["Starforge, 2 at-risk rows, part 1", sf], ["a house of one, 2 at-risk rows, part 1", one]]) {
+    t.diagnostic(`${name}: ${served(g)} characters (budget ${PART1_BUDGET})`);
+    assert.deepEqual(g.marks.at_risk, EXACT_RISK_ROWS, `${name}: both rows are the exact string`);
+    assert.ok(!JSON.stringify(g).includes("unpublished at the next settlement unless staked"), `${name}: the definite forecast is gone`);
+    assert.ok(served(g) <= PART1_BUDGET, `${name} is ${served(g)} characters as served`);
+  }
+});
+
+// ── POS-947/c · the naming, a one-off in first_steps (Darko 2026-11-08; Wright 19:33Z, corrected 19:34Z) ─────────
+//
+// "acts should be reserved for always-relevant verbs; not one-offs": `invited-by` is offered in first_steps, beside the
+// missing papers, only while the house's record names no inviter (`naming`), gone once named, never in `can`. Neither
+// budget above moves. The requested newly joined, inviter-less house (the H2 "new house", every paper missing) is held to
+// part 1's; the other fixtures' compositions with the offer are said.
+const NAMING_STEP = 'invited-by: household { do: "invited-by", args: { invited_by: "<their handle, or hh:<slug>>" } }: if someone invited your house; once, public';
+test("POS-947/c · the naming is offered in first_steps only while the house names no inviter, never in can, inside both budgets", (t) => {
+  const newHouse = (naming) => glanceV2({ ...partsFor(["newbie"], { waiting: 0, papersGaps: { newbie: ["home", "window", "parcel"] }, quests: [], fresh: true }),
+    mail: { unanswered: 0, newInbound: 0, standing: 0 }, naming }, { nowMs: NOW });
+  const fresh = newHouse(true);
+  assert.deepEqual(fresh.house.first_steps.slice(-1), [NAMING_STEP], "offered, after the papers");
+  assert.equal(fresh.house.first_steps.length, 4, "home, window, parcel, then the naming");
+  assert.equal(fresh.house.first_steps_note, FIRST_STEPS_NAMING_NOTE, "the note says what the naming does, never that it makes the house easier to find");
+  assert.ok(!JSON.stringify(fresh.can).includes("invited-by"), "never in can");
+  const named = newHouse(false);
+  assert.equal(named.house.first_steps.some((s) => s.startsWith("invited-by")), false, "a house that names an inviter is not offered it");
+  assert.equal(named.house.first_steps_note, FIRST_STEPS_NOTE, "and its note is as it was");
+  // a whole house is offered the naming alone; a whole, named house has no first steps at all
+  assert.deepEqual(firstSteps({ kai: [] }, { naming: true }), [NAMING_STEP]);
+  assert.equal(firstSteps({ kai: [] }, { naming: false }), null);
+  assert.equal(firstSteps({ kai: [] }), null, "off unless the record says so");
+  assert.deepEqual(firstSteps({ kai: ["invited-by"] }), null, "a member's gap can never offer it: it is the house's, from its record");
+  for (const g of [fresh, named]) assert.deepEqual(unexplained("household", g, 2), []);
+
+  // THE CALLED CASE, held to part 1's budget: the newly joined, inviter-less house.
+  t.diagnostic(`a new house (newly joined, inviter-less), offered the naming: ${served(fresh)} characters as served (part 1 budget ${PART1_BUDGET}); ${served(named)} without, +${served(fresh) - served(named)}`);
+  assert.ok(served(fresh) <= PART1_BUDGET, `the newly joined house's glance with the naming is ${served(fresh)} characters as served`);
+  // The other fixtures' compositions with the offer, SAID and not capped (WLD-51's rule: "a budget for that fixture, not a
+  // contract that every composition fits"); H2's own assertions above are unchanged.
+  const sf = glanceV2({ ...partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } }), naming: true }, { nowMs: NOW });
+  const one = glanceV2({ ...partsFor(["kai"], { waiting: 3 }), naming: true }, { nowMs: NOW });
+  const { p, closer, happened, went } = fullStarforge();
+  const full = glanceV2({ ...p, closer, happened, went, naming: true }, { nowMs: NOW });
+  t.diagnostic(`with the naming, said not capped: Starforge part 1 ${served(sf)} (budget ${PART1_BUDGET}); a house of one ${served(one)} (budget ${PART1_BUDGET}); Starforge every block ${served(full)} (budget ${FULL_BUDGET})`);
+  for (const g of [sf, one, full]) assert.equal(offer1(g), NAMING_STEP);
+});
+const offer1 = (g) => g.house.first_steps.find((s) => s.startsWith("invited-by: "));
+
+// POS-1094 (review of #1088; Darko's call-2 ceiling): the default's line is one sentence on one line, and the widest glance with it is inside 10,000.
+// FULL_BUDGET and PART1_BUDGET above stay as the tighter guards on the glance as the building lanes grow it; the line is not counted in them.
+test("POS-1094 · the full household glance as the MCP door's default, with its line, is at or under 10,000 characters", (t) => {
+  const { p, closer, happened, went } = fullStarforge();
+  const base = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
+  const dflt = glanceV2({ ...p, closer, happened, went, isDefault: true }, { nowMs: NOW });
+  t.diagnostic(`Starforge, every block, as the default: ${served(dflt)} characters (${served(dflt) - served(base)} for the line; the tighter guard ${FULL_BUDGET} is for the glance without it)`);
+  assert.ok(served(dflt) > served(base), "the line is there");
+  assert.ok(served(dflt) <= 10000, `the default glance is ${served(dflt)} characters as served`);
 });

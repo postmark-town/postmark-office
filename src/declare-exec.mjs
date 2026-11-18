@@ -20,6 +20,7 @@
 // Exit 0 with the plan result or { error: { code, field, defect, hint } } (a
 // bounce is an answer); exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,7 @@ import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./cerem
 import { planHouseKey, appendHouseKey, registryWith } from "./house-key.mjs";
 import { heardAnswer, recordHeard, heardReceipt } from "./arrival-heard.mjs";
 import { judgeInvite, recordInvite, inviteReceipt } from "./arrival-invite.mjs";
+import { landSource } from "./arrival-source.mjs";
 import { meepLawAtOffice } from "./fund-holder.mjs";
 import { recordAshore } from "./ashore.mjs";
 import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -66,8 +68,7 @@ async function main() {
   answer(await penTransaction(CLONE, async () => {
     // Freshen first: the registers we are about to check must be the ones the
     // town holds, not the ones this clone happened to hold last crossing.
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
     // THE INDEX, UNDER THE LOCK (POS-268): the handle check reads the store's
     // residents, loaded now; a store that cannot answer refuses the declaration
@@ -240,6 +241,11 @@ async function main() {
     // it after the pull. declareHousehold prefers this field over its own plan.
     const heardLine = heardReceipt(heardGiven, heard);
     const inviteLine = inviteReceipt(invite, invited);
+
+    // WHERE THEY CAME FROM (POS-770): the outreach tag a consent click parked
+    // against this declarer's GitHub id lands as the new house's came_from,
+    // privately. After the commit, best-effort, and never in the answer.
+    await landSource({ ghId: decl.ghId, household: plan.slug });
     return { slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, registry: registryOutcome, files: plan.files.map((f) => f.path),
       ...(ashore ? { ashore: ashore.recorded } : {}),
       ...(heardLine ? { heard_about: heardLine } : {}),

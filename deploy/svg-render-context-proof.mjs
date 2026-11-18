@@ -17,7 +17,9 @@
 // Playwright is not a dependency of this repo — this is a HAND-RUN proof, not
 // a CI test. Point it at an install and at a viewer.mjs:
 //
-//   PLAYWRIGHT=file:///G:/Wright-HQ/node_modules/playwright/index.js \n//   VIEWER=file:///G:/Postmark/repo-clones/wright/postmark-world/spectator/viewer.mjs \n//   SHOTS=. node deploy/svg-render-context-proof.mjs
+//   PLAYWRIGHT=file:///G:/Wright-HQ/node_modules/playwright/index.js \
+//   VIEWER=file:///G:/Postmark/repo-clones/wright/postmark-world/spectator/viewer.mjs \
+//   SHOTS=. node deploy/svg-render-context-proof.mjs
 
 import { createServer } from "node:http";
 import { writeFileSync } from "node:fs";

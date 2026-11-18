@@ -38,7 +38,7 @@
 // photograph, so it is absent until a writer there calls in.
 
 /** The earshot this grid is sized for — `voices.mjs § EARSHOT_M`, which a pure module cannot import. */
-export const GRID_CELL_M = 64;
+const GRID_CELL_M = 64;
 
 /**
  * How long a projection may be trusted without a rebuild. Every writer in this
@@ -65,6 +65,14 @@ export function governingOf(departures = []) {
   return out;
 }
 
+//
+// THROUGH THE SAME SERIALISATION THE PEN USES. The act's payload is JSON and its
+// crossing a numeric column, so what comes back is what JSON can say: a door
+// that computed `y: -0` (round1 of a small negative) reads back `0`. Both
+// answer the same position, and a record that is not byte-equal to the one the
+// rebuild will read is not the record — the replay caught exactly this.
+const asStored = (v) => (v == null ? null : JSON.parse(JSON.stringify(v)));
+
 /**
  * THE WALK DOOR'S MOVEMENT, AS THE RECORD WILL HAND IT BACK.
  *
@@ -76,14 +84,6 @@ export function governingOf(departures = []) {
  * act with the live `walkEntry`, reads it back through `storedDepartures`, and
  * holds the two equal.
  */
-//
-// THROUGH THE SAME SERIALISATION THE PEN USES. The act's payload is JSON and its
-// crossing a numeric column, so what comes back is what JSON can say: a door
-// that computed `y: -0` (round1 of a small negative) reads back `0`. Both
-// answer the same position, and a record that is not byte-equal to the one the
-// rebuild will read is not the record — the replay caught exactly this.
-const asStored = (v) => (v == null ? null : JSON.parse(JSON.stringify(v)));
-
 export function recordOfMovement(movement) {
   return {
     iso: movement.at, handle: movement.actor,
@@ -336,7 +336,7 @@ export function createPositionGrid({ rowsFor, cellM = GRID_CELL_M, frames = null
 // `everyonePlaced` itself, exactly as before.
 
 /** How many placements are kept at once: orient's, the witness's and the walkers' answers differ by roster, not by instant. */
-export const PLACEMENTS_KEPT = 8;
+const PLACEMENTS_KEPT = 8;
 
 /**
  * `rows({ key, at, place })` answers `place(null, at)` — `everyonePlaced`'s rows

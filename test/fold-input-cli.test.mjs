@@ -17,9 +17,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { ingestOrdering } from "../world2/tools/fold-input-cli.mjs";
@@ -78,19 +78,20 @@ test("TWO foldDeltas REFUSE rather than one winning silently", () => {
   //
   // Exercised by shadowing lane 2's module in a throwaway copy of the tools
   // directory, so the real files are untouched.
-  const dir = mkdtempSync(join(tmpdir(), "twodelta-"));
+  const dir = tempDir("twodelta-");
   try {
     const tools = join(dir, "world2", "tools");
     execFileSync("node", ["-e", `require("node:fs").mkdirSync(${JSON.stringify(tools)},{recursive:true})`]);
     // THE CLOSURE, NOT THE THREE FILES THE LANE STARTED WITH. `fold-delta.mjs`
-    // imports `canon-locks.mjs` (which imports `escrow-presence.mjs`) for the
-    // 2026-09-12 carry, and this CLI imports `canon-register.mjs` to build the
-    // register from `--world-repo`. A copy list that has fallen behind the
-    // imports fails as a module that will not LOAD — which arrives here as an
-    // empty stdout and an unparseable JSON, not as the refusal this test is
-    // about, so the guard would read broken exactly when it was still fine.
+    // imports `canon-locks.mjs` (which imports `escrow-presence.mjs`, which asks
+    // `standing.mjs § townOwned`, POS-701) for the 2026-09-12 carry, and this
+    // CLI imports `canon-register.mjs` to build the register from `--world-repo`.
+    // A copy list that has fallen behind the imports fails as a module that
+    // will not LOAD — which arrives here as an empty stdout and an unparseable
+    // JSON, not as the refusal this test is about, so the guard would read
+    // broken exactly when it was still fine.
     for (const f of ["fold-input-cli.mjs", "fold-delta.mjs", "mark-render.mjs",
-      "canon-locks.mjs", "canon-register.mjs", "escrow-presence.mjs"]) {
+      "canon-locks.mjs", "canon-register.mjs", "escrow-presence.mjs", "standing.mjs"]) {
       copyFileSync(join(OFFICE, "world2", "tools", f), join(tools, f));
     }
     // A stand-in for lane 2's module that exports BOTH names.
@@ -98,9 +99,10 @@ test("TWO foldDeltas REFUSE rather than one winning silently", () => {
       "export async function foldInputFromStore() { return {}; }\n"
       + "export async function stakesFromStore() { return []; }\n"
       + "export async function foldDelta() { return {}; }\n");
-    // `mark-render.mjs` imports ../../src/mark-record.mjs; give it the real one.
+    // `mark-render.mjs` imports ../../src/mark-record.mjs, and `canon-locks.mjs` imports ../../src/held.mjs
+    // (POS-765, the one held contract); give the copy the real ones.
     mkdirSync(join(dir, "src"), { recursive: true });
-    copyFileSync(join(OFFICE, "src", "mark-record.mjs"), join(dir, "src", "mark-record.mjs"));
+    for (const f of ["mark-record.mjs", "held.mjs"]) copyFileSync(join(OFFICE, "src", f), join(dir, "src", f));
 
     const r = spawnSync(process.execPath, [join(tools, "fold-input-cli.mjs"),
       "--world-sha", "a".repeat(40), "--town-clone", OFFICE, "--town-sha", "b".repeat(40), "--window", "177"], {
@@ -108,6 +110,8 @@ test("TWO foldDeltas REFUSE rather than one winning silently", () => {
       env: { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: "postgres://nobody@127.0.0.1:1/nowhere" },
     });
     assert.equal(r.status, 1, `expected a refusal; stdout=${r.stdout} stderr=${r.stderr.slice(0, 300)}`);
+    // a copy that cannot load prints nothing: say so, with the child's own stderr, before the parse turns it into an opaque JSON error
+    assert.notEqual(r.stdout.trim(), "", `the copied CLI printed nothing (status ${r.status}); stderr=${r.stderr.slice(0, 600)}`);
     assert.equal(JSON.parse(r.stdout).refused, "two-fold-deltas");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -137,7 +141,7 @@ test("ingestOrdering: an ancestor is `behind`, with the distance NAMED", () => {
   // went red on the merged train and would have stayed red on main for good.
   // A test whose oracle is the repository it lives in measures that
   // repository's shape, not the function (the class: calendar-pinned controls).
-  const dir = mkdtempSync(join(tmpdir(), "foldcli-behind-"));
+  const dir = tempDir("foldcli-behind-");
   try {
     const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     g("init", "-q", "-b", "main");
@@ -155,7 +159,7 @@ test("ingestOrdering: an ancestor is `behind`, with the distance NAMED", () => {
 });
 
 test("ingestOrdering: a head that is NOT an ancestor refuses — a rewritten branch or the wrong clone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "foldcli-"));
+  const dir = tempDir("foldcli-");
   try {
     const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     g("init", "-q", "-b", "main");

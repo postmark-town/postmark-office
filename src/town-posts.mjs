@@ -31,7 +31,8 @@
 //
 // ── THE CLASSES ─────────────────────────────────────────────────────────────
 //
-// event, quest, bug and idea. An idea is a post since POS-290 (behind
+// event, quest, bug, idea and ballot (POS-983: the town's vote, put up and
+// carried by its hands; each row carries its body, terms and choices). An idea is a post since POS-290 (behind
 // IDEA_POSTS for the acts; the read reports what the store holds, which is
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
@@ -59,7 +60,8 @@
 // up the town, so every
 // page also carries `catchers`, the Hall of Fame's totals over the whole
 // record (bugs.mjs § THE CATCHERS): the history is still read for every bug,
-// as it was before the read paged. The other classes are not paged.
+// as it was before the read paged. The other classes page the same way since
+// POS-732 (page-rows.mjs: default 20, held under the connector's cap).
 //
 // ── A BUG CARRIES ITS OWN FIELDS ────────────────────────────────────────────
 //
@@ -82,11 +84,13 @@
 // and answers stamps_paid null, rather than calling every stage unpaid.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { pageRows } from "./page-rows.mjs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { officeRead } from "./world2-pen.mjs";
-import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS } from "./household-posts.mjs";
+import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS, BODY } from "./household-posts.mjs";
+import { BALLOT_CLASS, BALLOT_STATES, STATE_CLOSED as BALLOT_CLOSED, choicesOf } from "./ballots.mjs";
 import { EVENT_CLASS, refuse } from "./events.mjs";
 import { QUEST_CLASS, QUEST_FINISHED, readQuestRegistry, questTerms } from "./quests.mjs";
 import { BUG_CLASS, BUG_FINISHED, bugCatchersOf, bugJarOrder } from "./bugs.mjs";
@@ -112,16 +116,47 @@ export const POST_CLASSES = Object.freeze({
   [IDEA_CLASS]: Object.freeze({ finished: IDEA_FINISHED }),
 });
 
+/**
+ * Every class this public read answers: POST_CLASSES, and the ballot
+ * (POS-983), the town's vote, put up and carried by its hands. A ballot is not
+ * in POST_CLASSES, which is also the household's own posts read's list
+ * (household-posts.mjs § householdPosts): a household's part in a vote is read
+ * at votes (and on its doorstep's votes), so that read and the morning page
+ * are as they were.
+ */
+export const READ_CLASSES = Object.freeze({
+  ...POST_CLASSES,
+  [BALLOT_CLASS]: Object.freeze({ finished: Object.freeze([BALLOT_CLOSED]) }),
+});
+
 /** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
 export const CLASS_STATES = Object.freeze({
   [EVENT_CLASS]: Object.freeze(["announced", "live", "ended", "cancelled"]),
   [QUEST_CLASS]: Object.freeze([...QUEST_STATES]),
   [BUG_CLASS]: Object.freeze([...BUG_STATES]),
   [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
+  [BALLOT_CLASS]: Object.freeze([...BALLOT_STATES]),
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
-export const POSTS_PARAMS = Object.freeze(["class", "state", "stage", "limit", "offset"]);
+export const POSTS_PARAMS = Object.freeze(["class", "state", "stage", "limit", "offset", "sort"]);
+
+/** The sorts the posts list takes (POS-854, Darko 2026-11-16 22:51 EST: "by recency or by like most stamps staked … keep it simple"). */
+export const POST_SORTS = Object.freeze(["recent", "staked"]);
+/** The classes that take a stake, so that `sort: "staked"` has something to sort by. A bug takes none (bugs.mjs § NO STAKE). */
+export const STAKED_CLASSES = Object.freeze([IDEA_CLASS]);
+
+/** `sort`: absent keeps the class's own order; otherwise recent or staked, and anything else is a 422 naming both. */
+function judgeSort(fields) {
+  const v = fields?.sort;
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string" || !POST_SORTS.includes(v))
+    throw refuse(422, `sort is one of ${POST_SORTS.join(" or ")}`, 'sort: "recent" (newest activity first) or "staked" (most stamps standing behind it first)', { field: "sort" });
+  return v;
+}
+
+const activeAt = (p) => String(p.latest?.at ?? "");
+const byRecent = (a, b) => activeAt(b).localeCompare(activeAt(a)) || a.id.localeCompare(b.id);
 
 const editDistance = (a, b) => {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -182,8 +217,8 @@ function judgePostsClass(fields) {
   // A REPORT IS PRIVATE (POS-757): never in POST_CLASSES, so never on this
   // public, keyless read; the filer's household reads its own with its key.
   if (c === REPORT_CLASS) throw REPORT_IS_PRIVATE();
-  if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
-  if (!Object.hasOwn(POST_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
+  if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(READ_CLASSES).join(", ")}`, { field: "class" });
+  if (!Object.hasOwn(READ_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(READ_CLASSES).join(", ")}`, { field: "class" });
   return c;
 }
 
@@ -223,12 +258,15 @@ const plain = ({ ...r }) => Object.fromEntries(Object.entries(r));   // own stri
 export { NO_CHAIN };
 
 /**
- * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
- * @param {{ now?: number, env?: object, townClone?: string }} ctx
+ * `town { read: "posts", args: { class, post?, limit?, offset? } }`: limit and offset page every class (POS-732; the bug class
+ * keeps its own default of 50). `whole` answers the plain REST list in one piece when it names no page; `hold: false` lifts the
+ * connector's cap from a page (an internal reader that wants every post).
+ * @param {{ now?: number, env?: object, townClone?: string, whole?: boolean, hold?: boolean }} ctx
  */
-export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true } = {}) {
+export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true, backing = null, whole = false, hold = true } = {}) {
   const cls = judgePostsClass(fields);
   const wanted = judgeStateFilter(fields, cls);
+  const sortAsked = judgeSort(fields);
   const one = String(fields?.post ?? "").trim();
   let rows;
   let history = null;
@@ -261,16 +299,42 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       return { ...plain(r), fields: { quest: f.quest ?? null }, terms: questTerms(entry), history: historyOf(r.id) };
     }).sort((a, b) => (order.get(a.fields.quest) ?? Infinity) - (order.get(b.fields.quest) ?? Infinity) || a.id.localeCompare(b.id));
   } else if (cls === BUG_CLASS) {
-    // the jar's order, the bug read's own (bugs.mjs § THE JAR'S ORDER), never the shared postOrder
-    posts = rows.map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) },
+    // the jar's order, the bug read's own (bugs.mjs § THE JAR'S ORDER), never the shared postOrder.
+    // POS-942: the body is the reporter's own words, served beside the fields, so a checker reads them from the public read and not only from the store.
+    posts = rows.map((r) => ({ ...plain(r), body: r[BODY] ?? "", fields: { ...(r[FIELDS] ?? {}) },
       history: historyOf(r.id) })).sort(bugJarOrder);
   } else if (cls === IDEA_CLASS) {
     // An idea (POS-290) carries its body, its own fields (links, of), its
     // history, the awards recorded on it (and what the chain shows each paid),
     // its backing and its sign-ups.
-    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
-      history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
-      ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
+    // What stands behind an idea is the stamp ledger's (post-stake.mjs § postBackingOf), the one owner of a
+    // post's escrow: `stake` is the total and `backing` the same in the grammar's own words (a post's stake
+    // is for it; the door offers no against). A ledger that cannot be read leaves `stake` null and says so.
+    let ledger = null;
+    if (rows.length) {   // no idea post, nothing to back: the ledger is not asked
+      try { ledger = backing ? await backing(townClone) : await (await import("./post-stake.mjs")).postBackingOf(townClone); }   // `backing` is a suite's seam
+      catch { unavailable = [unavailable, "the stakes behind the ideas could not be read from the stamp ledger, so each idea's stake is null"].filter(Boolean).join("; "); }
+    }
+    posts = [...rows].sort(postOrder).map((r) => {
+      const held = ledger?.holders.get(r.id) ?? [];
+      const sum = (side) => held.filter((h) => (h.side === "against") === (side === "against")).reduce((a, h) => a + h.n, 0);
+      const { sign_ups } = ideaResponsesOf(extras.responses.get(r.id) ?? []);
+      return { ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
+        history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
+        stake: ledger ? (ledger.escrow.get(r.id) ?? 0) : null,
+        backing: { for: sum("for"), against: sum("against"), net: sum("for") - sum("against"), stakers: held.length },
+        ...(one && r.id === one ? { stakes: held.map((h) => ({ handle: h.handle, stamps: h.n })).sort((a, b) => b.stamps - a.stamps || a.handle.localeCompare(b.handle)) } : {}),
+        sign_ups };
+    });
+  } else if (cls === BALLOT_CLASS) {
+    // A ballot (POS-983) carries its body (what is being decided, how and when),
+    // its terms and each choice in its own words, in the file's order. The
+    // count is the vote read's (town { read: "votes" }), from the same record.
+    posts = [...rows].sort(postOrder).map((r) => {
+      const f = r[FIELDS] ?? {};
+      return { ...plain(r), body: r[BODY] ?? "", fields: { ...f }, choices: choicesOf(f), history: historyOf(r.id),
+        votes: `town { read: "votes", args: { topic: "${f.topic}" } }` };
+    });
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }
@@ -291,9 +355,22 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = posts.filter((p) => wanted.states.includes(p.state));
     if (wanted.alias) filterNote = ALIAS_NOTE;
   }
-  const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...POST_CLASSES[cls].finished],
+  // THE SORT (POS-854). `staked` has something to sort by only where a class takes a stake; elsewhere it says so
+  // and answers newest first, never a refusal (Wright's settlement of Darko's 22:51 word, POS-844).
+  let sortUsed = null;
+  let sortNote = null;
+  if (sortAsked && !one) {
+    sortUsed = sortAsked;
+    if (sortAsked === "staked" && !STAKED_CLASSES.includes(cls)) {
+      sortUsed = "recent";
+      sortNote = `a ${cls} takes no stake, so there is nothing to sort by: this list is newest first (sort: "staked" applies to ${STAKED_CLASSES.join(", ")})`;
+    }
+    posts = [...posts].sort(sortUsed === "staked" ? (a, b) => (Number(b.stake) || 0) - (Number(a.stake) || 0) || byRecent(a, b) : byRecent);
+  }
+  const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...READ_CLASSES[cls].finished],
     ...(unavailable ? { unavailable } : {}) };
   const listHead = { ...head, ...(wanted.states && !one ? { state: wanted.states } : {}), counts_by_state,
+    ...(sortUsed ? { sort: sortUsed } : {}), ...(sortNote ? { sort_note: sortNote } : {}),
     ...(filterNote ? { note: filterNote } : {}) };
   if (one) {
     const hit = posts.find((p) => p.id === one);
@@ -304,6 +381,10 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     const { posts: page, ...paging } = bugPageOf(posts, fields);
     return { ...listHead, ...paging, catchers: bugCatchersOf(wholeClass, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
-  return { ...listHead, total: posts.length, posts,
-    ...(cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {}) };
+  const tail = cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {};
+  // POS-732: every other class pages as the bug class does (limit default 20, offset), held under the connector's cap.
+  // The plain REST list (GET /posts) keeps its whole answer when it names neither, for the snapshot readers that make
+  // one request and no continuation (site tools/lib/fetch-town-data.mjs); `limit` or `offset` on it pages.
+  if (whole && fields.limit == null && fields.offset == null) return { ...listHead, total: posts.length, posts, ...tail };
+  return { ...pageRows(posts, fields, { noun: cls, key: "posts", around: listHead, hold }), ...tail };
 }

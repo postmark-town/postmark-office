@@ -112,3 +112,32 @@ test("the bound is BELOW PIPE_BUF, not at it — the newline is part of the writ
   assert.ok(LINE_MAX < 4096, `LINE_MAX ${LINE_MAX} must leave room under PIPE_BUF for the newline and a margin`);
   assert.ok(PATH_MAX > 0 && PATH_MAX < LINE_MAX);
 });
+
+// POS-1064/b: a doorstep or household line carries `timing` (read-timing.mjs). It is kept ahead of the call's shape, and when it must go the line SAYS so.
+const TIMING = { v: 1, rid: "0123456789ab", door: "doorstep", route: "worker", worker: 0, tries: 1, ok: true, status: 200, admit_ms: 1.1, queue_ms: 0.3, exec_ms: 1116.4, total_ms: 1120,
+  bundle: { n: 1, sum_ms: 1114.1, max_ms: 1114.1 }, leases: { main: { n: 0 }, worker: { n: 11, failed: 0, acquire_ms: { sum: 5.6, max: 3.6 }, held_ms: { sum: 318.4, max: 183.7 }, failed_wait_ms: 0 } }, cov: "pen" };
+
+test("timing rides an ordinary line and a long path's line whole; the call's shape gives way before it, named as dropped", () => {
+  const ordinary = JSON.parse(accessLine(entry({ call: { read: "doorstep" }, timing: TIMING })));
+  assert.deepEqual(ordinary.timing, TIMING);
+  const longPath = accessLine(entry({ path: "/" + "a".repeat(6000), call: { read: "doorstep" }, timing: TIMING }));
+  assert.ok(bytes(longPath) + 1 <= LINE_MAX);
+  assert.deepEqual(JSON.parse(longPath).timing, TIMING, "a long path never costs the measurement");
+  // a call big enough to push the line over after the path is dropped: the call goes, the timing stays, and the line says what was dropped
+  const heavy = accessLine(entry({ path: "/" + "a".repeat(6000), call: { blob: "z".repeat(3500) }, timing: TIMING }));
+  const back = JSON.parse(heavy);
+  assert.ok(bytes(heavy) + 1 <= LINE_MAX);
+  assert.deepEqual(back.timing, TIMING);
+  assert.equal(back.call_dropped, true);
+  assert.equal(back.call, null);
+});
+
+test("when timing itself cannot fit, the last resort says `timing_dropped`: no timing and no timing_dropped is an unmeasured request, never a cut one", () => {
+  const huge = accessLine(entry({ household: "h".repeat(9999), timing: { ...TIMING, filler: "t".repeat(9999) } }));
+  const back = JSON.parse(huge);
+  assert.ok(bytes(huge) + 1 <= LINE_MAX);
+  assert.equal(back.timing, undefined);
+  assert.equal(back.timing_dropped, true);
+  assert.equal(back.truncated, true);
+  assert.equal(JSON.parse(accessLine(entry({ household: "h".repeat(9999) }))).timing_dropped, undefined, "a line that never had timing does not claim to have dropped one");
+});

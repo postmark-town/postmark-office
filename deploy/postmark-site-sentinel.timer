@@ -4,7 +4,7 @@ Description=site-sentinel every 10 minutes — the town's own doors are read on 
 [Timer]
 # A plain ten minutes, the same cadence as postmark-usdc-watch.
 #
-# Deliberately NOT offset around the rehydrate timer (*:07,22,37,52). An offset
+# Deliberately NOT offset around the keeping timer (*:07,22,37,52). An offset
 # was drafted and dropped: reading a door mid-rehydrate is harmless — the office
 # swaps its read handle in place and X-Postmark-As-Of is always a coherent sha,
 # never a torn one — and the freshness thresholds are measured in tens of

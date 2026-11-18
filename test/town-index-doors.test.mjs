@@ -22,6 +22,14 @@ import { fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden } from "./helpers/twin-golden.mjs";
+import { openOauthDb } from "../src/oauth.mjs";
+
+// THE OFFICE'S SIGN-IN FILE EXISTS before it boots (POS-271's boot guard): an
+// unswitched office whose oauth.db is missing asks the store whether it holds
+// the town's sign-ins, and refuses to boot when it cannot ask. The cut-off
+// office's store is dead on purpose, so its file is made first, as every
+// office past its first boot has one. This file is about the index, not sign-in.
+const existingOauthDb = (path) => { openOauthDb(path).close(); return path; };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TWINS = twinGolden("town-index-doors");
@@ -31,7 +39,7 @@ const offices = {};
 
 function office(name, env) {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
-    "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
+    "--oauth-db", existingOauthDb(join(tmp, `${name}-oauth.db`)), "--roles-db", join(tmp, `${name}-roles.db`)], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
       OFFICE_READ_WORKERS: "0", WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },

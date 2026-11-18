@@ -16,10 +16,10 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ingest } from "../world2/tools/town-index-ingest.mjs";
@@ -33,7 +33,7 @@ const LEDGER = join(CLONE, "WHITE_PAGES", "stamp-ledger.md");
 const hasClone = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) && existsSync(LEDGER);
 const NO_CLONE = "no town-clone with tools/stamp-mint.mjs beside the office: the fixture copies the town's own tools and ledger from it";
 
-const tmp = mkdtempSync(join(tmpdir(), "stamp-tail-"));
+const tmp = tempDir("stamp-tail-");
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
 // ── the tail reader, on files ────────────────────────────────────────────────

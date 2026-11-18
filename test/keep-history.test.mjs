@@ -50,13 +50,15 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // order it runs them, between settlements and positions (review-612). 27 since
 // review-593 c: the world snapshot (POS-268 5b) is a soft step, after hhkeys_log.
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
-test("the step list is the script's: 28 steps, 5 fatal and 23 soft, no step twice", () => {
-  assert.equal(STEPS.length, 28);
-  assert.equal(new Set(STEPS).size, 28);
+// 29 since POS-816: the invite pass, right after the welcome pass.
+test("the step list is the script's: 30 steps, 5 fatal and 25 soft, no step twice", () => {
+  assert.equal(STEPS.length, 30);
+  assert.equal(new Set(STEPS).size, 30);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[16], "snapshot");
+  assert.equal(STEPS[18], "snapshot", "after the fifteen locked soft steps (the invite pass among them since POS-816, the event-sparks pass since POS-1035)");
+  assert.equal(STEPS[17], "sparks", "the event-sparks pass runs under the lock after the mint's commit, before the snapshot");
   assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
 });
 
@@ -253,7 +255,9 @@ test("buildReceipt fills every unrecorded step as notrun, always names a source,
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "yesterday", at: "2026-10-13T08:08:00Z", exit: 0 }), /bad timestamps/);
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "2026-10-13T08:07:00Z", at: "2026-10-13T08:08:00Z", exit: 256 }), /bad exit/);
   for (const ok of ["exit:1", "exit:128", "ledger-red", "prereq:mint", "signal:TERM", "no-change", "switch-off", "unchecked", "write-failed"]) assert.match(ok, REASON_RE);
-  for (const bad of ["exit:1234", "prereq:Mint", "signal:KILL", "ledger-red ", "error: see log", ""]) assert.doesNotMatch(bad, REASON_RE);
+  // POS-1030: what became of a mint commit whose push answered no, and the mint refused onto one still unsettled
+  for (const ok of ["landed-unacked", "unmade", "unconfirmed", "moved", "gone", "prereq:unlanded"]) assert.match(ok, REASON_RE);
+  for (const bad of ["exit:1234", "prereq:Mint", "signal:KILL", "ledger-red ", "error: see log", "", "unmade ", "landed"]) assert.doesNotMatch(bad, REASON_RE);
 });
 
 test("the writer CLI: one receipt per call into the named log, through a temp file renamed over it", () => {
@@ -303,7 +307,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 23 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 25 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line

@@ -49,9 +49,10 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 /** The key spelling this town writes from the w40 ship onward. */
 export const keyOfSlug = (slug) => (slug ? `hh:${slug}` : null);
 
-/** A house's slug, as `slugFromName` in residency.mjs mints one. Kept in step
- *  with that function deliberately: a dot survives because a house may choose a
- *  domain for its name (cadaeic.space) and that IS the name someone picked. */
+/** A house's slug: the one slugger. residency.mjs only re-exports this
+ *  function (`export { slugFromName }`), so there is no second copy to keep in
+ *  step. A dot survives because a house may choose a domain for its name
+ *  (cadaeic.space) and that IS the name someone picked. */
 export function slugFromName(name) {
   return String(name ?? "").trim().toLowerCase()
     .replace(/['’]/g, "")
@@ -72,8 +73,9 @@ export function slugFromName(name) {
  * by login, so nothing pinned breaks and nothing unpinned regresses.
  *
  * Vendored from `residency.mjs § accountMatches`, which vendored it from the
- * town's `tools/account-match.mjs`. `residency.mjs` now re-exports THIS one, so
- * the office holds a single copy again and the town's is the only twin left.
+ * town's `tools/account-match.mjs`. `residency.mjs` imports THIS one for its own
+ * use and does not re-export it, so the office holds a single copy again and the
+ * town's is the only twin left.
  */
 export function accountMatches(account, actorId, actorLogin) {
   if (!account) return false;
@@ -567,64 +569,76 @@ export function sessionKeysFor(key, registry, pins = {}) {
   return [key, ...keys.filter((k) => k !== key)];
 }
 
-// ── the loaded half ─────────────────────────────────────────────────────────
+// ── the module pool's fold, and the memo ────────────────────────────────────
 //
-// One registry read per request, and one answer per (request, x). The registry
-// is three tables and a fold; `householdKeyFor` is called once per journal row
-// and twice per guarded write, so an unmemoised deriver would put the whole
-// registry through `registryFromRows` on every line of a crossing.
+// The registry is three tables and a fold; `houseOfVia` is reached from
+// `householdKeyFor` (once per journal row, twice per guarded write), so an
+// unmemoised deriver would put the whole registry through `registryFromRows`
+// on every line of a crossing. Hence one fold per queryable (below) and, drawn
+// from it, one answer per (queryable, x).
 //
-// THE CACHE IS EXPLICITLY DISPOSABLE. `__clearHouseCache()` is the seam a test
-// and a long-lived process both need: the office's own drain writes rows and
-// then reads them back in the same process, and a cache that outlived the write
-// would answer with the town from before the ceremony. Every writer in
-// `registry-store.mjs` clears it; so does `withRecordFrom` in the suites.
-
-let loaded = null;       // { registry, pins } — the module pool's fold, once
-let answers = new Map(); // `${via}|${x}` -> { slug, via }
-let viaRows = new WeakMap();    // queryable -> { registry, pins }
-let viaAnswers = new WeakMap(); // queryable -> Map<memo, { slug, via }>
-
-/** Drop the memo. Called by every registry writer and by the test harness. */
-export function __clearHouseCache() {
-  loaded = null;
-  answers = new Map();
-  viaRows = new WeakMap();
-  viaAnswers = new WeakMap();
-}
-
-/** The registry and pins, folded once per process until something writes. */
-export async function houseRows(env = process.env) {
-  if (loaded) return loaded;
-  const rows = await loadRegistryRows(env);
-  if (rows === null) return null;          // the office is not pointed at the record
-  loaded = { registry: registryFromRows(rows), pins: pinsFromRows(rows) };
-  return loaded;
-}
+// A COPY LIVES FOR `HOUSE_CACHE_TTL_MS`, AND ITS ANSWERS LIVE AND DIE WITH IT
+// (POS-860). Each thread keeps its own copies (a read worker is a thread with
+// its own copy of this module) and re-reads the registry once a copy is older
+// than the time-to-live; the answers drawn from the old copy, a cached miss
+// among them, go with it. That is how a house founded, a resident joined or a
+// house renamed by anything this thread cannot hear is seen: the other
+// threads, and every writer outside the office (the backfill and rekey tools).
+// Before this the copy lasted as long as its queryable, and a database pool
+// lives as long as the process, so such a house answered `unknown` until the
+// office restarted.
+//
+// `__clearHouseCache()` drops every copy THIS thread holds, at once. The join
+// ceremony calls it after each registry write (`ceremony.mjs`), so the thread
+// that founded the house sees it with no wait; the suites that write rows and
+// read them back through one stub call it to start clean. It reaches this
+// thread only: every other thread heals by age.
 
 /**
- * "Which house is this?" — the one question, asked of the record.
- *
- * `{ slug: null, via: "unknown" }` when the record has never heard of `x`, and
- * the SAME answer when the office is not pointed at the record at all. Those
- * two are genuinely the same fact for every caller here — "I cannot name a
- * house for this" — and the callers that must tell them apart (the drain, the
- * seed) read `loadRegistry()` directly and get `null` for the second.
+ * How long a thread keeps its copy of the registry before it reads it again, in
+ * milliseconds. The cost is one registry read (three short queries) per thread
+ * per queryable per time-to-live; the wait is how long a house this thread was
+ * not told about can read as `unknown`.
  */
-export async function houseOf(x, env = process.env, opts = {}) {
-  const rows = await houseRows(env);
-  if (!rows) return NO;
-  const memo = `${opts.via ? [].concat(opts.via).join("+") : "*"}|${typeof x === "object" ? JSON.stringify(x) : String(x)}`;
-  const was = answers.get(memo);
-  if (was) return was;
-  const out = resolveHouse(x, rows.registry, rows.pins, opts);
-  answers.set(memo, out);
-  return out;
+export const HOUSE_CACHE_TTL_MS = 60_000;
+
+/**
+ * Is this copy young enough to serve? Its age counts from when its read BEGAN,
+ * so a slow read does not extend its life, and from nothing else: a copy that
+ * is asked all the time still ages out. A copy stamped in the future (the
+ * clock stepped back) is not young, or it would be held until the clock caught
+ * up with it.
+ */
+const young = (copy) => {
+  const age = Date.now() - copy.at;
+  return age >= 0 && age < HOUSE_CACHE_TTL_MS;
+};
+
+// Bumped by every clear. A read that began before a clear may have read the
+// registry before the write the clear answers, so it hands its copy to its own
+// caller and does not store it: otherwise a read in flight would undo the clear.
+let epoch = 0;
+
+let loaded = null;       // { rows: { registry, pins }, at } — the module pool's fold
+let viaRows = new WeakMap();    // queryable -> { rows: { registry, pins }, at, answers: Map<memo, { slug, via }> }
+
+/** Drop every copy this thread holds, and the answers drawn from them. The ceremony calls it after a registry write; so do the suites. */
+export function __clearHouseCache() {
+  epoch++;
+  loaded = null;
+  viaRows = new WeakMap();
 }
 
-/** The house's KEY, as the ship writes one: `hh:<slug>`, or null. */
-export async function houseKeyOf(x, env = process.env) {
-  return keyOfSlug((await houseOf(x, env)).slug);
+/** The registry and pins from the module pool, folded once per time-to-live. */
+export async function houseRows(env = process.env) {
+  if (loaded && young(loaded)) return loaded.rows;
+  const began = epoch;
+  const at = Date.now();
+  const rows = await loadRegistryRows(env);
+  if (rows === null) return null;          // the office is not pointed at the record
+  const out = { registry: registryFromRows(rows), pins: pinsFromRows(rows) };
+  if (began === epoch) loaded = { rows: out, at };
+  return out;
 }
 
 // ── the queryable half ──────────────────────────────────────────────────────
@@ -633,44 +647,45 @@ export async function houseKeyOf(x, env = process.env) {
 // client or a pool and must answer from THAT one — see `registryRowsVia`'s
 // header for why reaching past it would be the two-queue disease renamed.
 //
-// The memo is keyed on the queryable itself, in a WeakMap, so a pool that lives
-// for the life of the process is folded once and a per-request client is
-// collected with its request. `__clearHouseCache()` drops these too, because a
-// suite that writes a row and reads it back through the same stub pool must see
-// the row it wrote.
+// The copy is keyed on the queryable itself, in a WeakMap, so a per-request
+// client is collected with its request and a pool is held while it lives, for
+// at most a time-to-live per copy. The answers are kept ON the copy they were
+// drawn from, so they cannot outlive it: when the copy is replaced (it aged out,
+// or `__clearHouseCache()` dropped it) a miss it held is not served again.
+// `__clearHouseCache()` drops these too, because a suite that writes a row and
+// reads it back through the same stub pool must see the row it wrote.
 
-/** The registry and pins as THIS queryable holds them, folded once. */
-export async function houseRowsVia(q) {
+/** This queryable's copy: the registry and pins it holds, when its read began, and the answers drawn from it. */
+async function copyVia(q) {
   const was = viaRows.get(q);
-  if (was) return was;
+  if (was && young(was)) return was;
+  const began = epoch;
+  const at = Date.now();
   const rows = await registryRowsVia(q);
-  const out = { registry: registryFromRows(rows), pins: pinsFromRows(rows) };
-  viaRows.set(q, out);
-  return out;
+  const copy = { rows: { registry: registryFromRows(rows), pins: pinsFromRows(rows) }, at, answers: new Map() };
+  if (began === epoch) viaRows.set(q, copy);
+  return copy;
+}
+
+/** The registry and pins as THIS queryable holds them, folded once per time-to-live. */
+export async function houseRowsVia(q) {
+  return (await copyVia(q)).rows;
 }
 
 /** "Which house is this?", asked of the store the caller is already holding. */
 export async function houseOfVia(q, x, opts = {}) {
-  const rows = await houseRowsVia(q);
-  let memos = viaAnswers.get(q);
-  if (!memos) { memos = new Map(); viaAnswers.set(q, memos); }
+  const copy = await copyVia(q);
   const memo = `${opts.via ? [].concat(opts.via).join("+") : "*"}|${typeof x === "object" ? JSON.stringify(x) : String(x)}`;
-  const hitMemo = memos.get(memo);
+  const hitMemo = copy.answers.get(memo);
   if (hitMemo) return hitMemo;
-  const out = resolveHouse(x, rows.registry, rows.pins, opts);
-  memos.set(memo, out);
+  const out = resolveHouse(x, copy.rows.registry, copy.rows.pins, opts);
+  copy.answers.set(memo, out);
   return out;
 }
 
 /** The house's KEY from the caller's store: `hh:<slug>`, or null. */
 export async function houseKeyOfVia(q, x) {
   return keyOfSlug((await houseOfVia(q, x)).slug);
-}
-
-/** Every spelling this house has carried, from the caller's own store. */
-export async function houseKeysOfVia(q, x) {
-  const rows = await houseRowsVia(q);
-  return houseKeysOf(x, rows.registry, rows.pins);
 }
 
 /** Every spelling → its house's live key, from the caller's own store. */
@@ -695,14 +710,6 @@ export async function liveHouseOfVia(q) {
 export async function sessionKeysVia(q, key) {
   if (key == null || key === "") return [];
   const rows = await houseRowsVia(q);
-  return sessionKeysFor(key, rows.registry, rows.pins);
-}
-
-/** The same set, from the module pool's fold. */
-export async function sessionKeysOf(key, env = process.env) {
-  if (key == null || key === "") return [];
-  const rows = await houseRows(env);
-  if (!rows) return [key];
   return sessionKeysFor(key, rows.registry, rows.pins);
 }
 

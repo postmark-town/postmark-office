@@ -40,8 +40,9 @@ import { join } from "node:path";
 
 import { WORLD_CLONE } from "./world-store.mjs";
 // The READ tier's published-main ref. `world-branches.mjs` imports node builtins
-// only, so this closes no cycle, and it is the one place that decision lives —
-// see its § freshestMainRef "IT IS ALSO THE CANON READER".
+// plus `settlements.mjs` and `world-refresher.mjs`, and neither of those imports
+// this file, so this closes no cycle, and it is the one place that decision
+// lives — see its § freshestMainRef "IT IS ALSO THE CANON READER".
 import { blessedRef } from "./world-branches.mjs";
 
 /** Around-you and town shelves are windows. These are their sills. */
@@ -230,7 +231,7 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
     // a promise about the words, and the right move is to add after it rather
     // than to loosen the other lane's assertion to fit mine.
     note: unread.length === 0
-      ? `complete for you — frame events are rare by construction, and every claim effect on your marks and on your ground rides here too, and so does every hold on a thing of yours or by your own hand${creatureEffects ? ", and every creature's answer to you" : ""}`
+      ? `complete for you — frame events are rare by construction, and every claim effect on your marks and on your ground rides here too, and so does every hold on a thing of yours or by your own hand${creatureEffects ? ", and every creature's answer to you" : ""}; a withdrawn mark of yours leaving canon rides here as the mark's latest state, not a history (a withdrawal later undone is not kept), dated by its window's scheduled settlement, not a retirement instant (a settlement run that finishes after the next crossing is dated a crossing early)`
       : `INCOMPLETE — ${unread.join("; ")}. Frame events below are whole; the shelves named here are missing from this answer, and this line is here so you do not read their absence as nothing having happened.`,
     since_crossing: sinceCrossing,
     through_crossing: nowCrossing,

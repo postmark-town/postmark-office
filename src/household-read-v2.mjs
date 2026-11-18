@@ -19,15 +19,23 @@
 //
 // The deep shapes stay typed (Darko's 21:55 question): a member's typed row is
 // house-bundle.mjs § memberRow, the one the house read pages; this file only
-// says it in one line. v1 is untouched: nothing here runs without read_shape.
+// says it in one line. v1 is untouched, but the glance is not the only caller:
+// household-apex.mjs `householdGlance` runs this file under read_shape: "v2",
+// while `householdDeep` (the typed reads closer, correspondents, happened and
+// stamps' went) and `householdWaiting` (read: "waiting") call its helpers
+// without read_shape.
 
 import { memberRow } from "./house-bundle.mjs";
-import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
+import { HOUSEHOLD_LINES } from "./door-read-shape.mjs";
 import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
+import { sayReferenceOf } from "./circles.mjs"; // POS-1035: a say's id and the say it answers, as references
 
-/** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
+/**
+ * How many groups of what waits the glance shows: the largest first, ties
+ * oldest first (needGroups' order).
+ */
 export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
 export const TAIL_ROWS = 100;
@@ -43,11 +51,14 @@ export const humanPhrase = (houseName) => `${houseName || "the house"}'s human`;
 
 export const CAN_GROUPS = Object.freeze({
   answer: ["declare-stance-on"],
+  // letter-note (POS-730) is not listed here: the glance's part 1 is sized to its budget (household-read-v2.test.mjs § PART1_BUDGET), and the act
+  // is named where it is used: the awaiting view's rows, the household door's act schema and CONTRACT.md.
   write: ["send", "mark-all-read", "amend-letter", "withdraw-letter", "block", "unblock"],
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
   host: ["host", "cancel-event", "rsvp", "announce"],
-  house: ["add-resident", "declare", "begin"],
+  // CORE-114: declare, begin and buy-parcel-room are offered (the tier's next; first_steps), never listed here
+  house: ["add-resident"],
 });
 
 /**
@@ -65,14 +76,10 @@ export const actFields = (act) => {
   return fields.length ? `${act} { ${fields.join(", ")} }` : act;
 };
 
-/** The groups, each one line of `act { fields }`, for the acts this caller can use. */
-export function canBlock(tier, household) {
-  const usable = usableActs(tier, household);
+/** The groups, each one line of `act { fields }`. */
+export function canBlock() {
   const out = {};
-  for (const [group, acts] of Object.entries(CAN_GROUPS)) {
-    const mine = acts.filter(usable);
-    if (mine.length) out[group] = mine.map(actFields).join(" · ");
-  }
+  for (const [group, acts] of Object.entries(CAN_GROUPS)) out[group] = acts.map(actFields).join(" · ");
   return out;
 }
 
@@ -121,18 +128,35 @@ export const FIRST_STEPS = Object.freeze({
   // eval round 2: parcels publish free (RULED 09-27: min stake 0, everyone), so no stake step;
   // eval round 3: a placeholder that says where the spot comes from, never a copyable place
   parcel: 'world { do: "leave-mark", args: { kind: "parcel", slug: "my-home", at: <open ground from world { read_shape: "v2" }>, body: "…" } }: free',
+  // POS-947/c (Darko 2026-11-08: "acts should be reserved for always-relevant verbs; not one-offs"; Wright 19:34Z):
+  // the one-off naming of a household's inviter, offered here only while its record names none (`naming` below),
+  // gone once named, never in `can`. The house's, not a member's, so no handle; the card is read: "invited-by".
+  "invited-by": 'household { do: "invited-by", args: { invited_by: "<their handle, or hh:<slug>>" } }: if someone invited your house; once, public',
+  // CORE-114 (Wright 2026-11-17): room for one more parcel is offered here, while the house may buy it (declared after the
+  // cutoff, room below three: parcel-room.mjs § THE TWO STAGE RULES) and never listed in `can`. `from` is whichever
+  // resident pays, said as a placeholder: the offer is the house's, so it names no resident. The call quotes first.
+  "buy-parcel-room": 'household { do: "buy-parcel-room", args: { from: "<who pays>", preview: true } }: room for one more parcel; the quote first, writes nothing',
 });
+/** CORE-114: said in place of the offer when the facts that decide it could not be read: neither offered nor hidden. */
+export const ROOM_UNREAD_STEP = 'buy-parcel-room: not readable just now, so not offered';
 /** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
-export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel"]);
+export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel", "buy-parcel-room", "invited-by"]);
 
 /**
  * The first steps for what the members are missing, in order, each naming the
  * call (and so its tool), or null when nothing is. None of them gates a
- * resident: each makes the house more visible.
+ * resident: each makes the house more visible. `naming`: the house's record
+ * names no inviter yet, so the one-off naming is offered (POS-947/c). `room`
+ * (CORE-114): "open" when the house may buy room for one more parcel (the offer),
+ * "unread" when the facts that decide it could not be read (said, never guessed),
+ * anything else when it may not (the date, the room: nothing offered).
  */
-export function firstSteps(gaps = {}) {
-  const missing = new Set(Object.values(gaps).flat());
+export function firstSteps(gaps = {}, { naming = false, room = null } = {}) {
+  const missing = new Set(Object.values(gaps).flat().filter((k) => k !== "invited-by" && k !== "buy-parcel-room"));
+  if (naming === true) missing.add("invited-by");
+  if (room === "open") missing.add("buy-parcel-room");
   const steps = FIRST_STEPS_ORDER.filter((k) => missing.has(k)).map((k) => `${k}: ${FIRST_STEPS[k]}`);
+  if (room === "unread") steps.push(ROOM_UNREAD_STEP);
   return steps.length ? steps : null;
 }
 
@@ -156,19 +180,10 @@ export const needRow = (c) => ({
   since: c.date ?? null,
 });
 
-/**
- * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
- * marks over one place of yours is ONE row, `{ by, over, count, oldest,
- * newest, sample }`, the sample being the group's oldest body, whole. Groups
- * run oldest first, up to NEEDS_FIRST. `rows` is newest first, as the inbox
- * orders it.
- */
 /** The stance words the door takes (world-stance.mjs § the declare tool's enum). */
 export const STANCE_WORDS = "welcomed | neutral | opposed";
 /** How many of a group's mark ids the glance names, oldest first. */
 export const GROUP_IDS = 3;
-/** A ready-to-run answer to one waiting mark, as v1's rows carried it. */
-export const answerAct = (id) => `declare-stance-on { on: "${id}", stance: ${STANCE_WORDS} }`;
 /** How many ids one stance call takes (world-stance.mjs § STANCE_LIST_MAX). */
 export const STANCE_LIST_CAP = 100;
 /**
@@ -184,6 +199,13 @@ export function groupAct({ by, over, count }, ids) {
   return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
 }
 
+/**
+ * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
+ * marks over one place of yours is ONE row, `{ by, over, count, oldest,
+ * newest, sample }`, the sample being the group's oldest body, whole. Groups
+ * run largest first, ties oldest first (round 4, Darko 16:49), up to `max`
+ * (NEEDS_FIRST by default). `rows` is newest first, as the inbox orders it.
+ */
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   const groups = new Map();
   for (const c of rows) {
@@ -199,7 +221,7 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   }
   // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
-    // after round 4 (Darko 16:49): the largest group first, then the oldest of the rest, so a cut never hides the biggest stream
+    // after round 4 (Darko 16:49): the largest group first, ties oldest first, so a cut never hides the biggest stream
     .sort((a, b) => (b.count - a.count) || String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
@@ -214,8 +236,9 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
  * and needs-you's counts. `first` is the waiting marks grouped by author and
- * place, oldest group first. When more wait than the page holds, `tail` (the
- * inbox's last rows, read on their own) joins the page so the oldest are there.
+ * place, largest group first, ties oldest first (needGroups' order). When more
+ * wait than the page holds, `tail` (the inbox's last rows, read on their own)
+ * joins the page so the oldest are there.
  */
 export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];
@@ -264,7 +287,7 @@ export const MARKS_KEY = 'pending: on the docket · standing: published · keep:
 // round 4 (Wright's look): a refusal's cause is said whole, on one line, never cut mid-sentence
 const oneLine = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
 /** One at-risk mark, what happens and why; the keeping call is the key's `keep:`. */
-export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked`;
+export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, last-settlement risk; stake to keep`;
 // the call that keeps one is named once, in MARKS_KEY's `keep:` (world-stake.mjs § world_stake: mark, stamps, preview;
 // Darko 18:04, a line per mark carried it first)
 
@@ -277,14 +300,16 @@ export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, 
  */
 export function marksBlock({ counts = {}, published = [], effects = null, atRisk = null } = {}) {
   const n = (v) => (Number.isFinite(v) && v > 0 ? v : null);
-  const decided = (effects ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused"));
+  // POS-731: a withdrawn mark of the house's leaving canon is decided at its crossing too
+  const decided = (effects ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused" || e.kind === "mark-withdrawn"));
   const last = decided.reduce((c, e) => Math.max(c, Number(e.crossing) || 0), 0);
   const at = decided.filter((e) => Number(e.crossing) === last);
   const refused = at.filter((e) => e.kind === "claim-refused");
-  // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>)"
-  const landed = at.length - refused.length;
+  const withdrawn = at.filter((e) => e.kind === "mark-withdrawn");
+  // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>) · 1 withdrawn (<first>)"
+  const landed = at.length - refused.length - withdrawn.length;
   const lastCrossing = at.length
-    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${oneLine(refused[0].cause ?? "no cause recorded")})` : null].filter(Boolean).join(" · ")}`
+    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${oneLine(refused[0].cause ?? "no cause recorded")})` : null, withdrawn.length ? `${withdrawn.length} withdrawn (${withdrawn[0].mark})` : null].filter(Boolean).join(" · ")}`
     : null;
   const risky = (atRisk ?? []).filter((r) => r.mark ?? r.id);
   const newest = [...published].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || String(a.id).localeCompare(String(b.id)))
@@ -361,9 +386,10 @@ export const dayBefore = (nowMs, days) => new Date(nowMs - days * 86_400_000).to
  * them: the ledger's semantics. The office's read flag is not used: residents
  * who read through git never set it. `letters` are the window's rows, both
  * directions (to_h, from_h, thread, date, delivered_at); `house` is every
- * resident of the house.
+ * resident of the house. `noted` is the house's private letter notes
+ * (letter-notes.mjs), a Map or Set keyed by letter id: a marked letter is skipped.
  */
-export function unansweredOf(letters = [], { mine, house = mine } = {}) {
+export function unansweredOf(letters = [], { mine, house = mine, noted = null } = {}) {
   const ours = mine instanceof Set ? mine : new Set(mine ?? []);
   const home = house instanceof Set ? house : new Set(house ?? []);
   const when = (r) => String(r.delivered_at ?? r.date ?? "");
@@ -371,6 +397,8 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
   let n = 0;
   for (const r of letters) {
     if (!r.delivered_at || !ours.has(r.to_h) || home.has(r.from_h)) continue;
+    // a letter the house has marked "no reply needed" or "waiting on …" is not counted (POS-730, Darko 2026-11-06); it stays in the awaiting view
+    if (noted?.has?.(r.id)) continue;
     const answered = out.some((o) => o.thread === r.id || (o.to_h === r.from_h && when(o) >= when(r)));
     if (!answered) n += 1;
   }
@@ -386,9 +414,10 @@ export const MAIL_KEY = 'to_answer: last 14 days, no reply · boat: next crossin
  * letters sailing at the next crossing. Threads of any age where they wrote
  * last are read: "mail", view: "awaiting", never the glance.
  */
-export function mailBlock({ unanswered = null, bounced = null, standing = null } = {}) {
+export function mailBlock({ unanswered = null, bounced = null, standing = null, notesUnavailable = null } = {}) {
   // round 4 (Darko 15:51): the 14 days are the default, named once in the key
-  return { to_answer: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
+  // POS-730: a house's letter notes that could not be read are said, never shown as none: the count may still hold marked letters
+  return { to_answer: unanswered, bounced, on_the_next_boat: standing, ...(notesUnavailable ? { notes_unavailable: notesUnavailable } : {}), key: MAIL_KEY };
 }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */
@@ -400,7 +429,7 @@ export const stampsKey = ({ went = false } = {}) =>
  * misled, as the house spends no pot), what is staked, what has been earned,
  * what went in the last 12 hours, and today's quests when there are any.
  */
-export function stampsBlock(details = [], { quests = [], went = null, you = null } = {}) {
+export function stampsBlock(details = [], { quests = [], went = null, you = null, stakes = null } = {}) {
   const known = details.filter((d) => d.tenses);
   const sum = (f) => known.reduce((n, d) => n + (Number(d.tenses[f]) || 0), 0);
   // eval round 3: the reader's own spendable balance, when the glance knows who is reading
@@ -409,12 +438,23 @@ export function stampsBlock(details = [], { quests = [], went = null, you = null
     ...(mine ? { yours: Number(mine.tenses.liquid) || 0 } : {}),
     residents_total: sum("liquid"),
     staked: sum("staked"),
+    // POS-1100 (Darko 2026-11-16 22:30: "we shouldn't allow households to bloat their own household apex read"): the AGGREGATE of everything
+    // the house has stamps behind and never the list, so this stays one size however many things a house stakes on
+    // (a house with nothing staked says nothing here: `staked: 0` is the whole answer, and an empty block is left out like every other)
+    ...(stakes && (stakes.unavailable || stakes.count > 0) ? { stakes: stakesAggregate(stakes) } : {}),
     earned_total: sum("minted"),
     ...(went != null ? { went_12h: went } : {}),
     ...(quests.length ? { quests } : {}),
     ...(known.length < details.length ? { unread: details.filter((d) => !d.tenses).map((d) => d.handle) } : {}),
     key: stampsKey({ went: went != null }),
   };
+}
+
+/** The stakes aggregate as the glance says it (household-stakes.mjs § aggregateOf): at risk first, the total, the count, a count per kind, and the read that lists them. */
+export const STAKES_LIST = 'household { read: "stakes" }';
+export function stakesAggregate(a) {
+  if (a?.unavailable) return { unavailable: "the ledger could not be read, so this is unknown, not zero", list: STAKES_LIST };
+  return { at_risk: a.at_risk ?? null, total: a.total ?? 0, count: a.count ?? 0, by_kind: a.by_kind ?? {}, ...(a.kind_note ? { kind_note: a.kind_note } : {}), list: STAKES_LIST };
 }
 
 /** Today's household quests, one line each: "Reach out 2/5 today". */
@@ -433,16 +473,16 @@ export const MEMBERS_KEY = "newest act first · handle · on <mark> | at x, y (m
 export const byLastAct = (a, b) => String(b.last_active ?? "").localeCompare(String(a.last_active ?? "")) || String(a.handle).localeCompare(String(b.handle));
 
 /** The `more` line, with the one sentence about what the glance leaves out (eval round 2). */
-export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothing in it is left out`;
+export const glanceMore = (cursor, { isDefault = false } = {}) => `${moreLine(cursor, { isDefault })} · a block with nothing in it is left out`;
 
 /**
  * The house's glance. `parts` is what the door read (household-apex.mjs §
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, naming = false, room = null, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null, stakes = null, isDefault = false } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
-  const steps = firstSteps(gaps);
+  const steps = firstSteps(gaps, { naming, room });
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
   // and marks.at_risk cannot disagree (a fixture that handed marks its own list made them say 0 and 1)
   const marksOf = marks ? marksBlock({ ...marks, atRisk: needs?.stakes_at_risk?.rows ?? null }) : null;
@@ -454,7 +494,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
       ...(isNewHouse(house, rows, nowMs) ? { arrived: ARRIVED_LINE } : {}),
       members_key: MEMBERS_KEY,
       members: [...rows].sort(byLastAct).map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
-      ...(steps ? { first_steps: steps, first_steps_note: FIRST_STEPS_NOTE } : {}),
+      ...(steps ? { first_steps: steps, first_steps_note: firstStepsNote(steps) } : {}),
     },
     // eval round 1: "needs" said two things; what waits on the house's word is `waiting`
     waiting: needsBlock({ stances, needs, tail }),
@@ -462,19 +502,19 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     ...(marksOf ? { marks: marksOf } : {}),
     ...(postsOf ? { posts: postsOf } : {}),
     mail: mailBlock({ ...mail, bounced: needs ? (needs.unplaced_bounces?.rows?.length ?? 0) : null }),
-    stamps: stampsBlock(details, { quests, went: went ? went.length : null, you }),
+    stamps: stampsBlock(details, { quests, went: went ? went.length : null, you, stakes }),
     // eval round 1: plainly letters, the window in the name (Darko 2026-10-20), with its key
     // eval round 2: an empty block is left out (more says so), and happened carries its key
     // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
     ...(closer?.length ? { correspondents: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
     ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name) } } : {}),
-    can: canBlock(standing?.tier, standing?.household),
+    can: canBlock(),
     law: {
       tier: standing?.tier ?? null,
       ...(standing?.world_writes ? { world_writes: `${standing.world_writes.used}/${standing.world_writes.cap} this ${standing.world_writes.per ?? "hour"}` } : {}),
     },
     cursor,
-    more: glanceMore(cursor),
+    more: glanceMore(cursor, { isDefault }), // POS-1094: while v2 is the door's default, the line on it
     reading_law: READING_LAW_V2,
     read_shape: "v2",
   };
@@ -492,6 +532,15 @@ export function isNewHouse(house = {}, rows = [], nowMs = Date.now()) {
 
 /** Said once beside the first steps (eval round 2): whether the missing papers are required. */
 export const FIRST_STEPS_NOTE = "none is required; each makes your house easier to find";
+/** POS-947/c: naming an inviter does not make a house easier to find, so the note says what it does instead, only when it is offered. */
+export const FIRST_STEPS_NAMING_NOTE = "none is required; each paper makes your house easier to find, and invited-by credits who brought you";
+export const FIRST_STEPS_ROOM_CLAUSE = "buy-parcel-room is the exception: its price is never returned";
+export const firstStepsNote = (steps = []) => {
+  const named = steps.some((s) => s.startsWith("invited-by: "));
+  const room = steps.some((s) => s.startsWith("buy-parcel-room: ") && s !== ROOM_UNREAD_STEP);
+  if (!room) return named ? FIRST_STEPS_NAMING_NOTE : FIRST_STEPS_NOTE;
+  return named ? `${FIRST_STEPS_NAMING_NOTE}; ${FIRST_STEPS_ROOM_CLAUSE}` : `${FIRST_STEPS_NOTE}; ${FIRST_STEPS_ROOM_CLAUSE}`;
+};
 
 /**
  * since: "<cursor>" on the glance: only what changed. Needs dated on or after
@@ -561,9 +610,10 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
     const at = r.delivered_at;
     for (const other of parties) {
       if (home.has(other)) continue;
-      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null };
+      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null, locals: new Set() };
       cur.letters += 1;
       cur.ids.push(r.id);
+      for (const p of parties) if (ours.has(p)) cur.locals.add(p);
       if (!cur.last_at || String(at) > String(cur.last_at)) cur.last_at = at;
       by.set(other, cur);
     }
@@ -571,6 +621,7 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
   return [...by.entries()]
     .map(([h, d]) => ({
       with: h, of: houseOf(h), letters: d.letters,
+      house_members: [...d.locals].sort(),   // POS-1027: which of the house's residents wrote with them: a pair read's `a`
       ...(milestones ? { milestones: milestones.get(h) ?? [] } : {}),
       ...(mints ? { stamps_between: d.ids.reduce((n, id) => n + (mints.get(id) ?? 0), 0) } : {}),
       last_at: d.last_at,
@@ -593,12 +644,36 @@ export function mintsByLetter(lines, mine) {
 }
 
 /**
+ * What a stamp that went was spent on (POS-1027: a design groups the rows by it), from the ledger line's own target and reason:
+ *   mark    stake:world-mark/<id>      a stake behind a mark
+ *   idea    stake:world-mark/<id>      …when `ideaIds` (the idea posts' ids) holds that id: an idea is backed through the same target
+ *   idea    stake:post/<author>/<slug> a stake on an idea post (POS-854), whatever ids the posts list holds
+ *   ballot  stake:vote/…               a stake on a ballot's choice
+ *   pot     stake:pot/…                a stake on a funding pot
+ *   gift    <handle> · for: gift       stamps given to a resident outside the house
+ *   burn    BURN                       stamps burned (a correction)
+ *   other   anything else the grammar admits, never guessed into one of the above
+ * The row keeps every field it had (from, to, stamps, for, via): `kind` is added beside them, nothing is dropped.
+ */
+export function wentKind(to, why, ideaIds = null) {
+  const target = String(to ?? "");
+  if (target.startsWith("stake:world-mark/")) return ideaIds?.has?.(target.slice("stake:world-mark/".length)) ? "idea" : "mark";
+  // POS-1100: an idea is a POST now (POS-854), backed through `stake:post/<author>/<slug>`; the idea class is the only post class that takes a stake (post-stake.mjs § STAKE_POST_CLASSES)
+  if (target.startsWith("stake:post/")) return "idea";
+  if (target.startsWith("stake:vote/")) return "ballot";
+  if (target.startsWith("stake:pot/")) return "pot";
+  if (target === "BURN") return "burn";
+  if (why === "gift" && !target.includes(":")) return "gift";
+  return "other";
+}
+
+/**
  * The house's stamps that WENT, as dated ledger rows, newest first: every
  * line whose giver is one of `mine` (a stake, a gift, a burn, a pot stake).
  * A MINT is not one (stamps arriving), nor is an escrow coming home, nor a
  * gift between two residents of the house: it never left the house.
  */
-export function wentRows(lines, mine, { house = mine } = {}) {
+export function wentRows(lines, mine, { house = mine, ideaIds = null } = {}) {
   const home = house instanceof Set ? house : new Set(house ?? []);
   const out = [];
   for (const { canonical, written_at } of lines ?? []) {
@@ -608,6 +683,7 @@ export function wentRows(lines, mine, { house = mine } = {}) {
     const via = /(?:^| · )via: (\S+)/.exec(note)?.[1] ?? null;
     const why = /(?:^| · )for: (\S+)/.exec(note)?.[1] ?? null;
     out.push({ at: written_at ? new Date(written_at).toISOString() : null, date: m[1], from: m[2], to: m[3], stamps: Number(m[4]),
+      kind: wentKind(m[3], why, ideaIds),
       ...(why ? { for: why } : {}), ...(via ? { via } : {}) });
   }
   return out;
@@ -637,7 +713,15 @@ export function happenedRow(a, { houseName = null } = {}) {
     object: a.object ?? null,
     place: a.at_anchor ?? null,
     ...(by ? { by } : {}),
+    // POS-1035 (the close block's POS-1024 row): a say carries its say id and the say it answers, as references — never words
+    ...sayReference(a),
   };
+}
+
+/** `{ say: { id, reply_to? } }` for a say act row whose id is an act number, else nothing (additive, after every existing field). */
+export function sayReference(a) {
+  const ref = sayReferenceOf(a);
+  return ref ? { say: ref } : {};
 }
 
 /**

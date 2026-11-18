@@ -16,8 +16,17 @@ import { installActsPen, uninstallActsPen } from "./acts-pen-stub.mjs";
 import {
   hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs, announceAtOffice,
   postAtTown, amendAtTown, closeAtTown, advanceAtTown,
+  stakeExecutorForTests, postStakedEvent, closeStakedEvent, nextEventId,
 } from "../src/events-store.mjs";
-import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
+
+// POS-1035: every new event stakes 20 through the executor, which holds the town lock and signs the ledger. These are the post
+// machine's own tests on a stub pen (no town, no store), so the stake is taken in-process here, its ledger landing a no-op: the
+// money itself is proved on a real town and store in event-sparks.test.mjs. The row and receipt carry the stake as they would.
+stakeExecutorForTests(async (p, env) => (p.mode === "post"
+  ? postStakedEvent(p.handle, p.input, { now: p.now, env, door: p.door,
+    stake: { id: await nextEventId(p.handle, p.input?.title, { now: p.now, env }), n: 20, by: p.handle, land: async () => ({}) } })
+  : closeStakedEvent(p.handle, p.id, { now: p.now, env, door: p.door, stakeReturn: { n: 20, to: p.handle, land: async () => ({}) } })));
+import { phaseAt, calendarFrom, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
 import { compareRebuild, dryRun, NEVER_TOUCHED_LINE } from "../world2/tools/events-rebuild.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -279,6 +288,53 @@ test("cancel · stays on the calendar marked cancelled; its id is not reused —
   const again = await hostAtOffice(HOST(now), WRIGHT);
   assert.equal(again.event.id, `${event.id}-2`);
   await refusedWith(rsvpAtOffice({ event: event.id }, ERRANT), 409, /was cancelled/);
+});
+
+// POS-909 · the calendar's `now`: live events lead, cancelled ones follow. All inputs invented, the clock fixed.
+const CAL_NOW = Date.parse("2030-01-02T12:00:00Z");
+const calRow = (id, starts, ends, state = "announced", opts = {}) => ({
+  id, title: id, body: "", author: "test-host", household: "test-house", place_mark: null, place_x: 1, place_y: 2,
+  starts, ends, revised: 0, state, fields: { doors_open: opts.doors_open ?? starts }, class: "event",
+});
+const ids = (list) => list.map((e) => e.id);
+
+test("POS-909 calendar · in `now` a live event leads a cancelled one that started earlier; the cancelled one stays listed, marked, in its phase; coming and ended keep their order", () => {
+  const rows = [
+    calRow("test-host/cancelled-early", "2030-01-02T09:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/live-late", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z"),
+    calRow("test-host/live-early", "2030-01-02T10:00:00Z", "2030-01-02T15:00:00Z"),
+    // the same start as live-late: the id tiebreaker holds inside each partition
+    calRow("test-host/cancelled-tie-b", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/cancelled-tie-a", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/cancelled-doors", "2030-01-02T12:30:00Z", "2030-01-02T15:00:00Z", "cancelled", { doors_open: "2030-01-02T11:30:00Z" }),
+    // coming: a cancelled one earlier than a live one stays in time order
+    calRow("test-host/coming-cancelled", "2030-01-03T10:00:00Z", "2030-01-03T12:00:00Z", "cancelled"),
+    calRow("test-host/coming-live", "2030-01-03T11:00:00Z", "2030-01-03T12:00:00Z"),
+    // ended: inside and outside the 7-day list, a cancelled one among them
+    calRow("test-host/ended-new", "2030-01-02T07:00:00Z", "2030-01-02T08:00:00Z"),
+    calRow("test-host/ended-cancelled", "2029-12-30T07:00:00Z", "2029-12-30T08:00:00Z", "cancelled"),
+    calRow("test-host/ended-old", "2029-12-01T07:00:00Z", "2029-12-01T08:00:00Z"),
+  ];
+  const cal = calendarFrom(rows, new Map(), CAL_NOW);
+  assert.deepEqual(ids(cal.now), [
+    "test-host/live-early", "test-host/live-late",
+    "test-host/cancelled-early", "test-host/cancelled-tie-a", "test-host/cancelled-tie-b", "test-host/cancelled-doors",
+  ]);
+  assert.equal(cal.now[0].cancelled, false);
+  assert.deepEqual(cal.now.map((e) => e.cancelled), [false, false, true, true, true, true], "every cancelled one stays listed and marked");
+  assert.deepEqual(cal.now.map((e) => e.phase), ["underway", "underway", "underway", "underway", "underway", "doors-open"], "the clock's phase is untouched");
+  assert.deepEqual(ids(cal.coming), ["test-host/coming-cancelled", "test-host/coming-live"], "coming stays in time order, cancelled in place");
+  assert.equal(cal.coming[0].cancelled, true);
+  assert.deepEqual(ids(cal.ended), ["test-host/ended-new", "test-host/ended-cancelled"], "ended: newest end first, 7 days, cancelled still there");
+  assert.equal(cal.total, 10, "total counts every listed event once");
+});
+
+test("POS-909 calendar · a cancelled event alone in its window is still listed and marked in `now`; with no cancelled event nothing about `now` changes", () => {
+  const lone = calendarFrom([calRow("test-host/lone", "2030-01-02T10:00:00Z", "2030-01-02T15:00:00Z", "cancelled")], new Map(), CAL_NOW);
+  assert.deepEqual(lone.now.map((e) => [e.id, e.cancelled, e.phase]), [["test-host/lone", true, "underway"]]);
+  assert.equal(lone.total, 1);
+  const live = ["b", "a", "c"].map((s, i) => calRow(`test-host/live-${s}`, `2030-01-02T1${i}:00:00Z`, "2030-01-02T15:00:00Z"));
+  assert.deepEqual(ids(calendarFrom(live, new Map(), CAL_NOW).now), ["test-host/live-b", "test-host/live-a", "test-host/live-c"], "all live: starts order, as before");
 });
 
 test("a second host of a STANDING event's title is refused and pointed at the amendment", async () => {
@@ -758,7 +814,8 @@ test("post machine · town { do: \"post\", class: \"event\" } writes a `post` ac
   assert.deepEqual([act.class, act.action, act.object], ["event", "post", "wright/office-hours"]);
   const p = JSON.parse(act.payload);
   assert.deepEqual(Object.keys(p).sort(), ["body", "class", "ends", "fields", "place", "post", "starts", "title"]);
-  assert.deepEqual(p.fields, { doors_open: iso(now + 0.5 * H) }, "doors_open is the event class's own field");
+  // POS-1035: every new event carries its hosting stake (the poster's own 20) beside its doors
+  assert.deepEqual(p.fields, { doors_open: iso(now + 0.5 * H), stake: { n: 20, by: "wright" } }, "doors_open is the event class's own field, and the stake rides beside it");
   const row = posts.get("wright/office-hours");
   assert.equal(row.class, "event"); assert.equal(row.state, "announced"); assert.equal(row.author, "wright");
   const { event } = await calendarAtOffice({ post: "wright/office-hours" }, { now });
@@ -805,7 +862,8 @@ test("post machine · close: an event closes as cancelled — on the calendar as
   await postAtTown(TOWN_EVENT(now), WRIGHT, { now });
   const c = await closeAtTown({ post: "wright/office-hours" }, WRIGHT, { now });
   assert.equal(c.state, "cancelled"); assert.equal(c.post.cancelled, true); assert.equal(c.post.state, "cancelled");
-  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: "wright/office-hours", state: "cancelled" });
+  // POS-1035: the whole stake comes home in the cancellation's own act
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: "wright/office-hours", state: "cancelled", stake_returned: { n: 20, to: "wright" } });
   assert.equal(pen.rows().at(-1).action, "close");
   await refusedWith(closeAtTown({ post: "wright/office-hours" }, WRIGHT, { now }), 409, /already cancelled/);
   await refusedWith(cancelAtOffice({ event: "wright/office-hours" }, WRIGHT, { now }), 409, /already cancelled/);
@@ -826,7 +884,7 @@ test("post machine · the class is judged: post needs one, another class is refu
   const { pen } = setup();
   const now = Date.now();
   await refusedWith(postAtTown({ ...TOWN_EVENT(now), class: undefined }, WRIGHT, { now }), 422, /post needs a class/);
-  await refusedWith(postAtTown({ ...TOWN_EVENT(now), class: "bounty" }, WRIGHT, { now }), 422, /answers class "event", "quest" or "bug", not "bounty"/);
+  await refusedWith(postAtTown({ ...TOWN_EVENT(now), class: "bounty" }, WRIGHT, { now }), 422, /answers class "event", "quest", "bug" or "ballot", not "bounty"/);
   await postAtTown(TOWN_EVENT(now), WRIGHT, { now });
   await refusedWith(amendAtTown({ post: "wright/office-hours", class: "idea", title: "x" }, WRIGHT, { now }), 422, /not "idea"/);
   await refusedWith(closeAtTown({ post: "wright/office-hours", class: "idea" }, WRIGHT, { now }), 422, /not "idea"/);
@@ -865,7 +923,7 @@ test("post machine · the town door reads the event class: read: \"event\" dispa
     assert.ok(WRITE_TOOLS.has(flat), `${flat} is a credentialed act`);
   }
   const post = TOOLS.find((t) => t.name === "town_post").inputSchema;
-  assert.deepEqual(post.properties.class.enum, ["idea", "event", "quest", "bug", "report"]); // report: POS-757, one value, its fields in explain
+  assert.deepEqual(post.properties.class.enum, ["idea", "event", "quest", "bug", "ballot", "report"]); // report: POS-757, one value, its fields in explain; ballot: POS-983, the town's hands only
   assert.deepEqual(post.required, ["class"]);
 });
 

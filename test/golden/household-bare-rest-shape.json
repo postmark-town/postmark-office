@@ -18,66 +18,6 @@
      "required": "boolean",
      "type": "string"
     },
-    "from_town": {
-     "description": "string",
-     "type": "string"
-    },
-    "handle": {
-     "description": "string",
-     "required": "boolean",
-     "type": "string"
-    },
-    "heard": {
-     "description": "string",
-     "enum": [
-      "string"
-     ],
-     "type": "string"
-    },
-    "heard_note": {
-     "description": "string",
-     "maxLength": "number",
-     "type": "string"
-    },
-    "household": {
-     "description": "string",
-     "required": "boolean",
-     "type": "string"
-    },
-    "invited_by": {
-     "description": "string",
-     "maxLength": "number",
-     "type": "string"
-    },
-    "note": {
-     "description": "string",
-     "type": "string"
-    },
-    "since": {
-     "description": "string",
-     "type": "string"
-    }
-   },
-   "teaches": "string"
-  },
-  {
-   "act": "string",
-   "blurb": "string",
-   "dispatches_to": "string",
-   "fields": {
-    "agent": {
-     "description": "string",
-     "type": "string"
-    },
-    "architecture": {
-     "description": "string",
-     "type": "string"
-    },
-    "card": {
-     "description": "string",
-     "required": "boolean",
-     "type": "string"
-    },
     "handle": {
      "description": "string",
      "required": "boolean",
@@ -214,6 +154,10 @@
      "required": "boolean",
      "type": "string"
     },
+    "resend": {
+     "description": "string",
+     "type": "string"
+    },
     "stake_candidate": {
      "description": "string",
      "type": "string"
@@ -256,6 +200,10 @@
     "from": {
      "description": "string",
      "required": "boolean",
+     "type": "string"
+    },
+    "preview": {
+     "description": "string",
      "type": "string"
     },
     "stamps": {
@@ -558,6 +506,31 @@
    "fields": {
     "household": {
      "description": "string",
+     "required": "boolean",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "null",
+   "fields": {
+    "letter": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "on": {
+     "description": "string",
+     "type": "string"
+    },
+    "state": {
+     "description": "string",
+     "enum": [
+      "string"
+     ],
      "required": "boolean",
      "type": "string"
     }

@@ -109,10 +109,66 @@ export function welcomeDatesFrom(lines, { classifyEntry, roll }) {
   return out;
 }
 
+/**
+ * The day each household was PAID for a quest the town pays once per household
+ * (POS-976), from the STORE's signed quest-pay lines: `Map(household key ->
+ * { <quest-id>: <day> })`. `lines` is the canonical text of those rows
+ * (src/stamp-lines.mjs § questPayLinesVia); null means the store was not read,
+ * and the answer is null too, never an empty map standing in for "nobody".
+ *
+ * WHAT COUNTS is the town's own receipt rule, not a new one: a line the town's
+ * `classifyEntry` reads as `quest-pay`, for a quest `QUEST_PAY` names, for exactly
+ * that quest's amount, by the-town, on a day the quest was open. Anything else
+ * (another quest, a different amount, another authority, a closed window, a line
+ * the grammar does not read) settles nothing. A balance or a recipient's name is
+ * never read: only the receipt.
+ *
+ * WHICH HOUSE a line settles is the HOUSE THE LINE NAMES, and nothing else. A
+ * quest-pay line names the payee's household AT THE LINE'S DATE: `--quest-mint`
+ * refuses unless `--household === keyOf(handle, date)`, and the verifier reds a
+ * line whose key is not the payee's house on that day (tools/stamp-mint.mjs,
+ * tools/stamp-verify.mjs), so for a lawful line the paid house is exactly
+ * `canon(c.household)`. The payee's house TODAY is deliberately not credited (that
+ * is the WELCOME row's rule, `welcomeDatesFrom`, and not this quest's): a resident
+ * paid in house A who later moves to a distinct house B takes no receipt with
+ * them, so B's rows stay unknown until B is paid on its own line. `canon` folds
+ * the spellings of ONE declared house (a `gh:<account id>`, a retired slug) to its
+ * `hh:<slug>`, as the town's houseCanonOf does (identity when none is given): a
+ * house paid under one spelling keeps its receipt under the others. The earliest
+ * day wins.
+ */
+export function questPaidFrom(lines, { classifyEntry, questPay, questOpenOn = null, canon = (k) => k }) {
+  // the window is the town's own formula (QUEST_PAY's `from`/`until`); the town's questOpenOn is used when the checkout exports it, and this is it when not
+  const open = typeof questOpenOn === "function" ? questOpenOn
+    : (terms, date) => typeof terms?.from === "string" && typeof date === "string" && date >= terms.from && (!terms.until || date <= terms.until);
+  if (!lines || typeof classifyEntry !== "function" || !questPay) return null;
+  const out = new Map();
+  const put = (key, quest, date) => {
+    if (!key) return;
+    const k = canon(key);
+    const row = out.get(k) ?? {};
+    if (!row[quest] || date < row[quest]) row[quest] = date;
+    out.set(k, row);
+  };
+  for (const canonical of lines) {
+    const c = classifyEntry(canonical);
+    if (c?.kind !== "quest-pay") continue;
+    const terms = questPay[c.quest];
+    if (!terms || c.n !== terms.amount || c.by !== "the-town") continue;
+    if (!open(terms, c.date)) continue;
+    put(c.household, c.quest, c.date);
+  }
+  return out;
+}
+
 /** One resident's standing row — the JSON the index stores. PURE. */
-export function standingRow(handle, { facts, first, depth, ladderActive, welcomedSince = null }) {
+export function standingRow(handle, { facts, first, depth, ladderActive, welcomedSince = null, paidQuests = null }) {
   return {
     ...(facts ?? {}),
+    // The quests the town has PAID this resident's household for, by quest id, each
+    // with its paid day (POS-976): only quests with a qualifying signed line, so an
+    // absent key means "not known paid", never "unpaid".
+    ...(paidQuests && Object.keys(paidQuests).length ? { paid_quests: paidQuests } : {}),
     // The day the bundle was paid, ONLY on a row the town calls welcomed
     // (POS-495). Who counts as welcomed is the town's fact above, and the
     // store never changes it: no line in the store leaves the row welcomed
@@ -136,14 +192,15 @@ export function standingRow(handle, { facts, first, depth, ladderActive, welcome
  * `welcomeDatesFrom`'s map (or null), and `keyOf` a handle's household key,
  * the key the town's `welcomed` fact looks up.
  */
-export function standingRowsFor(handles, { deliveries, friendships, factsFor, welcomedOn = null, keyOf = null }) {
+export function standingRowsFor(handles, { deliveries, friendships, factsFor, welcomedOn = null, keyOf = null, paidOn = null, paidKeyOf = null }) {
   const first = firstEachWay(deliveries);
   const depth = depthByHandle(friendships);
   const ladderActive = Boolean(friendships?.active);
   const out = new Map();
   for (const h of handles ?? []) {
     const welcomedSince = (welcomedOn && keyOf ? welcomedOn.get(keyOf(h)) : null) ?? null;
-    out.set(h, standingRow(h, { facts: factsFor(h), first, depth, ladderActive, welcomedSince }));
+    const paidKey = paidOn ? (paidKeyOf ?? keyOf)?.(h) : null;
+    out.set(h, standingRow(h, { facts: factsFor(h), first, depth, ladderActive, welcomedSince, paidQuests: paidKey ? paidOn.get(paidKey) ?? null : null }));
   }
   return out;
 }
@@ -184,8 +241,16 @@ export function standingRowsFor(handles, { deliveries, friendships, factsFor, we
  * welcome row and decide nothing else. Null (the hydrate, a store that did not
  * answer, a checkout too old to export `classifyEntry` or `currentHouseholds`)
  * leaves every row undated, as before.
+ *
+ * `questPayLines` is the store's signed quest payments (POS-976, src/stamp-lines.mjs
+ * § questPayLinesVia), read by the ingest beside the welcome rows: they settle the
+ * rows of the quests the town pays once per household (`paid_quests` on the standing
+ * row) and decide nothing else. `houses` is the registry's `households` object (the
+ * store's registry when the ingest has it, else the checkout's printed tools/households.json), for the town's houseCanonOf. Null lines
+ * (the hydrate, a store that did not answer, a checkout too old to export `QUEST_PAY`
+ * or `classifyEntry`) leave every such row unknown, as before.
  */
-export function standingRowsFromTown(tools, repo, handles, { base = null, welcomeLines = null } = {}) {
+export function standingRowsFromTown(tools, repo, handles, { base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const deliveries = tools.parseDeliveries(repo);
   const friendships = base ? tools.foldFriendships(repo, { base }) : tools.foldFriendships(repo);
   const households = typeof tools.currentHouseholds === "function"
@@ -194,12 +259,19 @@ export function standingRowsFromTown(tools, repo, handles, { base = null, welcom
     ? tools.welcomedHouseholds(repo, households) : undefined;
   const welcomedOn = households !== undefined && typeof tools.classifyEntry === "function"
     ? welcomeDatesFrom(welcomeLines, { classifyEntry: tools.classifyEntry, roll: households }) : null;
+  // the quests the town pays once per household: settled by the signed receipt (POS-976), under the house's canonical key
+  const canon = typeof tools.houseCanonOf === "function" && houses ? tools.houseCanonOf(houses) : (k) => k;
+  const paidOn = households !== undefined && tools.QUEST_PAY
+    ? questPaidFrom(questPayLines, { classifyEntry: tools.classifyEntry, questPay: tools.QUEST_PAY, questOpenOn: tools.questOpenOn, canon })
+    : null;
+  const keyOf = (h) => households?.get(h)?.key ?? `solo:${h}`;
   const rows = standingRowsFor(handles, {
     deliveries, friendships,
     factsFor: (h) => tools.onboardingFactsFor(repo, h, { deliveries, households, welcomed }),
-    welcomedOn,
+    welcomedOn, paidOn,
     // the key the town's `welcomed` fact looks up (quest-progress.mjs § onboardingFactsFor)
-    keyOf: (h) => households?.get(h)?.key ?? `solo:${h}`,
+    keyOf,
+    paidKeyOf: (h) => canon(keyOf(h)),
   });
   return { rows, friendships };
 }

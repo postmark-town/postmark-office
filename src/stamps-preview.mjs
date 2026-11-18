@@ -19,18 +19,21 @@
 // clone, never vendored). That is the same fold `tools/world-stake.mjs
 // § worldStakeState` performs for balances — the fold the CLIP itself reads —
 // and the same one the town index's derivation (`src/town-index.mjs` §
-// stampFold) performs to fill the index's `stamps` table.
+// stampFold) performs to fill the store's `town_stamps` table.
 //
-// ⚑ AND IT IS DELIBERATELY NOT THE INDEX. The lane brief says "from the same
-// fold the estate read uses", and the estate read (`household-stamps.mjs
-// § estateRead`) goes through `queries.stampsDetail`, which reads the SQLite
-// index — a SNAPSHOT of this fold, refreshed at rehydrate. A preview exists to
-// say what THIS act will do to your stamps; taken from a snapshot, its `after`
-// arithmetic would be wrong by exactly whatever the ledger has done since the
-// last rehydrate, in the one case the preview is for. The clip's own source is
-// the live ledger, so the preview reads the live ledger. The index stays the
-// estate read's, which is a different question ("what do my books say") asked at
-// a different door.
+// ⚑ AND IT IS DELIBERATELY NOT THE INDEX ALONE. The lane brief says "from the
+// same fold the estate read uses", and the estate read (`household-stamps.mjs
+// § estateRead`) goes through `stampsDetail` over the store (`town-index-store.mjs
+// § stampsDetail`), which reads `town_stamps` — a SNAPSHOT of this fold, as of
+// the town-index ingest's last run. A preview exists to say what THIS act will
+// do to your stamps; taken from that snapshot alone, its `after` arithmetic
+// would be wrong by exactly whatever the ledger has done since the ingest, in
+// the one case the preview is for. The clip's own source is the live ledger, so
+// the preview reads the live ledger: `heldFor` below starts from `town_stamps`
+// for speed but adds the ledger's tail after the ingest's `stamps_tip`
+// (`stamp-tail.mjs § heldFromIndex`, POS-314), and folds the whole file when it
+// cannot vouch for that. The snapshot alone stays the estate read's, which is a
+// different question ("what do my books say") asked at a different door.
 //
 // ── THE CLIP, AND THE ONE COPY THIS FILE ADMITS TO ──────────────────────────
 //
@@ -117,13 +120,12 @@ export function clipTo(requested, ceiling) {
 export async function heldFor(clone, handle, { env = process.env } = {}) {
   const { readFileSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { pathToFileURL } = await import("node:url");
+  const { importTownTool, isPinStop, pinStopHint } = await import("./town-tool.mjs");
   const ledgerPath = join(clone, "WHITE_PAGES", "stamp-ledger.md");
-  const mintPath = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(ledgerPath) || !existsSync(mintPath))
+  if (!existsSync(ledgerPath) || !existsSync(join(clone, "tools", "stamp-mint.mjs")))
     return { liquid: 0, staked: 0, unread: "the office has no town clone carrying the stamp ledger, so what you hold could not be read here" };
   try {
-    const mint = await import(pathToFileURL(mintPath));
+    const mint = await importTownTool(clone, "stamp-mint.mjs"); // POS-994: the office's pinned copy, checked against the clone
     // SNAPSHOT 7 (POS-314): the store's town_stamps plus the ledger's tail.
     // Null (no tip, a tip this clone lacks, no store) folds the whole file
     // below, as before: the full derivation wins.
@@ -138,6 +140,7 @@ export async function heldFor(clone, handle, { env = process.env } = {}) {
       staked: mint.foldStaked(entries).get(handle) ?? 0,
     };
   } catch (e) {
+    if (isPinStop(e)) return { liquid: 0, staked: 0, unread: `the stamp ledger was not read: ${pinStopHint(e)}` };
     const { plainReason } = await import("./fault-words.mjs"); // POS-657: the plain reason, the raw error to the log
     return { liquid: 0, staked: 0, unread: `the stamp ledger could not be folded here: ${plainReason(e, "files", "the stamp ledger")}` };
   }

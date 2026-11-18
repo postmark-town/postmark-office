@@ -42,12 +42,18 @@
 // reads have no lower bound), D4 the thing goes to full hands too (no capacity
 // check), D5 the words (NAMES_SHOWN and the lines below).
 //
+// WLD-129 (Darko 2026-10-29 19:51, "Yes, from now on"): SUPPORTERS are named too, after the
+// fighters: a resident whose steady or shield, in this creature's ring, was for a resident who took
+// part (supportersOf). From now on only: an ending already written is never rewritten. They go in
+// the same `took_part` list, so the payload's shape is unchanged; the keys are credited separately.
+//
 // THE OFFICE'S CODE NAMES NO PLACE, NO THING AND NO ROLE: what a creature
 // carries is whatever its declaration names, and the world's kind may write its
 // own ending line (`ending:`, with {finisher}, {names} and {carried}).
 
 import { settlementAtOrBefore } from "../../src/world-forecast.mjs";
 import { currentCrossing } from "../../src/crossings.mjs";
+import { STEADY_ACTION as STEADY, SHIELD_ACTION as SHIELD } from "../../src/encounter.mjs";
 
 export const CREATURE = "creature";
 export const TOWN = "the-town";
@@ -98,21 +104,31 @@ export const FINISHES_SQL = `SELECT f.payload->>'by' AS by, t.id::text AS act_id
  * an act whose object is the creature, and a walk toward it, count whether or not
  * a reaction row followed.
  */
-export const ANSWERED_SQL = `SELECT act_id, actor, object, approach FROM (
-    SELECT t.id AS id, t.id::text AS act_id, t.actor, t.object, t.payload->>'approach' AS approach FROM acts r
+export const ANSWERED_SQL = `SELECT act_id, actor, object, approach, support FROM (
+    SELECT t.id AS id, t.id::text AS act_id, t.actor, t.object, t.payload->>'approach' AS approach,
+        CASE WHEN t.class = '${CREATURE}' AND t.action IN ('${STEADY}', '${SHIELD}') THEN t.action END AS support FROM acts r
       JOIN acts t ON t.id = CASE WHEN r.object ~ '^[0-9]+$' THEN r.object::bigint END
       WHERE r.class = '${CREATURE}' AND r.action = 'react' AND r.actor = $1 AND t.at < $2
     UNION
-    SELECT a.id, a.id::text, a.actor, a.object, a.payload->>'approach' FROM acts a
+    SELECT a.id, a.id::text, a.actor, a.object, a.payload->>'approach', NULL FROM acts a
       WHERE a.object = $1 AND a.at < $2 AND a.actor <> '${TOWN}' AND a.actor <> $1
     UNION
     -- a walk toward it (an approach) names the creature in its payload, not its object. Bounded by
     -- the move class's index (class, id) from the creature's own spawn row on, with no new index:
     -- only walks since it appeared are read, and only the approaches among them are kept.
-    SELECT w.id, w.id::text, w.actor, w.object, w.payload->>'approach' FROM acts w
+    SELECT w.id, w.id::text, w.actor, w.object, w.payload->>'approach', NULL FROM acts w
       WHERE w.class = 'move' AND w.action = 'walk' AND w.at < $2 AND w.actor <> '${TOWN}'
         AND w.id >= COALESCE((SELECT min(s.id) FROM acts s WHERE s.object = $1 AND s.class = '${CREATURE}' AND s.action = 'spawn'), 9223372036854775807)
         AND w.payload->>'approach' = $1
+    UNION
+    -- a steady or a shield the record places in its ring (WLD-129): the act's payload names the creature
+    -- whose ring held it, and its object is the resident it was for. The reaction branch above also
+    -- carries one the creature answered when the payload named another creature whose ring overlapped.
+    -- Bounded the same way: only acts since it appeared are read.
+    SELECT h.id, h.id::text, h.actor, h.object, NULL, h.action FROM acts h
+      WHERE h.class = '${CREATURE}' AND h.action IN ('${STEADY}', '${SHIELD}') AND h.at < $2 AND h.actor <> '${TOWN}'
+        AND h.id >= COALESCE((SELECT min(s.id) FROM acts s WHERE s.object = $1 AND s.class = '${CREATURE}' AND s.action = 'spawn'), 9223372036854775807)
+        AND h.payload->>'creature' = $1
   ) x ORDER BY id`;
 /**
  * A CREATURE THAT TEMPTS ends by its two tallies over the window the settlement
@@ -151,7 +167,8 @@ export function planTallyEnding({ spawn, rows, answered, settlement, cutoff, men
   const p = asObj(spawn.payload);
   const id = spawn.object, kind = String(p.kind ?? CREATURE);
   const tallied = rows.map((r) => (r.action === "strike" ? r.actor : r.object)).filter(resident);
-  const took = [...new Set([...tookPart(id, answered, []), ...tallied])];
+  const fought = [...new Set([...tookPart(id, answered, []), ...tallied])];
+  const took = [...fought, ...supportersOf(answered, fought)];
   const ending = menu?.endings?.[road] ?? null;
   const names = namesSaid(took);
   return {
@@ -200,7 +217,8 @@ export function planFightEnding({ spawn, rows, answered, settlement, cutoff, fro
   const p = asObj(spawn.payload);
   const id = spawn.object, kind = String(p.kind ?? CREATURE);
   const raised = rows.filter((r) => r.action === "sanity").map((r) => r.object).filter(resident);
-  const took = [...new Set([...tookPart(id, answered, []), ...raised])];
+  const fought = [...new Set([...tookPart(id, answered, []), ...raised])];
+  const took = [...fought, ...supportersOf(answered, fought)];
   const names = namesSaid(took);
   const line = typeof kindFile?.ending === "string" && kindFile.ending.trim()
     ? kindFile.ending.replaceAll("{names}", () => names || "no one").replaceAll("{finisher}", () => took[0] ?? "no one").replaceAll("{carried}", () => "nothing")
@@ -223,6 +241,25 @@ export const PRIOR_WITHDRAW_SQL = `SELECT id::text AS id FROM acts WHERE class =
 
 /** A resident's handle, never a creature or the town. */
 const resident = (h) => typeof h === "string" && h !== "" && h !== TOWN && !h.startsWith(`${CREATURE}:`);
+
+/**
+ * WLD-129: who SUPPORTED the fight, after the fighters. A resident whose steady or shield, in this
+ * creature's ring, was for a fighter (a resident named in `fought`, the ending's own took-part list
+ * before supporters). RULED (Darko 2026-10-29 19:51, "Yes, from now on"): the ending names them too.
+ * `answered` are ANSWERED_SQL's rows (a support row carries `support`: "steady" | "shield", its object
+ * the resident it was for). Ordered by their first supporting act, earliest first, like the fighters;
+ * a fighter is never named twice; a support for someone who did not fight names no one; and an
+ * ending already written is never reopened (this runs at the plan, once).
+ */
+export function supportersOf(answered = [], fought = []) {
+  const fighters = new Set(fought);
+  const first = new Map(); // handle → their first supporting act id
+  for (const r of answered) {
+    if ((r.support !== STEADY && r.support !== SHIELD) || !fighters.has(r.object) || fighters.has(r.actor) || r.actor === r.object) continue;
+    if (resident(r.actor) && isNum(r.act_id) && (!first.has(r.actor) || idCmp(r.act_id, first.get(r.actor)) < 0)) first.set(r.actor, String(r.act_id));
+  }
+  return [...first.entries()].sort((a, b) => idCmp(a[1], b[1])).map(([h]) => h);
+}
 
 /**
  * D1: who took part, by their first act, earliest first. `answered` are
@@ -272,7 +309,8 @@ export function planEnding({ spawn, finishers, answered, settlement, cutoff, kin
   if (!first) return null;
   const p = asObj(spawn.payload);
   const id = spawn.object, kind = String(p.kind ?? CREATURE), carried = typeof p.carries === "string" ? p.carries : null;
-  const took = tookPart(id, answered, finishers, { mode });
+  const fought = tookPart(id, answered, finishers, { mode });
+  const took = [...fought, ...supportersOf(answered, fought)];
   const others = took.filter((h) => h !== first.by);
   return {
     id, kind, x: Number(p.x), y: Number(p.y), finisher: first.by, act: first.act_id, took_part: took, carries: carried,

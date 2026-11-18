@@ -34,8 +34,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -212,7 +212,7 @@ const isLeafDir = (d) => readdirSync(d).every((e) => e === "mark.md" || !statSyn
 
 before(async () => {
   if (WHY_SKIP) return;
-  dir = mkdtempSync(join(tmpdir(), "pos142-ingest-"));
+  dir = tempDir("pos142-ingest-");
   const repo = join(dir, "w");
   execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
   git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
@@ -404,7 +404,7 @@ let px = null;
 
 async function printoutFixture() {
   if (px) return px;
-  const pdir = mkdtempSync(join(tmpdir(), "pos614-ingest-"));
+  const pdir = tempDir("pos614-ingest-");
   const repo = join(pdir, "w");
   execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
   git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
@@ -497,7 +497,7 @@ test("POS-614 · the printout is named by author email AND subject: the crossing
 });
 
 test("POS-614 · A HAND COMMIT AND THE PRINTOUT ON ONE FILE: only the hand's fields are carried, the hand's value wins, and the receipt names the printout's fields left out", { skip: WHY_SKIP }, async () => {
-  const mdir = mkdtempSync(join(tmpdir(), "pos614-mixed-"));
+  const mdir = tempDir("pos614-mixed-");
   try {
     const repo = join(mdir, "w");
     execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });

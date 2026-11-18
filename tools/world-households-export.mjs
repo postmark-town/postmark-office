@@ -40,7 +40,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { sketchbookKeys, worldHouseholdsFromStore } from "../src/household-logins.mjs";
+import { pinnedAccountKeys, sketchbookKeys, worldHouseholdsFromStore } from "../src/household-logins.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -116,6 +116,19 @@ for (const u of second.unnameable) {
     + `${u.bound?.length ? ` (${u.bound.join(", ")})` : ""}; there is no honest name to bind it under`);
 }
 
+// THE PINNED IDS (WLD-122, "Bind pinned ids"): numeric GitHub account id →
+// household key, from the store's pins and the same households map as above
+// (src/household-logins.mjs § THE PINNED IDS). The PR lane binds an author
+// through this and nothing else; `logins` keeps its sketchbook meaning. An id
+// the derivation places in two houses, or a pin with no usable id, binds
+// nothing and is said here.
+const pinned = pinnedAccountKeys({ pins: storePins, households, declared: storeRegistry });
+for (const c of pinned.conflicts)
+  console.error(`[households-export] PINNED ID NOT BOUND — account ${c.id} resolves to ${c.keys.join(", ")}; `
+    + "the lane cannot tell which household it acts for, so it binds none (never a winner)");
+if (pinned.malformed.length)
+  console.error(`[households-export] PINNED ID NOT BOUND — the pin of ${pinned.malformed.join(", ")} carries no usable numeric id`);
+
 // ── THE FRESHNESS STAMP NAMES ITS OWN SOURCE ────────────────────────────────
 //
 // `generated_at` says WHEN this file was written and nothing at all about WHAT
@@ -186,6 +199,8 @@ const out = {
   logins: Object.fromEntries(Object.entries(allLogins).sort(([a], [b]) => a.localeCompare(b))),
   admins_note: "admins: the admin households (WLD-21, Darko 2026-10-18), whose GitHub account on the house's own list owns the postmark-town organisation. They may make the three passage classes, dungeon, stairs and portal-ground (world tools/admin-makers.mjs). Printed from the office's role book (role admin, written at each settlement by tools/admin-refresh.mjs); no gate asks GitHub itself.",
   admins,
+  pinned_ids_note: "pinned_ids: numeric GitHub account id → household key, for the PR lane's author binding (WLD-122, Darko 2026-10-27: \"Bind pinned ids\"). An id appears only if a pin names it and the registry places it in exactly one household; an id it would place in two is left out and said on the export's stderr. A login is never proof of identity: logins above also binds sketchbook names. A reader that finds no pinned_ids refuses to bind; it never falls back to logins or households.",
+  pinned_ids: pinned.ids,
 };
 
 
@@ -228,6 +243,7 @@ if (args.includes("--check")) {
     compare("households", households, had.households),
     compare("logins", out.logins, had.logins),
     compare("admins", Object.fromEntries(admins.map((k) => [k, true])), Object.fromEntries((had.admins ?? []).map((k) => [k, true]))),
+    compare("pinned_ids", out.pinned_ids, had.pinned_ids),
   ];
   const movedAll = both.filter((c) => c.moved.length);
   if (!movedAll.length) {
@@ -238,8 +254,8 @@ if (args.includes("--check")) {
   }
   console.error("households-export --check: THE MAPPING MOVED");
   for (const c of movedAll) {
-    const mine = c.name === "households" ? households : c.name === "logins" ? out.logins : Object.fromEntries(admins.map((k) => [k, "admin"]));
-    const theirs = c.name === "households" ? had.households : c.name === "logins" ? had.logins : Object.fromEntries((had.admins ?? []).map((k) => [k, "admin"]));
+    const mine = c.name === "households" ? households : c.name === "logins" ? out.logins : c.name === "pinned_ids" ? out.pinned_ids : Object.fromEntries(admins.map((k) => [k, "admin"]));
+    const theirs = c.name === "households" ? had.households : c.name === "logins" ? had.logins : c.name === "pinned_ids" ? had.pinned_ids : Object.fromEntries((had.admins ?? []).map((k) => [k, "admin"]));
     console.error(`  ${c.name}: ${c.moved.length} of ${c.total} entries differ`);
     for (const k of c.moved.slice(0, 10)) {
       console.error(`    ${k}: file has ${theirs?.[k] ?? "(absent)"} -- this run derives ${mine?.[k] ?? "(absent)"}`);
@@ -254,6 +270,8 @@ writeFileSync(dest, JSON.stringify(out, null, 2) + "\n");
 const planted = Object.keys(second.additions).length;
 console.log(`households: ${Object.keys(households).length} handles → ${dest}`);
 console.log(`admins: ${admins.length ? admins.join(", ") : "none"}`);
+console.log(`pinned_ids: ${Object.keys(pinned.ids).length} account(s) bound`
+  + `${pinned.conflicts.length || pinned.malformed.length ? ` · ${pinned.conflicts.length + pinned.malformed.length} LEFT UNBOUND, named above` : ""}`);
 console.log(`logins: ${Object.keys(logins).length} from pins + ${planted} second key(s) `
   + `for households no login binds = ${Object.keys(allLogins).length} the wall can read`
   + `${second.collisions.length || second.unnameable.length

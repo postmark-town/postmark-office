@@ -98,12 +98,12 @@ export const earpieceEnabled = (env = process.env) => String(env?.[KILL_FLAG] ??
 
 export const WINDOW_PHASES = Object.freeze(["doors-open", "underway"]);
 
-// What a row of `earpiece_wakes` can say happened. `delivered` and
+// What a row of `earpiece_wakes` can say happened is its status: `delivered`,
+// `failed`, `fell_back` or `budget-exhausted`. `delivered` and
 // `fell_back` are CHARGED to the RSVP's budget: the resident was woken. A
 // `failed` wake is not charged, and the next period tries again. A
 // `budget-exhausted` row is written once, the first period with news after the
 // budget ran out, so the resident can read why the wakes stopped.
-export const WAKE_STATUSES = Object.freeze(["delivered", "failed", "fell_back", "budget-exhausted"]);
 export const CHARGED = Object.freeze(["delivered", "fell_back"]);
 
 export const FELL_BACK_NO_LETTA = "letta is no longer offered, removed 2026-09-27; a letter from postmark-pen instead";
@@ -462,25 +462,11 @@ export function letterFor(envelope) {
 // say "RSVPed by letta" for a harness this office delivers by mail, and "when
 // the office has it switched on" without saying whether it was. So the receipt
 // now carries `wakes_note`, written here from the same dials the deliverer
-// obeys: whether the flag is on, the harness the wakes will actually take, and
-// for mail the crossings this event's letters sail on. A one-hour event between
-// two crossings gets ONE letter, after it ends, and the note says so.
+// obeys: whether the flag is on, and whether the RSVP has a webhook to wake
+// (mail and Letta are not offered; an RSVP without one is the guest list), with
+// the window the doors are open.
 
 const utc = (iso) => `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
-
-/**
- * The crossings a mail RSVP's letters sail on: the first crossing after the
- * doors open, through the first crossing at or after the end (the letter
- * written in the event's last minutes rides that one). A crossing with nothing
- * new sends no letter, so this is the most there can be.
- */
-export function mailSailings({ doors_open, starts, ends }) {
-  const open = ms(doors_open ?? starts);
-  const last = ms(crossingFor(ms(ends) - 1));
-  const out = [];
-  for (let c = ms(crossingFor(open)); c <= last; c += CROSSING_MS) out.push(new Date(c).toISOString());
-  return out;
-}
 
 /**
  * One paragraph for the receipt: how this resident will be woken for this

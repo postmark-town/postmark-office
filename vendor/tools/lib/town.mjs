@@ -1,4 +1,4 @@
-// VENDORED from postmark-town/postmark-site tools/lib/town.mjs (upstream sha256 462bb8c9810199d1db0d179ac6f387e6654088c581d5ed41799e5415d9145cc4, LF, vendored 2026-10-09).
+// VENDORED from postmark-town/postmark-site tools/lib/town.mjs (upstream sha256 ef80524af7279341af1dfa1e427addd03f08df430b38c4fa6b5900046a67e079, LF, vendored 2026-11-03).
 // Do not edit here — fix upstream and re-vendor; scripts/check-vendor-drift.mjs compares hashes.
 // town.mjs — read a postmark-town/postmark checkout into one structured model.
 //
@@ -37,7 +37,14 @@ export function parseFrontmatter(text) {
   if (!m) return { data: {}, body: text.trim(), hasFrontmatter: false };
   const data = {};
   for (const line of m[1].split(/\r?\n/)) {
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    // The value starts at its first non-space, or is empty (POS-876). This read
+    // /^([A-Za-z0-9_-]+):\s*(.*)$/, where `\s*` and `(.*)` could both take the
+    // same spaces, so a line that `.` can't finish (a lone CR, U+2028 or U+2029,
+    // which the split keeps) tried every split of them: quadratic in the line.
+    // `\s*` then `\S` can split them only one way. It matches the same lines and
+    // captures the same value: whitespace, line breaks included, up to the first
+    // non-space, then the rest, which holds no line break.
+    const kv = /^([A-Za-z0-9_-]+):\s*((?:\S.*)?)$/.exec(line);
     if (!kv) continue; // indented continuation / comment — skip, stay simple
     let value = kv[2].trim();
     if (/^(\[|\{|")/.test(value)) {
@@ -106,7 +113,13 @@ function salvageProfileFrontmatter(source) {
   const data = {};
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const match = /^([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$/.exec(lines[i]);
+    // One quantifier after the colon, never two (POS-876; the office's own
+    // parser had the same line, POS-875). The old `(?:[ \t]*(.*))?$` let both
+    // halves take the same spaces, so a line `.` can't finish (a lone CR,
+    // U+2028 or U+2029, which the split keeps) tried every split of them:
+    // quadratic in the line. It matches the same lines, and the spaces `[ \t]*`
+    // used to drop, `.trim()` drops, so `raw` is the same.
+    const match = /^([A-Za-z0-9_-]+):(.*)$/.exec(lines[i]);
     if (!match) continue;
     const key = match[1];
     const raw = (match[2] ?? "").trim();
@@ -129,7 +142,13 @@ function salvageProfileFrontmatter(source) {
     } catch {
       // Keep the resident's readable scalar rather than losing neighboring
       // valid fields because one value has an unmatched quote/bracket.
-      data[key] = raw.replace(/\s+#.*$/, "").trim();
+      // The comment is cut at the start of the run of whitespace before its
+      // `#` (POS-876). This read /\s+#.*$/, which tried again from every
+      // character of a run that no `#` follows: quadratic in the run. The
+      // lookbehind starts a try only where a run starts, which is where the
+      // leftmost match always began, so the cut is the same. `raw` holds no
+      // line break (the key line refuses one), so `.*$` reads to the end once.
+      data[key] = raw.replace(/(?<!\s)\s+#.*$/, "").trim();
     }
   }
   return data;
@@ -353,14 +372,105 @@ function readResident(townRoot, handle, problems) {
 // ── mail ledger ─────────────────────────────────────────────────────────────
 // Delivery: `- date · id · from → to` (optional `· thread: new|<id>`)
 // Bounce:   `- date · BOUNCE · <letter path> (from <sender>): <defect>`
+//
+// ── A BOUNCE LINE IS READ IN ONE PASS (POS-876) ─────────────────────────────
+// It was read with
+//   /^-\s+(\d{4}-\d{2}-\d{2})\s+·\s+BOUNCE\s+·\s+(.+?)\s+\(from\s+([^)]+)\):\s*(.*)$/
+// and that regex tried every place the path could end, and for each place read
+// the whitespace after it again, and the sender up to the next ")" again, and
+// the defect's whitespace again: quadratic in the line. `bounceOf` gives every
+// line the same answer that regex gave, reading each character a fixed number
+// of times. What the regex did, in the order it tried it:
+//   1. The path starts after the whitespace that follows the second "·". It ends
+//      at the first run of whitespace whose next word is "(from" and whose
+//      sender and defect read, and it holds no line break (`.`).
+//   2. The sender is everything after "(from" and its whitespace up to the next
+//      ")", and it is never empty: when that whitespace runs right up to the ")",
+//      the sender is its last character.
+//   3. ")" must be followed by ":". The defect starts after the whitespace that
+//      follows, and holds no line break (`.*$`).
+//   4. When no path reads, the regex gave the path one character of the
+//      whitespace after "·" instead, the last one that isn't a line break and
+//      leaves whitespace both before and after it, and then needed "(from" right
+//      after that whitespace.
+// Falsifiers: test/town-keyline-linear.test.mjs.
+const BOUNCE_HEAD = /^-\s+(\d{4}-\d{2}-\d{2})\s+·\s+BOUNCE\s+·/;
+const SPACE_RE = /\s/;
+// A line break is exactly what the old regex's `.` refused: LF, CR, U+2028, U+2029.
+const DOT_RE = /./;
+const isLineBreak = (c) => !DOT_RE.test(c);
+
+function bounceOf(t) {
+  const head = BOUNCE_HEAD.exec(t);
+  if (!head) return null;
+  const n = t.length;
+  const spaceEnd = (i) => { while (i < n && SPACE_RE.test(t[i])) i++; return i; };
+  let lastBreak = -1;
+  for (let i = n - 1; i >= 0; i--) if (isLineBreak(t[i])) { lastBreak = i; break; }
+
+  // The first ")" at or after r. Asked with r rising, so each stretch is read once.
+  let parenFrom = Infinity, paren = -1;
+  const firstParen = (r) => {
+    if (r < parenFrom || (paren !== -1 && paren < r)) { paren = t.indexOf(")", r); parenFrom = r; }
+    return paren;
+  };
+  // Where the defect starts after the ")" at p, or -1 (3). Kept for the last p asked.
+  let defectFor = -2, defectAt = -1;
+  const defectStart = (p) => {
+    if (p !== defectFor) {
+      defectFor = p;
+      const i = t[p + 1] === ":" ? spaceEnd(p + 2) : -1;
+      defectAt = i !== -1 && i > lastBreak ? i : -1;
+    }
+    return defectAt;
+  };
+  // The sender and defect when "(from" starts at f, or null (2, 3).
+  const senderAt = (f) => {
+    if (!t.startsWith("(from", f)) return null;
+    const r = f + 5;
+    const spaced = spaceEnd(r);
+    if (spaced === r) return null;
+    const p = firstParen(r);
+    if (p === -1) return null;
+    let from = spaced;
+    if (from === p) {
+      if (spaced - r < 2) return null;
+      from = p - 1;
+    }
+    const d = defectStart(p);
+    return d === -1 ? null : { from: t.slice(from, p), defect: t.slice(d) };
+  };
+
+  const date = head[1];
+  const q = head[0].length;
+  const start = spaceEnd(q);
+  if (start === q) return null;
+  // (1) Every place inside one run of whitespace leads to the same "(from", so
+  // only a run's first place is asked; the path holds no line break.
+  let firstBreak = start;
+  while (firstBreak < n && !isLineBreak(t[firstBreak])) firstBreak++;
+  for (let e = start + 1; e <= firstBreak && e < n;) {
+    if (!SPACE_RE.test(t[e])) { e++; continue; }
+    const f = spaceEnd(e);
+    const rest = senderAt(f);
+    if (rest) return { date, path: t.slice(start, e), ...rest };
+    e = f;
+  }
+  // (4)
+  const rest = senderAt(start);
+  if (!rest) return null;
+  for (let g = start - 2; g > q; g--) if (!isLineBreak(t[g])) return { date, path: t[g], ...rest };
+  return null;
+}
+
 export function parseLedger(text) {
   const entries = [];
   for (const line of text.split(/\r?\n/)) {
     const t = line.trim();
     if (!t.startsWith("- ") || !/^\-\s+\d{4}-\d{2}-\d{2}\s+·/.test(t)) continue;
-    const bounce = /^-\s+(\d{4}-\d{2}-\d{2})\s+·\s+BOUNCE\s+·\s+(.+?)\s+\(from\s+([^)]+)\):\s*(.*)$/.exec(t);
+    const bounce = bounceOf(t);
     if (bounce) {
-      entries.push({ kind: "bounce", date: bounce[1], path: bounce[2], from: bounce[3], defect: bounce[4] });
+      entries.push({ kind: "bounce", date: bounce.date, path: bounce.path, from: bounce.from, defect: bounce.defect });
       continue;
     }
     const delivery = /^-\s+(\d{4}-\d{2}-\d{2})\s+·\s+(\S+)\s+·\s+(\S+)\s+→\s+(\S+)(?:\s+·\s+thread:\s*(\S+))?/.exec(t);

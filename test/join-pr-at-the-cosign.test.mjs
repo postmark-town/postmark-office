@@ -25,8 +25,8 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -130,7 +130,7 @@ test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
 const clones = [];
 function town(registry, pins) {
-  const dir = mkdtempSync(join(tmpdir(), "join-bind-"));
+  const dir = tempDir("join-bind-");
   clones.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
@@ -457,7 +457,7 @@ test("a frozen gangway boards a household member and the berth names their house
   // new handle inside an existing credential household boards the ship like any
   // other arrival". A passenger is not a resident, so no register is touched;
   // the berth simply remembers which house it will come ashore into.
-  const dir = mkdtempSync(join(tmpdir(), "pos158-gangway-"));
+  const dir = tempDir("pos158-gangway-");
   mkdirSync(join(dir, "HARBOR"), { recursive: true });
   writeFileSync(join(dir, "HARBOR", "GANGWAY.md"), "state: frozen" + String.fromCharCode(10));
   const wasClone = process.env.TOWN_CLONE;
@@ -485,7 +485,7 @@ test("a frozen gangway boards a household member and the berth names their house
 test("a frozen gangway mints NOTHING, even for an account with no house at all", async () => {
   // SYBIL 1a (review 3/6): a FRESH account is what plans `created`, so it is the
   // one that exercises a mint running past the breaker.
-  const dir = mkdtempSync(join(tmpdir(), "pos158-gangway-fresh-"));
+  const dir = tempDir("pos158-gangway-fresh-");
   mkdirSync(join(dir, "HARBOR"), { recursive: true });
   writeFileSync(join(dir, "HARBOR", "GANGWAY.md"), "state: frozen" + String.fromCharCode(10));
   const wasClone = process.env.TOWN_CLONE;
@@ -595,7 +595,7 @@ const viaExec = (payload, { clone }) => penTransaction(clone, async () => {
 
 test("a push that did not land leaves the pin in the store; the same account's retry lands, another account is refused", async () => {
   const clone = town(REGISTRY(), PINS());
-  const origin = mkdtempSync(join(tmpdir(), "join-bind-origin-"));
+  const origin = tempDir("join-bind-origin-");
   clones.push(origin);
   execFileSync("git", ["init", "-q", "--bare", origin]);
   git(clone, "branch", "-M", "main");
@@ -630,5 +630,55 @@ test("a push that did not land leaves the pin in the store; the same account's r
     __setPoolForTest(null);
     for (const [k, v] of [["WORLD2_PG", was.pg], ["WORLD2_PG_URL", was.url], ["TOWN_PUSH", was.push]])
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
+});
+
+// ── POS-884: THE RESERVED PREFIXES, AT THE BIND ITSELF ──────────────────────
+//
+// The locked writer, entered the way its exec enters it (`viaExec`: the pen's
+// transaction around `bindUnderLock`), not through `requestResidency`, whose
+// own first check would refuse first. Each reserved request is otherwise the
+// admitted shape (the house's own account, a grammatical handle, a card), so
+// the refusal is the town's one reserved-prefix rule (vendored,
+// vendor/tools/reserved-handles.mjs), and it binds nothing: no pin, no
+// membership, no ashore row, no card, no commit. The same request for an
+// ordinary handle is admitted and bound.
+
+test("POS-884 · the bind refuses each reserved prefix by the rule's sentence and binds nothing; the matched ordinary request is admitted", async () => {
+  const pool = makePool(rowsFromRegistry(REGISTRY(), PINS()));
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  __setPoolForTest(pool);
+  Object.assign(process.env, ENV_ON);
+  const bindAs = (handle, clone) => viaExec({ args: { handle, card: "An invented agent of this house.", agent: "Invented" }, key: HOUSE_KEY }, { clone });
+  try {
+    for (const [handle, prefix] of [["berth-inv-tide", "berth-"], ["human-of-inv-reed", "human-of-"]]) {
+      const clone = town(REGISTRY(), PINS());
+      const head = git(clone, "rev-parse", "HEAD");
+      const writes = { ...pool.state.writes };
+      await assert.rejects(() => bindAs(handle, clone), (e) => {
+        assert.equal(e.code, 409);
+        assert.equal(e.defect, `"${handle}" wears a reserved prefix`);
+        assert.match(e.hint, new RegExp(`^handle "${handle}" wears the ${prefix} reserved prefix \\(the reserved-prefix rule: no resident handle begins with berth- or human-of-\\)`));
+        return true;
+      });
+      assert.deepEqual(pool.state.writes, writes, `${handle}: no write reached the record`);
+      assert.equal(pinOf(pool, handle), undefined, `${handle}: no pin`);
+      assert.deepEqual(house(pool, "the-trueing-house").residents, ["wright"], `${handle}: no membership`);
+      assert.equal(pool.state.ashore.some((a) => a.handle === handle), false, `${handle}: no ashore row`);
+      assert.equal(git(clone, "rev-parse", "HEAD"), head, `${handle}: no commit`);
+      assert.equal(existsSync(join(clone, "WHITE_PAGES", handle)), false, `${handle}: no card`);
+      assert.equal(git(clone, "status", "--porcelain"), "", `${handle}: nothing left behind`);
+    }
+    const clone = town(REGISTRY(), PINS());
+    const head = git(clone, "rev-parse", "HEAD");
+    const out = await bindAs("inv-moss", clone);
+    assert.equal(out.admitted, "inv-moss", "the matched ordinary request is admitted");
+    assert.equal(String(pinOf(pool, "inv-moss")?.gh_id), "999", "and bound to the verified id");
+    assert.deepEqual(house(pool, "the-trueing-house").residents, ["wright", "inv-moss"]);
+    assert.equal(git(clone, "rev-list", "--count", `${head}..HEAD`), "1", "in one commit");
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
   }
 });

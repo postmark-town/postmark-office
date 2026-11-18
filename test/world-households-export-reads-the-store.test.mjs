@@ -69,6 +69,11 @@ function exportTo(label, env) {
   return { res, file, emitted: existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null };
 }
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("the world file renders the store's houses and pins, not the printouts'", () => {
   const { res, emitted } = exportTo("store", REG.env);
   assert.equal(res.status, 0, `the export must complete: ${res.stderr}`);
@@ -115,9 +120,13 @@ test("no town checkout is read: an empty town still renders the store's registry
   assert.equal(emitted.logins["kin-gh"], "hh:ana-house");
   assert.equal(emitted.town_sha, null, "no town was read, so none is named");
   // `admins` joined 2026-10-18 (WLD-21, Darko 19:52): the role book's admin
-  // households, printed for the World's gates; no book here, so none
-  assert.deepEqual(Object.keys(emitted), ["generated_at", "town_sha", "source", "note", "logins_note", "households", "logins", "admins_note", "admins"],
-    "the file's shape does not move");
+  // households, printed for the World's gates; no book here, so none.
+  // `pinned_ids` joined 2026-10-30 (WLD-122, Darko "Bind pinned ids"): numeric
+  // GitHub account id → household, the PR lane's author binding; additive,
+  // after every field that was already here.
+  assert.deepEqual(Object.keys(emitted), ["generated_at", "town_sha", "source", "note", "logins_note", "households", "logins", "admins_note", "admins", "pinned_ids_note", "pinned_ids"],
+    "the file's shape moves only by the additive pinned_ids");
+  assert.deepEqual(emitted.pinned_ids, { 1: "hh:ana-house", 2: "hh:ana-house" });
   assert.deepEqual(emitted.admins, []);
 });
 

@@ -48,8 +48,9 @@ const OPERATOR = "an operator's tool, pass or panel, never a resident's read";
 const OWN_URL = "what a household's own url answered (Wright's G4: like media.mjs, it stays)";
 const ALLOWED = {
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
-  "ballots-store.mjs": [5, `${OWN}: LateCrossingError's ruled message (x2), an UNREACHABLE refusal's \`cause\` field (x3, never sent)`],
+  "ballots-store.mjs": [7, `${OWN}: LateCrossingError's ruled message (x3: the write, the stake, a hand's ballot act), an UNREACHABLE refusal's \`cause\` field (x4, never sent)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
+  "clone-fresh.mjs": [1, `${OWN}: a classifier (POS-382): it reads git's own refusal of a pull to tell dirt (the named 503) from any other pull failure, and never says the text`],
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],
   "drop-recovery.mjs": [2, `${OPERATOR} (the drop-recovery pass's report)`],
@@ -64,16 +65,16 @@ const ALLOWED = {
   "gift-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
   "idea-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect`],
   "join-bind-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
+  "invite-name-exec.mjs": [1, `${OWN}: join-bind-exec's catch, line for line (POS-947): a refusal (an HTTP status) relayed by its own defect, else its message; anything else goes to faultLogged`],
   "join-bind.mjs": [2, `${OWN}: relay, a refusal (a defect or an HTTP status) in its own words`],
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
   "media-sweep.mjs": [5, `${OPERATOR} (the sweep's and the takedown's reports on the box: a source's or storage's refusal, named for the operator who reads last.json)`],
   "oauth.mjs": [2, `${OWN}: SignInUnreadable's why, and the co-sign's unread berth place (POS-740), both of which go to the log`],
-  "paperwork.mjs": [1, `${OWN}: a status field`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
   "registry-store.mjs": [1, `${OWN}: a classifier`],
   "release.mjs": [1, `${OPERATOR} (the deploy receipt the auto-deploy probes)`],
-  "server.mjs": [3, `${OWN}: the boot refusal (a log), causeSaid (the log's reader), doorTripped's own refusal message (KEPT, POS-617: an integer HTTP code is only ever set by the office, and the 503 classes' messages are ruled sentences)`],
+  "server.mjs": [4, `${OWN}: the boot refusal (a log), the paperwork boot guard's refusal when the store cannot be asked (a log, then exit 78; POS-271), causeSaid (the log's reader), doorTripped's own refusal message (KEPT, POS-617: an integer HTTP code is only ever set by the office, and the 503 classes' messages are ruled sentences)`],
   "settle-join-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "standing-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "static-keys-retire.mjs": [1, `${OWN}: a tool's own printout`],
@@ -100,15 +101,17 @@ const ALLOWED = {
   "world-pool.mjs": [2, `${OWN}: plumbing`],
   "world-refresher.mjs": [1, `${OWN}: plumbing`],
   "world-serve.mjs": [1, `${OWN}: plumbing (the eligibility gate's detail, which only a log line reads; the instrument panel GET /world/store is keyless, so since POS-663 its unread main says plainReason's words and the raw error goes to the log)`],
-  "world-stance.mjs": [3, `${OWN}: PenUnreachableError's ruled sentence (x3: the ground's word, the town's, and the owner's word on a thing, POS-688)`],
+  "world-stance.mjs": [1, `${OWN}: PenUnreachableError's ruled sentence (x1: writeStanceAct, the one write behind the ground's word, the town's, and the owner's word on a thing, POS-688)`],
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
-  "world2-pen.mjs": [2, `${OWN}: status fields`],
-  "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
+  "world2-pen.mjs": [1, `${OWN}: a status field (penWrite's lastError)`],
+  "write.mjs": [2, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723); ${OWN}: the ancestry classifier checks whether git's exit 1 carries stderr, never puts that text in an answer (POS-922)`],
 };
 
 const walk = (d) => readdirSync(d).flatMap((n) => {
   const p = join(d, n);
+  // POS-994: src/town-pins/ holds byte copies of the TOWN's modules; their words are the town's, not the office's doors.
+  if (n === "town-pins" && d === SRC) return [];
   return statSync(p).isDirectory() ? walk(p) : p.endsWith(".mjs") ? [p] : [];
 });
 const census = {};

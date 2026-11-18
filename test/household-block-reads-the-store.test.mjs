@@ -57,6 +57,11 @@ const { sameHousehold, refuseOutOfReach } = await import("../src/world-hold.mjs"
 // `householdLookup` is the new read; the old module only had the synchronous `householdOf`.
 const lookupNow = async () => (households.householdLookup ? households.householdLookup() : households.householdOf);
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("a housemate bound only in the store is of the author's household", async () => {
   const of = await lookupNow();
   const kin = of("kin");

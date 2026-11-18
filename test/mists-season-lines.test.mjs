@@ -107,6 +107,35 @@ test("mistsStand: from the schedule's first crossing on, and never without a sch
   assert.equal(mistsStand(null, 300), false);
 });
 
+// WLD-147 (Darko, 2026-11-02 17:06 EST, "full removal for mists"): the world's record names `withdrawn_from`, "from crossing N there are
+// no Mists at all", and the ferry's word on them goes with them. The record is the world's own: the `mists` block of postmark-world#355
+// at its head 16ca9c188 (test/fixtures/mists-record-wld147.json), and every crossing below is derived from it.
+const WITHDRAWN = JSON.parse(readFileSync(new URL("./fixtures/mists-record-wld147.json", import.meta.url), "utf8"));
+const GONE = WITHDRAWN.withdrawn_from, FIRST_STANDING = WITHDRAWN.schedule[0].crossing;
+
+test("mistsStand: and only until the record's `withdrawn_from`; a value that is not a finite number is no withdrawal", async () => {
+  const { mistsStand } = await import("../src/world.mjs");
+  const w = { terrain: { mists: WITHDRAWN } };
+  assert.equal(mistsStand(w, FIRST_STANDING - 1), false, "before the Mists");
+  for (const c of [FIRST_STANDING, GONE - 1]) assert.equal(mistsStand(w, c), true, `crossing ${c}: they stand`);
+  for (const c of [GONE, GONE + 1, GONE + 400]) assert.equal(mistsStand(w, c), false, `crossing ${c}: withdrawn, no Mists at all`);
+  for (const bad of [null, undefined, "289", NaN]) assert.equal(mistsStand({ terrain: { mists: { ...WITHDRAWN, withdrawn_from: bad } } }, GONE + 5), true, `withdrawn_from ${String(bad)} withdraws nothing, as in the engine`);
+});
+
+test("the ride line after the withdrawal: the ferry says nothing of the Mists from the withdrawn crossing on, and the season's clause before it", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { transportBlock } = await import("../src/world.mjs");
+  const base = await vehicleWorld();
+  const w = { ...base, terrain: { ...(base.terrain ?? {}), mists: WITHDRAWN } };
+  const { service } = await vesselServiceFrom(w, { repo: CLONE });
+  const plain = transportAt(WHARF, service, w);
+  const seasoned = transportAt(WHARF, service, w, { season: true });
+  assert.equal(seasoned.line, plain.line.slice(0, -1) + RIDE_CLAUSE, "the control: the season's clause is there to be seen");
+  const wharf = { x: -1380, y: -2543 };
+  assert.equal(stopUnderfoot(wharf, service, w), WHARF);
+  assert.equal((await transportBlock(w, wharf, { crossing: GONE - 1 })).line, seasoned.line, "the last crossing the Mists stand: the ferry's word");
+  for (const c of [GONE, GONE + 1, GONE + 100]) assert.deepEqual(await transportBlock(w, wharf, { crossing: c }), plain, `crossing ${c}: the line it was before the Mists`);
+});
+
 test("the ride line: the ferry's word on the Mists while they stand; the old line before them and with no crossing named", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const { transportBlock } = await import("../src/world.mjs");
   const w = withMists(await vehicleWorld(), 244);

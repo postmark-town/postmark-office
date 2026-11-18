@@ -41,7 +41,8 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool, isPinStop, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint and verifier are the office's pinned copies
 
 import { penTransaction } from "../src/write.mjs";
 import { landStamped } from "../src/stamp-lines.mjs";
@@ -52,14 +53,16 @@ const OFFICE = "postmaster";
 
 // ── the town's own parsing and receipts (tools/ballot-pass.mjs), unchanged ───
 
-function parseFrontmatter(text) {
+export function parseFrontmatter(text) {
   const t = text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   if (!t.startsWith("---\n")) return null;
   const end = t.indexOf("\n---", 4);
   if (end === -1) return null;
   const fields = {};
   for (const line of t.slice(4, end).split("\n")) {
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
+    // The lookahead keeps the value from starting on a space `\s*` could have taken (POS-877); the
+    // old `\s*(.*)$` was quadratic on a line `.` can't finish. Trimmed below.
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(?!\s)(.*)$/.exec(line);
     if (m) fields[m[1]] = m[2].trim();
   }
   return fields;
@@ -105,11 +108,23 @@ const landedLines = (fm, r) => [
   r.clipped ? `The rest were clipped — your household's headroom on this candidate was ${r.household_headroom_before}; the unapplied stamps never left your balance.` : "Nothing was clipped.",
   r.vote_minted ? "Casting your first stake on this topic minted you +1 stamp (rule 4)." : "",
   `Household headroom left on this candidate: ${r.household_headroom_after}. Your balance: ${r.balance_after}.`,
+  choiceLine(r.choice),
 ].filter(Boolean);
+// POS-983 (point 6): the choice in its own words (credit, note, link, when its ballot gives any) and
+// how many households back it now, from the stake's own answer (ballots.mjs § choiceStanding): one
+// line, on a landed receipt and a zero one alike. A bare-name ballot's line is its count alone.
+function choiceLine(c) {
+  if (!c) return "";
+  const n = Number(c.backing_households) || 0;
+  const words = [c.credit ? `by ${c.credit}` : "", c.note ?? "", c.link ?? "",
+    `${n} household${n === 1 ? "" : "s"} backing it, ${Number(c.staked) || 0} stamp(s) staked`].filter(Boolean);
+  return `**${c.candidate}**: ${words.join(" · ")}`;
+}
 const zeroLines = (r) => [
   `Your ballot was read but **no stamps could apply**: ${r.reason}.`,
   "Nothing left your balance. You can stake a different candidate, or rest easy — a read ballot is a counted voice even at zero.",
-];
+  choiceLine(r.choice),
+].filter(Boolean);
 const refusedLines = (e) => [
   `Your ballot could not be applied: **${e.defect ?? e.message}**.`,
   e.hint ? `Hint: ${e.hint}.` : "",
@@ -118,9 +133,16 @@ const refusedLines = (e) => [
 
 // ── the pass ────────────────────────────────────────────────────────────────
 
-/** The town's verifier over the working tree, as the ferry runs it. */
+/**
+ * The town's verifier over the working tree, as the ferry runs it: the office's
+ * pinned copy (POS-994), checked against the clone and handed the clone by name.
+ * A pin stop is a failed verification, saying why.
+ */
 function townVerifies(repo) {
-  const r = spawnSync(process.execPath, [join(repo, "tools", "stamp-verify.mjs")], { cwd: repo, encoding: "utf8" });
+  let argv;
+  try { argv = townToolArgv(repo, "stamp-verify.mjs"); }
+  catch (e) { if (isPinStop(e)) return { ok: false, out: e.message }; throw e; }
+  const r = spawnSync(process.execPath, argv, { cwd: repo, encoding: "utf8" });
   return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n").slice(-3).join(" | ") };
 }
 
@@ -137,7 +159,7 @@ export async function ballotPassRun(repo, keyPem, date, { env = process.env, ver
   const out = { processed: 0, receipts: 0, held: [] };
   if (!existsSync(inbox)) return out;
 
-  const { parseStampLedger, classifyEntry } = await import(pathToFileURL(join(repo, "tools", "stamp-mint.mjs")).href);
+  const { parseStampLedger, classifyEntry } = await importTownTool(repo, "stamp-mint.mjs"); // POS-994: the pinned copy
   const ledgerPath = join(repo, "WHITE_PAGES", "stamp-ledger.md");
   const staked = new Set();
   if (existsSync(ledgerPath)) {

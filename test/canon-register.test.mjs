@@ -50,10 +50,11 @@
 // A test suite that only reds on the first flip is watching the town's safety and
 // not the ruling's; both are run, and both splits are in the report.
 
+import { townHoldsOf } from "../world2/tools/canon-register.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -70,7 +71,7 @@ import { slugOf } from "../world2/tools/materialize.mjs";
 // fixture that stubbed either of those would be testing a different function.
 const made = [];
 function worldFixture(ids, { unreadable = [] } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "canon-reg-"));
+  const dir = tempDir("canon-reg-");
   made.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });
@@ -173,7 +174,7 @@ test("an unknown backend is a throw, not a default", async () => {
 // ── 7 · a checkout git cannot answer for ────────────────────────────────────
 test("no checkout, and a checkout with no WORLD/marks, both refuse", async () => {
   await assert.rejects(() => canonRegisterAt({ backend: "git", worldRepo: null }), /no world checkout/);
-  const dir = mkdtempSync(join(tmpdir(), "canon-reg-bare-"));
+  const dir = tempDir("canon-reg-bare-");
   made.push(dir);
   await assert.rejects(() => canonRegisterAt({ backend: "git", worldRepo: dir }), /no WORLD\/marks under/);
 });
@@ -238,7 +239,7 @@ const caughtAsync = async (fn) => { try { await fn(); return null; } catch (e) {
  * sha and a read at HEAD can DISAGREE and the test can see it.
  */
 function readingWorldFixture() {
-  const dir = mkdtempSync(join(tmpdir(), "canon-sha-"));
+  const dir = tempDir("canon-sha-");
   made.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });
@@ -349,4 +350,17 @@ test("a sha whose marks tree is EMPTY is a CANNOT-RUN, never `canon carries noth
   const e = await caughtAsync(() => canonRegisterAtSha({ worldRepo: dir, sha: empty }));
   assert.ok(e, "an empty register must refuse");
   assert.match(e.message, /loads no marks|no WORLD\/marks/);
+});
+
+test("TOWN HOLDS · townHoldsOf keeps the town's own records' holder and owner, null when canon prints none, and no one else's", () => {
+  const holds = townHoldsOf([
+    { id: "the-town/a-key", by: "the-town", held_by: "wright/a-knight", owned_by: " kai " },
+    { id: "the-town/a-sign", by: "the-town" },
+    { id: "alpha/held-thing", by: "alpha", held_by: "beta" },
+    { id: "the-town/broken", by: "the-town", _error: "unparseable" },
+  ]);
+  assert.deepEqual([...holds.entries()], [
+    ["the-town/a-key", { held_by: "wright/a-knight", owned_by: "kai" }],
+    ["the-town/a-sign", { held_by: null, owned_by: null }],
+  ]);
 });

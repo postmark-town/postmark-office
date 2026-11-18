@@ -123,11 +123,10 @@ export async function backfillHomeShelf({
  *                spent) is the real current state, and every write lands in a
  *                file deleted at the end.
  *   switched     the store's office_media (OFFICE_PAPERWORK_STORE=1), the paper
- *                the office itself writes, with oauth.db as its rollback mirror
- *                when the file is here. A DRY run is ONE store client inside a
- *                transaction that `done()` rolls back: the same real reads, and
- *                writes that are never committed. Copying the file instead
- *                would read the mirror, which is the store's past.
+ *                the office itself writes (the rollback's mirror is deleted and
+ *                oauth.db leaves the box, POS-271). A DRY run is ONE store
+ *                client inside a transaction that `done()` rolls back: the same
+ *                real reads, and writes that are never committed.
  *
  * `where` says which, for the run's own header. `done()` closes the file,
  * removes a dry copy, rolls a dry transaction back and closes the store pool.
@@ -155,7 +154,7 @@ export async function openLedger({ path, dry = false, env = process.env }) {
   }
   if (!dry) {
     const odb = await openPaper(path, { schema: oauthSchema, env });
-    return { odb, where: `the store's office_media${odb.file ? `, mirrored to ${path}` : ""}`, done: async () => { odb.close(); await closePaperworkPools(); } };
+    return { odb, where: "the store's office_media", done: async () => { odb.close(); await closePaperworkPools(); } };
   }
   const reader = await openPaper(path, { readOnly: true, env });
   const client = await reader.pool.connect();

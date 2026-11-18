@@ -21,9 +21,10 @@
 // derivation costs at 213 residents, docs/town-index-store.md).
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies, checked against the checkout
 import { readTown, parseFrontmatter } from "../vendor/tools/lib/town.mjs";
 import { isResidentHandle, REGISTRY_PATH } from "./residency.mjs"; // one definition of what a handle is — the door's
 import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off the household's record (POS-219)
@@ -33,6 +34,21 @@ import { readWindowState } from "./panes.mjs"; // the pane's machine twin — on
 // The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
 import { TOWN_TABLES } from "./town-tables.mjs";
 export { TOWN_TABLES };
+import { discoveryRowsOf, DISCOVERY_EPOCH, ZERO_REVISION, fingerprintAdd, digestOfChunk, digestOfEdge, digestOfResident } from "./town-discovery.mjs"; // POS-497: derived from the letters and homes below
+
+/** A row's change stamp, the `digest` every town_* table but repo_log keeps: the md5 of its columns as written (the ingest's digestOf). */
+export const rowDigest = (row) => createHash("md5").update(JSON.stringify(row)).digest("hex");
+
+/** discovery_revision, whole: the fingerprint of every piece, every edge and every resident key on the roll (town-discovery.mjs § the generation). */
+export const discoveryRevisionOf = (chunks, edges, residentHandles) =>
+  fingerprintAdd(ZERO_REVISION, [...chunks.map(digestOfChunk), ...edges.map(digestOfEdge), ...residentHandles.map(digestOfResident)]);
+
+const colOf = (table, col) => TOWN_TABLES[table].cols.indexOf(col);
+/** Discovery's sources from the derivation's own rows: the letters' (id, from_h, json) and the homes' (handle, json). */
+export const discoverySourcesOf = (letters, homes) => ({
+  letters: letters.map((r) => ({ id: r[colOf("letters", "id")], from: r[colOf("letters", "from_h")], json: r[colOf("letters", "json")] })),
+  homes: homes.map((r) => ({ handle: r[colOf("homes", "handle")], json: r[colOf("homes", "json")] })),
+});
 
 /** A keyed table's rows, last write wins at the FIRST write's position — sqlite's INSERT OR REPLACE, as an array. */
 function keyed(table) {
@@ -100,6 +116,15 @@ export function readHistory(town, { range = null, log = console } = {}) {
 // cleanly when the key is absent (the live town doesn't carry it yet).
 const isOffice = (r) => { const o = r.address?.data?.office; return o === true || o === "true"; };
 
+// THE HOUSE'S PICTURE (POS-219) is kept on the household's record, one per
+// resident, and the town's households.json is that record as the drain renders
+// it. The resident card carries it as `homePicture` and the home row as
+// `picture`; a checkout with no registry reads every house as having none,
+// which is true of it.
+function readPictureRegistry(TOWN) {
+  try { return JSON.parse(readFileSync(join(TOWN, REGISTRY_PATH), "utf8")); } catch { return null; }
+}
+
 /**
  * WHAT THE OFFICE INDEXES AS A PERSON, decided by the door's own admission
  * grammar rather than by a directory listing. The vendored `readTown` enumerates
@@ -112,20 +137,12 @@ const isOffice = (r) => { const o = r.address?.data?.office; return o === true |
  * The skip is REPORTED, never silent: dropping a name quietly is how a town
  * loses somebody without anyone noticing (`the-town/the-disclosure` — refuse or
  * disclose absent inputs, never quietly substitute). If a real resident ever
- * trips this, the line it logs is how we find out on the next hydration instead
- * of from their letter asking where they went.
+ * trips this, the line it logs is how we find out on the next derivation instead
+ * of from their letter asking where they went. The whole pass reports the skip;
+ * a pass scoped by `only` (the delta's) does not.
  *
  * `lastActive(handle)` answers the history pass's value for a handle.
  */
-// THE HOUSE'S PICTURE (POS-219) is kept on the household's record, one per
-// resident, and the town's households.json is that record as the drain renders
-// it. The resident card carries it as `homePicture` and the home row as
-// `picture`; a checkout with no registry reads every house as having none,
-// which is true of it.
-function readPictureRegistry(TOWN) {
-  try { return JSON.parse(readFileSync(join(TOWN, REGISTRY_PATH), "utf8")); } catch { return null; }
-}
-
 export function residentRows(TOWN, town, lastActive, { log = console, only = null } = {}) {
   const out = keyed("residents");
   const pictures = readPictureRegistry(TOWN);
@@ -144,7 +161,7 @@ export function residentRows(TOWN, town, lastActive, { log = console, only = nul
       // on 181 of the town's 182 handles; where they differ it is this reader's
       // shape the office's doors and tests are written against. src/profiles.mjs
       // holds the measurement and why that file was not deleted. Absent/malformed
-      // reads null; a profile defect never stops a hydration.
+      // reads null; a profile defect never stops a derivation.
       profile: readProfile(TOWN, r.handle),
     })]);
   }
@@ -189,12 +206,13 @@ export function bulletinRows(town) {
  * points here for it. FIRST-DAY.md is "The first-day 360", a newcomer's walk
  * round the town by Julian and Vex of little-bird's house (CORE-8), and
  * PROMISES.md is their "The town's seven promises, in plain words", LOGOS's
- * seven promises reworded plainly (CORE-8).
+ * seven promises reworded plainly (CORE-8). HEARTH-SETUP.md (POS-1019, the town's root file) is the ONE authored prompt that starts an agent on its household's
+ * own Hearth template with its human (POS-1018); it is served whole from the town checkout as `hearth-setup`, and the office keeps no second copy of its words.
  */
-export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md"]);
+export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md", "HEARTH-SETUP.md"]);
 
 /** The names `town { read: "docs" }` takes as `doc:`, each a key of the docs value lowercased. */
-export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises"]);
+export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises", "hearth-setup"]);
 
 /**
  * `town { read: "docs" }`'s answer, shaped from the ONE docs value that GET
@@ -208,7 +226,8 @@ export function docsAnswer({ as_of = null, docs = {} } = {}, doc = null) {
     return {
       as_of,
       docs: Object.entries(docs).map(([k, d]) => ({ doc: k.toLowerCase(), path: d.path, chars: d.body?.length ?? 0 })),
-      open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move',
+      open: 'args: { doc: "<name>" } answers one doc whole — doc: "stamps" is what stamps are and how they move' +
+        (docs["HEARTH-SETUP"] ? '; doc: "hearth-setup" is the prompt for designing your household\'s Hearth with your human' : ''),   // said only while the doc is on the shelf: a pointer that cannot lead to the text is not drawn
     };
   }
   const d = docs[String(doc).toUpperCase()];
@@ -243,12 +262,11 @@ export function ledgerLines(town) {
  * `only` (a Set of handles) recomputes just those residents: the delta's case.
  */
 export async function mailStateRows(TOWN, town, { log = console, only = null } = {}) {
-  const tool = join(TOWN, "tools", "mail-state.mjs");
-  if (!existsSync(tool)) {
+  if (!existsSync(join(TOWN, "tools", "mail-state.mjs"))) {
     log.warn("WARN: town checkout has no tools/mail-state.mjs — doorsteps will say correspondence: null");
     return null;
   }
-  const { mailState, fromTownLedger } = await import(pathToFileURL(tool));
+  const { mailState, fromTownLedger } = await importTownTool(TOWN, "mail-state.mjs");
   const ledgerEvents = fromTownLedger(town.ledger);
   const out = keyed("mail_state");
   for (const r of town.residents) {
@@ -269,15 +287,15 @@ export async function mailStateRows(TOWN, town, { log = console, only = null } =
  * read (queries.stampsDetail).
  *
  * Answers null when the checkout has no tool or no ledger (no rows, no
- * `stamps_minted`), as hydrate always did. `entries` lets a delta fold only the
+ * `stamps_minted`): deriveTownIndex then leaves `stamps` empty and writes
+ * neither stamps meta row. `entries` lets a delta fold only the
  * lines past a crossing; the three folds are additive (measured,
  * docs/town-index-store.md), so the ingest adds that fold to the stored one.
  */
 export async function stampFold(TOWN, { entries = null } = {}) {
-  const stampTool = join(TOWN, "tools", "stamp-mint.mjs");
   const stampLedger = join(TOWN, "WHITE_PAGES", "stamp-ledger.md");
-  if (!existsSync(stampTool) || !existsSync(stampLedger)) return null;
-  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await import(pathToFileURL(stampTool));
+  if (!existsSync(join(TOWN, "tools", "stamp-mint.mjs")) || !existsSync(stampLedger)) return null;
+  const { parseStampLedger, foldBalances, foldMintCount, foldStaked } = await importTownTool(TOWN, "stamp-mint.mjs");
   const all = entries ?? parseStampLedger(readFileSync(stampLedger, "utf8"));
   return { entries: all.length, tip: stampTipOf(all), balance: foldBalances(all), mintCount: foldMintCount(all), staked: foldStaked(all) };
 }
@@ -297,7 +315,7 @@ export const stampTipOf = (entries) => {
 };
 
 /** A fold's rows: every account but MINT and BURN, and the minted total. */
-export function stampRows(fold) {
+function stampRows(fold) {
   const rows = [];
   for (const [acct, n] of fold.balance) if (acct !== "MINT" && acct !== "BURN") rows.push([acct, n, fold.mintCount.get(acct) ?? 0, fold.staked.get(acct) ?? 0]);
   return { rows, minted: String(-(fold.balance.get("MINT") ?? 0)) };
@@ -348,6 +366,29 @@ export async function fundingRows(TOWN, { log = console } = {}) {
 }
 
 /**
+ * BRING A NEIGHBOUR's monthly count, for `town_meta` (POS-961). The town's own fold
+ * (tools/quest-progress.mjs § foldQuestProgress) already carries it on every handle's
+ * entry as `invite: { month, paid }`: the household's INVITER-side payouts dated in the
+ * town month, by canonical inviting household (`invitesPaidByHouse`, POS-816/g). This
+ * only carries that answer to the board, as one small meta value, so the hot read never
+ * parses the ledger: `{ month, paid: { <handle>: <n> } }`, handles whose house was paid
+ * at least once (a handle absent from `paid` is a COUNTED zero for `month`). Null when
+ * the town's fold predates the field, so the board keeps the row unmeasured, never a
+ * zero it cannot know. Sorted, so two runs over one ledger write one value.
+ */
+export function invitesOf(prog) {
+  let month = null;
+  const paid = [];
+  for (const [handle, p] of prog) {
+    const m = p?.invite?.month;
+    if (typeof m !== "string") continue;
+    month ??= m;
+    if (m === month && Number.isInteger(p.invite.paid) && p.invite.paid > 0) paid.push([handle, p.invite.paid]);
+  }
+  return month ? JSON.stringify({ month, paid: Object.fromEntries(paid.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) }) : null;
+}
+
+/**
  * Quests — today's per-resident progress (quest gold Phase 2), folded with the
  * town's OWN tool, and the standing rows (the board's non-daily facts; the rules
  * live in src/quest-standing.mjs). Answers null when the checkout has no quest
@@ -358,15 +399,26 @@ export async function fundingRows(TOWN, { log = console } = {}) {
  * delta ingest, behind STAMP_LINES); the town's folds group households by it in
  * place of the printouts. Null is the printouts, as before.
  *
+ * `questPayLines` is the store's signed quest payments when the ingest read them (POS-976,
+ * src/stamp-lines.mjs § questPayLinesVia): they settle the rows of the quests the town pays once per household.
  * `welcomeLines` is the store's welcome rows when the ingest read them
  * (POS-495, src/stamp-lines.mjs § welcomeLinesVia): they date the welcome row.
- * Null is undated, as before (the hydrate always passes null).
+ * Null is undated: the default, and what a caller with no store to read (the
+ * tests, test/helpers/dev-target.mjs) passes.
  */
-export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null } = {}) {
-  const questTool = join(TOWN, "tools", "quest-progress.mjs");
+/**
+ * The checkout's printed registry (tools/households.json) `households` object, or null: the town's houseCanonOf folds a house's account ids and retired
+ * slugs from it. It is the FALLBACK: the ingest hands the store's registry when it has one (`houses`, POS-976), because the printout is not the record
+ * and can lag a fresh account or a retired slug.
+ */
+function printedHouseholds(TOWN) {
+  try { return JSON.parse(readFileSync(join(TOWN, "tools", "households.json"), "utf8"))?.households ?? null; } catch { return null; }
+}
+
+export async function questRows(TOWN, town, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const registryPath = join(TOWN, "quest-registry.json");
-  if (!existsSync(questTool) || !existsSync(registryPath)) return null;
-  const questMod = await import(pathToFileURL(questTool));
+  if (!existsSync(join(TOWN, "tools", "quest-progress.mjs")) || !existsSync(registryPath)) return null;
+  const questMod = await importTownTool(TOWN, "quest-progress.mjs");
   const { foldQuestProgress, townDay } = questMod;
   const today = townDay();
   const prog = foldQuestProgress(TOWN, base ? { today, base } : { today });
@@ -375,7 +427,7 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
     progress.put([handle, p.send, p.receive, p.household.size, p.household.send, p.household.receive,
       JSON.stringify(p.sentTo ?? []), JSON.stringify(p.heardFrom ?? [])]);
   }
-  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), standing: null };
+  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), invites: invitesOf(prog), standing: null };
 
   // ── the standing rows: what the record already knew and nobody joined ──────
   // ONE derivation, not a second one: every fact comes from the town's own
@@ -385,12 +437,12 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
   // is the office's own admission grammar: the raw list carries `_archived`.
   if (typeof questMod.onboardingFactsFor === "function" && typeof questMod.foldFriendships === "function") {
     const { onboardingFactsFor, foldFriendships, welcomedHouseholds } = questMod;
-    const { parseDeliveries, currentHouseholds, classifyEntry } = await import(pathToFileURL(join(TOWN, "tools", "stamp-mint.mjs")));
+    const { parseDeliveries, currentHouseholds, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf } = await importTownTool(TOWN, "stamp-mint.mjs"); // POS-994: the pinned copy
     const { standingRowsFromTown } = await import("./quest-standing.mjs");
     const handles = town.residents.map((r) => r.handle).filter(isResidentHandle);
     const { rows, friendships } = standingRowsFromTown(
-      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry },
-      TOWN, handles, { base, welcomeLines });
+      { parseDeliveries, foldFriendships, currentHouseholds, welcomedHouseholds, onboardingFactsFor, classifyEntry, QUEST_PAY, questOpenOn, houseCanonOf },
+      TOWN, handles, { base, welcomeLines, questPayLines, houses: houses ?? printedHouseholds(TOWN) });
     const standing = keyed("quest_standing");
     for (const [h, row] of rows) standing.put([h, JSON.stringify(row)]);
     out.standing = standing.rows();
@@ -462,10 +514,11 @@ export function atlasRows(TOWN, town, { log = console } = {}) {
 }
 
 /**
- * The whole index for one checkout, every table: what hydrate.mjs writes and
- * what the ingest's seed writes. `meta` rows come in hydrate's insert order.
+ * The whole index for one checkout, every table: what the ingest's seed writes
+ * (world2/tools/town-index-ingest.mjs). `meta` rows come in the order built
+ * below, which the delta's meta rows repeat.
  */
-export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null } = {}) {
+export async function deriveTownIndex(TOWN, { log = console, base = null, welcomeLines = null, questPayLines = null, houses = null } = {}) {
   const asOf = execFileSync("git", ["-C", TOWN, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const town = readTown(TOWN);
   for (const p of town.problems) log.warn(`WARN (town): ${p}`);
@@ -503,17 +556,27 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   }
   Object.assign(t, await fundingRows(TOWN, { log }));
 
-  const q = await questRows(TOWN, town, { log, base, welcomeLines }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null in hydrate
+  const q = await questRows(TOWN, town, { log, base, welcomeLines, questPayLines, houses }); // the store's key base and welcome rows when the seed read them (POS-341 part 4, POS-495); null from a caller with no store (the tests)
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
+  if (q?.invites) meta.push(["quest_invites", q.invites]); // POS-961: bring a neighbour's monthly count
 
   const atlas = atlasRows(TOWN, town, { log });
   t.regions = atlas?.regions ?? [];
   t.homes = atlas?.homes ?? [];
 
+  // DISCOVERY (POS-497): its pieces and edges from the letters and homes just
+  // derived, and its generation, last in meta. The ingest skips all three on a
+  // store without 088 (world2/tools/town-index-ingest.mjs § discovery).
+  const disc = discoveryRowsOf(discoverySourcesOf(t.letters, t.homes));
+  t.discovery_chunks = disc.chunks;
+  t.letter_edges = disc.edges;
+  meta.push(["discovery_epoch", DISCOVERY_EPOCH],
+    ["discovery_revision", discoveryRevisionOf(disc.chunks, disc.edges, t.residents.map((r) => r[colOf("residents", "handle")]))]);
+
   const m = keyed("meta");
   for (const row of meta) m.put(row);
   t.meta = m.rows();
-  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0 };
+  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0, discoverySkipped: disc.skipped };
 }

@@ -18,10 +18,10 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { rowsFromRegistry, renderRegistry, registryFromRows, HOUSEHOLD_KEYS } from "../src/registry-rows.mjs";
 import {
@@ -36,7 +36,7 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const TMP = mkdtempSync(join(tmpdir(), "postmark-likeness-"));
+const TMP = tempDir("postmark-likeness-");
 const CLEANUP = [];
 after(async () => {
   for (const f of CLEANUP.reverse()) await f().catch(() => {});
@@ -74,7 +74,7 @@ const AT = () => new Date("2026-10-21T12:00:00.000Z");
 // ── § 1 the record ──────────────────────────────────────────────────────────
 
 test("§ 1 likeness is the tail column; unanswered renders no key, answered renders in template order", () => {
-  assert.deepEqual(HOUSEHOLD_KEYS.slice(-2), ["likeness", "invited_by"], "an optional column joins the tail; 085's invited_by (POS-576) came after it");
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-4), ["likeness", "invited_by", "likeness_state", "hearth"], "an optional column joins the tail; 085's invited_by (POS-576) came after it, 092's likeness_state (POS-726 slice B) after that, then 093's hearth (POS-962)");
   const rows = seed();
   assert.ok(rows.households.every((r) => r.likeness === null), "no key folds to NULL: never answered");
   assert.equal(renderRegistry(rows).households.includes("likeness"), false, "an unanswered registry prints exactly as before");

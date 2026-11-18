@@ -44,8 +44,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, rmSync, rmdirSync, realpathSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,7 +55,7 @@ const IMPORTER = "test/helpers/cli-guard-importer.mjs";
 // Paths that do not exist at all — the refusals below are all "no X at <path>",
 // never a write; the child's cwd is the scratch dir so a tool that did write a
 // default file would write it there, and the after() sweeps it.
-const SCRATCH = mkdtempSync(join(tmpdir(), "cli-guard-"));
+const SCRATCH = tempDir("cli-guard-");
 const NOWHERE = join(SCRATCH, "does-not-exist");
 const NOWHERE_DB = join(SCRATCH, "does-not-exist.db");
 const NOWHERE_OUT = join(SCRATCH, "out.json");
@@ -80,7 +80,7 @@ const TRACKED = git("ls-files", "-z").stdout.split("\0").filter(Boolean);
 assert.ok(TRACKED.length > 0, "the office must be a git checkout with tracked files, or the teardown proof below proves nothing");
 const changedTracked = () => git("status", "--porcelain", "--untracked-files=no").stdout;
 const CHANGED_BEFORE = changedTracked();
-const LINK_DIR = mkdtempSync(join(tmpdir(), "cli-guard-link-"));
+const LINK_DIR = tempDir("cli-guard-link-");
 const LINK = join(LINK_DIR, "office");
 if (process.platform === "win32") {
   const mk = spawnSync("cmd", ["/c", "mklink", "/J", LINK, ROOT], { encoding: "utf8" });
@@ -114,7 +114,12 @@ const NO_PG = { WORLD2_PG_URL: undefined, WORLD2_PG: undefined, WORLD2_CLEARING_
 const ROSTER = {
   // src/
   "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
+  "src/town-tool.mjs": { args: [], code: 2, needle: "usage: town-tool.mjs run <name> --clone <town clone>" }, // POS-994: the shell's door to a pinned town module
+  "src/stamp-verify-pinned.mjs": { args: [], code: 2, needle: "usage: stamp-verify-pinned.mjs --pinned" }, // POS-994: the pinned verifier, with the pinned key
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
+  "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
+  // POS-1035: the hosting stake's executor tail (event-sparks.mjs § execMain) — no key, so it answers not-yet-open and touches nothing
+  "src/event-sparks.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
   "src/world-drain.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // world.db is retired (POS-270 lane W 3b): the world tails read the store's
@@ -131,6 +136,10 @@ const ROSTER = {
   "src/world-store.mjs": { args: [], env: NO_PG, code: 1, needle: "no world graph" },
   // tools/
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
+  // STAR-102: the release train's ship gate reads GitHub; bare, with no repo or token, it says its usage and asks nothing
+  "tools/release-train-gate.mjs": { args: [], env: { GITHUB_REPOSITORY: undefined, GH_TOKEN: undefined }, code: 2, needle: "usage: GITHUB_REPOSITORY" },
+  // POS-606: the town signpost's one amend; bare, it asks for --dry-run or --apply and loads nothing of the office
+  "tools/town-signpost-amend.mjs": { args: [], env: {}, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/avatar-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
@@ -152,6 +161,7 @@ const ROSTER = {
   "tools/ops-awareness.mjs": { args: ["--by-hand", join(ROOT, "tools", "ops-awareness.mjs")], env: { AWARENESS_OFFLINE: "1", OPS_ROOT: NOWHERE }, code: 2, needle: "is not JSON" },
   "tools/capture-doorstep-golden.mjs": { args: [], code: 0, needle: "{" },
   "tools/capture-household-golden.mjs": { args: [], code: 0, needle: "{" },
+  "tools/convert-idea-marks.mjs": { args: [], env: { OFFICE_KEEP: undefined, INVOCATION_ID: undefined }, code: 1, needle: "--town <town-clone> is required" }, // POS-854: bare, it asks for the town clone and reads nothing
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
@@ -159,6 +169,8 @@ const ROSTER = {
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
   // connection fails on it.
+  // POS-770: the arrivals read. A bad --days refuses before any log or store is read.
+  "tools/arrivals.mjs": { args: ["--days", "0"], env: NO_PG, code: 2, needle: "--days takes a whole number of days" },
   "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
@@ -203,17 +215,24 @@ const ROSTER = {
   "tools/set-down-ashore.mjs": { args: [], code: 2, needle: "usage: node tools/set-down-ashore.mjs --handle" },
   // POS-341: the owed-tolerant verify refuses a directory with no town verifier before it runs anything.
   "tools/stamp-verify-owed.mjs": { args: [], code: 2, needle: "stamp-verify-owed: no town at" },
+  "tools/town-pins.mjs": { args: [], code: 2, needle: "usage: town-pins.mjs --write" }, // POS-994: writes or checks the office's pins
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   // The PayPal rail (POS-183 part 2): no PAYPAL_ENV, so it refuses before it reads
   // a credential, a clone, PayPal or the ledger.
   "tools/paypal-watch.mjs": { args: [], env: { ...NO_PG, PAYPAL_ENV: undefined, PAYPAL_CLIENT_ID: undefined, PAYPAL_SECRET: undefined }, code: 1, needle: "PAYPAL_ENV must be live or sandbox" },
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
+  // POS-988: the sandboxed seal's client refuses with no --clone before it reads a file or a socket.
+  "tools/town-seal-sandbox.mjs": { args: [], code: 2, needle: "usage: town-seal-sandbox.mjs --clone" },
+  // POS-994: the sandboxed town tools' client refuses with no tool or no --clone before it reads a file or a socket.
+  "tools/town-tool-sandbox.mjs": { args: [], code: 2, needle: "usage: town-tool-sandbox.mjs <ferry|verify|quests> --clone" },
   "tools/train-week-check.mjs": { args: [], code: 2, needle: "usage: node tools/train-week-check.mjs" },
   "tools/usdc-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/vessel-parity.mjs": { args: ["--world", NOWHERE], env: NO_PG, code: 9, needle: "vessel-parity tripped" },
   "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
+  // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
+  "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
   "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
@@ -224,8 +243,12 @@ const ROSTER = {
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
   "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
+  "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
+  // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
+  "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
+  "tools/repair-dreaming-household.mjs": { args: ["--bogus"], code: 2, needle: "no arguments but --dry-run" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
   // POS-354: --help only; any other run reads the dev office's env files and dials its store.
@@ -322,6 +345,7 @@ const ROSTER = {
   // POS-392's import: no mode, so it refuses before it reads a clone or dials the store.
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
+  "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────
@@ -329,6 +353,10 @@ const GUARD_RE = /process\.argv\[1\]/;
 function* walk(dir) {
   for (const e of readdirSync(dir)) {
     if (e === "node_modules" || e === "viewer" || e === "schema") continue;
+    // POS-994: src/town-pins/ holds byte copies of the TOWN's modules, pinned; their
+    // entry guards are the town's own, and the office runs them only through
+    // src/town-tool.mjs (on this roster), never as an entry of its own.
+    if (e === "town-pins" && dir.endsWith("src")) continue;
     const p = join(dir, e);
     if (statSync(p).isDirectory()) yield* walk(p);
     else if (/\.(mjs|js|cjs)$/.test(e)) yield p;

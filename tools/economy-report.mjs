@@ -35,7 +35,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994
 import * as V from "./lib/ops-viz.mjs";
 
 const TOWN_CLONE = process.env.TOWN_CLONE || "/srv/postmark-office/town-clone";
@@ -49,9 +49,9 @@ const WORLD_REF = process.env.WORLD_REF || "refs/remotes/origin/main";
 const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
 const gitTry = (repo, args, fallback = null) => { try { return git(repo, args); } catch { return fallback; } };
 
-// ── the town's own money law, imported live ──────────────────────────────────
-const sm = await import(pathToFileURL(join(TOWN_CLONE, "tools", "stamp-mint.mjs")));
-const ws = await import(pathToFileURL(join(TOWN_CLONE, "tools", "world-stake.mjs")));
+// ── the town's own money law: the office's pinned copies, checked against the clone (POS-994) ──
+const sm = await importTownTool(TOWN_CLONE, "stamp-mint.mjs");
+const ws = await importTownTool(TOWN_CLONE, "world-stake.mjs");
 
 const townSha = git(TOWN_CLONE, ["rev-parse", "--short", "HEAD"]).trim();
 // Read the ledger from the WORKING TREE, not `git show HEAD:` — because
@@ -101,8 +101,10 @@ const equityRows = [...equity.values()].sort((a, b) => b.minted - a.minted || a.
 const M = equityRows.reduce((s, r) => s + r.minted, 0);          // cumulative mint
 const liquidTotal = equityRows.reduce((s, r) => s + r.liquid, 0);
 const escrowTotal = equityRows.reduce((s, r) => s + r.escrow, 0);
-// What the town's correction burns took out of supply (POS-649): the BURN
-// account's balance. With it, liquid + escrow + burned = M.
+// What the town's burns took out of supply: the BURN account's balance, which
+// holds the corrections' burns (POS-649) and, from 11-01, the parcels households
+// buy from the town (POS-762, `for: parcel:<nth>/<household>`). With it,
+// liquid + escrow + burned = M.
 const burnedTotal = liquid.get("BURN") ?? 0;
 for (const r of equityRows) r.share = M > 0 ? r.minted / M : 0;
 
@@ -492,7 +494,7 @@ ${equityBars}
 ${V.details(`all ${equityRows.length} households, with liquid, escrow and this week's minting`, equityTable)}
 
 <h2>supply</h2>
-<p class="note">One bar, cut where the stamps actually are. <code>liquid + escrow + burned = M</code> is arithmetic here, not a verdict: with MINT and the <code>stake:*</code> escrow accounts excluded and BURN counted as burned (the corrections' burns, POS-649), a double-entry fold sums to M however broken the ledger is, so a green tick on it would be assurance that cannot fail. The two chips below are the guards that can — a household below zero means the clip law was breached, and an account that moved stamps while never minting and never being pinned is money from nowhere.</p>
+<p class="note">One bar, cut where the stamps actually are. <code>liquid + escrow + burned = M</code> is arithmetic here, not a verdict: with MINT and the <code>stake:*</code> escrow accounts excluded and BURN counted as burned (the corrections' burns, POS-649, and parcels bought from the town, POS-762), a double-entry fold sums to M however broken the ledger is, so a green tick on it would be assurance that cannot fail. The two chips below are the guards that can — a household below zero means the clip law was breached, and an account that moved stamps while never minting and never being pinned is money from nowhere.</p>
 ${V.legend([{ name: `liquid, held by households (${comma(liquidTotal)})`, color: V.SERIES[0] },
   { name: `escrowed in open stakes (${comma(escrowTotal)})`, color: V.SERIES[3] }])}
 ${supplyBar}

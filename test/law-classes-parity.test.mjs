@@ -20,8 +20,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import { worldClone, NO_WORLD, OFFICE_ROOT } from "./fixture-paths.mjs";
@@ -56,7 +56,7 @@ let dir, worldDb, db, snap, blessing;
 before(async () => {
   if (why) return;
   blessing = newestBlessing(CLONE);
-  dir = mkdtempSync(join(tmpdir(), "law-parity-"));
+  dir = tempDir("law-parity-");
   worldDb = join(dir, "world.db");
   // The world side is the hydration's ROWS, published as the world graph snapshot
   // (POS-270 lane W 3a): the class readers answer from it, never from a file. The

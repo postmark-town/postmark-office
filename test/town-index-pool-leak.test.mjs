@@ -151,7 +151,7 @@ test("the household quest board, many at once, through every branch, with a worl
         if (branch === 2) reads.push(ix.questBoard("nobody", { worldBlock: asksThePen }));
         if (branch === 3) reads.push(ix.questBoard(null));
         if (branch === 4) reads.push(ix.questBoard("wright", { worldBlock: throws }));
-        if (branch === 5) reads.push(ix.questBoard("bent handle", { worldBlock: asksThePen })); // the store refuses the read inside the transaction: the ROLLBACK path
+        if (branch === 5) reads.push(ix.questBoard("bent\u0000handle", { worldBlock: asksThePen })); // the store refuses the read inside the transaction: the ROLLBACK path
       }
       const got = await allAnswer(`round ${round}`, reads, pen);
       got.forEach((r, i) => {

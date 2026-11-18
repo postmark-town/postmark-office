@@ -37,28 +37,86 @@ import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { rungWords } from "./post-words.mjs";
 import { apiUrl } from "./public-base.mjs";
-import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
+import { wakesNote, earpieceEnabled, PEN_HANDLE } from "./earpiece.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
   QUEST_CLASS, QUEST_AUTHOR, STATE_OPEN, STATE_CLOSED, questPostId, questEntries, judgeQuestEntry, judgeQuestHand,
   QUEST_NO_AMEND, QUEST_NO_ADVANCE,
 } from "./quests.mjs";
 import {
-  BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
+  BUG_CLASS, BUG_FIELDS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
-  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
+  RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
+import { BALLOT_CLASS, topicOfPost } from "./ballots.mjs"; // POS-983: a ballot is put up and carried by the town's hands (ballot-acts.mjs)
 import {
-  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
+  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_COMPLETE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
   judgeText, judgeRsvp, challengeWebhook, harnessPlan, applyPostAct, eventView, calendarFrom, slugFromTitle,
   judgeAnnouncement, announceMax, ANNOUNCE_MAX_ENV,
 } from "./events.mjs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { eventEvidence, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
+import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
+
+/**
+ * The settlements this office has published (ms), where a conversation splits — world.mjs's one reader of them, asked lazily so
+ * this module never boots the world to read a calendar; a read that cannot get them groups the window as one settlement and says so.
+ */
+async function publishedSettlements() {
+  const { settlementsKnown } = await import("./world.mjs");
+  return settlementsKnown();
+}
+
+/** How many ended events one page of the lasting list carries (POS-1035, calls 13 and 25). */
+export const PAST_PAGE = 40;
+
+/**
+ * THE LASTING EVENT LIST (POS-1035; calls 13, 25): every ended event the record holds, newest end first, paged — past the
+ * calendar's seven days, so the site's list of past events can reach them all. The recent calendar is unchanged and stays short.
+ * `before` is the `next.before` of the page before (the last event's `ends`); events tied on that instant ride the same page.
+ */
+async function pastEvents(client, fields, now) {
+  const raw = fields?.before;
+  const before = raw == null || raw === "" ? now : Date.parse(String(raw));
+  if (!Number.isFinite(before)) throw refuse(422, `"${raw}" is not a cursor`, "before: the `next.before` the previous page gave you (an ISO instant)");
+  const { rows } = await client.query(
+    `SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends < $2 AND ends <= $3 ORDER BY ends DESC, id LIMIT $4`,
+    [EVENT_CLASS, new Date(before).toISOString(), new Date(now).toISOString(), PAST_PAGE + 1]);
+  let page = rows.map(rowOf);
+  let more = page.length > PAST_PAGE;
+  if (more) {
+    page = page.slice(0, PAST_PAGE);
+    const lastEnds = page.at(-1).ends;
+    // keep every event tied on the cut instant, so a cursor never skips one
+    const { rows: tied } = await client.query(
+      `SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends = $2 AND NOT (id = ANY($3)) ORDER BY id`,
+      [EVENT_CLASS, lastEnds, page.map((r) => r.id)]);
+    page = [...page, ...tied.map(rowOf)];
+    const { rows: [{ n }] } = await client.query("SELECT count(*)::int AS n FROM posts WHERE class = $1 AND ends < $2", [EVENT_CLASS, new Date(lastEnds).toISOString()]);
+    more = n > 0;
+  }
+  const byEvent = new Map();
+  if (page.length) {
+    const { rows: rs } = await client.query(
+      "SELECT post, handle FROM responses WHERE post = ANY($1) AND kind = $2 ORDER BY post, handle", [page.map((r) => r.id), RESPONSE_RSVP]);
+    for (const r of rs) byEvent.set(r.post, [...(byEvent.get(r.post) ?? []), r.handle]);
+  }
+  return {
+    as_of: new Date(now).toISOString(),
+    past: page.map((r) => eventView(r, byEvent.get(r.id) ?? [], now, [])),
+    next: more ? { past: true, before: new Date(page.at(-1).ends).toISOString() } : null,
+    note: "every ended event, newest end first; open one with { event: \"<host>/<slug>\" } for its window, its room and who came",
+  };
+}
 
 // THE TABLES ARE `posts` AND `responses` since 028 (POS-288): the calendar's
 // tables, generalized in place, with events their first class. The old names
@@ -125,8 +183,8 @@ export const rowOf = (r) => (r ? { ...r, place_x: numOrNull(r.place_x), place_y:
   fields: typeof r.fields === "string" ? JSON.parse(r.fields) : { ...(r.fields ?? {}) } } : null);
 const doorsOf = (row) => row.fields?.doors_open ?? row.starts;
 
-async function eventRow(client, id) {
-  const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1 AND class = $2`, [id, EVENT_CLASS]);
+async function eventRow(client, id, { forUpdate = false } = {}) {
+  const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1 AND class = $2${forUpdate ? " FOR UPDATE" : ""}`, [id, EVENT_CLASS]);
   return rowOf(rows[0]);
 }
 async function rsvpHandles(client, id) {
@@ -215,7 +273,11 @@ const LEGACY_NAME = { body: "invitation" };
 const namesFor = (door, list) => (door === "household" ? list.map((k) => LEGACY_NAME[k] ?? k) : list);
 
 /** Put an event on the calendar: one `post` act, one `posts` row. */
-async function postEvent(handle, input, { now, env, door }) {
+// `stake` (POS-1035; call 22, Darko 17:37:45Z): `{ id, n, by, land }` — the hosting stake, landed IN this post's own transaction.
+// `id` was minted before the ledger line was signed (the line names it), so here it is only confirmed still free; `land(client)`
+// lands the already-signed ledger line on this transaction (stamp-lines.mjs § landPlannedVia). The post, its row and the stake are
+// recorded together or not at all. Absent, an event posts free, exactly as before (a legacy post, or EVENT_STAKE off).
+async function postEvent(handle, input, { now, env, door, stake = null }) {
   const text = judgeText({ title: input.title, body: input.body }, { bodyField: door === "household" ? "invitation" : "body" });
   const interval = judgeInterval(input, now);
   const shape = judgePlaceShape(input.place);
@@ -224,21 +286,86 @@ async function postEvent(handle, input, { now, env, door }) {
     const { rows: held } = await client.query(
       "SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${handle}/%`]);
     const taken = new Map(held.map((r) => [r.id, { cancelled: r.state === STATE_CANCELLED, ends: isoOrNull(r.ends) }]));
-    const id = mintEventId(handle, text.title, (i) => taken.get(i) ?? null, now);
+    const id = stake ? stake.id : mintEventId(handle, text.title, (i) => taken.get(i) ?? null, now);
+    if (stake && taken.has(id)) throw refuse(409, `"${id}" was taken while its stake was being signed`, "nothing was written and no stamp moved — host it again", { moved: true });
     const payload = { post: id, class: EVENT_CLASS, title: text.title, body: text.body,
       place: { mark: place.mark, x: place.x, y: place.y }, starts: interval.starts, ends: interval.ends,
-      fields: { doors_open: interval.doors_open } };
+      fields: { doors_open: interval.doors_open, ...(stake ? { stake: { n: stake.n, by: stake.by } } : {}) } };
     const actId = await insertAct(client, actRow({ action: ACT_POST, actor: handle, event: id, payload, place, now }));
     const household = await householdKeyFor(client, handle);
     const row = applyPostAct({ posts: new Map(), responses: new Map() },
       { id: actId, action: ACT_POST, actor: handle, object: id, payload, household });
     await insertPost(client, row);
+    const landed = stake ? await stake.land(client) : null;
+    if (landed?.moved) throw refuse(409, "the stamp ledger moved while this stake was landing", "nothing was written and no stamp moved — host it again", { moved: true });
+    if (landed?.error) throw refuse(landed.error.code ?? 503, landed.error.defect, landed.error.hint);
     const where = `${place.mark ?? "a point"} (${place.x}, ${place.y}), ${interval.starts} to ${interval.ends}`;
+    const staked = stake ? { stake: { n: stake.n, by: stake.by, ...(landed?.commit ? { commit: landed.commit } : {}),
+      note: `${stake.n} of ${stake.by}'s stamps are staked on this event until it ends or is cancelled: at its end each room its talk formed becomes a spark (one with the 60 m circle if nobody spoke; at most ${EVENT_SPARKS_MAX}), ${EVENT_SPARK_BACKING} stamp backing each and the rest home — one room keeps ${EVENT_SPARK_BACKING} and ${stake.n - EVENT_SPARK_BACKING} come home; cancelled, all ${stake.n} come home` } } : {};
     return door === "household"
-      ? { event: eventView(row, [], now), act_id: actId, receipt: `hosted: ${id}, at ${where}`, read: READ_HINT(id) }
-      : { post: eventView(row, [], now), act_id: actId, receipt: `posted: ${id} (an event), at ${where}`, read: POST_READ_HINT(id) };
+      ? { event: eventView(row, [], now), act_id: actId, ...staked, receipt: `hosted: ${id}, at ${where}`, read: READ_HINT(id) }
+      : { post: eventView(row, [], now), act_id: actId, ...staked, receipt: `posted: ${id} (an event), at ${where}`, read: POST_READ_HINT(id) };
   }, env);
 }
+
+/** The id a new event of this host and title would take now (read-only): what a hosting stake's ledger line names before the post is written. */
+export async function nextEventId(handle, title, { now = Date.now(), env = process.env } = {}) {
+  const text = judgeText({ title, body: "" }, { bodyField: "body" });
+  // part of a write (the hosting stake signs the id it reads), so an unreachable record refuses in the pen's own words
+  return write(async (client) => {
+    const { rows: held } = await client.query("SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${handle}/%`]);
+    const taken = new Map(held.map((r) => [r.id, { cancelled: r.state === STATE_CANCELLED, ends: isoOrNull(r.ends) }]));
+    return mintEventId(handle, text.title, (i) => taken.get(i) ?? null, now);
+  }, env);
+}
+
+/**
+ * THE COMPLETION'S RECEIPT, on the caller's transaction (POS-1035): the event row read FOR UPDATE, refused unless it is still
+ * a staked, ended, uncancelled, unreturned and uncompleted event — so a retry or a second tick can never complete it twice — then
+ * the town's internal `complete` act and the row it folds to (`fields.completed`, the stake's whole return and its spark backing).
+ */
+export async function recordCompletionVia(client, id, { sparks, n, to, backing, now }) {
+  const prev = await eventRow(client, id, { forUpdate: true });
+  if (!prev) throw refuse(404, `no event "${id}"`, "nothing was written");
+  if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event makes no spark; its stake came home with the cancellation", { moved: true });
+  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete`, "nothing was written — it completes once", { moved: true });
+  if (!prev.fields?.stake || prev.fields.stake.returned) throw refuse(409, `"${id}" has no open stake to complete`, "nothing was written", { moved: true });
+  if (Date.parse(prev.ends) > now) throw refuse(409, `"${id}" has not ended`, "an event completes at its end", { moved: true });
+  if (prev.fields.stake.by !== to || Number(prev.fields.stake.n) !== Number(n)) throw refuse(409, `"${id}"'s stake is ${prev.fields.stake.n} from ${prev.fields.stake.by}`, "nothing was written", { moved: true });
+  const at = new Date(now).toISOString();
+  const payload = { post: id, sparks: [...sparks].map(String), at, stake_returned: { n, to }, backing };
+  const actId = await insertAct(client, actRow({ action: ACT_COMPLETE, actor: PEN_HANDLE, event: id, payload, place: placeOfRow(prev), now }));
+  const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() }, { id: actId, action: ACT_COMPLETE, actor: PEN_HANDLE, object: id, payload, household: prev.household });
+  await updatePost(client, row);
+  return { act_id: actId, row };
+}
+
+/**
+ * A FREE EVENT'S RECEIPT, on the caller's transaction (POS-1035, Darko 23:15/23:17 EST): the same FOR UPDATE guard — an ended,
+ * uncancelled, unstaked, uncompleted event, so a retry or a second tick never makes its drafts twice — then the `complete` act and
+ * its row. It carries `{ post, at, free: true }` and NOTHING else: the drafts it made are its host's private ones, so no id, count
+ * or word of them reaches this public act, the row, a read or an export.
+ */
+export async function recordFreeCompletionVia(client, id, { now }) {
+  const prev = await eventRow(client, id, { forUpdate: true });
+  if (!prev) throw refuse(404, `no event "${id}"`, "nothing was written");
+  if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event makes no spark", { moved: true });
+  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete`, "nothing was written — it completes once", { moved: true });
+  if (prev.fields?.stake) throw refuse(409, `"${id}" is a staked event`, "a staked event completes with its stake, not as drafts; nothing was written", { moved: true });
+  if (Date.parse(prev.ends) > now) throw refuse(409, `"${id}" has not ended`, "an event completes at its end", { moved: true });
+  const at = new Date(now).toISOString();
+  const payload = { post: id, at, free: true };
+  const actId = await insertAct(client, actRow({ action: ACT_COMPLETE, actor: PEN_HANDLE, event: id, payload, place: placeOfRow(prev), now }));
+  const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() }, { id: actId, action: ACT_COMPLETE, actor: PEN_HANDLE, object: id, payload, household: prev.household });
+  await updatePost(client, row);
+  return { act_id: actId, row };
+}
+
+/** POS-1035: the staked post and the staked cancellation, for the executor (event-sparks.mjs) that holds the town lock and signs. */
+export const postStakedEvent = (handle, input, opts) => postEvent(handle, input, opts);
+export const closeStakedEvent = (handle, id, opts) => closeEvent(handle, id, opts);
+/** One event's row as the store holds it (read-only), or null. */
+export const eventRowAtOffice = (id, { env = process.env } = {}) => read((client) => eventRow(client, id), env);
 
 // The amendment's fields, in the order its `changed` list names them.
 const AMENDABLE = ["title", "body", "place", "doors_open", "starts", "ends"];
@@ -254,6 +381,11 @@ async function amendEvent(handle, id, input, { now, env, door }) {
     await mayChange(client, prev, handle);
     if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event is not amended — host a new one");
     if (Date.parse(prev.ends) <= now) throw refuse(409, `"${id}" has ended`, "an ended event is not amended — host a new one");
+    // POS-1035: a staked event's words become its spark's — an amendment that would not survive there is refused before it lands
+    if (prev.fields?.stake && !prev.fields.stake.returned) {
+      const words = sparkTextRefusal({ title: text.title, body: text.body });
+      if (words) throw refuse(words.code, words.defect, words.hint);
+    }
     // THE DOORS STAY WHERE THEY STAND unless they are sent (Keemin through
     // Wright, 2026-09-28, POS-288 D5). An amendment that moves `starts` used
     // to reset `doors_open` to the new start, changing a field it was not
@@ -299,22 +431,38 @@ async function amendEvent(handle, id, input, { now, env, door }) {
 }
 
 /** Close an event: one `close` act; it stands on the calendar as cancelled. */
-async function closeEvent(handle, id, { now, env, door }) {
+// `stakeReturn` (POS-1035; Darko 11:00 EST: "All 20 come home, no spark"): `{ n, to, land }` — a staked event's whole stake comes
+// home IN the cancellation's own act and transaction (`land` lands the already-signed post-return line), never twice: the row is
+// read FOR UPDATE, and one already cancelled or already returned is refused before anything moves. A staked event cannot be
+// cancelled without it (the door routes it through the executor, which holds the town lock and signs).
+async function closeEvent(handle, id, { now, env, door, stakeReturn = null }) {
   return write(async (client) => {
-    const prev = await eventRow(client, id);
+    const prev = await eventRow(client, id, { forUpdate: true });
     if (!prev) throw refuse(404, `no event "${id}"`, "ids are <host>/<slug>, as the calendar names them");
     await mayChange(client, prev, handle);
     if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" is already cancelled`, "nothing to do");
     if (Date.parse(prev.ends) <= now) throw refuse(409, `"${id}" has ended`, "an ended event is not cancelled — it happened");
-    const payload = { post: id, state: STATE_CANCELLED };
+    const staked = prev.fields?.stake ?? null;
+    if (staked && staked.returned) throw refuse(409, `"${id}"'s stake has already come home`, "nothing to do — it cannot be paid twice");
+    if (staked && !stakeReturn)
+      throw refuse(503, `"${id}" carries a ${staked.n}-stamp stake, which comes home with its cancellation`, "the cancellation must go through the stake's own road; nothing was written — cancel it again");
+    if (!staked && stakeReturn) throw refuse(409, `"${id}" carries no stake to return`, "nothing was written");
+    if (staked && (Number(stakeReturn.n) !== Number(staked.n) || stakeReturn.to !== staked.by))
+      throw refuse(409, `"${id}"'s stake is ${staked.n} from ${staked.by}; the return named ${stakeReturn.n} to ${stakeReturn.to}`, "nothing was written — the whole stake comes home to the one who paid it");
+    const payload = { post: id, state: STATE_CANCELLED, ...(staked ? { stake_returned: { n: staked.n, to: staked.by } } : {}) };
     const actId = await insertAct(client, actRow({ action: ACT_CLOSE, actor: handle, event: id, payload, place: placeOfRow(prev), now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_CLOSE, actor: handle, object: id, payload, household: prev.household });
     await updatePost(client, row);
+    const landed = staked ? await stakeReturn.land(client) : null;
+    if (landed?.moved) throw refuse(409, "the stamp ledger moved while the stake was coming home", "nothing was written and no stamp moved — cancel it again", { moved: true });
+    if (landed?.error) throw refuse(landed.error.code ?? 503, landed.error.defect, landed.error.hint);
     const view = eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id]));
+    const home = staked ? { stake: { returned: staked.n, to: staked.by, ...(landed?.commit ? { commit: landed.commit } : {}),
+      note: `all ${staked.n} stamps came home to ${staked.by} with the cancellation; no spark is made` } } : {};
     return door === "household"
-      ? { event: view, act_id: actId, receipt: `cancelled: ${id} — it stays on the calendar, marked cancelled, and its id is not reused`, read: READ_HINT(id) }
-      : { post: view, act_id: actId, state: STATE_CANCELLED,
+      ? { event: view, act_id: actId, ...home, receipt: `cancelled: ${id} — it stays on the calendar, marked cancelled, and its id is not reused`, read: READ_HINT(id) }
+      : { post: view, act_id: actId, state: STATE_CANCELLED, ...home,
           receipt: `closed: ${id} — an event closes as cancelled; it stays on the calendar, marked cancelled, and its id is not reused`, read: POST_READ_HINT(id) };
   }, env);
 }
@@ -327,7 +475,49 @@ export async function hostAtOffice(fields, key, { now = Date.now(), env = proces
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends };
   if (fields.event != null && String(fields.event).trim() !== "")
     return amendEvent(handle, String(fields.event).trim(), input, { now, env, door: "household" });
-  return postEvent(handle, input, { now, env, door: "household" });
+  return hostOrStake(handle, input, { now, env, door: "household" });
+}
+
+// ── THE HOSTING STAKE'S ROAD (POS-1035) ─────────────────────────────────────
+//
+// Every new event is posted by the executor (event-sparks.mjs), which holds the town lock, checks the posting resident's own
+// liquid stamps, signs the stake line and lands it in the post's own transaction. A staked event's cancellation takes the same
+// road, so its stake always comes home. An event stored without a stake (scheduled before this shipped) keeps the free road.
+const STAKE_EXEC = () => join(dirname(fileURLToPath(import.meta.url)), "event-sparks.mjs");
+// THE TESTS' SEAM, and only theirs: the post machine's own tests run on an in-process stub pen with no town and no store, which a
+// spawned executor cannot see. `stakeExecutorForTests(fn)` hands them an in-process one; `null` puts the real one back. Nothing
+// in the office calls it, and no environment reaches it: there is no switch here, every new event stakes.
+let stakeExecOverride = null;
+export function stakeExecutorForTests(fn) { stakeExecOverride = typeof fn === "function" ? fn : null; }
+async function viaStakeExec(payload, env) {
+  if (stakeExecOverride) return stakeExecOverride(payload, env);
+  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
+  let out;
+  try {
+    out = await execUnderTownLock(STAKE_EXEC(), JSON.stringify(payload), { ...env, TOWN_CLONE: env.TOWN_CLONE ?? join(dirname(fileURLToPath(import.meta.url)), "..", "town-clone") });
+  } catch (e) {
+    if (lockTimedOut(e)) throw refuse(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
+    // its words go to the log, never the answer (fault-words.mjs § faultLogged)
+    throw refuse(503, "the event's stake could not be written just now — nothing was written and no stamp moved; try again shortly", faultLogged("the event stake executor tripped", e));
+  }
+  const result = JSON.parse(String(out).trim().split("\n").at(-1));
+  if (result.error) throw refuse(result.error.code ?? 503, result.error.defect, result.error.hint);
+  return result;
+}
+async function hostOrStake(handle, input, { now, env, door }) {
+  // the cheap refusals first, before the town lock is taken (the executor judges them again, inside it)
+  judgeText({ title: input.title, body: input.body }, { bodyField: door === "household" ? "invitation" : "body" });
+  judgeInterval(input, now);
+  judgePlaceShape(input.place);
+  const words = sparkTextRefusal({ title: input.title, body: input.body });
+  if (words) throw refuse(words.code, words.defect, words.hint);
+  return viaStakeExec({ mode: "post", handle, input, door, now }, env);
+}
+async function closeOrReturn(handle, id, { now, env, door }) {
+  const row = await read((client) => eventRow(client, id), env);
+  if (row?.fields?.stake && !row.fields.stake.returned && row.state !== STATE_CANCELLED)
+    return viaStakeExec({ mode: "cancel", handle, id, door, now }, env);
+  return closeEvent(handle, id, { now, env, door });
 }
 
 // ── cancel-event · the household door ───────────────────────────────────────
@@ -336,7 +526,7 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
   const handle = standpointHandle(fields, key);
   const id = String(fields.event ?? "").trim();
   if (!id) throw refuse(422, "which event?", 'event: "<host>/<slug>", as the calendar names it', { field: "event" });
-  return closeEvent(handle, id, { now, env, door: "household" });
+  return closeOrReturn(handle, id, { now, env, door: "household" });
 }
 
 // ── the town door: post · amend · close · advance (POS-288, POS-294) ───────
@@ -350,8 +540,10 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
 // loaded when an idea act arrives (it imports this file's row helpers).
 const IDEA_CLASS = "idea";
-const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+// POS-983: class "ballot" joins, the town's own, put up and carried by its hands (ballot-acts.mjs)
+const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS];
 const ideaPen = () => import("./idea-store.mjs");
+const ballotPen = () => import("./ballot-acts.mjs");
 
 function judgeClass(fields, { required, env = process.env }) {
   const c = fields.class == null ? "" : String(fields.class).trim();
@@ -359,8 +551,8 @@ function judgeClass(fields, { required, env = process.env }) {
   // act naming class "idea" is refused exactly as it was before the class existed.
   const ideas = ideaPostsOn(env);
   const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
-  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug" or "idea", not "${c}"` : `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken; class: "ballot" is the town\'s vote, by its hands' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug", "ballot" or "idea", not "${c}"` : `this act answers class "event", "quest", "bug" or "ballot", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -383,8 +575,12 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
+  // and an invitation's (POS-816): invite:<the invited household's slug>, never a public row
+  if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
+  // and a ballot's (POS-983): postmark-pen/ballot-<topic>, the pen's by the file's name
+  if (topicOfPost(id)) return BALLOT_CLASS;
   const { ideaRow } = await ideaPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
     : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
@@ -393,10 +589,11 @@ async function classOf(fields, id, env) {
 export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
   const cls = judgeClass(fields, { required: true, env });
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("post", fields, key, { now });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
   if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
   const handle = standpointHandle(fields, key);
-  return postEvent(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
+  return hostOrStake(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
 }
 
@@ -405,6 +602,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) throw REPORT_NO_AMEND();
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("amend", fields, key, { now });
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
@@ -417,11 +615,12 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) throw REPORT_NO_CLOSE();
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("close", fields, key, { now });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
     "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
   const handle = standpointHandle(fields, key);
-  return closeEvent(handle, id, { now, env, door: "town" });
+  return closeOrReturn(handle, id, { now, env, door: "town" });
 }
 
 /**
@@ -431,11 +630,14 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
  * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
-export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
+export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null, clone = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
+  // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
+  if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("advance", fields, key, { now, ...(clone ? { clone } : {}) });
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
   for (const k of ["skip", "reason"])
@@ -587,7 +789,7 @@ async function postBug(fields, key, { now, env, roll }) {
   } else {
     reporter = standpointHandle(fields, key);
   }
-  const text = judgeBugText({ title: fields.title, body: fields.body, issue: fields.issue, steps: fields.steps, record: fields.record });
+  const text = judgeBugText({ title: fields.title, body: fields.body, issue: fields.issue, steps: fields.steps, record: fields.record, fix_myself: fields.fix_myself });
   return write(async (client) => {
     const { rows } = await client.query("SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${reporter}/%`]);
     const id = mintBugId(reporter, text.title, new Set(rows.map((r) => r.id)));
@@ -630,7 +832,7 @@ async function amendBug(fields, key, id, { now, env }) {
         `a reporter amends until the bug is confirmed; tell ${BUG_HANDS.join(", ")} what changed, by letter`);
     const now_ = { title: text.title ?? prev.title, body: text.body ?? prev.body, ...prev.fields, ...text.fields };
     const was = { title: prev.title, body: prev.body, ...prev.fields };
-    const changed = ["title", "body", "issue", "steps", "record"].filter((k) => k in now_ && now_[k] !== was[k]);
+    const changed = ["title", "body", ...BUG_FIELDS].filter((k) => k in now_ && now_[k] !== was[k]);
     if (!changed.length) throw refuse(422, "nothing to amend", `every field you sent already stands on "${id}"`);
     const payload = { post: id, changed };
     for (const k of changed) {
@@ -660,9 +862,10 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
   if (!RECREDIT_HANDS.includes(hand))
     throw refuse(403, `only ${RECREDIT_HANDS.join(" and ")} re-credit a stage`, "a recredit burns a mint the town paid, and only the founders move money");
   const r = judgeRecreditFields(fields, roll);
+  // The advance, the skip (POS-931/a: a skipped stage is re-credited only on its skip act) and any recredit.
   const stageActs = (c) => c.query(
     "SELECT id, object, action, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, [id]])
-    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_RECREDIT)));
+    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_SKIP || a.action === ACT_RECREDIT)));
   const { postPaymentsVia } = await import("./post-history.mjs");
   // As at the advance: the stage is judged, then its linked work is read from
   // GitHub before the write's transaction opens.
@@ -680,12 +883,24 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await client.query("SELECT id FROM posts WHERE id = $1 AND class = $2 FOR UPDATE", [id, BUG_CLASS]);
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
-    const { was, n } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
+    const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
     await judgeEarnedCreditVia(client, r, gh);
-    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
+    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
+      ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
+    if (skipped) {
+      return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
+        ...(grade !== undefined ? { grade } : {}),
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+          + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
+          + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
+        read: bugReadHint(id) };
+    }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
-      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
+        + ". "
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
       read: bugReadHint(id) };
@@ -701,7 +916,20 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
   // the write's transaction opens, so no store connection waits on the network.
   const before = await read((c) => bugRow(c, id), env);
-  const gh = before ? await githubAuthorOf(judgeAdvance(fields, before, roll), { env }) : null;
+  const first = before ? judgeAdvance(fields, before, roll) : null;
+  // The stage guard (bug-stage-guard.mjs): fixed waits for its PR's merge, shipped for a tag holding it.
+  // Only a founder's force goes past a refusal, and the act keeps why and what it went past.
+  if (first?.force && !FORCE_HANDS.includes(hand))
+    throw refuse(403, `only ${FORCE_HANDS.join(" and ")} force a stage past the guard`, `${hand} advances ${first.to} when the work is there: ${first.to === "fixed" ? "its PR merged" : "a tag holding the merge"}`, { field: "force" });
+  let forced = null;
+  if (first) {
+    try { await stageProofOf(first, before, { env }); }
+    catch (e) {
+      if (!first.force || !e?.defect) throw e;
+      forced = { reason: first.force, past: e.defect };
+    }
+  }
+  const gh = first ? await githubAuthorOf(first, { env }) : null;
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
@@ -715,7 +943,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       // The link is kept per stage; the act carries the post's whole map after it, as the reveal does.
       ...(j.link ? { links: { ...(prev.fields?.links ?? {}), [j.to]: j.link } } : {}) };
     const payload = { post: id, from: prev.state, to: j.to, ...(j.credit ? { credit: j.credit } : {}),
-      ...(Object.keys(set).length ? { fields: set } : {}), hand };
+      ...(Object.keys(set).length ? { fields: set } : {}), ...(forced ? { forced } : {}), hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
@@ -725,8 +953,11 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
-      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
+        + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);
 }
@@ -755,9 +986,10 @@ async function skipBug(fields, key, id, { now, env }) {
 }
 
 /**
- * The reveal at ship (POS-236): a town hand sets the three candidates Iris
- * painted, or the fixer picks one. One `reveal` act, carrying the post's whole
- * reveal after it; it mints nothing and moves no stage.
+ * The reveal at ship (POS-236, CORE-25): a town hand sets the critter's one
+ * portrait (its image at once, and a later one replaces it), or sets the three
+ * candidates of an older set for the fixer to pick one. One `reveal` act,
+ * carrying the post's whole reveal after it; it mints nothing and moves no stage.
  */
 export async function revealAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = String(fields?.post ?? "").trim();
@@ -783,7 +1015,11 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
     await updatePost(client, row);
     const critter = prev.fields?.critter ? `"${prev.fields.critter}"` : "its critter";
     return { post: bugAnswer(row), act_id: actId, hand: actor, reveal,
-      receipt: reveal.pick
+      receipt: reveal.pick && reveal.candidates.length === 1 && prev.fields?.reveal?.pick
+        ? `revealed: ${id}'s critter ${critter} has a new portrait, set by ${actor}; it replaces the earlier one, and the jar shows it from now on`
+        : reveal.pick && reveal.candidates.length === 1
+        ? `revealed: ${id}'s critter ${critter} has its portrait, set by ${actor}; the jar shows it from now on`
+        : reveal.pick
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };
@@ -949,14 +1185,38 @@ async function registerHarness(client, { handle, household, kind, address, secre
  * posts, and the calendar is the event class's), and there the one event is
  * named `post`; either name opens it.
  */
-export async function calendarAtOffice(fields = {}, { now = Date.now(), env = process.env } = {}) {
+export async function calendarAtOffice(fields = {}, { now = Date.now(), env = process.env, settlements = publishedSettlements } = {}) {
   const id = String(fields?.event ?? fields?.post ?? "").trim();
+  const past = fields?.past === true || fields?.past === "true";
+  if (past && id) throw refuse(422, "past lists events; event opens one", 'town { read: "calendar", args: { past: true } } — or { event: "<host>/<slug>" } for one');
   return read(async (client) => {
     if (id) {
       const row = await eventRow(client, id);
       if (!row) throw refuse(404, `no event "${id}"`, 'ids are <host>/<slug> — town { read: "calendar" } lists them');
-      return { as_of: new Date(now).toISOString(), event: eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id])) };
+      const view = eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id]));
+      // POS-1035 (CORE-82): once its doors have opened, an event answers its window, every room its talk formed and the households
+      // with a public act there — resolved by the office from the record, never by the site from RSVPs or today's positions
+      if (row.state !== STATE_CANCELLED) {
+        let edges = [];
+        try { edges = (await settlements()) ?? []; } catch { edges = []; }
+        const evidence = await eventEvidence(client, row, { now, edges });
+        if (evidence) {
+          // its own sparks, the public collection its completion recorded (one per room, in order): each accepted (standing) or
+          // waiting on acceptance; [] before it ends, and for a free event, whose sparks are its host's private drafts
+          try { evidence.sparks = await eventSparksOf(client, row); }
+          catch { evidence.sparks = null; evidence.spark_note = "the store could not answer the event's sparks just now — unknown, not none"; }
+          // why the collection says what it says — so an empty one is never read as a failed read, nor a capped one as every room's
+          const note = evidence.sparks ? sparkNoteOf(row, evidence, { now }) : undefined;
+          if (note) evidence.spark_note = note;
+          // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
+          try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(row) })); }
+          catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
+          view.evidence = evidence;
+        }
+      }
+      return { as_of: new Date(now).toISOString(), event: view };
     }
+    if (past) return pastEvents(client, fields, now);
     const since = new Date(now - ENDED_LIST_DAYS * 86_400_000).toISOString();
     const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends > $2 ORDER BY starts, id`, [EVENT_CLASS, since]);
     const events = rows.map(rowOf);

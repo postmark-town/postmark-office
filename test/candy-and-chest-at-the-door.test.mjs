@@ -143,3 +143,29 @@ test("A MAKE'S ACTOR IS THE TOP-LEVEL HANDLE on a two-resident key; a by naming 
   assert.equal(await makeSays({ ...make }), "which resident is making these?", "neither, on a two-resident key: still asked");
   assert.equal(await makeSays({ ...make, handle: "gamma" }), '"gamma" is not one of your residents');
 });
+
+// ── postmark#4441 (Umber): A SITED MARK'S ACTOR IS THE TOP-LEVEL HANDLE TOO ──
+// The make above was fixed; the single mark on the ground still read only `by`,
+// so a two-resident key naming its resident with handle was asked again. The
+// same one-actor contract, the same six cases. (No world clone here: past the
+// actor, the write fails later, so the assertions are about which sentence.)
+const markSays = async (payload) => {
+  try { await leaveMarkViaOffice(process.env.WORLD_CLONE, payload, two); return { defect: "LANDED" }; }
+  catch (e) { return { defect: String(e.defect ?? e.message), code: e.code, hint: e.hint }; }
+};
+const said = async (payload) => (await markSays(payload)).defect;
+const sited = { ...chest, slug: "a-sited-bowl" };
+
+test("A SITED MARK'S ACTOR IS THE TOP-LEVEL HANDLE on a two-resident key; a by naming another is two actors (postmark#4441)", async () => {
+  assert.doesNotMatch(await said({ ...sited, handle: "alpha" }), /which resident is leaving this mark\?|not one of your residents/, "the handle names who leaves it");
+  assert.doesNotMatch(await said({ ...sited, handle: "alpha", by: "alpha" }), /two residents named|which resident|not one of your residents/, "the same resident twice is one");
+  const twoActors = await markSays({ ...sited, handle: "alpha", by: "beta" });
+  assert.equal(twoActors.defect, 'two residents named: handle "alpha" and by "beta"');
+  assert.equal(twoActors.code, 422);
+  assert.equal(twoActors.hint, "a mark is one resident's act: the top-level handle is who leaves it. Leave by: off, or name the same resident. Nothing was written.");
+  assert.doesNotMatch(await said({ ...sited, by: "beta" }), /two residents named|which resident|not one of your residents/, "by alone still names who leaves it");
+  assert.equal(await said({ ...sited }), "which resident is leaving this mark?", "neither, on a two-resident key: still asked");
+  const stranger = await markSays({ ...sited, handle: "gamma" });
+  assert.equal(stranger.defect, '"gamma" is not one of your residents');
+  assert.equal(stranger.code, 403);
+});

@@ -90,9 +90,9 @@ import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mj
 // the office learns "pool" once per table — see world2-acts.mjs § THE STANCE
 // READ'S OWN CREDENTIAL.
 import { stanceQuery } from "./world2-acts.mjs";
-import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
+import { importEngineAt, mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import {
-  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, houseOf, judgeTownHand, judgeTownWord,
+  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstCover, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
   lawMarksAt, lawShaFor, onCurrentVersion, readVersions,
 } from "./town-stance.mjs";
 import { join } from "node:path";
@@ -174,6 +174,49 @@ const TEACH_CACHE = new Map();
 /** Markdown emphasis stripped, whitespace folded — the sentence as a reader hears it. */
 const plain = (s) => s.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
 
+// ── THE QUOTE BOUND (CORE-95; Wright, CORE-88 settlement: "The unbounded quote in responseFunctionSays is upstream of this read") ──
+//
+// The anchors slice a sentence out of a file a World PR can rewrite, so a quote's length is the file's, not this door's. Each quote
+// `responseFunctionSays` returns (opposed, neutral_and_revisable, any_latency; the third is the one `stanceTeach`'s unruled text reuses)
+// is therefore bounded HERE, at its producer: JSON-encoded as a value (JSON.stringify of the string, its quotes and escapes counted) it
+// is at most RESPONSE_QUOTE_MAX_BYTES of UTF-8, marker included. A quote that fits is returned verbatim. One that does not keeps a
+// whole-character prefix and a plain marker, so a cut prefix is never passed off as the full law: it counts the quote's UTF-8 bytes it
+// removed and names the file.
+//
+// THE NUMBER IS SIZED SO THE USUAL TEACHING ANSWER FITS THE CONNECTOR (Wright, CORE-95 fit, 2026-11-14 16:18Z: "size the per-quote
+// bound so a teaching answer with its usual number of quotes plus its own fields stays under 10,000"). The answer the consumer sends
+// (`household { read: "stances", part: "teach" }`: {read, part, law, teach}, as household-read-page.mjs teachPage builds it and mcp.mjs
+// § contentFor serialises it, JSON.stringify(…, null, 1) in UTF-8) carries FOUR copies of a producer quote: `what_opposed_does`,
+// `until_you_speak`, `any_latency`, and `any_latency` again inside the unruled text. Everything else in it (the envelope, the law
+// line, `from`, the late-welcome body twice (`the_law_reaches` and inside `unruled`), the unruled text's own words, the marks and the
+// nested-quote escapes) measured 2,223 bytes in a PRINTABLE STRESS CASE: a late-welcome body of 150 four-byte characters, which is a
+// stress figure chosen for the measurement, not a limit the record enforces. CAP_BYTES 10,000 - 2,223 = 7,777 over 4 copies = 1,944
+// per quote; the constant is 1,900. 4 x 1,900 + 2,223 = 9,823 is that measured stress-case allocation for the usual teaching answer
+// (177 bytes under the cap), NOT an invariant. What this does NOT bound: the late-welcome body is a kind property and the mark lint
+// exempts it from the 150-character cap, so it is uncapped here; and a JSON control character costs up to 6 bytes, so a body or quote
+// of such characters costs more than the printable figure. Growth in that property, a fifth quote copy or a longer field would need
+// the number re-derived. A live quote is a sentence or two (about 200 bytes), so normal teaching is far under it and verbatim. It
+// bounds each producer quote; test/world-stance.test.mjs asserts the whole answer for the stress case.
+export const RESPONSE_QUOTE_MAX_BYTES = 1900;
+const jsonBytes = (s) => Buffer.byteLength(JSON.stringify(s), "utf8");
+const cutMarker = (removedBytes) => ` [cut: ${removedBytes} bytes of this quote are not shown; the whole text is in ${RESPONSE_FUNCTION_FILE.replace(/\\/g, "/")} in the World checkout]`;
+
+/** `quote` verbatim when it fits RESPONSE_QUOTE_MAX_BYTES as a JSON value; otherwise its longest whole-character prefix plus `cutMarker`, still within it. */
+export function boundQuote(quote, max = RESPONSE_QUOTE_MAX_BYTES) {
+  if (jsonBytes(quote) <= max) return quote;
+  const chars = Array.from(quote);                                   // code points: a cut never lands inside a character (or a surrogate pair)
+  const total = Buffer.byteLength(quote, "utf8");
+  const fits = (n) => {
+    const head = chars.slice(0, n).join("");
+    return jsonBytes(head + cutMarker(total - Buffer.byteLength(head, "utf8"))) <= max;
+  };
+  let lo = 0, hi = chars.length;                                      // the largest n that fits; n = 0 is the marker alone
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fits(mid)) lo = mid; else hi = mid - 1; }
+  while (lo > 0 && !fits(lo)) lo -= 1;                                // the marker's digits can shrink as the prefix grows: settle on a size that holds
+  const head = chars.slice(0, lo).join("");
+  return head + cutMarker(total - Buffer.byteLength(head, "utf8"));
+}
+
 /**
  * The response function's own two sentences, sliced out of the file at `repo`.
  *
@@ -181,6 +224,14 @@ const plain = (s) => s.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
  * the file moves, is rewritten, or loses an anchor, this says so and the door
  * teaches one sentence less. That is strictly better than teaching a sentence
  * the record no longer contains.
+ *
+ * THE BOUND (CORE-95): every quote returned here (`what_opposed_does`,
+ * `until_you_speak`, `any_latency`) is at most RESPONSE_QUOTE_MAX_BYTES (1,900,
+ * sized so the usual teaching answer stays under 10,000; see the derivation
+ * at the constant) UTF-8 bytes
+ * JSON-encoded as a value, marker included. A longer one is cut at a
+ * whole character and ends in a plain marker saying how many bytes were cut and
+ * that the whole text is in LOGOS/the-response-function.md (`boundQuote`).
  */
 export function responseFunctionSays(repo = WORLD_CLONE) {
   const path = join(repo, RESPONSE_FUNCTION_FILE);
@@ -203,7 +254,7 @@ export function responseFunctionSays(repo = WORLD_CLONE) {
     if (end < 0) { missing.push(a.key); continue; }
     // The line-terminated anchor stops AT the break; the sentence-terminated one
     // keeps the sentence that ends it.
-    found[a.key] = plain(text.slice(start, a.to === "\n" ? end : end + a.to.length));
+    found[a.key] = boundQuote(plain(text.slice(start, a.to === "\n" ? end : end + a.to.length)));   // CORE-95: bounded here, for all three quotes
   }
   const out = missing.length === RESPONSE_ANCHORS.length
     ? { unresolved: `${RESPONSE_FUNCTION_FILE.replace(/\\/g, "/")} no longer carries the sentences this door quotes (${missing.join(", ")}) — it was rewritten, and this door will not paraphrase what it can no longer read` }
@@ -291,6 +342,27 @@ export const STANCE_LIST_MAX = 100;
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
+/**
+ * Write one stance row to the record, or refuse with 503 when the pen cannot be reached.
+ *
+ * Both arms of the pen flip refuse alike (G1 / POS-156, RULING 3): the flipped arm is `appendActFlipped`
+ * and the other is `appendJournal`, which now awaits the record and throws exactly as the flipped one does.
+ * Either way the record is committed and awaited before the door answers, and an unreachable pen means
+ * nothing was written. The refusal names no flag: `W2_PEN` decides which function writes, not whether the
+ * record is the record. `safeAgain` is the end of the hint, who may speak again ("your stance is safe to
+ * speak again").
+ */
+async function writeStanceAct(entry, safeAgain) {
+  try {
+    return laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
+  } catch (err) {
+    if (err?.name === "PenUnreachableError")
+      throw bounce(503, err.message,
+        `this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — ${safeAgain}`);
+    throw err;
+  }
+}
+
 // ── the engine's geometry, read at a ref ─────────────────────────────────────
 //
 // `rect` and `overlapArea` are the world's own, and the fold itself decides
@@ -373,14 +445,22 @@ export function groundFor(incoming, marks, overlaps) {
 // marks), `householdOf` groups handles into households (identity when absent,
 // which is the old per-handle reading), and `words` are the standing words on
 // current versions: any resident's word clears the whole house.
-export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overlaps, householdOf = (h) => h, words = [], households = null }) {
+export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overlaps, householdOf = (h) => h, words = [], households = null, isThing = null, elder = undefined }) {
   const mineById = new Map(mine.map((m) => [m.id, m]));
   const myHouses = households ?? new Set(mine.map((m) => houseOf(householdOf, m.by)));
+  // THE WORDS, FOUND BY THEIR MARK (POS-1057). `awaitingOf` reads only the words spoken on the mark it is asked about, and it was
+  // handed every standing word for every mark. Grouped once here, each mark is handed its own; the answer is the same.
+  const wordsOn = new Map();
+  for (const w of words) {
+    if (w?.on == null) continue;
+    if (!wordsOn.has(w.on)) wordsOn.set(w.on, []);
+    wordsOn.get(w.on).push(w);
+  }
   const out = [];
   for (const incoming of all) {
     if (!incoming?.id || mineById.has(incoming.id)) continue;
     if (spoken.has(incoming.id)) continue;
-    const ground = awaitingOf(incoming, { marks: mine, overlaps, words, householdOf })
+    const ground = awaitingOf(incoming, { marks: mine, overlaps, words: wordsOn.get(incoming.id) ?? [], householdOf, isThing, elder })
       .filter((a) => myHouses.has(a.who))
       .flatMap((a) => a.ground)
       .sort()
@@ -599,9 +679,84 @@ function stanceCandidateOf(row) {
 // that answered `[]` instead would tell a resident nothing awaits their word
 // while a sketch sat on their ground, which is the exact failure the-late-welcome
 // exists to prevent.
+//
+// ── THE SLOW HALF IS KEPT UNTIL ITS INPUTS MOVE (POS-1057) ───────────────────
+//
+// Darko, 2026-11-17 09:44 EST: "instead of cell by cell, could we just sacrifice big O space instead of time by having
+// everything precomputed? like each settlement it's very clear which marks are new". Every doorstep read this whole world
+// again: canon's marks copied, every locked claim fetched with its geometry (732 KB a read on 2026-11-17), every footprint
+// rasterized. A bulk /doorsteps page did it 25 times.
+//
+// What is kept, per office thread, in memory: canon's mark objects, the first-laid instants and claim chains, and each
+// canon mark's footprint record. The marks' rectangles and ages hang off those same objects (`RECTS` below,
+// town-stance.mjs § elderByFirstLaid), so keeping the objects keeps those too.
+//
+// What it is keyed on, so a kept answer is never an old one:
+//   - the published state object (one per blessed commit: world-branches.mjs § readJsonAtRef);
+//   - the ids of the live claims, which with canon's ids are the slugs the first-laid read names;
+//   - LOCKED_PRINT, read from the store on EVERY call: how many locked claims there are, the newest decision, and the sum
+//     of their row versions (`xmin`, which Postgres moves on every write to a row). So a claim locked outside a
+//     settlement moves it (19 of 183 locks from 11-10 to 11-17 were), and so does a locked row changed in place.
+//
+// What is never kept: the live claims (the-late-welcome needs each read's own) and the stance words.
+//
+// A store, or a test's stub, that cannot answer LOCKED_PRINT gets no memo: the read builds everything, as it always did.
+const LOCKED_PRINT = `
+  SELECT count(*)::int AS n,
+         max(decided_at) AS newest,
+         sum(xmin::text::bigint)::text AS writes
+    FROM claims
+   WHERE status = 'locked'`;
+
+async function lockedPrint(env) {
+  const r = await stanceQuery(LOCKED_PRINT, [], env);
+  const row = r?.rows?.length === 1 ? r.rows[0] : null;
+  if (!row || !Number.isInteger(row.n) || (row.n > 0 && (row.writes === null || row.writes === undefined))) return null;
+  const newest = row.newest instanceof Date ? row.newest.toISOString() : String(row.newest ?? "");
+  return `${row.n}|${newest}|${row.writes ?? ""}`;
+}
+
+const KEPT = new Map(); // repo → { built, loading }, each { state, liveKey, print, … }
+const RECTS = new WeakMap(); // the engine's geometry module → (a mark object → its rectangle); read in stanceInbox
+/** Tests only: forget the kept stance world. */
+export function __forgetStanceWorldForTest() { KEPT.clear(); }
+
+/** The slow half, built: canon's marks as every reader sees them (published, and frozen, since reads share them), and the locked claims folded. */
+async function buildStanceWorld({ state, liveKey, print, ids, env }) {
+  const laid = await stanceQuery(FIRST_LAID_SELECT, [ids], env);
+  if (laid.unreachable) return { unreachable: laid.unreachable };
+  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
+  const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
+  for (const r of laid.rows ?? []) {
+    if (!r?.slug) continue;
+    const id = String(r.slug);
+    if (!chainOf.has(id)) chainOf.set(id, []);
+    chainOf.get(id).push({ id: r.id, geometry: r.geometry ?? null, decided_at: r.decided_at ?? null });
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (!firstLaid.has(id) || at < firstLaid.get(id)) { firstLaid.set(id, at); originOf.set(id, r.id); }
+  }
+  const canon = (state?.marks ?? []).filter((m) => m?.id).map((m) => Object.freeze({ ...m, published: true }));
+  return { state, liveKey, print, canon, isCanon: new WeakSet(canon), firstLaid, originOf, chainOf,
+    wholeMark: elderByFirstLaid(firstLaid), canonRecords: new WeakMap() };
+}
+
+/** The slow half for this read: the kept one when its three keys all stand, else a build, shared by the reads that arrive while it runs. */
+function stanceWorldFor(repo, want) {
+  if (want.print === null) return buildStanceWorld(want);   // nothing says the locked claims stood still, so nothing is kept
+  const is = (k) => Boolean(k) && k.state === want.state && k.liveKey === want.liveKey && k.print === want.print;
+  const slot = KEPT.get(repo) ?? {};
+  if (is(slot.built)) return slot.built;
+  if (is(slot.loading)) return slot.loading.promise;
+  const loading = { state: want.state, liveKey: want.liveKey, print: want.print, promise: null };
+  const settle = (built) => { if (KEPT.get(repo)?.loading === loading) KEPT.set(repo, built && !built.unreachable ? { built } : { built: slot.built }); };
+  loading.promise = buildStanceWorld(want).then((built) => { settle(built); return built; }, (e) => { settle(null); throw e; });
+  KEPT.set(repo, { built: slot.built, loading });
+  return loading.promise;
+}
+
 export async function worldForStances(repo, { dbPath: _dbPath = null, env = process.env } = {}) {
   const state = publishedState(repo).state;
-  const canon = state?.marks ?? [];
   // The fold's own handle → household map (WORLD/households.json, carried into
   // the state since world#150). Stances group by HOUSEHOLD (POS-361, Q6); a
   // handle the map does not name is its own household.
@@ -614,13 +769,94 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
     .map(stanceCandidateOf)
     .filter((m) => m && m.at && m.extent);
 
+  // THE SLOW HALF (POS-1057, the header above): kept while the published state, the live ids and the locked claims stand.
+  // The slugs the first-laid read names are the live claims' and canon's, in the order the marks below take.
+  const ids = [...new Set([...live.map((m) => String(m.id)), ...(state?.marks ?? []).filter((m) => m?.id).map((m) => String(m.id))])];
+  const print = state && typeof state === "object" ? await lockedPrint(env) : null;
+  const kept = await stanceWorldFor(repo, { state, liveKey: live.map((m) => m.id).join("\n"), print, ids, env });
+  if (kept.unreachable) return { unreachable: kept.unreachable };
+
   // Canon wins an id collision: a drained draft is in both, and the published
   // copy is the one everybody else can see.
   const byId = new Map();
   for (const m of live) byId.set(m.id, m);
-  for (const m of canon) if (m?.id) byId.set(m.id, { ...m, published: true });
-  return { marks: [...byId.values()], householdOf };
+  for (const m of kept.canon) byId.set(m.id, m);
+  const marks = [...byId.values()];
+
+  // SENIORITY IS THE FIRST-LAID DATE (postmark#4450; POS-449, "an amend does not
+  // make an elder mark young"). Read here, where the claims are already read,
+  // and handed to `awaitingOf` only as a comparison, so no date joins the
+  // candidate rows or anything a tier prints. `stance_reader` may read `claims`
+  // and nothing else (023; falsifier-draft-privacy § the stance carve), so the
+  // join `firstClaimedBySlug` makes to `marks` is not open here. The first-laid
+  // instant is the earliest claim on the slug that STOOD (Wright, 2026-11-05 on
+  // office#924: "a claim that never stood never laid the mark"), which is a
+  // `locked` one: a draft or pending claim has not cleared, a refused one never
+  // stood, and a retracted one was withdrawn while pending. Each is dated as
+  // `firstClaimedBySlug` dates one (mark-render.mjs § firstClaimInstant): its
+  // record date, else its submitted_at. A slug with no locked claim (a draft
+  // not yet cleared) keeps its own date, as before.
+  // The read and its fold are `buildStanceWorld`'s, above.
+  const { firstLaid, originOf, chainOf } = kept;
+  const { footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  // AND ON THE CELLS TWO MARKS SHARE (POS-571). The fold reads seniority cell by
+  // cell wherever a mark's footprints say which of its cells are new (world
+  // consent.mjs § seniorAtContact: "an expansion is a newcomer on its new
+  // cells"), so the door asks the same blessed engine the same question, of the
+  // same claims it already reads: the footprints from the earliest locked claim
+  // on, through the canon shape the door is judging (`mark-render.mjs §
+  // footprintsThroughShape`), so an amend locked but not yet crossed neither drops
+  // the history canon's fold read nor adds what it has not (P3). They and the
+  // instants stay in this closure: `elder` hands `awaitingOf` a yes or no, and
+  // no date or footprint joins a candidate. An engine that cannot answer per
+  // cell (one older than the rule, or one that cannot be read) leaves the
+  // whole-mark order, which is what its own fold reads too.
+  let firstCoverOrder = null;
+  try { firstCoverOrder = (await importEngineAt(repo, "consent.mjs")).firstCoverOrder ?? null; } catch { firstCoverOrder = null; }
+  const records = new Map();
+  const recordOf = (m) => {
+    const id = String(m?.id ?? "");
+    if (records.has(id)) return records.get(id);
+    // a canon mark's record is built once for the kept world; every other mark's (a live claim's) for this read only
+    const canonMark = m !== null && typeof m === "object" && kept.isCanon.has(m);
+    let rec = canonMark ? kept.canonRecords.get(m) : undefined;
+    if (!rec) {
+      const at = firstLaid.get(id);
+      const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
+      const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
+      rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
+        date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
+      if (canonMark) kept.canonRecords.set(m, rec);
+    }
+    records.set(id, rec);
+    return rec;
+  };
+  const elder = elderByFirstCover({ firstCoverOrder, recordOf, wholeMark: kept.wholeMark });
+
+  // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
+  // own test, the same one world.mjs uses for an act's anchor (held.mjs §
+  // isThingMark).
+  const [{ isThingMark }, { markClassOf }, { classExtendsOf }] = await Promise.all([
+    import("./held.mjs"), import("./world-grants.mjs"), import("./world-classes.mjs")]);
+  const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+  const isThing = (m) => isThingMark(m, thingOpts);
+
+  return { marks, householdOf, elder, isThing };
 }
+
+// The first-laid read, on the one table `stance_reader` holds. Six columns,
+// none of them a body, only claims that stood, and its rows never leave
+// `worldForStances`. The id, the geometry and the decision instant are the
+// footprints' (POS-571): when each locked version took effect, and where.
+const FIRST_LAID_SELECT = `
+  SELECT slug,
+         id,
+         data ->> 'date' AS laid_date,
+         submitted_at,
+         decided_at,
+         geometry
+    FROM claims
+   WHERE slug = ANY($1) AND status = 'locked'`;
 
 // ── A STANCE OUTLIVES THE WINDOW IT WAS SPOKEN IN (postmark#2454, 2026-09-04) ──
 //
@@ -639,12 +875,31 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
 // read moves to the acts record (G2); until then the mirror + the photographs
 // ARE the record on 1.0.
 const PHOTO_CACHE = new Map(); // path → { key, rows }
+const PHOTO_NAMES = new Map(); // STATE/log's path → { stamp: the directory's mtime, names: its photographs }
+const PHOTO_SETTLE_MS = 2000;
 function photographStanceRows(worldClone) {
   const dir = join(worldClone, "STATE", "log");
   if (!existsSync(dir)) return [];
   const out = [];
+  // THE LISTING IS KEPT WHILE THE DIRECTORY STANDS (POS-1057). Every stance read listed this directory again (thousands of
+  // entries on prod; a tenth of a bulk doorstep page's CPU on 2026-11-17). A directory's own mtime moves when an entry is
+  // added, removed or renamed, so the names are kept on it; a photograph rewritten in place moves no directory, and is
+  // caught as before by its own size and mtime below.
+  //
+  // A listing taken within PHOTO_SETTLE_MS of the directory's last change is used once and not kept: a file system stamps
+  // mtimes on a coarse clock, so a second file written in the same tick as the first would leave the mtime where the
+  // listing found it, and a kept listing would never see that file (a drained stance missing from every read, #2454).
   let names;
-  try { names = readdirSync(dir).filter((n) => /^\d+\.journal\.jsonl$/.test(n)); } catch { return []; }
+  try {
+    const stamp = statSync(dir).mtimeMs;
+    const listed = PHOTO_NAMES.get(dir);
+    if (listed && listed.stamp === stamp) names = listed.names;
+    else {
+      const at = Date.now();
+      names = readdirSync(dir).filter((n) => /^\d+\.journal\.jsonl$/.test(n));
+      if (at - stamp > PHOTO_SETTLE_MS) PHOTO_NAMES.set(dir, { stamp, names }); else PHOTO_NAMES.delete(dir);
+    }
+  } catch { return []; }
   for (const name of names) {
     const path = join(dir, name);
     let st; try { st = statSync(path); } catch { continue; }
@@ -742,9 +997,9 @@ function stanceRowFromAct(a) {
  * beside it, merged by the twin key. Empty (never a throw) when neither can be
  * read.
  *
- * ASYNC as of this change, because the register is. There is exactly one caller
- * (`stanceInbox`, already async) and it awaits — a second synchronous copy of
- * this read is how the two would come to disagree about who is standing.
+ * ASYNC because the register is. Every caller awaits it (the stance inbox, the
+ * declare doors, the settlement and the town's reads) — a second synchronous
+ * copy of this read is how the two would come to disagree about who is standing.
  *
  * ── THE SQLITE ARM IS GONE (G1 / POS-156, 2026-09-22) ──────────────────────
  *
@@ -813,7 +1068,18 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   if (!mineHandles.size) return { candidates: [], standing: [], mine: [] };
   const geom = await stanceGeometry(repo);
   if (!geom) return { candidates: [], standing: [], mine: [], unavailable: "the world's own geometry could not be read — overlap is the engine's answer, never this door's" };
-  const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
+  // ONE RECTANGLE PER MARK (POS-1057): the engine's own `rect`, asked once of each mark and kept beside the mark object, where
+  // every pair used to ask it again of both sides. Kept per engine module, so canon's marks (the same objects from read to
+  // read while `worldForStances` keeps them) are asked once, and a live claim's fresh object is asked once a read.
+  let rects = RECTS.get(geom);
+  if (!rects) RECTS.set(geom, rects = new WeakMap());
+  const rectOf = (m) => {
+    if (m === null || typeof m !== "object") return geom.rect(m);
+    let r = rects.get(m);
+    if (r === undefined) rects.set(m, r = geom.rect(m));
+    return r;
+  };
+  const overlaps = (a, b) => geom.overlapArea(rectOf(a), rectOf(b)) > 0;
 
   // THE READ MAY BE UNREACHABLE, AND THAT IS SAID RATHER THAN ROUNDED TO ZERO.
   // `worldForStances` has no 1.0 arm to fall back on since POS-195; an office
@@ -836,7 +1102,8 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   // pass runs once without words to find them, and the versions of those marks
   // decide which words still stand. Unreachable is `unavailable`, never "every
   // word stands": a stale word passed off as current would hide an amendment.
-  const open = candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses });
+  const { isThing, elder } = world;
+  const open = candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, isThing, elder });
   const read = await readVersions(open.map((c) => c.mark), versionDeps);
   if (read.unreachable) return { candidates: [], standing: [], mine: [], unavailable: read.unreachable };
   const words = standingStances(rows, { versions: read.versions });
@@ -845,11 +1112,18 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   // WHOSE GROUND THE NUMBER COUNTED, now that it is the house's: a resident's
   // own only while every mark counted is theirs, else the household's.
   const scope = mine.every((m) => mineHandles.has(m.by)) ? stancesGround(mineHandles) : "household";
-  return { candidates: candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, words }), standing, mine: mine.map((m) => m.id), scope,
+  // THE SECOND PASS READS ONLY WHAT THE FIRST FOUND (POS-1057). A word can only take a mark off the list or shorten its ground,
+  // never add one: the pass above ran with no words, so every candidate with words is among `open`. Weighing the whole world a
+  // second time gave the same list at twice the cost.
+  const openIds = new Set(open.map((c) => c.mark));
+  const stillOpen = all.filter((m) => openIds.has(m?.id));
+  return { candidates: candidatesFrom({ mine, all: stillOpen, overlaps, householdOf, households: myHouses, words, isThing, elder }), standing, mine: mine.map((m) => m.id), scope,
     // Carried for the set-down group (`stanceShadow`'s `setDowns`), which needs
     // the same world and the same stance rows — never a second read of either.
-    // Nothing renders these two keys; the shadow names every field it answers.
-    marks: all, stanceRows: rows,
+    // Nothing renders these keys; the shadow names every field it answers.
+    // `householdOf` and `groundHolders` (the handles that author the ground this
+    // read counted) let `stanceCountsForHandles` serve every resident of one house from this one pass.
+    marks: all, stanceRows: rows, householdOf, groundHolders: [...new Set(mine.map((m) => m.by))],
     // The teaching block's one mark body, taken off the set this read already
     // holds — never a second read of the world for one sentence.
     lateWelcome: all.find((m) => m.id === LATE_WELCOME_MARK)?.body?.trim() || null };
@@ -884,6 +1158,25 @@ export const stancesGround = (handles) => {
 // ── tier 1 + 2 · what rides the bare read ────────────────────────────────────
 
 /**
+ * POS-812 (RULED, Darko 2026-10-28: "new ground, new edge"). A stance is a word on an edge, the
+ * pair of a thing and a ground. A thing on new ground is a new edge: it awaits that ground's
+ * holder, and a welcome spoken on the old ground stays with the old ground. Said in plain words
+ * on the world door's reads a stance shows in (the bare read's ambient block and the stance
+ * shadow); NOT on the shared fold, and NOT on household { read: "stances" }: the doorstep bundle's
+ * stances segment IS that read, and its bytes are held still (test/foyer-shrink F7c5,
+ * test/doorstep-stances). Putting the words there moves the morning page: Darko's call.
+ */
+export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
+// the reads that carry it are the ground holder's own, so the word awaited is theirs
+export const edgeLine = (c) => { const g = Array.isArray(c?.on_your_ground) ? c.on_your_ground[0] : c?.on_your_ground; return g ? `new ground, new edge: awaiting your word here, on ${g}` : null; };
+// `row` (the candidate, or its one-line form) carries the edge line `c` earns, when it earns one.
+const withEdge = (c, row = c) => { const edge = edgeLine(c); return edge ? { ...row, edge } : row; };
+export function withEdgeWords(answer) {
+  if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
+  return { ...answer, awaiting: answer.awaiting.map((c) => withEdge(c)), edge: EDGE_LAW };
+}
+
+/**
  * One candidate, as the ambient block shows it: one line each.
  *
  * ── `says` IS OMITTED WHEN THERE IS NO BODY TO SAY (POS-195, 2026-09-22) ────
@@ -915,8 +1208,8 @@ const ambientLine = (c) => ({
  *    on your own parcel, it expands to a compact ambient block (first ~3
  *    candidates, newest first)"
  *
- * So the integer is unconditional and the detail is not. `onOwnParcel` is the
- * caller's containment spine answering whether they are standing on their own
+ * So the integer is unconditional and the detail is not. The `spine` option is the
+ * caller's containment chain, which answers whether they are standing on their own
  * ground — ambient detail belongs where you live, and a market read never grows
  * it however many candidates are waiting.
  *
@@ -947,7 +1240,8 @@ export async function stancesBlock(repo, key, { spine = [], dbPath = null } = {}
     return {
       stances_awaiting: n,
       stances_awaiting_ground: ground,
-      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map(ambientLine),
+      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map((c) => withEdge(c, ambientLine(c))),
+      edge: EDGE_LAW,
       ...(n > AMBIENT_CAP ? { more: n - AMBIENT_CAP } : {}),
       // ⚑ TRUED 2026-09-02 (#2392). This sentence taught the WORLD door for
       // both halves, and BOTH were dead: the grant hangs on the `household`
@@ -1100,6 +1394,52 @@ export async function stancesForHandles(handles, { cursor = null, limit = PAGE_S
 }
 
 /**
+ * EVERY RESIDENT'S OWN WAITING-STANCE COUNT, ONE PASS PER HOUSE (POS-1084).
+ *
+ * `stanceInbox` weighs the ground of the caller's whole world-household (`myHouses`), so every resident of one
+ * world-household gets the same candidate list: their `stances_awaiting` is the same number. Only the ground label
+ * differs (`scope`: "resident:<handle>" while every mark the pass counted is theirs, else "household"). So the
+ * house is asked once, for its first resident, and each member's count and label are taken from that one pass,
+ * the label by the very rule `stanceInbox` applies to a one-handle key. A house of ten costs one pass, not ten.
+ *
+ * Answers a Map, handle → `{ stances_awaiting, stances_awaiting_ground }`, or `{ unavailable }` and NO count (an
+ * unreadable inbox is unknown, never 0), the words `stancesForHandles` uses. A pass that is unavailable leaves
+ * each remaining resident to ask for themselves (its cause may be one house's), so a failure costs what it did.
+ * Never throws. `inbox` stands in for `stanceInbox` in a falsifier.
+ */
+export async function stanceCountsForHandles(handles, { repo = null, dbPath = null, inbox: inboxOf = stanceInbox } = {}) {
+  const out = new Map();
+  const todo = [...new Set([...(handles ?? [])].filter(Boolean))];
+  while (todo.length) {
+    const first = todo.shift();
+    let inbox;
+    try {
+      inbox = await inboxOf(repo ?? WORLD_CLONE, { handles: new Set([first]) }, { dbPath });
+    } catch (e) {
+      out.set(first, { unavailable: `the consent inbox could not be read (${plainReason(e, "record", "the consent inbox")})` });
+      continue;
+    }
+    if (inbox.unavailable || !Array.isArray(inbox.candidates)) {
+      out.set(first, { unavailable: inbox.unavailable ?? "the consent inbox answered no count for this resident — unknown, not zero" });
+      continue;
+    }
+    const householdOf = inbox.householdOf ?? ((h) => h);
+    const house = houseOf(householdOf, first);
+    const holders = inbox.groundHolders ?? [];
+    const stances_awaiting = inbox.candidates.length;
+    // the one-handle key's own rule: the ground is theirs only while every mark counted is theirs (no marks: theirs)
+    const scopeOf = (h) => inbox.scope !== undefined && h === first ? inbox.scope : (holders.every((by) => by === h) ? stancesGround([h]) : "household");
+    out.set(first, { stances_awaiting, stances_awaiting_ground: scopeOf(first) });
+    for (let i = todo.length - 1; i >= 0; i--) {
+      if (houseOf(householdOf, todo[i]) !== house) continue;
+      const [member] = todo.splice(i, 1);
+      out.set(member, { stances_awaiting, stances_awaiting_ground: scopeOf(member) });
+    }
+  }
+  return out;
+}
+
+/**
  * A READ NEVER PERFORMS.
  *
  * `read:` is `do:`'s sibling, not a second way to act — so an envelope carrying
@@ -1125,14 +1465,6 @@ export function readNeverPerforms(fields) {
 
 // ── the write ────────────────────────────────────────────────────────────────
 
-/**
- * declare-stance-on — one row in the single log.
- *
- * The door RECORDS AND EXPOSES; it does not enforce. Per the-deferred-gate,
- * "placement, stance, and refusal are the crossing's work" — so nothing here
- * consults a fold, blocks a mark, or changes what anybody's world looks like.
- * It writes the word down with its witnesses and gets out of the way.
- */
 // ── THE OWNER'S WORD (POS-688; Darko 2026-10-19 16:39–16:45, D-O1..D-O6 at 17:14) ──
 //
 // "The owner's word on their thing, while someone outside the house holds it or
@@ -1195,14 +1527,7 @@ async function answerWord({ on, stance, by, key, own, dbPath, witnessStamp, cros
         : stance === "welcomed" ? `the owner's house gives ${on} to ${act.by} to keep`
         : `the owner's house lends ${on} to ${act.by}`,
     };
-    try {
-      row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-    } catch (err) {
-      if (err?.name === "PenUnreachableError")
-        throw bounce(503, err.message,
-          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-      throw err;
-    }
+    row = await writeStanceAct(entry, "your stance is safe to speak again");
   }
   return {
     on, stance, by, answers: act.kind, act: answered,
@@ -1351,15 +1676,7 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
       ? `the town opposes it, citing ${cites} — the crossing returns it when it judges, and an opposed mark with open stakes stands until they unwind`
       : `the town has looked and says neutral — it clears "awaiting the town" and confers nothing${cites ? ` (citing ${cites})` : ""}`,
   };
-  let row;
-  try {
-    row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-  } catch (err) {
-    if (err?.name === "PenUnreachableError")
-      throw bounce(503, err.message,
-        "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — the town's word is safe to speak again");
-    throw err;
-  }
+  const row = await writeStanceAct(entry, "the town's word is safe to speak again");
   return {
     on, stance, as: AS_TOWN, by: TOWN_SPEAKER, household: TOWN, hand,
     version, law, law_sha: lawSha.sha, law_sha_from: lawSha.from,
@@ -1370,6 +1687,14 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
   };
 }
 
+/**
+ * declare-stance-on — one row in the single log.
+ *
+ * The door RECORDS AND EXPOSES; it does not enforce. Per the-deferred-gate,
+ * "placement, stance, and refusal are the crossing's work" — so nothing here
+ * consults a fold, blocks a mark, or changes what anybody's world looks like.
+ * It writes the word down with its witnesses and gets out of the way.
+ */
 export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {}, shared = null } = {}) {
   // THE WORLD-FREEZE GATE (the engine cutover, 2026-08-24). A stance is a
   // ground act — the freeze's own bounce names it in the list — so this door
@@ -1472,7 +1797,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
       `${target.by} is of your own household, and a house does not consent to its own declaration — a stance is the word of the ground it landed on`);
   const mine = all.filter((m) => myHouses.has(houseOf(householdOf, m.by)) && m.at && m.extent);
   const mineById = new Map(mine.map((m) => [m.id, m]));
-  const ground = awaitingOf(target, { marks: mine, overlaps, householdOf })
+  const ground = awaitingOf(target, { marks: mine, overlaps, householdOf, isThing: world.isThing, elder: world.elder })
     .filter((a) => myHouses.has(a.who)).flatMap((a) => a.ground).sort().map((id) => mineById.get(id));
   if (!ground.length)
     throw bounce(403, `"${on}" does not stand on your ground`,
@@ -1497,22 +1822,18 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   {
     // THE SUPERSEDED COURTESY READS THE WHOLE RECORD, NOT ONE STORE.
     //
-    // This computed `prior` from `readJournal(db)` alone — the live sqlite
+    // This once computed `prior` from `readJournal(db)` alone — the live sqlite
     // journal — while the read side had already moved to photographs ∪ journal
-    // (#2454) and now to the register beside them. So a resident re-declaring a
-    // stance whose first word had been drained got a receipt saying nothing was
-    // superseded, which is the #2454 sentence in the smallest possible type: the
-    // town knew, and the door told them it did not.
+    // (#2454). So a resident re-declaring a stance whose first word had been
+    // drained got a receipt saying nothing was superseded, which is the #2454
+    // sentence in the smallest possible type: the town knew, and the door told
+    // them it did not. (The sqlite stance row is gone with the journal INSERT,
+    // G1 / POS-156, and so is the reaper that took those rows once their twin
+    // was confirmed in `acts`.)
     //
-    // AND MY OWN REAPER ACCELERATES IT. Once a stance row's twin is confirmed in
-    // `acts` the reaper takes the sqlite row, so this window shrinks from "until
-    // the next drain" to "until the next reap". A courtesy field decaying faster
-    // because of a fix I shipped in the same lane is not a courtesy, it is a
-    // regression I would have introduced and then not been able to see — nothing
-    // asserts `superseded`, which is why it took my reviewer to find it.
-    //
-    // `stanceRows` is the one derivation every tier reads from; this now shares
-    // it rather than keeping a fourth opinion about what has been said.
+    // `stanceRows` is the one derivation every tier reads from — the drained
+    // photographs and the register; this shares it rather than keeping a
+    // fourth opinion about what has been said.
     const prior = standingStances(shared ? shared.rows : await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
     const entry = {
       crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
@@ -1526,30 +1847,14 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
           : "your ground opposes it — the crossing reads your veto when it judges",
     };
     // ── LANE ONE OF THE PEN FLIP (W2_PEN=stance; Keemin ruled the shape
-    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror). The design's
+    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror (D3 went with
+    // G1 / POS-156)). The design's
     // own pick for first: "the one door that has never had a second pen to
-    // disagree with." Flipped, the record is Postgres `acts`, committed and
-    // awaited BEFORE anything else; sqlite gets the reverse-mirror copy after.
-    // Unreachable Postgres = the ruled refusal, and nothing was written.
-    // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ─────────────────────
-    //
-    // The unflipped arm was `appendJournal(db, entry)` — a sqlite row written
-    // here and a Postgres copy queued behind it. The sqlite row is gone, so
-    // that call awaits the record and throws exactly as the flipped one does,
-    // and this door's refusal is one sentence for both. It names no flag:
-    // `W2_PEN` decides which function writes, not whether the record is the
-    // record.
-    let row;
-    try {
-      row = laneFlipped("stance")
-        ? await appendActFlipped(null, entry)
-        : await appendJournal(null, entry);
-    } catch (err) {
-      if (err?.name === "PenUnreachableError")
-        throw bounce(503, err.message,
-          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-      throw err;
-    }
+    // disagree with." The record is Postgres `acts`, committed and awaited
+    // BEFORE anything else, and unreachable Postgres is the ruled refusal with
+    // nothing written. Both arms of the flip refuse alike now (G1 / POS-156,
+    // RULING 3): `writeStanceAct` is that one write and that one refusal.
+    const row = await writeStanceAct(entry, "your stance is safe to speak again");
     return {
       on, stance, by,
       on_your_ground: ground.map((g) => g.id),

@@ -13,7 +13,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
+import { overlayRegistry, overlayCard, overlayHomeImages, homeImagesOf, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
@@ -40,7 +41,7 @@ const KEY = "absent-test-key";
 // steps read the town's own quest tools from it, and without one they never
 // reach the index rows they read (the quest registry, progress and standing).
 const TOWN = townClone();
-let store = null, skip = false;
+let store = null, skip = false, fixtureDay = null;
 const offices = {};
 
 function office(name, env) {
@@ -71,7 +72,8 @@ before(async () => {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
     const put = (...v) => putValues(db, "meta", v);
     put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-    put("quest_day", townDay());
+    fixtureDay = townDay();
+    put("quest_day", fixtureDay);
     putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
     putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   }
@@ -120,7 +122,13 @@ function firstDiff(a, b) {
 // args: { full: true } asks for, so that ask is held to the record's answer for
 // the bare ask (RECORDED_AS). The read's line on the bare menu says so.
 const CHANGED = {
-  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+  // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
+  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings"]'],
+    // WLD-28: the manifest's reads list gains the household's settings read (GET /households/{slug}/settings), after /household
+    ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="'],
+    // and it names the read among the keyed ones: it answers 401 without a key (test/manifest-keyed-reads.test.mjs)
+    ['"/world2/my-marks"]', '"/world2/my-marks","/households/{slug}/settings"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
@@ -139,9 +147,42 @@ CHANGED["MCP household {}"].push(
     "taken into the office's keeping the moment it conforms, and it sails on the next ferry crossing."],
   [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
     `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
-  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
+  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`],
+  // AND THE HOUSEHOLD'S SETTINGS READ (WLD-28): `settings` joins the reads after blocks; nothing else in the answer moves.
+  [`"blocks":"your house's mail blocks, private to it"`, `"blocks":"your house's mail blocks, private to it","settings":"likeness and Hearth, read-only"`]);
+// AND THE HOUSEHOLD'S REFUSALS READ (POS-1003): `refusals` joins the reads after settings; nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"settings":"likeness and Hearth, read-only"`, `"settings":"likeness and Hearth, read-only","refusals":"acts refused to your house, 90 days"`]);
+// AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
+CHANGED["MCP household {}"].push(
+  [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
+    `{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}},{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`]);
+// AND A HOUSEHOLD NOTES A LETTER PRIVATELY (POS-730, Darko 2026-11-06 "good to go"): the act joins the index at the roster's end, after buy-parcel-room.
+CHANGED["MCP household {}"].push(
+  [`{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`,
+    `{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note","teaches":"Note a letter.","fields":{"letter":{"required":true},"state":{"required":true},"on":{}}}]`]);
+// AND A BALLOT STAKE PREVIEWS (POS-502, Wright 2026-11-09 23:48Z): stake-vote takes preview, the dry run every other
+// stamp-moving door has, and the index lists it among the act's fields. Nothing else in the row moves.
+CHANGED["MCP household {}"].push(
+  [`"candidate":{"required":true},"stamps":{"required":true}}}`,
+    `"candidate":{"required":true},"stamps":{"required":true},"preview":{}}}`]);
+// AND THE RSVP CARD TEACHES ITS REST CALL (POS-911, Darko 2026-11-05 21:18 EST, "Raise to 9,088 (rec)"): the card's last
+// sentence names the public address, which the recorded answer does not have. Nothing else in the row moves.
+CHANGED["MCP household {}"].push(
+  ["it needs a public https endpoint you run.",
+    "it needs a public https endpoint you run. Over REST: POST https://postmark.town/api/household with do: rsvp and args: { event }."]);
+// AND THE HEARTH'S PUBLIC READS (POS-1027): closer and happened name a house (anyone's public record, your own whole read without one), the menu gains day and
+// hearth, and send takes resend, the bounced letter it replaces. Nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"closer":"who your house writes most, this fortnight"`, `"closer":"who a house writes most"`],
+  [`"happened":"what your house did, newest first","waiting"`, `"happened":"what a house did, newest first","day":"a resident's day","hearth":"a house's Hearth","waiting"`],
+  [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
+// POS-1100 / POS-1102: the stakes read now lists everything the house has stamps behind (`allocation`), and limit/offset page both of its parts.
+CHANGED["MCP household {}"].push(
+  ["your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident",
+    "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes), and the escrow behind your own published marks, the ones the next settlement would sweep first; limit/offset page both, 20 a page, next_offset walks on; bare it is your whole house, handle: narrows"]);
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 // AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
@@ -150,6 +191,15 @@ CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap
 // two recorded answers that carry the budget, and nothing else in them moves.
 for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
   (CHANGED[label] ??= []).push([`"world_unstake","world_walk"]`, `"world_unstake","world_walk","world_declare_stance"]`]);
+// AND THE DOOR'S MENU LOSES THREE ACTS (CORE-114, Wright 2026-11-17 00:26:57Z, fitting POS-958's proposal; Darko sees it before merge):
+// `begin` and `declare` (offered by the berth's and the visitor's `next`) and `buy-parcel-room` (offered in the glance's first_steps) are
+// off the connector's index. The record's two arrival cards open the list, and the buy-parcel-room card is the one POS-762/e's
+// substitution above puts back before letter-note's; each goes, and nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"acts":[{"act":"begin","teaches":"Declare your residency from your berth — your card, in your own words; your human co-signs with one click.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"declare","teaches":"Found your household at the door — name the house and its first resident, and the office admits you there and then.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"add-resident"`,
+    `"acts":[{"act":"add-resident"`],
+  [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
+    `,{"act":"letter-note"`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };
@@ -160,6 +210,32 @@ const RECORDED_AS = {
 // the answer must name a crossing between the clock's reading before the ask and
 // its reading after, and the record is held to that number; nothing else moves.
 const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
+// THE PINNED TOWN'S INPUTS, PUT BACK ON THE EXPECTED SIDE (POS-896). Three things in the recorded answers are the pinned town's, not
+// the fixture's, and move when the pin does: the quest list (the town's quest-registry.json), the pot postings that have no pot
+// (this fixture's store holds no pot at all, so every bounty id in that file is one), and wright's published card (the two fields
+// `architecture` and `note` of WHITE_PAGES/wright/ADDRESS.md, which the office reads from the clone). Each is bound here to the
+// pristine FILE, parsed by helpers/pos896-fixtures.mjs, never to what the store or `read_resident` answers; every other byte of
+// the record stands and is compared as before. The substitutions above are applied first and are untouched.
+const pristine = (was) => {
+  if (!TOWN) return was;
+  // POS-857 (the town past the S158 seed pin): a row with `ends` is offered through that town day, inclusive, and the board
+  // drops it after; spelled here from the fixture's day (the `quest_day` put in before()), not through the town's board code.
+  const allQuests = JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+  const past = (q) => typeof q.ends === "string" && typeof fixtureDay === "string" && fixtureDay > q.ends;
+  const rawQuests = allQuests.filter((q) => !past(q));
+  // the doorstep's next steps offer the board's quests too, so a quest past its `ends` is no step in the expectation either
+  const gone = new Set(allQuests.filter(past).map((q) => q.id));
+  const dropSteps = (node) => Array.isArray(node) ? node.map(dropSteps)
+    : node && typeof node === "object" ? Object.fromEntries(Object.entries(node).map(([k, v]) =>
+      [k, k === "steps" && Array.isArray(v) ? v.filter((s) => !(s?.kind === "quest" && gone.has(s.id))).map(dropSteps) : dropSteps(v)]))
+    : node;
+  if (gone.size) { try { was = JSON.stringify(dropSteps(JSON.parse(was))); } catch { /* not JSON: nothing to drop */ } }
+  const card = readFileSync(join(TOWN, "WHITE_PAGES", "wright", "ADDRESS.md"), "utf8");
+  const fields = { architecture: frontMatterScalar(card, "architecture"), note: frontMatterScalar(card, "note") };
+  // and the card's `homeImages` are the image files under wright's HOME/ in the pinned town (POS-1031: wright-at-la-cave.jpg arrived after the recorded town)
+  const images = homeImagesOf("wright", readdirSync(join(TOWN, "WHITE_PAGES", "wright", "HOME")));
+  return overlayHomeImages(overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields }), { handle: "wright", images });
+};
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
 // `asked` is the town clock's crossing read just before the ask
 const same = (what, label, answer, asked = null) => {
@@ -180,6 +256,7 @@ const same = (what, label, answer, asked = null) => {
     clocked(rec).number = n;
     was = JSON.stringify(rec);
   }
+  was = pristine(was);
   if (got === was) return;
   const d = firstDiff(was, got);
   assert.fail(`${what}: the answers part at ${d?.at}
@@ -242,6 +319,13 @@ test("every index door answers as the unswitched office did: status, body and as
   for (const [door, headers] of REST) {
     const asked = currentCrossing();
     const b = await rest("absent", door, headers);
+    // POS-1086: a REST doorstep now carries `rev` (src/doorstep-rev.mjs), a key the recorded twin predates. Held to be a rev, then set aside; every other byte is still compared.
+    if (door.startsWith("/doorstep/") && b.status === 200) {
+      const body = JSON.parse(b.body);
+      assert.match(body.rev, /^[0-9a-f]{16}$/, `${door} carries its rev`);
+      delete body.rev;
+      b.body = JSON.stringify(body);
+    }
     const what = `${door}${headers ? " (keyed)" : ""}`;
     same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b, asked);
   }
@@ -257,4 +341,45 @@ test("every MCP index read answers as the unswitched office did", async (t) => {
     const b = await mcp("absent", tool, args);
     same(`${tool} ${JSON.stringify(args)}`, `MCP ${tool} ${JSON.stringify(args)}`, b);
   }
+});
+
+// ── THE DETECTORS (POS-896): an invented card, the pristine fields held fixed, one wrong answer per branch ────────────────────
+// The card here is invented (a made-up resident, a made-up house of text), never a real resident's. `pristine` binds exactly two
+// fields; these cases show that the binding reads the FILE, is exact about quoting, touches nothing else, and that a wrong answer is
+// named at its path against the unchanged expectation.
+const INV_CARD_FILE = [
+  "---", "handle: inv-resident", "architecture: a made-up substrate for a made-up mind", "note: 'it''s invented'", "kind: \"quoted: yes\"", "folded: >", "  not a scalar", "---", "# body", ""].join("\n");
+
+test("detector · the card's front matter is read by its own spelling: plain, single-quoted ('' is one '), double-quoted; a block scalar is refused by name", () => {
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "architecture"), "a made-up substrate for a made-up mind");
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "note"), "it's invented");
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "kind"), "quoted: yes");
+  assert.throws(() => frontMatterScalar(INV_CARD_FILE, "folded"), /not a one-line scalar/);
+  assert.throws(() => frontMatterScalar(INV_CARD_FILE, "absent"), /no "absent:" in the front matter/);
+});
+
+const INV_RECORD = { handle: "inv-resident", address: { data: { handle: "inv-resident", architecture: "the old text", note: "the old note", joined: "2026-01-01" }, body: "# body" }, other: { handle: "someone-else", address: { data: { architecture: "theirs", note: "theirs too" } } } };
+const INV_FIELDS = { architecture: frontMatterScalar(INV_CARD_FILE, "architecture"), note: frontMatterScalar(INV_CARD_FILE, "note") };
+const invWant = () => overlayCard(steady(INV_RECORD), { handle: "inv-resident", fields: INV_FIELDS });
+
+test("detector · the overlay binds the two named fields of the named resident's card to the file and touches nothing else", () => {
+  const want = JSON.parse(invWant());
+  assert.equal(want.address.data.architecture, "a made-up substrate for a made-up mind");
+  assert.equal(want.address.data.note, "it's invented");
+  assert.equal(want.address.data.joined, "2026-01-01", "a field it does not name stands");
+  assert.deepEqual(want.other, INV_RECORD.other, "another resident's card (and its same-named fields) stands");
+  assert.deepEqual(Object.keys(want.address.data), Object.keys(INV_RECORD.address.data), "keys and their order stand");
+  assert.throws(() => overlayCard(steady(INV_RECORD), { handle: "inv-resident", fields: { nonexistent: "x" } }), /has no "nonexistent"/);
+});
+
+test("detector · each wrong ANSWER is named at its path against the fixed expectation: the old text, a missing field, a changed neighbour, a moved key", () => {
+  const want = invWant();
+  const right = () => structuredClone(JSON.parse(want));
+  const parts = (mutate) => { const a = right(); mutate(a); return firstDiffPath(steady(a), want); };
+  assert.equal(firstDiffPath(steady(right()), want), null, "the control: the right answer equals the expectation");
+  assert.equal(parts((a) => { a.address.data.architecture = INV_RECORD.address.data.architecture; }), "$.address.data.architecture", "the record's old text, not the file's");
+  assert.equal(parts((a) => { a.address.data.note = ""; }), "$.address.data.note", "an emptied note");
+  assert.equal(parts((a) => { delete a.address.data.note; }), "$.address.data.note", "a missing field");
+  assert.equal(parts((a) => { a.address.data.joined = "2026-01-02"; }), "$.address.data.joined", "a changed neighbour");
+  assert.equal(parts((a) => { a.other.address.data.architecture = "mine"; }), "$.other.address.data.architecture", "another resident's card changed");
 });

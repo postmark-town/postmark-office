@@ -36,18 +36,23 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
+import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
+import { MODULES, collect, manifest } from "../tools/town-pins.mjs";
+import { startToolSocket, stopToolSockets } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-whole-"));
-after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
+const scratch = tempDir("postmark-whole-");
+after(() => { stopSealSockets(); stopToolSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const works = (shell) => spawnSync(shell, ["-c", "true"], { stdio: "ignore" }).status === 0;
 const SH = works("dash") ? "dash" : works("sh") ? "sh" : null;
 const skip = SH ? false : "no POSIX shell on this machine";
+// The crossings reach the seal stage, which needs the socket stand-in (POSIX only).
+const fskip = skip || sealSkip;
 const fwd = (p) => p.replace(/\\/g, "/");
 
 const LEDGER = "WHITE_PAGES/stamp-ledger.md";
@@ -57,32 +62,54 @@ const GIT_ENV = {
 };
 
 // ── the town's tools, stubbed to their shell-facing contract ────────────────
+// POS-994: the ferry, the verify and the quests run in the town-tool sandbox,
+// whose tools see PATH, HOME and TOWN_TZ only. So the stubs take their orders
+// from the environment where they have one (the tick runs them directly) and
+// from an orders file at a fixed path otherwise, which run() writes from the
+// same STUB_ values (the stand-in socket does not confine reads). __ORDERS__ is
+// that path, filled in per fixture.
+const ORDERS = `
+import { existsSync, readFileSync } from "node:fs";
+export const O = { ...process.env, ...(existsSync("__ORDERS__") ? JSON.parse(readFileSync("__ORDERS__", "utf8")) : {}) };
+`;
 const CALLS = `
 import { appendFileSync } from "node:fs";
-export const call = (name) => { if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, name + "\\n"); };
+import { O } from "./stub-orders.mjs";
+export const call = (name) => { if (O.STUB_CALLS) appendFileSync(O.STUB_CALLS, name + "\\n"); };
 `;
+// The ferry's commit message, as the client writes it from the stub's report.
+const FERRY_DATE = "2026-11-15";
+const FERRY_SUBJECT = `ferry: 1 delivered, 0 bounced (${FERRY_DATE})`;
 const APPEND = `
 import { appendFileSync } from "node:fs";
 export const append = (file, rows) => { for (const r of String(rows).split("|")) appendFileSync(file, r + "\\n"); };
 `;
 const TOWN_TOOLS = {
+  "tools/stub-orders.mjs": ORDERS,
   "tools/stub-calls.mjs": CALLS,
   "tools/stub-append.mjs": APPEND,
+  // POS-994: the verifier's public key is pinned with it, and the office verifies with the pinned one
+  "tools/stamp-pubkey.pem": "a stub public key\n",
+  // POS-994: the office-keep verify passes --registry, which the office's runner hands to the
+  // pinned registry-source (in stamp-verify's closure, as in the town's)
+  "tools/registry-source.mjs": `export async function registryFromArgv() { return { registry: null }; }\n`,
   "tools/stamp-verify.mjs": `
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import "./registry-source.mjs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("verify");
-const n = existsSync(process.env.STUB_VERIFY_COUNT) ? Number(readFileSync(process.env.STUB_VERIFY_COUNT, "utf8")) + 1 : 1;
-writeFileSync(process.env.STUB_VERIFY_COUNT, String(n));
-if (process.env.STUB_VERIFY_HANG === String(n)) {
-  writeFileSync(process.env.STUB_HANG_MARK, "hanging");
+const n = existsSync(O.STUB_VERIFY_COUNT) ? Number(readFileSync(O.STUB_VERIFY_COUNT, "utf8")) + 1 : 1;
+writeFileSync(O.STUB_VERIFY_COUNT, String(n));
+if (O.STUB_VERIFY_HANG === String(n)) {
+  writeFileSync(O.STUB_HANG_MARK, "hanging");
   await new Promise((r) => setTimeout(r, 8000));
 }
 const bad = readFileSync("${LEDGER}", "utf8").split("\\n").findIndex((l) => l.includes("RED"));
 // POS-341: STUB_OWED_UNTIL names the row that pays this crossing's mints; until
 // the ledger holds it, the town's own "behind the mail" sentence is printed, in
 // the town's own words and on stderr, as tools/stamp-verify.mjs prints it
-const owed = process.env.STUB_OWED_UNTIL && !readFileSync("${LEDGER}", "utf8").includes(process.env.STUB_OWED_UNTIL);
+const owed = O.STUB_OWED_UNTIL && !readFileSync("${LEDGER}", "utf8").includes(O.STUB_OWED_UNTIL);
 if (bad !== -1 || owed) {
   const problems = [];
   if (bad !== -1) problems.push("line " + (bad + 1) + ": RED");
@@ -90,7 +117,8 @@ if (bad !== -1 || owed) {
   console.error("✗ stamp-ledger verification FAILED:\\n" + problems.map((p) => "  - " + p).join("\\n"));
   process.exit(1);
 }
-console.log("✓ stamp-ledger verified");
+// POS-994: green, the office's runner (src/stamp-verify-pinned.mjs) asks the pinned verifier's library
+export function verifyStampLedger() { return { ok: true, lines: 1, minted: 0, notes: [] }; }
 `,
   "tools/stamp-mint.mjs": `
 import { call } from "./stub-calls.mjs";
@@ -98,44 +126,68 @@ import { append } from "./stub-append.mjs";
 call("mint " + process.argv.slice(2).filter((a) => a.startsWith("--") && a !== "--key").join(" "));
 if (process.env.STUB_APPEND) append("${LEDGER}", process.env.STUB_APPEND);
 `,
+  // POS-994: the ferry runs --no-git in the sandbox, as ferry.mjs does then: it
+  // moves the mail and writes its report, and the client commits and pushes.
   "tools/ferry.mjs": `
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("ferry");
-if (process.env.STUB_FERRY_DELIVER) {
+const a = process.argv;
+if (!a.includes("--no-git")) { console.error("the stub ferry was run with git"); process.exit(9); }
+const d = O.STUB_FERRY_DELIVER ? 1 : 0;
+if (d) {
   mkdirSync("WHITE_PAGES/inbox", { recursive: true });
-  writeFileSync("WHITE_PAGES/inbox/" + process.env.STUB_FERRY_DELIVER + ".md", "a delivered letter\\n");
-  execFileSync("git", ["add", "WHITE_PAGES/inbox"]);
-  execFileSync("git", ["commit", "-qm", "ferry: crossing"]);
-  execFileSync("git", ["push", "-q"]);
+  writeFileSync("WHITE_PAGES/inbox/" + O.STUB_FERRY_DELIVER + ".md", "a delivered letter\\n");
 }
+const report = a.includes("--report") ? a[a.indexOf("--report") + 1] : null;
+if (report) writeFileSync(report, JSON.stringify({ ran: true, crossing: 293, town_sha: null, date: "${FERRY_DATE}", delivered: d, bounced: 0, committed: false, pushed: false, files: [] }));
 `,
   "tools/quest-progress.mjs": `
 import { writeFileSync } from "node:fs";
 import { call } from "./stub-calls.mjs";
+import { O } from "./stub-orders.mjs";
 call("quests");
-if (process.env.STUB_QUESTS) writeFileSync("TOWN_BULLETIN/quests.md", process.env.STUB_QUESTS + "\\n");
-`,
-  "PROJECTS/the-town-seal/seal.mjs": `
-import { writeFileSync } from "node:fs";
-import { call } from "../../tools/stub-calls.mjs";
-call("seal");
-if (process.env.STUB_SEAL) writeFileSync("PROJECTS/the-town-seal/seal.json", JSON.stringify({ seal: process.env.STUB_SEAL }) + "\\n");
-`,
-  "PROJECTS/the-town-seal/verify.mjs": `
-import { call } from "../../tools/stub-calls.mjs";
-call("seal-verify");
-process.exit(Number(process.env.STUB_SEAL_VERIFY_EXIT || 0));
+if (O.STUB_QUESTS) writeFileSync("TOWN_BULLETIN/quests.md", O.STUB_QUESTS + "\\n");
 `,
   "TOWN_BULLETIN/quests.md": "quests at the founding\n",
   "PROJECTS/the-town-seal/seal.json": "{\"seal\":\"founding\"}\n",
   "PROJECTS/the-town-seal/the-town-seal.html": "<p>founding</p>\n",
+  // the seal's fourth input, sent to the sandbox with the other three (POS-988)
+  "WHITE_PAGES/mail-ledger.md": "the mail ledger at the founding\n",
 };
+
+// POS-988: the seal pair runs in the sandbox, which is sent these two files, the
+// seal and the mail ledger, and nothing else: no tools/stub-calls.mjs and no
+// environment. So the stubs stand alone, and take their orders from a control
+// file at a fixed path that run() writes from the same STUB_SEAL and
+// STUB_SEAL_VERIFY_EXIT as before (the stand-in socket does not confine reads).
+// The seal writes the HTML too, as the real one does: the sandbox answers with both.
+const sealStubs = (ctl) => ({
+  "PROJECTS/the-town-seal/seal.mjs": `
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const ctl = existsSync(${JSON.stringify(ctl)}) ? JSON.parse(readFileSync(${JSON.stringify(ctl)}, "utf8")) : {};
+if (ctl.calls) appendFileSync(ctl.calls, "seal\\n");
+if (ctl.env) writeFileSync(ctl.env, JSON.stringify(Object.keys(process.env).sort()));
+const seal = ctl.seal || JSON.parse(readFileSync("PROJECTS/the-town-seal/seal.json", "utf8")).seal;
+writeFileSync("PROJECTS/the-town-seal/seal.json", JSON.stringify({ seal }) + "\\n");
+writeFileSync("PROJECTS/the-town-seal/the-town-seal.html", "<p>" + seal + "</p>\\n");
+`,
+  "PROJECTS/the-town-seal/verify.mjs": `
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+const ctl = existsSync(${JSON.stringify(ctl)}) ? JSON.parse(readFileSync(${JSON.stringify(ctl)}, "utf8")) : {};
+if (ctl.calls) appendFileSync(ctl.calls, "seal-verify\\n");
+process.exit(Number(ctl.verifyExit || 0));
+`,
+});
 
 // ── the office's side, stubbed where the tick and the ferry call it ─────────
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-988: the real client, which sends the seal to the socket stand-in
+  "tools/town-seal-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-seal-sandbox.mjs"), "utf8"),
+  // POS-994: the real client, which runs the ferry, the verify and the quests through the socket stand-in
+  "tools/town-tool-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-tool-sandbox.mjs"), "utf8"),
   // POS-341: the real tool, run against the town's stub verifier above
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   "deploy/settle-pass.mjs": `
@@ -272,7 +324,10 @@ function fixture(ledger) {
   const bin = join(root, "bin");
   const g = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...GIT_ENV } });
 
-  write(seed, { ...TOWN_TOOLS, [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
+  const orders = fwd(join(root, "orders.json"));
+  const tools = Object.fromEntries(Object.entries(TOWN_TOOLS).map(([k, v]) => [k, v.replaceAll("__ORDERS__", orders)]));
+  const townFiles = { ...tools, ...sealStubs(fwd(join(root, "seal-ctl.json"))) };
+  write(seed, { ...townFiles, [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
   // Byte-exact on every platform: a CRLF checkout would read as a dirty clone.
   g("init", "-q", "-b", "main", seed);
   g("-C", seed, "config", "core.autocrlf", "false");
@@ -284,6 +339,16 @@ function fixture(ledger) {
   g("-C", town, "config", "user.email", "pen@postmark.invalid");
   g("-C", town, "config", "user.name", "pen");
   write(office, OFFICE_FILES);
+  // POS-994: the tick and the ferry run the town's modules through the office's
+  // loader, as the office's pinned copies. The fixture office carries the real
+  // loader and pins of THIS town's stubs, so the stubs are what run.
+  write(office, {
+    "src/town-tool.mjs": readFileSync(join(OFFICE, "src", "town-tool.mjs"), "utf8"),
+    "src/stamp-verify-pinned.mjs": readFileSync(join(OFFICE, "src", "stamp-verify-pinned.mjs"), "utf8"),
+  });
+  const pinned = collect((p) => Buffer.from(townFiles[p]), MODULES.filter((m) => townFiles[`tools/${m}`] !== undefined));
+  for (const [p, { bytes }] of pinned) write(join(office, "src", "town-pins"), { [p]: bytes });
+  write(join(office, "src", "town-pins"), { "PINS.json": JSON.stringify(manifest(pinned, { townCommit: "d".repeat(40), readAt: "2026-11-16T00:00:00Z" })) });
   write(bin, BIN);
   return { root, origin, town, office, bin, g };
 }
@@ -292,6 +357,7 @@ function envFor(fx, extra) {
   return {
     ...process.env,
     ...GIT_ENV,
+    TOWN_PINS_DIR: "", // the fixture office's own pins, never the suite clone's
     PATH: `${fx.bin}${delimiter}${process.env.PATH}`,
     TOWN_CLONE: fwd(fx.town),
     WORLD_CLONE: fwd(fx.town),
@@ -299,6 +365,8 @@ function envFor(fx, extra) {
     STUB_CALLS: join(fx.root, "calls.txt"),
     STUB_VERIFY_COUNT: join(fx.root, "verify-count.txt"),
     STUB_HANG_MARK: join(fx.root, "hanging"),
+    TOWN_SEAL_SOCKET: fx.sealSocket,
+    TOWN_TOOL_SOCKET: fx.toolSocket,
     ...extra,
   };
 }
@@ -327,10 +395,22 @@ function ferryScript(fx) {
   const payload = ferryPayload();
   assert.ok(payload.includes("/srv/postmark-office/tools/town-drain-run.mjs") && payload.includes("/usr/bin/node"),
     "the ferry's drain path moved; the fixture root substitution would miss it");
+  fx.sealSocket ??= startSealSocket(join(fx.root, "seal.sock"));
+  // the sandbox checks the clone against THIS fixture's pins, as the box's checks prod's (POS-994)
+  fx.toolSocket ??= startToolSocket(join(fx.root, "tool.sock"), fx.town, { pinsDir: join(fx.office, "src", "town-pins") });
   return payload.replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
 }
 
-const run = (fx, argv, extra) => spawnSync(SH, argv, { cwd: fx.office, env: envFor(fx, extra), encoding: "utf8", timeout: 120000 });
+/** The seal stubs' orders, and the sandboxed town tools' (POS-994), from the same STUB_ variables the other stubs read. */
+function sealOrders(fx, extra = {}) {
+  writeFileSync(join(fx.root, "seal-ctl.json"), JSON.stringify({
+    calls: join(fx.root, "calls.txt"), seal: extra.STUB_SEAL, verifyExit: extra.STUB_SEAL_VERIFY_EXIT, env: extra.STUB_SEAL_ENV,
+  }));
+  const env = envFor(fx, extra);
+  writeFileSync(join(fx.root, "orders.json"), JSON.stringify(Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith("STUB_")))));
+}
+
+const run = (fx, argv, extra) => (sealOrders(fx, extra), spawnSync(SH, argv, { cwd: fx.office, env: envFor(fx, extra), encoding: "utf8", timeout: 120000 }));
 
 /**
  * Run under a wrapper that signals the whole process group with TERM once the
@@ -338,6 +418,7 @@ const run = (fx, argv, extra) => spawnSync(SH, argv, { cwd: fx.office, env: envF
  * the same way. The wrapper traps TERM itself so it lives to report.
  */
 function runKilled(fx, argv, extra) {
+  sealOrders(fx, extra);
   const quoted = argv.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
   const mark = fwd(join(fx.root, "hanging"));
   const wrapper = `${SH} ${quoted} & p=$!; trap 'echo wrapper-saw-term' TERM; `
@@ -367,7 +448,7 @@ test("tick · control: a green ledger gets the pass's rows committed and pushed,
   assert.equal(status(fx), "", "the clone ends clean");
   const shown = fx.g("-C", fx.origin, "show", `main:${LEDGER}`);
   assert.match(shown, /mint row 3\nwelcome row 4\n$/, "both rows reached origin");
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome", "verify"], "the joins settle first; a verify before the write and one after it");
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome", "verify"], "the joins settle first; a verify before the write and one after it");
   assert.doesNotMatch(r.stderr, /ROLLED BACK|catch-up OFF|FAILED/);
   assert.ok(existsSync(join(fx.office, "panes-published")), "the tick went on to publish the panes");
 });
@@ -399,7 +480,7 @@ test("tick · a verify that fails after the write restores the ledger and remove
     STUB_WELCOME_MAKES: "WHITE_PAGES/made-by-the-pass.md",
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome", "verify"]);
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome", "verify"]);
   assert.equal(tracked(fx), "", "no tracked file left modified: every pull and pen write can proceed");
   assert.equal(ledgerAt(fx), before, "the ledger is back to its arrival bytes");
   assert.equal(existsSync(join(fx.town, "WHITE_PAGES", "made-by-the-pass.md")), false, "the path the pass created is gone");
@@ -426,7 +507,7 @@ test("tick · a quiet tick (nothing owed) costs one verify, as before", { skip }
   const fx = fixture(["row 1"]);
   const r = run(fx, [tickScript(fx)], {});
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append", "welcome"],
+  assert.deepEqual(calls(fx), ["settle", "verify", "mint --append --repo", "welcome"],
     "the arrival check already read these bytes; a second verify would lengthen every tick's lock hold for nothing");
   assert.equal(status(fx), "");
 });
@@ -458,12 +539,12 @@ test("ferry · the unit's script survives systemd's reading of it", () => {
   assert.doesNotMatch(payload, /\$\{/, "systemd substitutes ${VAR} inside a word, from its own environment");
   const trap = payload.indexOf("trap undo EXIT");
   assert.ok(trap !== -1, "the ferry carries no EXIT trap");
-  assert.ok(trap < payload.indexOf("town-drain-run.mjs") && trap < payload.indexOf("node tools/ferry.mjs"),
+  assert.ok(trap < payload.indexOf("town-drain-run.mjs") && trap < payload.indexOf("town-tool-sandbox.mjs ferry"),
     "the trap is armed before the first write");
   assert.ok(payload.indexOf("reset --hard -q HEAD", trap) !== -1, "the opening reset/clean pair stays as the backstop");
 });
 
-test("ferry · control: a green crossing commits every pass and ends clean, with no rollback", { skip }, () => {
+test("ferry · control: a green crossing commits every pass and ends clean, with no rollback", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], {
     STUB_FERRY_DELIVER: "letter-1", STUB_APPEND: "mint row 2", STUB_BALLOT: "ballot row 3",
@@ -473,21 +554,21 @@ test("ferry · control: a green crossing commits every pass and ends clean, with
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
-  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
+  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", FERRY_SUBJECT]);
   assert.doesNotMatch(r.stderr, /a gate refused/);
 });
 
-test("ferry · a red verify after the mint leaves the clone at its last commit, and the delivery stays", { skip }, () => {
+test("ferry · a red verify after the mint leaves the clone at its last commit, and the delivery stays", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], { STUB_FERRY_DELIVER: "letter-1", STUB_APPEND: "mint row 2 RED" });
   assert.notEqual(r.status, 0, "the refusal is still loud: the unit fails");
   assert.equal(status(fx), "", "no mint row left on disk");
-  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "ferry: crossing", "the committed delivery stays");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), FERRY_SUBJECT, "the committed delivery stays");
   assert.equal(ledgerAt(fx), "row 1\n");
   assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
 });
 
-test("ferry · a red verify after the ballot pass removes the receipt it created and keeps the mint commit", { skip }, () => {
+test("ferry · a red verify after the ballot pass removes the receipt it created and keeps the mint commit", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], { STUB_APPEND: "mint row 2", STUB_BALLOT: "ballot row 3 RED" });
   assert.notEqual(r.status, 0);
@@ -497,15 +578,76 @@ test("ferry · a red verify after the ballot pass removes the receipt it created
   assert.equal(ledgerAt(fx), "row 1\nmint row 2\n");
 });
 
-test("ferry · a refusing seal verify puts the re-seal back", { skip }, () => {
+// POS-988: a refusal inside the sandbox writes nothing into the clone (the
+// client writes only on a green answer), so this holds the "nothing written"
+// half. The undo at the seal stage is the next test's.
+test("ferry · a refusing sandboxed seal verify writes nothing into the clone", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], { STUB_SEAL: "a bad seal", STUB_SEAL_VERIFY_EXIT: "1" });
   assert.notEqual(r.status, 0);
+  // POS-988: the refusal is the sandbox's, and it still fails the seal stage
+  assert.match(r.stderr, /\[seal\] the sandboxed seal refused at verify \(exit 1\)/);
+  assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
+  assert.deepEqual(calls(fx).filter((c) => c.startsWith("seal")), ["seal", "seal-verify"], "the seal ran, then its verify refused");
   assert.equal(status(fx), "");
   assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "seal.json"), "utf8"), "{\"seal\":\"founding\"}\n");
 });
 
-test("ferry · a crossing stopped mid-pass restores too", { skip }, () => {
+// ── POS-988: THE SEAL RUNS WITH NONE OF THE FERRY'S RIGHTS ──────────────────
+// The stage calls tools/town-seal-sandbox.mjs, which sends the seal to
+// postmark-town-seal.socket (here, the stand-in in test/helpers/seal-socket.mjs).
+// THE CAN-FAIL FLIPS: put `node PROJECTS/the-town-seal/seal.mjs` back in the
+// chain (the seal sees GH_TOKEN and the rest), or let the client exit 0 when
+// the socket does not answer (the crossing goes green with a stale seal).
+
+// THE CAN-FAIL FLIP for the undo at the seal stage: take `trap undo EXIT` out of
+// the payload and the re-seal stays on disk.
+test("ferry · a seal stage that wrote both outputs and then refused at its commit is put back by the undo (POS-988)", { skip: fskip }, () => {
+  const fx = fixture(["row 1"]);
+  // A planted hook refuses the seal's commit and nothing else: the client has
+  // written both outputs into the clone by then, so only the undo can take them back.
+  const hook = join(fx.town, ".git", "hooks", "pre-commit");
+  writeFileSync(hook, "#!/bin/sh\nif git diff --cached --name-only | grep -q '^PROJECTS/the-town-seal/'; then echo 'planted hook: the seal commit refused' >&2; exit 1; fi\nexit 0\n");
+  chmodSync(hook, 0o755);
+  const r = run(fx, ["-c", ferryScript(fx)], { STUB_FERRY_DELIVER: "letter-1", STUB_QUESTS: "quests moved", STUB_SEAL: "resealed" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /\[seal\] sealed in the sandbox/, "the client wrote the outputs before the commit refused");
+  assert.match(r.stderr, /planted hook: the seal commit refused/);
+  assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
+  assert.equal(status(fx), "", "the undo took the written outputs back");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "seal.json"), "utf8"), "{\"seal\":\"founding\"}\n");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "the-town-seal.html"), "utf8"), "<p>founding</p>\n");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "quests: crossing leaderboard", "the passes before the seal stay committed");
+});
+
+test("ferry · the seal runs with none of the ferry's environment (POS-988)", { skip: fskip }, () => {
+  const fx = fixture(["row 1"]);
+  const seen = join(fx.root, "seal-env.json");
+  const r = run(fx, ["-c", ferryScript(fx)], { STUB_SEAL: "resealed", STUB_SEAL_ENV: seen, GH_TOKEN: "fixture-token-not-real" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(seen, "utf8")), ["PATH"], "the seal saw PATH and nothing else: no GH_TOKEN, no TOWN_CLONE, no stub orders");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "seal: re-seal at the crossing", "and the ferry's own shell still commits it");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "the-town-seal.html"), "utf8"), "<p>resealed</p>\n", "both outputs came back, byte-exact");
+  assert.equal(status(fx), "");
+  assert.equal(head(fx), originHead(fx), "everything pushed");
+});
+
+test("ferry · a seal sandbox that does not answer fails the seal stage, and the undo keeps what committed before it (POS-988)", { skip: fskip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = run(fx, ["-c", ferryScript(fx)], {
+    STUB_FERRY_DELIVER: "letter-1", STUB_QUESTS: "quests moved", STUB_SEAL: "resealed",
+    TOWN_SEAL_SOCKET: fwd(join(fx.root, "no-such.sock")),
+  });
+  assert.notEqual(r.status, 0, "a missing sandbox is a refusal, never a skipped seal");
+  assert.match(r.stderr, /\[seal\] the seal sandbox did not answer at .*no-such\.sock/);
+  assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
+  assert.ok(!calls(fx).includes("seal"), "nothing ran the seal in the ferry's own process");
+  assert.equal(status(fx), "");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "quests: crossing leaderboard", "the passes before the seal stay committed");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "seal.json"), "utf8"), "{\"seal\":\"founding\"}\n");
+});
+
+test("ferry · a crossing stopped mid-pass restores too", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = runKilled(fx, ["-c", ferryScript(fx)], { STUB_APPEND: "mint row 2", STUB_VERIFY_HANG: "1" });
   assert.ok(existsSync(join(fx.root, "hanging")), `the kill never happened: ${r.stdout} ${r.stderr}`);
@@ -556,7 +698,7 @@ test("tick · STAMP_LINES=store: a runner that lost its push race and refused le
   assert.match(r.stderr, /mint catch-up ROLLED BACK/);
 });
 
-test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint commit, and nothing else moves", { skip }, () => {
+test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint commit, and nothing else moves", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], {
     ...STORE, STUB_FERRY_DELIVER: "letter-1", STUB_APPEND: "mint row 2", STUB_BALLOT: "ballot row 3",
@@ -565,13 +707,13 @@ test("ferry · STAMP_LINES=store: the runner's commit is the crossing's mint com
   assert.equal(r.status, 0, r.stderr);
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
-  assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append"), `the switch took the runner: ${calls(fx).join(", ")}`);
+  assert.ok(calls(fx).includes("mint-run --append") && !calls(fx).includes("mint --append --repo"), `the switch took the runner: ${calls(fx).join(", ")}`);
   assert.ok(calls(fx).includes("quests-run") && !calls(fx).includes("quests"), `and the quest snapshot on the store's key base: ${calls(fx).join(", ")}`);
   const log = fx.g("-C", fx.town, "log", "--format=%s", "-6").trim().split("\n");
-  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", "ferry: crossing"]);
+  assert.deepEqual(log.slice(0, 5), ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ballot: crossing pass", "mint: crossing pass", FERRY_SUBJECT]);
 });
 
-test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its committed rows", { skip }, () => {
+test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its committed rows", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = runKilled(fx, ["-c", ferryScript(fx)], { ...STORE, STUB_APPEND: "mint row 2", STUB_VERIFY_HANG: "1" });
   assert.ok(existsSync(join(fx.root, "hanging")), `the kill never happened: ${r.stdout} ${r.stderr}`);
@@ -591,7 +733,7 @@ test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its 
 // put the plain verify back at the tick's arrival (the catch-up stays OFF).
 const SKIP_MINT = /\[ferry\] the town-index ingest failed: the store mint is skipped this crossing, and the keep tick pays what is owed/;
 
-test("ferry · STAMP_LINES=store: a failed ingest skips the store mint, names it, and the crossing completes", { skip }, () => {
+test("ferry · STAMP_LINES=store: a failed ingest skips the store mint, names it, and the crossing completes", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], {
     ...STORE, STUB_INGEST_EXIT: "1", STUB_FERRY_DELIVER: "letter-1", STUB_OWED_UNTIL: "mint row 2", STUB_APPEND: "mint row 2",
@@ -608,10 +750,10 @@ test("ferry · STAMP_LINES=store: a failed ingest skips the store mint, names it
   assert.equal(status(fx), "");
   assert.equal(head(fx), originHead(fx), "everything pushed");
   assert.deepEqual(fx.g("-C", fx.town, "log", "--format=%s", "-3").trim().split("\n"),
-    ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ferry: crossing"], "no mint commit, and the rest landed");
+    ["seal: re-seal at the crossing", "quests: crossing leaderboard", FERRY_SUBJECT], "no mint commit, and the rest landed");
 });
 
-test("ferry · STAMP_LINES=store: after a skipped mint a real red still stops the crossing", { skip }, () => {
+test("ferry · STAMP_LINES=store: after a skipped mint a real red still stops the crossing", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], {
     ...STORE, STUB_INGEST_EXIT: "1", STUB_OWED_UNTIL: "mint row 2", STUB_BALLOT: "ballot row 3 RED",
@@ -624,7 +766,7 @@ test("ferry · STAMP_LINES=store: after a skipped mint a real red still stops th
   assert.equal(ledgerAt(fx), "row 1\n");
 });
 
-test("ferry · STAMP_LINES=store: an ingest that succeeds still mints, with the plain verify", { skip }, () => {
+test("ferry · STAMP_LINES=store: an ingest that succeeds still mints, with the plain verify", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], { ...STORE, STUB_OWED_UNTIL: "mint row 2", STUB_APPEND: "mint row 2" });
   assert.equal(r.status, 0, r.stderr);
@@ -645,12 +787,12 @@ for (const [label, extra] of [["the switch off", {}], ["STAMP_LINES=store", STOR
   });
 }
 
-test("the switch off is the town's --append: the unset tick and crossing never call the runner", { skip }, () => {
+test("the switch off is the town's --append: the unset tick and crossing never call the runner", { skip: fskip }, () => {
   const tick = fixture(["row 1"]);
   run(tick, [tickScript(tick)], { STUB_APPEND: "mint row 2" });
-  assert.ok(calls(tick).includes("mint --append") && !calls(tick).includes("mint-run --append"), calls(tick).join(", "));
+  assert.ok(calls(tick).includes("mint --append --repo") && !calls(tick).includes("mint-run --append"), calls(tick).join(", "));
   const ferry = fixture(["row 1"]);
   run(ferry, ["-c", ferryScript(ferry)], { STUB_APPEND: "mint row 2" });
-  assert.ok(calls(ferry).includes("mint --append") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
+  assert.ok(calls(ferry).includes("mint --append --repo") && !calls(ferry).includes("mint-run --append"), calls(ferry).join(", "));
   assert.ok(calls(ferry).includes("quests") && !calls(ferry).includes("quests-run"), calls(ferry).join(", "));
 });

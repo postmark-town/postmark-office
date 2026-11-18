@@ -111,3 +111,57 @@ for (const conf of CONFS) test(`the World page's keyless creature reads are cach
   // `location /api/`, uncached → the second assert reds; add `|$http_cookie` to the
   // shield's apex key → the cookie assert reds.
 });
+
+// POS-455 · THE MEDIA DOOR'S OWN CAP, AT THE EDGE (Darko, 2026-10-31 22:28 EDT, POS-455/a:
+// "Yes, with today's ship."). The raw-bytes `POST /media?by=<h>` (POS-818) takes up to
+// MAX_IMAGE = 1.5 MB, but `location /api/` caps every body at 1m, so a 1-1.5 MB image
+// met nginx's HTML 413 and never reached the door. An exact `location = /api/media`
+// carries the door's cap; every other /api/ body stays at 1m.
+// What it cannot see, said plainly: this parses the conf, it does not run nginx (no
+// nginx on the Windows box). The box step proves it with a real 1.2 MB upload.
+/** A `client_max_body_size` value in bytes (nginx units: k, m, g; bare = bytes), or null. */
+function bodyCapBytes(body) {
+  const m = /client_max_body_size\s+(\d+)([kKmMgG]?)\s*;/.exec(body);
+  if (!m) return null;
+  return Number(m[1]) * ({ "": 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 }[m[2].toLowerCase()]);
+}
+const proxyFacts = (body) => ({
+  headers: [...body.matchAll(/proxy_set_header\s+[^;]+;/g)].map((x) => x[0].replace(/\s+/g, " ")).sort(),
+  buffering: /proxy_buffering\s+(\w+);/.exec(body)?.[1] ?? null,
+  readTimeout: /proxy_read_timeout\s+(\S+);/.exec(body)?.[1] ?? null,
+  http: /proxy_http_version\s+(\S+);/.exec(body)?.[1] ?? null,
+  limit: /limit_req\s+[^;]+;/.exec(body)?.[0] ?? null,
+});
+
+test("POS-455 · /api/media carries the media door's own cap (MAX_IMAGE), and /api/ stays at 1m", async () => {
+  const { MAX_IMAGE } = await import("../src/edit.mjs");
+  const locs = locations(readFileSync(CONFS[0], "utf8"));
+  const media = locs.find((l) => l.where === "= /api/media");
+  assert.ok(media, "nginx-api.conf has no exact location for /api/media; a 1-1.5 MB upload meets nginx's HTML 413");
+  assert.equal(bodyCapBytes(media.body), MAX_IMAGE,
+    `/api/media caps the body at ${bodyCapBytes(media.body)} bytes; the door's own MAX_IMAGE is ${MAX_IMAGE}`);
+  const api = locs.find((l) => l.where === "/api/");
+  assert.ok(api, "nginx-api.conf lost location /api/");
+  assert.equal(bodyCapBytes(api.body), 1024 ** 2, "every other /api/ body stays at 1m");
+  // The exact location is the one nginx picks for the door, with or without ?by=.
+  assert.equal(servedBy(locs, "/api/media"), media, "/api/media is not served by its own exact location");
+  // Every other cap in the file is unchanged: /api/ is the only other one.
+  const caps = locs.filter((l) => bodyCapBytes(l.body) !== null).map((l) => l.where).sort();
+  assert.deepEqual(caps, ["/api/", "= /api/media"], "client_max_body_size appears on a location it did not before");
+});
+
+test("POS-455 · /api/media reaches the office's /media the way /api/ does, with /api/'s headers, timeouts and shield", () => {
+  const locs = locations(readFileSync(CONFS[0], "utf8"));
+  const media = locs.find((l) => l.where === "= /api/media");
+  const api = locs.find((l) => l.where === "/api/");
+  assert.ok(media && api, "the /api/media or /api/ location is missing");
+  // /api/ strips its prefix through proxy_pass's URI part; the exact twins strip it with this rewrite.
+  assert.match(media.body, /rewrite\s+\^\/api\(\/\.\*\)\$\s+\$1\s+break;/, "/api/media does not strip /api/ before the office sees the path");
+  assert.match(media.body, /proxy_pass\s+http:\/\/127\.0\.0\.1:4380;/, "/api/media does not proxy to the office's upstream");
+  assert.equal(/proxy_cache\s/.test(media.body), false, "an upload is never cached");
+  const want = proxyFacts(api.body), got = proxyFacts(media.body);
+  assert.deepEqual(got, want, "/api/media differs from /api/ in headers, buffering, timeouts or rate shield");
+  assert.match(media.body, /error_page\s+429\s*=\s*@postmark_keyless_rate;/, "/api/media lost the 429 answer");
+  // ⚑ THE FLIP: delete the `= /api/media` location → the first assert reds; set its cap to 1m
+  // → the equality with MAX_IMAGE reds; drop its rewrite → the office would see /api/media.
+});

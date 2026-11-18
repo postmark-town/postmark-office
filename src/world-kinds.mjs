@@ -22,9 +22,9 @@
 
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
 import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor } from "./world-hold.mjs";
-import { MAKE_FACE, CONSUME_FACE, madeWords, eatenWords, madeIdTaken } from "./named-making.mjs"; // POS-766: one named thing, made into a holder
+import { MAKE_FACE, CONSUME_FACE, WITHDRAW_FACE, madeWords, eatenWords, withdrawnWords, madeIdTaken } from "./named-making.mjs"; // POS-766: one named thing, made into a holder
 import { liveHolders, weightOf, refuseNesting } from "./holder-tree.mjs"; // the walks, cycle-safe; counts confer up
-import { chestRoomGuard } from "./chest-lock.mjs";
+import { chestRoomGuard, chestEmptyGuard } from "./chest-lock.mjs";
 import { inFlightFor, writeThingHolding, thingHoldingEntry, wholeLoadIn, heldLoadOf, refuseOverRoomAbove, refuseIfStolenNow, refuseIfAnyStolenNow, carriedClasses } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
 import { standsWithin, EARSHOT_M } from "./reach.mjs";
@@ -127,10 +127,16 @@ async function shownIn(fold, holder, attachments, view, deps, { sharp = false } 
     counting: `${sum.join(", ")}: ${count} counted, as the room counts it (a holder counts 1 and everything it holds)` };
 }
 
-/** A published holder, or the refusal: a draft holds nothing yet; a mark that does not hold, says so. */
+/** A holder on the world (published, or in someone's hands), or the refusal; a mark that does not hold, says so. */
+// WLD-138 F3: the 404 used to say "a draft holds nothing yet", and a holder set down full holds what it held
+// (its contents stay inside it, by its id, pending with it). So it says what is true of every holder not on the world.
+export const HOLDER_NOT_ON_THE_WORLD = "a holder is reached once it stands on the world (published) or while it is in someone's hands. " +
+  "A holder set down as its maker's draft keeps what it holds, inside it, but nothing goes in or comes out until it publishes: " +
+  "at the next settlement on its maker's own ground, and on the commons only with a stamp behind it. Withdrawn by its maker before then, " +
+  "a holder that holds anything comes back whole to the hands it was set down from. Nothing was changed.";
 async function holderOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet. Nothing was changed.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, HOLDER_NOT_ON_THE_WORLD);
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
   if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);
@@ -357,6 +363,48 @@ async function eatNamed(deps, key, actor, attachments, thing, stamp = null) {
   entry.effect = eatenWords({ actor, id: thing });
   const row = await deps.append(entry, {});
   return { seq: row?.actId ?? row?.seq ?? null, effect: entry.effect };
+}
+
+/**
+ * WITHDRAW A THING MADE IN HAND (POS-992; Darko 2026-11-11 09:21 EST, POS-992/a: "withdraw owns it"). Wright's
+ * specification: "a maker can withdraw a named thing it made and still holds. The holding ends the way an eaten
+ * thing's does; the make record stays; the id is never reused". A held made thing is no draft and no canon mark: it
+ * lives as the hold lane's `make` record (named-making.mjs § WHERE IT LIVES), so the withdraw door hands it here, and
+ * its holding ends as eatNamed ends one: ONE hold act, policy detach, with no place, so nothing is set down and the
+ * overlay drops it. The act is the hold lane's own `withdraw` face (Wright 14:47Z: "each hold face names the act
+ * that happened"), never `consume`: it was withdrawn by its maker, not eaten. The made record keeps the make
+ * (named-making.mjs § foldMade), so the name stays taken (G2), and a put-back never revives it
+ * (set-down-return.mjs § HOLD_ROW_FACES).
+ *
+ * Refused, writing nothing: a thing not in its maker's own hands (another's, a holder's, or gone, eaten or withdrawn
+ * already: an eaten one stays eaten), a class the town has taken (as every hold act is), and a made holder that still
+ * holds anything, judged under its lock in this write's own transaction (chest-lock.mjs § chestEmptyGuard), so a
+ * withdrawal never strands what is inside it.
+ */
+export async function withdrawHeldMade({ thing, maker, key, deps }) {
+  return holdTurn(async () => {
+    const { attachments } = await deps.readRows();
+    const made = deps.made ? await deps.made() : null;
+    if (!made?.has(thing))
+      throw bounce(404, `no mark "${thing}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts, your published marks and a thing you made and hold; check world_my_marks");
+    // its MAKER withdraws it (the make record's own `by`), never whoever holds it: the door's key check is not the only lock
+    const madeBy = String(made.get(thing).by ?? String(thing).split("/")[0]);
+    if (madeBy !== String(maker))
+      throw bounce(403, `${thing} was made by ${madeBy}, and a thing made in hand is withdrawn only by its maker`, "Nothing was changed.");
+    const holder = liveHolder(attachments, thing);
+    if (holder !== String(maker))
+      throw bounce(409, holder == null ? `${thing} is gone: it was eaten or withdrawn, and it stays gone` : `you are not holding ${thing}: ${holder} is`,
+        holder == null ? "a thing made in hand ends once, and its name is never made again. Nothing was changed."
+          : `a thing made in hand is withdrawn by its maker from their own hands${String(holder).includes("/") ? `; take it out of ${holder} first` : ""}. Nothing was changed.`);
+    const klass = String(made.get(thing).kind ?? "thing");
+    refuseIfStolenNow(deps, () => klass);
+    const { entry } = await thingHoldingEntry(deps, key, String(maker), attachments, { did: WITHDRAW_FACE, thing, holder: null, previous: String(maker), madeBy: String(maker) });
+    entry.payload.policy = "detach"; // nothing holds it, and nothing set it anywhere: it is gone, as an eaten thing is
+    entry.effect = withdrawnWords({ actor: String(maker), id: thing });
+    const row = await deps.append(entry, { guard: chestEmptyGuard({ chest: thing }) });
+    return { id: thing, withdrawn: true, made_in_hand: true, kind: klass, effect: entry.effect, seq: row?.actId ?? row?.seq ?? null,
+      crossing: row?.crossing ?? null, log: row?.record ?? "acts" };
+  });
 }
 
 /** A WHOLE MARK INTO A HOLDER: `give { thing, to: <holder> }`, from your hands, its room counting kinds and whole marks alike. */
@@ -589,11 +637,13 @@ export async function callKinds(route, args, key, actor, deps) {
             throw bounce(422, `${thing} was not made in hand`, `consume { thing } eats a thing made straight into hands or a holder (leave-mark { slug, body, to }); a counted one is eaten by its kind: consume { kind }. Nothing was changed.`);
           const holder = liveHolder(attachments, thing);
           if (holder !== String(actor))
-            throw bounce(409, holder == null ? `${thing} is gone: it was eaten` : `you are not holding ${thing}: ${holder} is`,
+            throw bounce(409, holder == null ? `${thing} is gone: it was eaten or withdrawn` : `you are not holding ${thing}: ${holder} is`, // POS-992: a withdrawn one was never eaten
               holder == null ? "Nothing was changed." : `consume eats from your own hands${String(holder).includes("/") ? `; take it out of ${holder} first` : ""}. Nothing was changed.`);
           const klass = String(made.get(thing).kind ?? "thing");
           if (!isEdible(klass))
-            throw bounce(422, `a ${klass} is not a consumable`, `consume uses up what is made to be used up (a consumable, as candy is); ${thing} is a ${klass}. Nothing was changed.`);
+            throw bounce(422, `a ${klass} is not a consumable`, `consume uses up what is made to be used up (a consumable, as candy is); ${thing} is a ${klass}.${
+              // POS-992 (postmark#4559's step 2): its maker, holding it, is pointed at the door that ends it
+              String(made.get(thing).by ?? String(thing).split("/")[0]) === String(actor) ? ` You made it and hold it, so you can withdraw it for good instead: withdraw { mark: "${thing}" }.` : ""} Nothing was changed.`);
           refuseIfStolenNow(deps, () => klass);
           const w = await eatNamed(deps, key, actor, attachments, thing);
           const after = [...attachments, { entity: String(actor), target: thing, policy: "detach", born_at: new Date().toISOString() }];
@@ -754,17 +804,23 @@ export async function holdRecordStats() { return (await keeper()).stats(); }
  * verbs you can do to it now) and, for a holder, what it holds, sharpened to
  * its kinds — a class and a number each, never a unit (15:46; 18:44 item 4).
  */
-export async function investigateMark(id, usable = null) {
-  const [world, guards, { lawSnapshot }, { canOn }, { classViewOf }, { isUnitRow }] = await Promise.all([
+export async function investigateMark(id, usable = null, { here = null } = {}) {
+  const [world, guards, { lawSnapshot }, { canOn }, { classViewOf }, { isUnitRow }, { standsWithin }] = await Promise.all([
     import("./world.mjs"), import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./usable-verbs.mjs"),
-    import("./world-units.mjs"), import("./world-stacks.mjs"),
+    import("./world-units.mjs"), import("./world-stacks.mjs"), import("./reach.mjs"),
   ]);
   const mark = (await world.worldMarkById(String(id))).mark;
   const can = usable ? { can: canOn(usable, id) } : {};
   if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a draft is not the town's canon; it lives only in its own household's reading of the world)", ...can };
+  // HOW FAR IT STANDS FROM THE READER (WLD-79; Darko 2026-10-19 18:49 EDT, "(b), 60 m, one rule for give and take"):
+  // the refusal's own measure (reach.mjs § standsWithin: metres rounded, then the compass point) and its own words,
+  // "140 m NE", so the close look and the refusal that follows it say one thing. Absent for a reader who is not
+  // standing anywhere, and for a mark with no place (one in someone's hands has none).
+  const reach = here ? standsWithin(here, mark) : null;
+  const distance = reach?.distance_round == null ? {} : { distance: `${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""}` };
   const view = classViewOf(lawSnapshot());
   const law = holderLawOf({ holder: String(id), mark, view });
-  const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };
+  const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...distance, ...can };
   if (!law.holder) return out;
   const { fold, attachments } = await holdRecordNow();
   return { ...out, holder: { capacity: law.capacity, open: law.open }, holds: await shownIn(fold, id, attachments, view,

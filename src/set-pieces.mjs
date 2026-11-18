@@ -38,7 +38,7 @@
 //   line      object a resident     { says, window, piece }              said outside a reaction
 //   persuade  actor the resident, object the creature   { words, household, window }  (the door's own row)
 
-import { NERVE_ACTION, STRIKE_ACTION, windowAt, resolveOf, nerveOf, isFinishable, liveShieldOn } from "./encounter.mjs";
+import { NERVE_ACTION, STRIKE_ACTION, windowAt, resolveOf, isFinishable, liveShieldOn } from "./encounter.mjs";
 
 export const PHASE_ACTION = "phase";
 export const HURL_ACTION = "hurl";
@@ -52,7 +52,6 @@ export const FIGHT_ACTIONS = Object.freeze([PHASE_ACTION, HURL_ACTION, HURLED_AC
 /** The acts that flinch from a feint (the world's FLINCH_VERBS, kept here when the law does not name them). */
 export const FLINCH_VERBS = Object.freeze(["dodge", "walk", "exit"]);
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const isNum = (v) => /^\d+$/.test(String(v ?? ""));
 /** Record order: by id when both are ids, else by instant. */

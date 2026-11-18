@@ -28,7 +28,7 @@
 // parent exactly as the store's uuids do.
 
 import { createHash } from "node:crypto";
-import { firstClaimInstant } from "../world2/tools/mark-render.mjs";
+import { firstClaimInstant, footprintsThroughShape, FOOTPRINT_CHAIN_SQL } from "../world2/tools/mark-render.mjs";
 import { STANDING_ROWS_SQL, REGISTER_ROWS_SQL } from "../world2/tools/world-snapshot-seal.mjs";
 
 const sha256 = (s) => createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
@@ -201,7 +201,10 @@ export function foldDifference(a, b) {
 //   households     SOURCE   the register rows at the seal (064) with the town at the
 //                           ledger position (its resolver, ADDRESS logins and dated
 //                           registry: lines), the crossing's own derivation
-//                           (tools/world-households-export.mjs § worldHouseholdsAt)
+//                           (src/household-logins.mjs § worldHouseholdsAt)
+//   houseFacts     SOURCE   the same two: each register house's `since`, and its
+//                           parcel purchases on the town ledger at town_sha
+//                           (parcel-room.mjs § houseFactsAt, POS-762)
 //   the engine     SHA REF  the world's tools/marks-fold.mjs at law_sha
 //   dials, fanup,  CONST    the engine's own defaults; the office passes none
 //   prev, tick
@@ -268,7 +271,6 @@ export async function householdsAt(registerRows, townRepo) {
   const { mkdtempSync, readdirSync, cpSync, symlinkSync, writeFileSync, rmSync, unlinkSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { pathToFileURL } = await import("node:url");
   const { registry, pins } = await registerOfVersions(registerRows);
   const dir = mkdtempSync(join(tmpdir(), "snapshot-town-"));
   try {
@@ -279,7 +281,16 @@ export async function householdsAt(registerRows, townRepo) {
     }
     writeFileSync(join(dir, "tools", "households.json"), JSON.stringify(registry, null, 2) + "\n");
     writeFileSync(join(dir, "tools", "github-ids.json"), JSON.stringify(pins, null, 2) + "\n");
-    const engine = await import(pathToFileURL(join(dir, "tools", "stamp-mint.mjs")).href);
+    // POS-994 (Wright, 2026-11-16): the checkout's own engine only inside the
+    // office's reviewed history, held to git at its commit; past the pin, the
+    // pinned copy or a stop by name (town-tool.mjs § importTownToolAt).
+    // A town folder git cannot name a commit for is checked against the pins as a clone.
+    const { spawnSync } = await import("node:child_process");
+    const { importTownTool, importTownToolAt } = await import("./town-tool.mjs");
+    const head = spawnSync("git", ["-C", townRepo, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" });
+    const engine = head.status === 0
+      ? await importTownToolAt(dir, head.stdout.trim(), "stamp-mint.mjs", { gitRepo: townRepo })
+      : await importTownTool(dir, "stamp-mint.mjs");
     const { worldHouseholdsAt } = await import("./household-logins.mjs");
     return worldHouseholdsAt(dir, engine).households;
   } finally {
@@ -341,11 +352,11 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
   if (!lawRows.length) throw new Error(`law_projection holds no class marks at ${header.law_sha.slice(0, 12)}, the law snapshot ${header.id} names`);
   const terrain = await terrainAt(p, header.law_sha);
   const { stakes, source: stakesSource } = await stakesAt(p, header.town_sha, { townRepo });
-  const { households, source: householdsSource } = await foldHouseholds(p, {
+  const { households, houseFacts, source: householdsSource } = await foldHouseholds(p, {
     lawSha: header.law_sha, townRepo,
     registerRows: header.register_digest ? () => snapshotRegisterRows(p, header.register_digest) : null,
   });
-  return { lawRows, terrain, stakes, stakesSource, households, householdsSource };
+  return { lawRows, terrain, stakes, stakesSource, households, houseFacts, householdsSource };
 }
 
 /**
@@ -354,15 +365,29 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
  * checkout: the town's own resolver over them. Otherwise the printed roster at
  * `lawSha`. Otherwise none, and every handle folds solo. `registerRows` is a
  * thunk, so the register is read only when a town checkout will use it.
- * → `{ households, source }`.
+ *
+ * THE HOUSES' PARCEL FACTS RIDE THE SAME ROAD (POS-762, parcel-room.mjs): with
+ * the register and the town, each house's settling day and its parcel purchases,
+ * for the world's fold to size its parcel room by. Without them, none, and the
+ * fold keeps every household at three, as it did before November; the source
+ * says so.
+ * → `{ households, houseFacts, source }`.
  */
 export async function foldHouseholds(p, { lawSha, registerRows = null, townRepo = null }) {
-  if (registerRows && townRepo)
-    return { households: await householdsAt(await registerRows(), townRepo), source: "the register at the seal, through the town's resolver at the ledger position" };
+  if (registerRows && townRepo) {
+    const rows = await registerRows();
+    const { houseFactsAt } = await import("./parcel-room.mjs");
+    return {
+      households: await householdsAt(rows, townRepo),
+      houseFacts: await houseFactsAt(rows, townRepo),
+      source: "the register at the seal, through the town's resolver at the ledger position (parcel room: each house's declaration day there, and its parcel purchases on the ledger)",
+    };
+  }
   const households = await rosterAt(p, lawSha);
+  const noFacts = "; no parcel facts, so every household keeps the cap of three";
   if (households)
-    return { households, source: `the printed WORLD/households.json at law ${String(lawSha).slice(0, 12)} (law_projection roster; a derived printout${registerRows ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})` };
-  return { households: null, source: "nothing: every handle folds solo" };
+    return { households, houseFacts: null, source: `the printed WORLD/households.json at law ${String(lawSha).slice(0, 12)} (law_projection roster; a derived printout${registerRows ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})${noFacts}` };
+  return { households: null, houseFacts: null, source: `nothing: every handle folds solo${noFacts}` };
 }
 
 /**
@@ -395,7 +420,8 @@ export async function snapshotFoldArgs(p, header, { townRepo = null, filing = nu
   const marks = inFilingOrder(marksFromRows(markRowsOfVersions(rows), inputs.lawRows), filing);
   await withClaimedAt(p, marks);
   return {
-    args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households },
+    // `houseFacts` only when there are some, so a fold without them is called exactly as before
+    args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households, ...(inputs.houseFacts ? { houseFacts: inputs.houseFacts } : {}) },
     stakesSource: inputs.stakesSource, householdsSource: inputs.householdsSource,
   };
 }
@@ -441,14 +467,32 @@ export async function firstClaimedBySlug(p, slugs, { pending = [] } = {}) {
   return out;
 }
 
-/** Stamp each parcel record with its first claim (`claimed_at`). Edits `marks` in place; returns it. */
+/**
+ * Stamp each record with its first claim (`claimed_at`), and, where its
+ * geometry has changed, its footprints (POS-571). Every mark, not only a parcel:
+ * a mark's age is its first-laid date wherever the law asks who came first, and
+ * seniority at contact reads it of any mark (world tools/consent.mjs §
+ * seniorAtContact). The footprints are read for THIS record's shape, the moment
+ * it was sealed or served (`mark-render.mjs § footprintsThroughShape`): the chain
+ * through that shape, so an amend locked after it neither drops the history that
+ * crossed nor adds a footprint that had not. Edits `marks` in place; returns it.
+ */
 export async function withClaimedAt(p, marks, { pending = [] } = {}) {
-  const parcels = marks.filter((m) => m?.kind === "parcel" && m.id);
-  if (!parcels.length) return marks;
-  const first = await firstClaimedBySlug(p, parcels.map((m) => String(m.id)), { pending });
-  for (const m of parcels) {
+  const dated = marks.filter((m) => m?.id);
+  if (!dated.length) return marks;
+  const first = await firstClaimedBySlug(p, dated.map((m) => String(m.id)), { pending });
+  for (const m of dated) {
     const at = first.get(String(m.id));
     if (at) m.claimed_at = at;
+  }
+  const placed = dated.filter((m) => m.at && m.extent && first.has(String(m.id)));
+  if (!placed.length) return marks;
+  const { rows } = await p.query(FOOTPRINT_CHAIN_SQL, [placed.map((m) => String(m.id))]);
+  const chainOf = new Map(rows.map((r) => [String(r.slug), r]));
+  for (const m of placed) {
+    const r = chainOf.get(String(m.id));
+    const footprints = r ? footprintsThroughShape({ chain: r.claim_chain, originId: r.id, originSince: first.get(String(m.id)), current: m }) : null;
+    if (footprints) m.footprints = footprints;
   }
   return marks;
 }

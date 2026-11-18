@@ -185,7 +185,7 @@ test("1 · OFF: town_post sends an idea where it went before, and every idea-pos
   const { pen, posts } = setup();
   assert.equal(await townPostEvent({ class: "idea", slug: "lantern", body: "A lantern on the quay." }, ERRANT, { roll: ROLL, env: OFF }), null,
     "off, the town door answers null and the idea lane (a Think Tank mark) runs exactly as before");
-  await refusedWith(postAtTown(IDEA, ERRANT, { now: NOW, env: OFF, roll: ROLL }), 422, /answers class "event", "quest" or "bug", not "idea"/);
+  await refusedWith(postAtTown(IDEA, ERRANT, { now: NOW, env: OFF, roll: ROLL }), 422, /answers class "event", "quest", "bug" or "ballot", not "idea"/);
   // a post that exists from a time the switch was on is refused, not hidden
   await post();
   const n = pen.rows().length;
@@ -362,6 +362,62 @@ test("7 · the Think Tank's read adds nothing while the store holds no idea post
   assert.deepEqual(t.posts.map((p) => [p.id, p.state, p.title]), [[ID, "posted", IDEA.title]]);
 });
 
+// POS-732 (review of #1085): the readers that want EVERY idea are not pages of them. Each of these goes red when its `whole: true` / `hold: false` goes,
+// because the default page is 20 and held under the connector's cap: with 30 fat ideas a caller that forgot the flag would get page one and think it was all.
+const MANY = 30;
+async function manyIdeas() {
+  for (let i = 0; i < MANY; i++)
+    await post({ class: "idea", title: `Lantern number ${String(i).padStart(2, "0")} on the quay`, body: `${"A lantern would let late residents find the boat. ".repeat(10)}(${i})` });
+}
+
+test("7c · the Think Tank's idea posts are every idea post, not the first page of them (ideaPostsForTank asks for the whole list)", async () => {
+  setup();
+  await manyIdeas();
+  const t = await ideaPostsForTank({ env: ON });
+  assert.equal(t.posts.length, MANY, "all of them: a default page would carry 20 or fewer");
+  // CONTROL: the same read, asked as a connector asks it, IS paged, so the whole above is the flag's doing
+  const page = await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, pointer: false });
+  assert.ok(page.shown < MANY && page.complete === false, `the control: the apex read pages (${page.shown} of ${MANY})`);
+});
+
+test("7d · the stake kinds read every idea id (ideaIdSet asks for the whole list), so a stake behind a late idea is kind idea", async () => {
+  setup();
+  await manyIdeas();
+  Object.assign(process.env, RECORD_ON);
+  const { ideaIdSet } = await import("../src/household-apex.mjs");
+  const { ids, note } = await ideaIdSet();
+  assert.equal(note, null);
+  assert.equal(ids.size, MANY, "every idea post id, not page one");
+  assert.ok(ids.has("errant/lantern-number-29-on-the-quay"), "the last one, which a page of 20 never reaches");
+});
+
+test("7e · the feed's idea source reads every idea in one unheld pass (the post loop lifts the cap), and the walk is not a page-by-page crawl", async () => {
+  setup();
+  await manyIdeas();
+  const { realSources } = await import("../src/town-feed-sources.mjs");
+  const seen = [];
+  const counting = async (fields, opts) => { const r = await postsAtOffice(fields, opts); seen.push(r.shown); return r; };
+  const src = realSources({ ix: null, clone: null, nowMs: NOW, readers: { postsAtOffice: counting } });
+  const r = await src.idea({ since: null, before: null, resume: null, cap: 500 });
+  assert.equal(r.rows.length, MANY, "every idea is a feed row");
+  assert.equal(seen.length, 1, `one read of 200, not a crawl of capped pages: ${JSON.stringify(seen)}`);
+});
+
+// POS-732: the town door HONOURS limit and offset: they reach the read (the grammar test drives every list read through the apex; this one goes on
+// through the real posts read and shows the page that comes back).
+test("7f · town { read: \"posts\", args: { limit, offset } } through the apex pages the class", async () => {
+  setup();
+  await manyIdeas();
+  const { townApex } = await import("../src/town-apex.mjs");
+  const { callTool, TOOLS } = await import("../src/mcp.mjs");
+  const schemas = Object.fromEntries(TOOLS.map((t) => [t.name, t.inputSchema.properties]));
+  const call = (tool, fields) => callTool(tool, fields, { db: null, key: null, canWrite: false, clone: null });
+  const p = await townApex({ read: "posts", args: { class: "idea", limit: 4, offset: 6 } }, null, { schemas, call });
+  assert.equal(p.error, undefined, JSON.stringify(p));
+  assert.deepEqual([p.shown, p.limit, p.offset, p.next_offset, p.total], [4, 4, 6, 10, MANY]);
+  assert.equal(p.posts.length, 4);
+});
+
 // POS-715 (Wright 2026-10-20, A): GET /posts?class=idea answered `total: 0` while
 // every doorstep listed ideas, because those are the Think Tank's marks. The idea
 // list now points at them, after its own rows; nothing a reader had moves.
@@ -373,7 +429,8 @@ test("7b · the idea list points at the Think Tank's marks, after its rows: thei
   assert.equal(empty.total, 0, "the posts table holds no idea post: the list is still empty, and says so");
   assert.deepEqual(empty.think_tank, { ideas: 2, read: 'town { read: "ideas" }',
     note: `the Think Tank's ideas are world marks, not posts, so they are not in this list: town { read: "ideas" } answers them` });
-  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "counts_by_state", "total", "posts", "think_tank"], "additive: the pointer rides after the rows");
+  // (until POS-732 this asserted no page fields: every class pages now, in the one pattern)
+  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "counts_by_state", "total", "shown", "limit", "offset", "complete", "posts", "think_tank"], "additive: the pointer rides after the rows");
   await post();
   const one = await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: TANK });
   assert.deepEqual([one.total, one.think_tank.ideas], [1, 2], "with an idea post, the rows are the posts and the pointer still counts the marks");

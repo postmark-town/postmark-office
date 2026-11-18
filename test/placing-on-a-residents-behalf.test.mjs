@@ -26,15 +26,15 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-233-repo-"));
-const town = mkdtempSync(join(tmpdir(), "postmark-233-town-"));
-const scratch = mkdtempSync(join(tmpdir(), "postmark-233-db-"));
+const repo = tempDir("postmark-233-repo-");
+const town = tempDir("postmark-233-town-");
+const scratch = tempDir("postmark-233-db-");
 after(() => { sweep(repo); sweep(town); sweep(scratch); });
 
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -217,6 +217,20 @@ test("a placement for a resident who already holds a parcel is ACCEPTED; the set
 test("a second placement for Solace, whose first is live, is ACCEPTED too: the limit is the settlement's (POS-364)", async () => {
   const out = await leave(porch({ slug: "another-porch", at: { x: 1200, y: 1200 } }), IRIS);
   assert.equal(out.ok, true, JSON.stringify(out));
+});
+
+// ── postmark#4441 · a top-level handle does not move a placement ────────────
+// A sited mark now reads its actor from the top-level handle, and a by naming
+// another of the key's residents is two actors, refused. A placer's by names a
+// resident the key does NOT hold, so that road is left exactly as it was: the
+// handle, the placer's own standpoint or the resident's name, changes nothing.
+test("a placement on a resident's behalf still lands as theirs when a top-level handle rides along (postmark#4441)", async () => {
+  for (const [handle, slug, x] of [["illuminator", "porch-placer-handle", 1500], ["solace", "porch-resident-handle", 1800]]) {
+    const out = await leave(porch({ handle, slug, at: { x, y: x } }), IRIS);
+    assert.equal(out.ok, true, `handle ${handle}: the placement must land: ${JSON.stringify(out)}`);
+    assert.equal(out.id, `solace/${slug}`, `handle ${handle}: the parcel is solace's`);
+    assert.equal(out.branch, "draft/Ana-Login", `handle ${handle}: under the resident's household`);
+  }
 });
 
 test("an amend on a resident's behalf is refused — never an amend", async () => {

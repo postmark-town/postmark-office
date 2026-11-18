@@ -1,6 +1,6 @@
 // read-grammar.test.mjs — explain:, the read grammar's second move (POS-632).
 //
-// One table, three doors. These hold: the fixed shape; the tutorial at an
+// One table, four doors. These hold: the fixed shape; the tutorial at an
 // empty path; an unknown path refused with the list; and COVERAGE: every key a
 // bare read can carry has a row, so a new key with no explain reds here by
 // name. The world's coverage is the v2 read with every optional block filled;
@@ -119,11 +119,13 @@ test("PR-5: the MCP server's instructions are the tutorial, the same text explai
   assert.match(MCP_INSTRUCTIONS, /DARKO/);
 });
 
-test("POS-687: the tutorial's look leads with the v2 world read, names plain world { } the older default, and says only v2 hands a cursor", () => {
+// until POS-1094 (2026-11-16) this asserted: v2 "the recommended way to look", plain world { } "the older, fuller read (still the default)"
+test("POS-687/POS-1094: the tutorial's plain world { } is the compact v2 glance, the default; the older read is read_shape: \"v1\"; only v2 hands a cursor", () => {
   const lines = TUTORIAL.split("\n");
-  const worlds = lines.filter((l) => /^\s+world \{/.test(l));
-  assert.match(worlds[0], /world \{ read_shape: "v2" \}.*the compact glance.*the recommended way to look/);
-  assert.match(worlds[1], /world \{ \}.*the older, fuller read \(still the default\)/);
+  const worlds = lines.filter((l) => /world \{/.test(l) && /^\s+(world|household) /.test(l));
+  assert.match(worlds[0], /world \{ \}.*the compact glance.*read_shape: "v2", the default.*world \{ read_shape: "v1" \} is the older, fuller read/);
+  assert.doesNotMatch(TUTORIAL, /opt-in|still the default|recommended way to look/);
+  assert.match(lines.find((l) => /^\s+household \{ \}/.test(l)), /read_shape: "v2", the default; "v1" is the older read/);
   assert.match(lines.find((l) => l.includes("4. Catch up:")), /the doorstep and the v2 world read hand you a cursor/);
   assert.doesNotMatch(TUTORIAL, /2026-w44/);
 });

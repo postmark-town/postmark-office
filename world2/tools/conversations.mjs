@@ -68,11 +68,12 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
-import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
+import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "e1004a5257f6b84756f0a28e22ea3a4cd3baa321", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
+            blob: "3e3fec2aafdd7d7d14a7b2a5dd8598b95b1737de", at: "968d780f186649a5154ba039d6f1655a2d330ce9" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -82,7 +83,7 @@ export const SAY_CLASS_NAME = "say";
 export const SAY_DIAL_SPEC = Object.freeze({
   earshot_m: [60, 1],                      // a hall, not a district
   fade_min: [5, 60 * 1000],                // on HEARING
-  conversation_lull_min: [30, 60 * 1000],  // silence that ends a conversation IN THE RECORD
+  // conversation_lull_min RETIRED (POS-779, Darko 2026-10-24): a thread splits at the settlement, not at a lull
   speak_every_s: [15, 1000],
   text_max: [500, 1],
   hear_max: [20, 1],
@@ -146,21 +147,29 @@ const distM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= earshotM;
 
 /**
- * voices.mjs `clusterVoices`, verbatim.
+ * voices.mjs `clusterVoices`, verbatim (POS-779).
  *
- * "The thread derivation (spec, 'a thread is a derivation, not an object').
- *  Voices chain into one conversation when they chain with ANY voice already in
- *  it and land within fadeMs of that cluster's latest voice; a cluster that goes
- *  quiet for fadeMs is finished and never reopens — five silent minutes at the
- *  same spot is a NEW conversation, not a continuation of the old one."
+ * "Voices chain into one conversation when they chain with ANY voice already in
+ *  it (earshot, or a shared deck). THERE IS NO LULL: inside one settlement a
+ *  conversation never expires, and a thread splits only at a settlement. A
+ *  settlement is an instant in `boundaries` (ms, any order); a voice's epoch is
+ *  how many boundaries sit at or before it, two voices in different epochs never
+ *  chain, and a finished epoch never reopens."
+ *
+ * The `fadeMs` lull path is kept for the one caller that is not the say record
+ * (the sound class's `thread_close_min`); `boundaries` absent means it.
  */
-export function clusterVoices(list, { earshotM, fadeMs } = {}) {
+export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
+  const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      if (v.at - open[i].latest > fadeMs) closed.push(...open.splice(i, 1));
+      // CORE-97: voices.mjs `clusterVoices`, verbatim: a room is over once its first settlement edge has passed AND the
+      // hour of grace after it ran out with no say belonging to it; the policy itself is imported, not copied.
+      const over = marks ? !roomOpen(open[i].latest, v.at, marks) : v.at - open[i].latest > fadeMs;
+      if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
     if (hits.length === 0) { open.push({ voices: [v], latest: v.at }); continue; }
@@ -210,17 +219,35 @@ export function threadOf(cluster, { live, voiceCap }) {
     latest: new Date(last.at).toISOString(),
     participants,
     voice_count: voices.length,
-    voices: shown.map((v) => ({
-      handle: v.handle,
-      standing: standingOf(v.handle),
-      said: v.text,
-      at: new Date(v.at).toISOString(),
-      at_ms: v.at,
-      x: Math.round(v.x),
-      y: Math.round(v.y),
-    })),
+    // THE FLAT LINE, EXTENDED ADDITIVELY (POS-1035, call 24): `handle, standing, said, at, at_ms, x, y` as ever, plus optional
+    // `id`, `reply_to` and `circle` (circles.mjs § sayLine). The circle is resolved over the WHOLE room, not the shown page.
+    voices: sayLines(shown, circleIndex(voices)),
   };
 }
+
+/**
+ * voices.mjs `pagedThread`, verbatim (POS-951): a thread's voices PAGED BACK by `voicesBefore`, the page widened to keep every voice tied on its oldest instant, with `voices_earlier`
+ * saying where the next page begins. `memoryMax` is the office's memory bound, which the store's page does not have: it passes none, and the note says the page is read from the record.
+ */
+export function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+  const meta = threadOf(cluster, { live, voiceCap: 1 });
+  const pool = Number.isFinite(voicesBefore) ? cluster.voices.filter((v) => v.at < voicesBefore) : cluster.voices;
+  let from = Math.max(0, pool.length - voiceCap);
+  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
+  const raw = pool.slice(from);
+  const voices = raw.length ? threadOf({ voices: raw }, { live, voiceCap: raw.length }).voices : [];
+  return {
+    ...meta,
+    ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ": this page is read from the record"}` } } : {}),
+    voices,
+  };
+}
+
+/** The feed's own teaching (POS-951), the same words voices.mjs `conversations()` carries (test/pos-779-vendor-equality.test.mjs holds them equal). */
+export const PLACE_NOTE = "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.";
+export const voicesNote = (voiceCap) => `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`;
+
 
 /**
  * world-journal.mjs `composeAnchor`, verbatim.
@@ -312,9 +339,13 @@ export function voiceOf(row, centreOf = null) {
         `(anchor ${JSON.stringify(row.at_anchor)}, offset ${row.at_dx},${row.at_dy}) — ` +
         `a voice with no place cannot be clustered, and {0,0} is the Origin, a real place somebody could be standing` };
     }
+    // POS-1035: a live say's act number IS its say id, and `payload.reply_to` is its one stored edge. A crystallized voice's
+    // act is the crossing save's emission, not a say, so it carries no say id: old talk stays a timeline (call 13).
+    const id = sayIdOf(row.id), replyTo = sayIdOf(p?.reply_to);
     return { era: "live", voice: {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,
-      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id) } };
+      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
+      ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) } };
   }
 
   return { refused: true, reason: `act ${row?.id} (${action}) matches no known voice era` };
@@ -426,29 +457,70 @@ export function unplacedDisclosure(unplaced = []) {
  * voices.mjs `conversations`, over voice records.
  *
  * "The page's read: every conversation in the world, live ones first. Served
- *  from the LOG, not the five-minute window — the conversation is ephemeral to
- *  attend, the record is not (Keemin: 'let's not auto-delete, so we can look
- *  back at them')."
+ *  from the LOG, not the ear's window (Keemin: 'let's not auto-delete, so we can
+ *  look back at them')."
  *
- * THE RECORD'S CLOCK, NOT THE EAR'S: clusters chain across a `closeMs` lull, not
- * a `fadeMs` one. That split is the sailing-night ruling — "agents on the deck
- * spoke ten minutes apart and the record shattered a four-hour party into serial
- * threads" — and passing `fadeMs` here would re-shatter every one of them.
+ * ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24): the same
+ * earshot grouping, the time-lull split gone. `boundaries` are the settlements
+ * (ms) at or before `now`; LIVE is the newest settlement's threads, CLOSED the
+ * earlier ones'. No boundary known: one epoch, everything live, said in
+ * `settlement_disclosed`. (The sailing night's lull ruling is superseded by this
+ * one: a four-hour party is one thread because nothing splits it but a settlement.)
+ *
+ * SHOW EARLIER (POS-779): `closed` is one PAGE of closedMax threads, newest first, and `earlier` says what is behind it:
+ * `remaining` threads and the `before` cursor to ask the next page with. `before` (ms) asks for the page of closed threads whose
+ * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
+ * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, closeMs, closedMax = 40, voiceCap = 80, fadeMs }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null, find = null }) {
   const t = now;
-  const clusters = clusterVoices(voices, { earshotM, fadeMs: closeMs });
+  const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
+  const since = marks.length ? marks[marks.length - 1] : -Infinity;
+  const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
+  // POS-1035: a named room or circle, found among every thread the record holds — voices.mjs `conversations` finds the same way
+  if (find) {
+    return {
+      now: new Date(t).toISOString(),
+      earshot_m: earshotM,
+      settlement_since: marks.length ? new Date(since).toISOString() : null,
+      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, marks), voiceCap }), source: "record" }),
+    };
+  }
   const live = [];
   const closed = [];
-  for (const c of clusters) (t - c.latest <= closeMs ? live : closed).push(c);
+  for (const c of clusters) (roomOpen(c.latest, t, marks) ? live : closed).push(c);
+  const paged = Number.isFinite(before);
+  const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
+  let cut = Math.min(closedMax, older.length);
+  while (cut < older.length && older[cut].latest === older[cut - 1].latest) cut += 1;
+  const page = older.slice(0, cut);
   return {
     now: new Date(t).toISOString(),
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
-    close_minutes: Math.round(closeMs / 60000),
-    live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-    closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
+    close_minutes: null,
+    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
+    settlement_since: marks.length ? new Date(since).toISOString() : null,
+    ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
+    place_note: PLACE_NOTE,
+    voices_note: voicesNote(voiceCap),
+    live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => pagedThread(c, { live: true, voiceCap, voicesBefore })),
+    closed: page.map((c) => pagedThread(c, { live: false, voiceCap, voicesBefore })),
+    earlier: { source: "record", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null },
   };
+}
+
+/**
+ * The scheduled heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in [fromMs, toMs]. A STAND-IN FOR TESTS AND THE
+ * OPERATOR'S FALSIFIER ONLY (POS-779): a heartbeat is a schedule, and a crossing the gate refused publishes nothing, so no read
+ * splits a thread at one. The door splits at the settlements the box PUBLISHED (src/hearing-window.mjs), and a voice older than
+ * the oldest of them is left out and said, never grouped.
+ */
+export function heartbeatEdges(fromMs, toMs) {
+  const H = 12 * 3600_000, O = 6 * 3600_000, out = [];
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return out;
+  for (let m = Math.ceil((fromMs - O) / H) * H + O; m <= toMs; m += H) out.push(m);
+  return out;
 }
 
 /** What this door says about what it could not do. */

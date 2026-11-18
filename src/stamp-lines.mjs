@@ -39,7 +39,7 @@ import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 import { NOT_LANDED, penCommit } from "./write.mjs";
 
@@ -50,9 +50,9 @@ const isLedger = (clone, p) => /(^|[\\/])WHITE_PAGES[\\/]stamp-ledger\.md$/.test
 /** Is the store write on? Only the exact value `store` turns it on. */
 export const stampLinesOn = (env = process.env) => env.STAMP_LINES === "store";
 
-/** The town's engine, from the clone (the one grammar, the one seal). */
+/** The town's engine: the office's pinned copy, checked against the clone (POS-994; the one grammar, the one seal). */
 export async function engineOf(clone) {
-  return import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+  return importTownTool(clone, "stamp-mint.mjs");
 }
 
 /** The town's public key, from the clone. */
@@ -90,6 +90,23 @@ export async function welcomeLinesVia(q) {
   const { rows: [t] } = await q.query("SELECT to_regclass('stamp_lines') IS NOT NULL AS ok");
   if (!t?.ok) return null;
   const { rows } = await q.query("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% · for: welcome:%' ORDER BY seq");
+  return rows.map((r) => r.canonical);
+}
+
+/**
+ * The canonical text of every QUEST PAYMENT the store holds (POS-976): the signed
+ * `MINT → <handle> · <n> · for: quest:<quest-id>/<household-key> · by: the-town`
+ * lines, in chain order. The same reader shape as welcomeLinesVia, for the same
+ * reason: the town's classifyEntry reads the grammar, this only hands it the
+ * lines. The store records a line only after its seal is recomputed and its
+ * signature verified (§ the verifier), so a line here is a signed line. Null when
+ * the store has no stamp_lines table (066 not applied); an empty table is an empty
+ * list. SQL only.
+ */
+export async function questPayLinesVia(q) {
+  const { rows: [t] } = await q.query("SELECT to_regclass('stamp_lines') IS NOT NULL AS ok");
+  if (!t?.ok) return null;
+  const { rows } = await q.query("SELECT canonical FROM stamp_lines WHERE canonical LIKE '% · for: quest:%/%' ORDER BY seq");
   return rows.map((r) => r.canonical);
 }
 

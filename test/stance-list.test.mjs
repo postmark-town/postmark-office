@@ -18,9 +18,9 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { CLASS_STANCE, STANCE_LIST_MAX, STANCE_TOOLS, declareStanceViaOffice, resetStanceGeometry } from "../src/world-stance.mjs";
@@ -28,7 +28,7 @@ import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool
 import { validateArgs } from "../src/validate-args.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-stance-list-"));
+const scratch = tempDir("postmark-stance-list-");
 after(() => sweep(scratch));
 
 // alpha holds a parcel from 08-01; beta, gamma and eta each lay a mark over it

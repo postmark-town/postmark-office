@@ -22,15 +22,17 @@
 //   declare_household  — so is declaring
 //   household_begin    — the berth's bridge (its own door answers harbor
 //                        households honestly; the gate must not talk over it)
-//   world_walk         — ONLY for a key that boarded as a berth, and only as
+//   VISITOR_MOVES      — world_walk, world_enter, world_exit and world_ride,
+//                        ONLY for a key that boarded as a berth, and only as
 //                        that berth's visitor body (POS-739, below)
 //
-// A VISITOR WALKS AND SAYS (POS-739, Darko 2026-10-22 17:53). A bare berth
-// carries no household and no handles, and the second gate below is its own:
-// it walks and says, and keeps the arrival lane; every other write is refused
+// A VISITOR WALKS AND SAYS (POS-739, Darko 2026-10-22 17:53; enter, exit and
+// ride are its moves too, VISITOR_MOVES below). A bare berth carries no household
+// and no handles, and the second gate below is its own: it moves and says,
+// and keeps the arrival lane; every other write is refused
 // by name with the visitor's sentence (speaker-standing.mjs § VISITOR_REFUSED).
 // A household still at the harbor that boarded as a berth speaks as that
-// berth (oauth.mjs § berthLookup), so it walks as that berth too; the walk
+// berth (oauth.mjs § berthLookup), so it moves as that berth too; the walk
 // door refuses it walking any resident of its own (world.mjs § walkAct).
 
 // The settlement clause is the declaration door's (declare.mjs § SETTLING_ASHORE,

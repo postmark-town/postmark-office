@@ -27,7 +27,8 @@
 //    fresh `generated_at` on every run, so copying it in unconditionally would
 //    put a commit on world main every twelve hours forever, whether or not one
 //    household changed — and would turn every quiet crossing into a crossing
-//    that moved main. So the SUBSTANCE (`households` + `logins`) is compared
+//    that moved main. So the SUBSTANCE (`households`, `logins`, `admins` and
+//    `pinned_ids`) is compared
 //    against the copy already committed in the sweep clone, and only a real
 //    difference is written.
 //
@@ -85,7 +86,9 @@ let prior = null;
 try { prior = JSON.parse(readFileSync(dest, "utf8")); } catch { /* first refresh, or no registry in this world */ }
 
 // `admins` (WLD-21) is substance too: a role granted or revoked with no handle moving is a change the World's gates read.
-const substance = (r) => JSON.stringify([r?.households ?? null, r?.logins ?? null, r?.admins ?? []]);
+// So is `pinned_ids` (WLD-122): the PR lane binds an author by it alone. Left out, a quiet crossing never
+// rendered it onto main, and an id re-pinned or dropped with no handle or login moving kept its old authority.
+const substance = (r) => JSON.stringify([r?.households ?? null, r?.logins ?? null, r?.admins ?? [], r?.pinned_ids ?? null]);
 
 // ── WRITE WHEN THE MAPPING MOVED, *OR* WHEN THE STANDING FILE IS UNSTAMPED ───
 //
@@ -112,6 +115,7 @@ const rekeyed = Object.keys(fh).filter((h) => h in ph && ph[h] !== fh[h])
 const pa = new Set(prior?.admins ?? []), fa = new Set(fresh.admins ?? []);
 const adminsGained = [...fa].filter((k) => !pa.has(k)).sort();
 const adminsLost = [...pa].filter((k) => !fa.has(k)).sort();
+const pinnedMoved = JSON.stringify(prior?.pinned_ids ?? null) !== JSON.stringify(fresh.pinned_ids ?? null);
 
 if (changed) {
   mkdirSync(dirname(dest), { recursive: true });
@@ -131,6 +135,7 @@ const movedLine = [
   rekeyed.length ? `${rekeyed.length} re-keyed` : null,
   adminsGained.length ? `admin: ${adminsGained.join(", ")}` : null,
   adminsLost.length ? `admin no longer: ${adminsLost.join(", ")}` : null,
+  pinnedMoved ? `pinned ids re-bound (${Object.keys(fresh.pinned_ids ?? {}).length} bound)` : null,
 ].filter(Boolean).join(", ") || "no membership change";
 
 const commitMessage = `settlement: household registry re-derived from the town at ${short}

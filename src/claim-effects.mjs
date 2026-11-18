@@ -32,6 +32,49 @@
 // at them. `retracted` writes none either — the resident did it, and the
 // backlog is for what happened TO you.
 //
+// ── A FOURTH, AND IT IS NOT A CLAIM (POS-731) ─────────────────────────────
+//
+//   mark-withdrawn   a published mark its author withdrew LEFT CANON: the
+//                    settlement's sweep took it out of the world and the store
+//                    retired it (`marks.status = 'retired'`, `retired_cause =
+//                    'settlement-withdraw'`, WLD-88)
+//
+// It is read from the `marks` table, not from `claims`. The store records no
+// claim retirement status, and the author's own request to withdraw is not the
+// mark leaving canon (it is a request until the settlement acts on it), so a
+// still-standing mark, a withdrawn DRAFT, a mark another door retired and
+// somebody else's mark all write nothing. What the store records is the window
+// the retirement was ruled in, not an instant: the instant is the SETTLEMENT
+// that window opened for, the derivation `alerts.mjs § settlementOfWindow`
+// already holds for the same retire step ("the settlement that took it"), and
+// the crossing is the ferry's crossing of that instant. The retirement's
+// `window` is the candle window the retire step ran in, the number the door's
+// own "already retired at candle N" refusal names; it is neither the cursor,
+// nor the claim's window, nor the settlement number.
+//
+// TWO LIMITS OF THAT SOURCE, BOUNDED AND SAID (POS-731 review; `to_you`'s note
+// and the outcomes description say both to the agent):
+//
+//   · LATEST STATE, NOT HISTORY. `marks.slug` is unique, and a mark put forward
+//     again goes `standing` with `retired_window` cleared, so a withdrawal that
+//     is later undone is not kept, and a mark withdrawn twice shows only the
+//     latest. The claim events persist; this one is as replayable as the
+//     `marks` row, which is the store's, and a history for it would be a schema
+//     or write change that is not this build's.
+//   · A SCHEDULED DATE, NOT A RECORDED INSTANT. The store records the window the
+//     retire step ran in, not when it ran, so the instant is the SCHEDULE of the
+//     settlement that window opened for (06:00 / 18:00Z). That is right for the
+//     run on schedule, and for a retire-only retry (it runs under the next
+//     settlement's window and is dated there). It is early for a settlement run
+//     that finishes after the next ferry crossing: an 18:00Z run completing
+//     after 00:00Z, before the 05:45:40 clearing opens the next window, still
+//     reads the 17:45:40 window and is dated 18:00Z, a crossing before it
+//     happened. An agent that read `since:` in between and passes that reply's
+//     `crossing` next pages past the event. Claim events carry their real
+//     `decided_at` and have no such edge. It needs one settlement more than six
+//     hours late, and the cure is a recorded retirement instant, which is a
+//     schema/write change this build does not make.
+//
 // ── THE CURSOR IS THE FERRY'S CROSSING, AND IT IS SAID SO ──────────────────
 //
 // `since:` is the world's 00:00/12:00Z crossing (`crossings.mjs §
@@ -41,11 +84,26 @@
 // lines up). Naming one and printing the other is the R4 finding.
 
 import { currentCrossing } from "./crossings.mjs";
-import { causeOf, refusalCheckOf, opposedLawOf } from "./mark-receipt.mjs";
+import { causeOf, refusalCheckOf, opposedLawOf, receiptFrom } from "./mark-receipt.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { settlementOfWindow } from "./alerts.mjs"; // POS-731: the settlement a retirement window names (review-220-577 4a)
 
 /** How many ferry crossings back the doorstep's `outcomes` and my-marks' `refused` look. */
 export const RULINGS_SINCE_CROSSINGS = 2;
+
+/** `marks.retired_cause` for a published mark its author withdrew (world2/tools/retire-unpublished.mjs § WITHDRAW_CAUSE; bound by test/withdrawn-outcomes.test.mjs). */
+export const WITHDRAW_RETIRE_CAUSE = "settlement-withdraw";
+
+/**
+ * The withdrawn retirements this read cannot place on a crossing: a row that
+ * names no window opening to date the settlement by. Pure. A caller owes the
+ * reader a disclosure for these: a retirement that cannot be dated is not a
+ * retirement that did not happen.
+ */
+export function unplacedWithdrawals(withdrawn = []) {
+  return (withdrawn ?? []).filter((w) => w?.slug && w.retired_cause === WITHDRAW_RETIRE_CAUSE
+    && !settlementOfWindow(w.opens_at)).map((w) => w.slug);
+}
 
 /**
  * The events a set of `claims` rows implies for one resident, in cursor order.
@@ -59,8 +117,14 @@ export const RULINGS_SINCE_CROSSINGS = 2;
  * @param nowCrossing   the crossing this read is taken at
  * @param mine          a predicate: is this mark one of my residents'?
  * @param onMyGround    a Set of mark ids standing on ground the caller holds
+ * @param withdrawn     `marks` rows the settlement retired as withdrawn (POS-731):
+ *                      { slug, owner, retired_window, retired_cause, opens_at }
+ * @param mineOwners    a Set of the handles whose marks are the house's: the
+ *                      withdrawn event is the mark OWNER's, and nothing else
+ *                      (no slug prefix, no custody, no ground: the ground a
+ *                      withdrawn mark stood on is history this read does not rebuild)
  */
-export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine = () => false, onMyGround = new Set() }) {
+export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine = () => false, onMyGround = new Set(), withdrawn = [], mineOwners = new Set() }) {
   const events = [];
   // `at` IS ISO (Keemin, 2026-09-27: "yeah everything iso please"). The store
   // hands `decided_at` back as a Date, and String(Date) is "Sat Sep 26 2026 …",
@@ -137,6 +201,25 @@ export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine =
       }
     }
   }
+
+  // THE WITHDRAWN MARK LEAVING CANON (POS-731). Only a retirement the settlement
+  // ruled under the withdraw cause, on a mark one of this house's owners holds,
+  // dated by the settlement its window opened for. A row with no such date
+  // writes nothing here and is the caller's to disclose (`unplacedWithdrawals`).
+  for (const w of withdrawn ?? []) {
+    if (!w?.slug || w.retired_cause !== WITHDRAW_RETIRE_CAUSE) continue;
+    if (!mineOwners.has(w.owner)) continue;
+    const when = settlementOfWindow(w.opens_at);
+    if (!when) continue;
+    const c = crossingAt(when);
+    if (!within(c)) continue;
+    const win = Number(w.retired_window);
+    events.push({
+      kind: "mark-withdrawn", mark: w.slug, at: at(when), crossing: c,
+      window: Number.isInteger(win) ? win : null, yours: true, on_your_ground: false,
+      summary: `${w.slug} was withdrawn and left the world, retired at candle ${Number.isInteger(win) ? win : "?"}`,
+    });
+  }
   // ISO sorts as text in instant order; a null `at` sorts first.
   return events.sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")));
 }
@@ -181,9 +264,30 @@ export async function readClaimEffects({ key, handles = [], sinceCrossing, nowCr
   }
 
   const mine = (id, row) => mineSet.has(row?.claimant) || mineSet.has(String(id).split("/")[0]);
+
+  // THE RETIREMENTS (POS-731), a second read beside the docket's, for the house's
+  // own marks only. It is its own try on purpose: a store that answered the
+  // docket and not the marks table cannot say a withdrawn mark of yours left, and
+  // "nothing of yours was withdrawn" would be the confident empty answer this
+  // read exists to refuse. The claim events it did read stay, the answer says it
+  // is not whole, and `to_you`'s `complete` follows.
+  let withdrawn = [];
+  let problem = null;
+  if (mineSet.size) {
+    try {
+      const { withdrawnRetirementsSince } = await import("./world2-claims.mjs");
+      withdrawn = await withdrawnRetirementsSince(since, { owners: [...mineSet] });
+    } catch (e) {
+      problem = `the retirements of your withdrawn marks could not be read (${plainReason(e, "record", "the retirement record")})`;
+    }
+    const unplaced = unplacedWithdrawals(withdrawn);
+    if (!problem && unplaced.length)
+      problem = `${unplaced.length} withdrawn mark${unplaced.length === 1 ? "" : "s"} of yours (${unplaced.slice(0, 3).join(", ")}) left the world at a window the store does not date, so ${unplaced.length === 1 ? "it" : "they"} cannot be placed on a crossing`;
+  }
+  const events = claimEffectsFrom({ rows, sinceCrossing, nowCrossing, mine, onMyGround, withdrawn, mineOwners: mineSet });
   return {
-    readable: true, store: "docket",
-    events: claimEffectsFrom({ rows, sinceCrossing, nowCrossing, mine, onMyGround }),
+    readable: problem === null, store: "docket", events,
+    ...(problem ? { reason: problem, missing: "your withdrawn marks' retirements" } : {}),
   };
 }
 
@@ -337,6 +441,131 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
   return {
     since_crossing: since, through_crossing: now, count: rows.length, rows,
     ...(effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read — that is not the same as nothing refused" } : {}),
+  };
+}
+
+// ── MY-MARKS' `locked` (bug post #4014) ───────────────────────────────────
+//
+// kogane, 2026-10-19, the bug post's own kept record: "Expected: the bare read
+// shows the bowl on some shelf while it is locked and waiting for its
+// settlement. … The bowl was on no shelf."
+//
+// A claim the candle has ruled for is `locked`, and it stays `locked` for good:
+// the status set has no `carried` (world2/schema 001, 007), so a claim a
+// settlement carried long ago is still `locked` in the store. The overlay
+// behind drafts and docket reads only draft and pending (guard-reads.mjs §
+// LIVE_STATUSES, a constant the write-path guards read too), so a locked claim
+// never reached my-marks at all. The shelf is derived the way `refused` is, and
+// for the same reason: the doorstep's `outcomes` already say "the candle ruled
+// for it" from these events, and one question must not have two derivations.
+//
+// RULED (Wright, 2026-11-02 00:4x EST, on postmark-office#839, quoted):
+//   · "B: locked rows come from claim effects, the way `refused` does. Add
+//      `lockedRowsFrom(events, canonIds)` beside `refusedRowsFrom`, derived from
+//      `readClaimEffects` over the same two-crossing window, skipping slugless
+//      rows, and shared by both doors. `LIVE_STATUSES` and the overlay reader
+//      stay as they are, since the write-path guards read the same constant."
+//   · "'Not yet carried' is canon-absence, the 1.0 focused read's own rule,
+//      inside that two-crossing bound."
+//   · "`held_review` waits for its own ruling. It isn't on this shelf."
+//
+// CANON-ABSENCE IS `mark-receipt.mjs § receiptFrom`'s own order: "1 · PUBLISHED.
+// Canon holds it, so the settlement ruled and the answer is a fact about the
+// world, whatever the docket says about the claim behind it" comes first, and
+// only then does a locked row say `locked`. So a locked claim whose mark canon
+// holds is `published`'s, and the shelf never lists it.
+//
+// WHAT THE RULING LEAVES, NAMED (on 1.0 none of it is new behaviour; where the twin differs, it says so):
+//   · a locked AMEND of a mark canon already holds is not on the shelf on 1.0
+//     (canon holds the id); it was invisible before and still is. That is 1.0's
+//     (canon-absence); the twin (world2-serve.mjs § world2MyMarks, POS-865) hands
+//     this function only the marks it calls CARRIED, by the receipt's window rule
+//     on the NEWEST lock (`marks.locked_window` beyond the newest window a
+//     settlement closed), so a carried mark whose amend no settlement has carried
+//     yet is not in that canon: it is on the shelf (and off `published`) there
+//     until the amend is carried. The two callers differ here, by the ruling.
+//   · the two-crossing window is this function's, for both callers: a locked
+//     claim no settlement has carried, older than the window, is on no shelf (on
+//     the twin it is also off `published`, while a settlement is stalled).
+//   · a locked claim whose mark was withdrawn or swept after the candle reads as
+//     waiting until the two crossings pass. On 1.0 the focused read says the same:
+//     `readMarkReceipt` never passes `settled_window`, so `receiptFrom`'s
+//     closed-candle branch ("it left after it was ruled") never fires there. The
+//     twin's own receipt does pass it, so on the twin the bare read and the
+//     focused read differ for those crossings. Left alone: POS-865's carried-or-not window rule does not decide it.
+//   · a mark that is also on `docket` (an amend put forward over a locked
+//     claim) or in `backed` (it carries stamps) is listed on both shelves; each
+//     shelf is true of a different claim, and none of the existing lists
+//     excludes the others but `published`.
+
+/**
+ * What a locked claim's row says: the focused read's own sentence, TAKEN FROM
+ * `receiptFrom` (its `locked` branch) and not copied beside it, so a change to
+ * that sentence changes this one and the two reads cannot tell it two ways. A
+ * locked claim with no canon and no settled window is exactly the case the
+ * shelf lists. A window the event does not carry reads "?"; `receiptFrom`
+ * would print "null".
+ */
+const lockedSays = (mark, window) => receiptFrom({ id: mark, claims: [{ slug: mark, status: "locked", window_id: window ?? "?" }] }).says;
+
+/**
+ * The household's own `claim-locked` events that no settlement has carried, as
+ * my-marks rows, one per mark. Pure.
+ *
+ * `events` are `claimEffectsFrom`'s, which already skip a slugless claim (it
+ * names no mark; `test/slugless-claims.test.mjs` binds that), kept here to
+ * `claim-locked` and to `yours` (a portfolio is what the household authored,
+ * not what was laid on its ground — `refusedRowsFrom`'s rule). `canonIds` is
+ * the ids canon holds: a mark in it has been carried.
+ *
+ * ONE ROW PER MARK, THE NEWEST RULING DECIDING — `receiptFrom`'s own rule ("the
+ * newest row the store holds for this slug decides the tense; older rows are its
+ * history"). A mark locked, then amended and locked again before either was
+ * carried is one mark on one shelf, at the later candle.
+ *
+ * The row is `id`-keyed like every other shelf's (`markPage` names what it
+ * withholds by `id`) and carries no position, body or kind: the events do not
+ * (that is the cost of deriving it as `refused` is derived). `locked_at`, not
+ * `at`: on a mark row `at` is the mark's place on the grid.
+ */
+export function lockedRowsFrom(events = [], canonIds = new Set()) {
+  const carried = canonIds instanceof Set ? canonIds : new Set(canonIds);
+  const newest = new Map();
+  for (const e of events) {
+    if (e.kind !== "claim-locked" || !e.yours || !e.mark) continue;
+    if (carried.has(e.mark)) continue;
+    const had = newest.get(e.mark);
+    if (!had || String(e.at ?? "") >= String(had.at ?? "")) newest.set(e.mark, e);
+  }
+  return [...newest.values()]
+    .map((e) => ({
+      id: e.mark,
+      by: String(e.mark).split("/")[0],
+      window: e.window ?? null,
+      locked_at: e.at ?? null,
+      says: lockedSays(e.mark, e.window),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * The household's own claims the candle locked in the last two crossings and
+ * that canon does not hold yet. `readable: false` is carried as `unavailable`,
+ * never as an empty list: "nothing is waiting" and "the docket could not be
+ * read" are different sentences (`myMarksRefused`'s rule, for the same store).
+ *
+ * The window is `myMarksRefused`'s (`RULINGS_SINCE_CROSSINGS`), so the two
+ * blocks speak of the same two crossings. Both my-marks doors call this one
+ * function, handed their own roster and their own canon.
+ */
+export async function myMarksLocked(handles = [], { key = null, nowMs = Date.now(), canonIds = new Set() } = {}) {
+  const through = currentCrossing(nowMs);
+  const from = Math.max(0, through - RULINGS_SINCE_CROSSINGS);
+  const effects = await readClaimEffects({ key, handles: [...handles], sinceCrossing: from, nowCrossing: through });
+  const rows = lockedRowsFrom(effects.events ?? [], canonIds);
+  return {
+    since_crossing: from, through_crossing: through, count: rows.length, rows,
+    ...(effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read — that is not the same as nothing waiting to be carried" } : {}),
   };
 }
 

@@ -23,7 +23,7 @@ import { join } from "node:path";
 
 import { LivingSet, loadCreatureLaw, reactTo, dial } from "../src/creatures.mjs";
 import {
-  AIMED_JEV_MS, AIMED_WAIT_MS, APPROACH_STOP, CREATURE_VERBS, SIGHT_M, WORDS_MAX,
+  AIMED_JEV_MS, AIMED_WAIT_MS, APPROACH_STOP, CREATURE_VERBS, FIGHT_VERBS, SIGHT_M, WORDS_MAX,
   creatureEntries, creaturePairs, whyNot, worldCreature,
 } from "../src/creature-verbs.mjs";
 import { canOn, canVerbs } from "../src/usable-verbs.mjs";
@@ -85,7 +85,10 @@ test("the law at the pin declares the afforded actions per kind, and the office 
   assert.deepEqual(LAW.affordedOf("bat").map((a) => a.action), ["watch", "approach", "shoo", "whisper"]);
   assert.deepEqual(LAW.affordedOf("raven").map((a) => a.action), ["watch", "approach", "shoo", "call", "offer"]);
   assert.deepEqual(LAW.affordedOf("wolf").map((a) => a.action), ["watch", "approach", "shoo", "call", "offer"]);
-  assert.deepEqual([...LAW.kindMod.AFFORDED_VERBS], [...CREATURE_VERBS], "the door's six are the world's six");
+  // Until the pin carried the fight (POS-896) this held the world's list equal to the six alone. The world now declares the fight's two
+  // as well, and the office keeps them apart (src/creature-verbs.mjs: FIGHT_VERBS, handed over only once the blessed law knows them),
+  // so the expectation is the office's own two lists joined, never the world's list read back.
+  assert.deepEqual([...LAW.kindMod.AFFORDED_VERBS], [...CREATURE_VERBS, ...FIGHT_VERBS], "the door's six and the fight's two are the world's eight");
   // a ref with no afforded actions (before the world half) reads none, and the law is otherwise whole
   const older = await loadCreatureLaw({ ref: "older", importTool: (f) => import(worldModuleUrl("tools", f)),
     readText: (path) => readFileSync(join(worldClone(), path), "utf8"), lawRecords: async () => { throw new Error("no marks here"); } });
@@ -185,6 +188,42 @@ test("refusals: which resident, not yours, no law (503), no afforded actions (40
   await assert.rejects(d.run({ act: "watch", creature: BAT }), (e) => e.code === 410 && /gone/.test(e.defect) && /fled/.test(e.hint));
   await assert.rejects(door().run({ act: "watch", creature: BAT, words: "hi" }), /watch carries no words/);
   await assert.rejects(door({ here: { x: 1000, y: 10 } }).run({ act: "call", creature: RAVEN, words: "x".repeat(WORDS_MAX + 1) }), /more than a call carries/);
+});
+
+// ── a creature that is gone says how it left (WLD-131; bug post postmark-town/postmark#4288) ──
+//
+// RULED (WLD-96, Darko 2026-10-21 19:39 and 19:41 EDT; his own words are not in this repo, the office records the ruling at
+// src/creatures.mjs § NEVER_FADES): a creature does not fade; it flees, or its settlement ends it. Wright on WLD-131
+// (2026-10-30), about this very refusal: "name the real way it left (fled, or ended at its settlement)". `faded` stays
+// honoured for the past, because old withdraw rows carry it (the WLD-131 gate). The bug post: a boss that ended at S139 and
+// never faded answered a watch with "it faded back into the Mists". Before this case the door read every reason that was
+// not `fled` as `faded`, so an ended creature was refused as faded.
+test("WLD-131 / bug post #4288: a watch on a creature that is gone says how it left: it fled, it ended at its settlement, or (an old row) it faded", async () => {
+  // the three withdraws, each in the shape its writer gives: a creature's own flee; the town's ending of a named creature
+  // (named-creature-ending.test.mjs pins this payload); the town's old 12 h fade (crossing-save-creatures.test.mjs)
+  const withdraws = {
+    fled: { actor: BAT, payload: { reason: "fled" } },
+    ended: { actor: "the-town", payload: { reason: "ended", finished_by: "kai", act: "20", took_part: ["kai"], carried: "the-town/a-thing", settlement: 139, cutoff: iso(NOW - 3600_000) } },
+    faded: { actor: "the-town", payload: { reason: "faded", fades_at: iso(NOW - 3600_000) } },
+  };
+  const said = {};
+  for (const [how, w] of Object.entries(withdraws)) {
+    const living = livingWith(spawnRow(BAT, "bat"), { id: "9", at: iso(NOW - 60_000), action: "withdraw", object: BAT, ...w });
+    // a control: the fold took the withdraw as `how`, or the door would not refuse at all and this loop would measure nothing
+    assert.equal(living.byId.get(BAT).gone, how, `the fold took the ${how} withdraw`);
+    const d = door({ living });
+    const e = await d.run({ act: "watch", creature: BAT }).then(() => null, (err) => err);
+    assert.ok(e, `a watch on a creature that ${how} is refused`);
+    assert.equal([e.code, e.defect].join(" "), "410 the bat is gone", `${how}: the refusal is the 410`);
+    assert.ok(nothingDone(d.calls), `nothing was done: ${how}`);
+    said[how] = e.hint;
+  }
+  // the whole map at once, so one red shows which of the three moved; equality, not a match, so "and it is NOT the other two"
+  assert.deepEqual(said, {
+    fled: "it fled back into the Mists; a creature never comes back. Nothing was done.",
+    ended: "it ended at its settlement; a creature never comes back. Nothing was done.",
+    faded: "it faded back into the Mists; a creature never comes back. Nothing was done.",
+  }, `LAW (Wright, WLD-131): "name the real way it left (fled, or ended at its settlement)"; got ${JSON.stringify(said)}`);
 });
 
 test("D6: an afforded action inside the 10 s window is refused before anything happens, so an offer uses nothing up", async () => {

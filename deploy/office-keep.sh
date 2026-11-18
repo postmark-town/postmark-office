@@ -34,7 +34,8 @@ set -eu
 # The keep units read /etc/postmark-world2-dev.env for the law pen, and systemd
 # hands every key in it to this script: four PG_*_PASSWORD values, the store
 # owner's included. The tick runs town-repo code (tools/stamp-verify.mjs,
-# tools/stamp-mint.mjs, tools/household-keys.mjs) that has no business holding
+# tools/stamp-mint.mjs, tools/household-keys.mjs; since POS-994 the office's
+# pinned copies of them, through src/town-tool.mjs) that has no business holding
 # any of them. So the law pen's is kept in a shell variable, never exported, and
 # all four leave the environment here, before the first child; the world step
 # alone is handed the one it needs (§ the world hydration).
@@ -109,6 +110,66 @@ trap 'KEEP_SIGNAL=HUP; exit 129' HUP
 # read nothing is written, and each tool handed the path refuses by name.
 REGISTRY_FILE="$SNAP/registry.json"
 
+# ── THE TICK'S OWN UNLANDED COMMIT (POS-1030) ────────────────────────────────
+# 2026-11-13 15:24Z: the mint pass committed two owed bug-stage payments, its
+# push lost a race to the Bug Catcher, and the commit stayed in the town clone
+# ahead of main. Every later tick's `pull --ff-only` refused, and the clone
+# stayed wedged until a hand reset it at 16:02Z. A commit is not a push, and a
+# push that answers no is not proof that nothing landed: the remote may have
+# taken it and the answer been lost. So THE REMOTE TIP IS THE RECEIPT, as it is
+# for the pen's own ceremony (src/write.mjs § landCommit):
+#   · the mint pass records its commit and that commit's parent in the clone's
+#     git directory BEFORE it pushes, so a tick stopped between the two leaves
+#     the record for the next one;
+#   · a push that answers no is settled at once, from a fresh fetch:
+#       landed       the commit is on the town's main: the push is done,
+#                    whatever it answered, and nothing is minted again;
+#       unmade       it is not, and the clone's HEAD is still exactly that
+#                    commit on its recorded parent: it is unmade, `reset --keep`
+#                    to the parent, which moves only the commit's own change
+#                    and refuses rather than touch other dirt. Every row in it
+#                    is derived, so the next tick mints them once, on main's
+#                    new tail. A signed line is never rebased;
+#       unconfirmed  the fetch or a read failed: nothing is discarded, the
+#                    record stays, and the next tick asks again;
+#       moved        another writer has committed on top of it in the clone:
+#                    that work is never taken away, so nothing is reset and the
+#                    record stays;
+#       gone         it is in neither the clone nor the town's main (a hand
+#                    reset it away): nothing of the tick's is left to settle;
+#   · the next tick settles any record BEFORE its pull, and signs no new line
+#     while one is still unsettled.
+# Only the commit the record names is ever unmade. Nothing earlier (a drain's
+# commit, the store runner's landed mint) is touched. Always answers 0, with
+# one word on stdout; what it did goes to the journal from its callers.
+KEEP_UNLANDED_NAME=office-keep-unlanded
+keep_settle_unlanded() {
+  # no git directory holds no record: whatever is wrong with the clone, its pull says so
+  ku_dir="$(git -C "$TOWN_CLONE" rev-parse --absolute-git-dir 2>/dev/null)" || { echo none; return 0; }
+  ku_rec="$ku_dir/$KEEP_UNLANDED_NAME"
+  [ -s "$ku_rec" ] || { echo none; return 0; }
+  ku_own="" ku_base=""
+  read -r ku_own ku_base < "$ku_rec" || true
+  if [ -z "$ku_own" ] || [ -z "$ku_base" ]; then echo unconfirmed; return 0; fi
+  git -C "$TOWN_CLONE" fetch -q origin || { echo unconfirmed; return 0; }
+  # merge-base --is-ancestor: 0 is yes, 1 is no, anything else is a read that failed
+  if git -C "$TOWN_CLONE" merge-base --is-ancestor "$ku_own" "@{upstream}" 2>/dev/null; then
+    rm -f -- "$ku_rec"; echo landed; return 0
+  else ku_rc=$?; fi
+  [ "$ku_rc" = 1 ] || { echo unconfirmed; return 0; }
+  ku_head="$(git -C "$TOWN_CLONE" rev-parse HEAD 2>/dev/null)" || { echo unconfirmed; return 0; }
+  if [ "$ku_head" = "$ku_own" ]; then
+    ku_parent="$(git -C "$TOWN_CLONE" rev-parse "$ku_own^" 2>/dev/null)" || { echo unconfirmed; return 0; }
+    [ "$ku_parent" = "$ku_base" ] || { echo unconfirmed; return 0; }
+    if git -C "$TOWN_CLONE" reset -q --keep "$ku_base"; then rm -f -- "$ku_rec"; echo unmade; else echo rollback-failed; fi
+    return 0
+  fi
+  if git -C "$TOWN_CLONE" merge-base --is-ancestor "$ku_own" HEAD 2>/dev/null; then echo moved; return 0
+  else ku_rc=$?; fi
+  [ "$ku_rc" = 1 ] || { echo unconfirmed; return 0; }
+  rm -f -- "$ku_rec"; echo gone
+}
+
 # ── under the lock: mutate + snapshot (seconds) ──────────────────────────────
 # The world clone gets FETCH, never pull: its checkout is the write pen's
 # (ensureDraftCheckout reseats it per-write), and a pen branch diverged from a
@@ -120,8 +181,27 @@ REGISTRY_FILE="$SNAP/registry.json"
   # Fatal as before (set -e): each records its refusal and exits with its own code.
   flock -w 300 9 || { keep_rc=$?; keep_step lock refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step lock ok
-  git -C "$TOWN_CLONE" pull --ff-only -q || { keep_rc=$?; keep_step pull refused "exit:$keep_rc"; exit "$keep_rc"; }
-  keep_step pull ok
+  # An earlier tick's mint commit whose landing it could not confirm is settled
+  # first (§ the tick's own unlanded commit), so this pull meets a clone that
+  # holds nothing of the tick's that the town's main does not.
+  ku_settled="$(keep_settle_unlanded)"
+  case "$ku_settled" in
+    none) ;;
+    landed) echo "[office-keep] an earlier tick's mint commit, whose push answered no, is on the town's main after all: it landed, and nothing is minted again" >&2 ;;
+    unmade) echo "[office-keep] an earlier tick's mint commit never landed: it is UNMADE to its parent so this pull can move; its rows are derived, and this tick mints them on main's tail" >&2 ;;
+    gone) echo "[office-keep] an earlier tick's unlanded mint commit is no longer in the clone (reset away by hand); its record is cleared" >&2 ;;
+    *) echo "[office-keep] an earlier tick's mint commit could not be settled ($ku_settled): it is KEPT, and no new line is signed onto it (git -C $TOWN_CLONE log -1; the record is $KEEP_UNLANDED_NAME in its git directory)" >&2 ;;
+  esac
+  git -C "$TOWN_CLONE" pull --ff-only -q || {
+    keep_rc=$?
+    case "$ku_settled" in unconfirmed|moved|rollback-failed) keep_step pull refused "$ku_settled" ;; *) keep_step pull refused "exit:$keep_rc" ;; esac
+    exit "$keep_rc"
+  }
+  case "$ku_settled" in
+    landed) keep_step pull ok landed-unacked ;;
+    unmade|gone) keep_step pull ok "$ku_settled" ;;
+    *) keep_step pull ok ;;
+  esac
   git -C "$WORLD_CLONE" fetch --prune -q origin || { keep_rc=$?; keep_step fetch refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step fetch ok
   if node /srv/postmark-office/deploy/registry-file.mjs "$REGISTRY_FILE"; then keep_step registry ok
@@ -208,19 +288,41 @@ REGISTRY_FILE="$SNAP/registry.json"
   #     welcome plan re-reads the ledger, so the household waits one tick.
   # A pass that changed nothing skips the second verify: the arrival check
   # already read these exact bytes, so the quiet tick costs one verify, as before.
-  # The trap disarms the moment the commit lands; a push that then fails leaves
-  # a local commit, exactly as it did before this block.
+  # The trap disarms the moment the commit is made: from there the commit is
+  # what is owed back, and a push that then fails is settled by
+  # keep_settle_unlanded (POS-1030), never left ahead of main.
   ( cd "$TOWN_CLONE" || { keep_step mint refused prep-failed; exit 1; }
     # nothing to roll back unless this pass arms; restore() below overrides
     keep_step rollback ok not-needed
     LEDGER=WHITE_PAGES/stamp-ledger.md
+    # An earlier tick's mint commit still unsettled after the pull (unconfirmed,
+    # or another writer on top of it): no new line is signed onto a tail the
+    # town's main may never hold.
+    if [ -s "$(git rev-parse --absolute-git-dir)/$KEEP_UNLANDED_NAME" ]; then
+      echo "[office-keep] mint catch-up OFF — the clone holds an earlier tick's mint commit that is not known to have landed (the line above names it), so this tick appended nothing; the catch-up resumes on the first tick that settles it" >&2
+      keep_step mint refused prereq:unlanded
+      exit 0
+    fi
     # The arrival check reads "mints owed" and "settlement owed" as not red
     # (POS-341, Darko 2026-10-20 15:38): they are exactly what this pass pays.
     # A crossing whose ingest failed skips its store mint and leaves them for
     # this tick, and a plain verify here would refuse the catch-up that pays them.
     # Anything else the town verifier finds is still red, and every verify after
     # a write below stays the plain one (tools/stamp-verify-owed.mjs).
-    if ! node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE"; then
+    arrived_rc=0
+    node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE" || arrived_rc=$?
+    if [ "$arrived_rc" -eq 3 ]; then
+      # POS-994: the pin stopped the arrival check (the town's verifier is not the office's pinned copy). Not a red ledger.
+      echo "[office-keep] mint catch-up OFF — the town's code is not the office's pinned copy (the line above names the file), so this tick appended nothing; it resumes once the pin and the town agree" >&2
+      keep_step mint refused town-pin-mismatch
+      exit 0
+    elif [ "$arrived_rc" -eq 2 ]; then
+      # POS-994: the office could not prepare the check (no pins, or pins without
+      # the public key): its own defect, not a red ledger
+      echo "[office-keep] mint catch-up OFF — the office could not prepare the arrival check (the line above says why), so this tick appended nothing; it is the office's to tend, not the ledger's" >&2
+      keep_step mint refused prep-failed
+      exit 0
+    elif [ "$arrived_rc" -ne 0 ]; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       # exit 0 keeps the tick's flow as it was; the receipt says what it is: the mint REFUSED
       keep_step mint refused ledger-red
@@ -282,13 +384,27 @@ REGISTRY_FILE="$SNAP/registry.json"
       cp "$LEDGER" "$HOLD/ledger.arrived" || { keep_step mint refused prep-failed; exit 1; }
       git rev-parse HEAD > "$HOLD/head.arrived" || { keep_step mint refused prep-failed; exit 1; }
     else
-      node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || { keep_step mint refused mint-failed; exit 1; }
+      # POS-994: the office's pinned copy of the town's mint, checked against the
+      # clone (exit 3 and its words on stderr when they differ: nothing runs).
+      # A pin stop (the door's exit 3) is named as one, never as a failed mint (Truey's review of #1065, finding 4).
+      node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step mint refused town-pin-mismatch; else keep_step mint refused mint-failed; fi; exit 1; }
     fi
     keep_step mint ok
     if node /srv/postmark-office/deploy/welcome-pass.mjs \
         --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem; then keep_step welcome ok
     else keep_step welcome refused "exit:$?"
       echo "[office-keep] welcome pass had refusals (non-fatal) — the lines above name each one; the household keeps its claim and the next crossing asks again" >&2
+    fi
+    # Bring a neighbour (POS-816, Darko 2026-10-28: the invite mint is
+    # deterministic). AFTER the welcome pass, because an invited household's 5
+    # more follows its welcome on the ledger and the town refuses it otherwise;
+    # BEFORE the verify and the commit below, with the same key and the store's
+    # registry, so its lines are verified and pushed with the rest. Its exit is
+    # swallowed like the welcome pass's: a refusal is an invitation waiting a tick.
+    if node /srv/postmark-office/deploy/invite-pass.mjs \
+        --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem; then keep_step invite ok
+    else keep_step invite refused "exit:$?"
+      echo "[office-keep] invite pass had refusals (non-fatal) — the lines above name each one; each invitation keeps its claim and the next tick asks again" >&2
     fi
     # The bug ladder's stage pass (Darko, 2026-10-07: payment "rides on the
     # acceptance"). Every stage an advance recorded and the ledger has not paid
@@ -314,7 +430,8 @@ REGISTRY_FILE="$SNAP/registry.json"
       echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     fi
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
-      node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || { keep_step verify refused verify-red; exit 1; }
+      # A pin stop is not a red ledger (the tamper word): it is named as itself.
+      node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" -- --registry "$REGISTRY_FILE" || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step verify refused town-pin-mismatch; else keep_step verify refused verify-red; fi; exit 1; }
       keep_step verify ok
     else
       keep_step verify ok no-change
@@ -324,9 +441,41 @@ REGISTRY_FILE="$SNAP/registry.json"
       keep_step commit ok
       armed=0
       keep_step rollback ok not-needed
-      # a commit is not a push: a push that fails leaves the local commit, as before
-      git push -q || { keep_step push refused push-failed; exit 1; }
-      keep_step push ok
+      # A COMMIT IS NOT A PUSH (POS-1030, § the tick's own unlanded commit): the
+      # commit and its parent are recorded before the push. A record that cannot
+      # be written unmakes the commit now, before anything could land it.
+      KU_REC="$(git rev-parse --absolute-git-dir)/$KEEP_UNLANDED_NAME"
+      if ! printf '%s %s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^)" > "$KU_REC"; then
+        if git reset -q --keep HEAD^; then keep_step rollback ok unmade; else keep_step rollback refused rollback-failed; fi
+        echo "[office-keep] mint catch-up NOT PUSHED — its commit could not be recorded before the push, so it was unmade (the rows re-derive on the next tick)" >&2
+        keep_step push refused prep-failed
+        exit 1
+      fi
+      if git push -q; then
+        rm -f -- "$KU_REC"
+        keep_step push ok
+      else
+        ku_settled="$(keep_settle_unlanded)"
+        case "$ku_settled" in
+          landed)
+            echo "[office-keep] the mint commit's push answered no, but the town's main holds it: it landed, and nothing is minted again" >&2
+            keep_step push ok landed-unacked ;;
+          unmade)
+            echo "[office-keep] mint catch-up PUSH LOST — the town's main does not hold the commit, so it is UNMADE to the head it was made on and the clone can follow main again; its rows re-derive on the next tick's tail" >&2
+            keep_step push refused push-failed
+            keep_step rollback ok unmade
+            exit 1 ;;
+          gone)
+            keep_step push refused push-failed
+            keep_step rollback ok gone
+            exit 1 ;;
+          *)
+            echo "[office-keep] mint catch-up PUSH NOT CONFIRMED ($ku_settled) — the commit is KEPT, recorded as $KEEP_UNLANDED_NAME in the clone's git directory, and the next tick settles it before its pull; git -C $TOWN_CLONE log -1" >&2
+            keep_step push refused push-failed
+            case "$ku_settled" in moved|rollback-failed) keep_step rollback refused "$ku_settled" ;; *) keep_step rollback refused unconfirmed ;; esac
+            exit 1 ;;
+        esac
+      fi
       # with the switch on, the lines this shell committed (the welcome and
       # stage passes) are recorded in the store now: the store reads git
       if [ "${STAMP_LINES:-}" = store ]; then
@@ -343,6 +492,29 @@ REGISTRY_FILE="$SNAP/registry.json"
     armed=0
     keep_step rollback ok not-needed
   ) || echo "[office-keep] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
+  # ── the staked events that ended become sparks (POS-1035; call 22) ──────────
+  # Still under the town lock, and AFTER the mint has committed, pushed and
+  # synced: each completion signs its own two lines, lands them in its own
+  # store transaction and commits them itself, and one that cannot land puts
+  # its lines back — true only on a clean ledger, so the pass refuses a dirty
+  # one (exit 3) and the next tick asks again. And no completion signs onto a
+  # ledger the mint would not: with an event due, the pass first runs the
+  # mint's own arrival check (owed mints are not red) and a red ledger is
+  # refused (exit 4) — a quiet tick runs no verify of its own. Non-fatal.
+  # A free event (posted before events were staked) makes its rooms' drafts only when it ends after EVENT_DRAFTS_FROM, one UTC
+  # instant in the unit's env file (/etc/postmark-office.env), set once at deploy (POS-1035/e; Wright 04:58:48Z). Unset: none.
+  sparks_rc=0
+  node /srv/postmark-office/deploy/event-sparks-pass.mjs \
+      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" --registry "$REGISTRY_FILE" \
+      ${EVENT_DRAFTS_FROM:+--drafts-from "$EVENT_DRAFTS_FROM"} || sparks_rc=$?
+  case "$sparks_rc" in
+    0) keep_step sparks ok ;;
+    3) keep_step sparks skip prereq:clean_ledger ;;
+    4) keep_step sparks refused ledger-red
+       echo "[office-keep] event sparks OFF — the ledger is red (stamp-verify above names the line), so no completion signs onto it; the next tick asks again" >&2 ;;
+    *) keep_step sparks refused "exit:$sparks_rc"
+       echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
+  esac
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town" || { keep_rc=$?; keep_step snapshot refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step snapshot ok
 ) 9>>"$LOCK"
@@ -409,7 +581,11 @@ fi
 # JSON (the tool absent or crashed) still writes a line, `checked: false`, so
 # "did not run" never reads like "found nothing".
 HK_LOG="${HOUSEHOLD_KEYS_LOG:-/srv/postmark-harbor/household-keys.jsonl}"
-hk_out="$(node "$SNAP/town/tools/household-keys.mjs" --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
+# The predicate is the office's pinned copy (POS-994), checked against the
+# snapshot's copy: a mismatch runs nothing, says so on stderr ([town-tool] …),
+# and leaves no JSON, so the line below is `checked: false` with those words.
+hk_rc=0
+hk_out="$(node /srv/postmark-office/src/town-tool.mjs run household-keys.mjs --clone "$SNAP/town" -- --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || hk_rc=$?
 if node -e '
   const text = process.argv[1] ?? "";
   let j = null;
@@ -432,6 +608,7 @@ if node -e '
   try { j = JSON.parse(String(process.argv[1] ?? "").trim().split("\n").pop()); } catch {}
   process.exit(j && Array.isArray(j.split_households) ? 0 : 3);
 ' "$hk_out"; then keep_step hhkeys ok
+elif [ "$hk_rc" -eq 3 ]; then keep_step hhkeys refused town-pin-mismatch   # the door's exit 3 is a pin stop, and only that
 else keep_step hhkeys refused unchecked
 fi
 

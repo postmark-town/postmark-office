@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { vesselServiceFrom } from "../src/world-movement.mjs";
 import { depositPointFor, stopsOfService } from "../src/world-ride.mjs";
 import { worldClone, NO_WORLD } from "./fixture-paths.mjs";
+import { lastStandingCrossing, lastStandingKeyframe } from "./helpers/mists-standing.mjs";
 
 const CLONE = worldClone();
 const SKELETON_PATH = CLONE ? join(CLONE, "WORLD", "skeleton.json") : null;
@@ -43,7 +44,7 @@ test("THE PANDO ROADS: ride in, walk inside, ride out, and a walk out of Pando r
   const at = (id) => depositPointFor(id, service) ?? worldState.marks.find((m) => m.id === id)?.at;
   const landing = at(LANDING), quay = worldState.marks.find((m) => m.id === QUAY).at;
   const home = worldState.marks.find((m) => m.id === PANDO_PARCEL).at;
-  for (const c of [SKELETON.mists.schedule[0].crossing, SKELETON.mists.schedule.at(-1).crossing]) {
+  for (const c of [SKELETON.mists.schedule[0].crossing, lastStandingCrossing(SKELETON.mists)]) {   // WLD-147: a withdrawn record's last keyframe has no Mists
     // ride in: the ride sets you down at the landing, and the landing is clear ground
     assert.equal(await mistsWallOn(CLONE, SKELETON, [landing], c), null, `the landing is clear at ${c}`);
     // walk inside: from the landing home to the Pando parcel, an open road
@@ -63,7 +64,7 @@ test("THE PANDO ROADS: ride in, walk inside, ride out, and a walk out of Pando r
 });
 
 test("the wall helper: a point in town is clear, a point past the border is behind the wall, and before the Mists nothing is", { skip: !READY && WHY_NOT }, async () => {
-  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const last = lastStandingCrossing(SKELETON.mists);
   assert.equal(await mistsWallOn(CLONE, SKELETON, [{ x: 0, y: 0 }], last), null);
   const past = { x: 0, y: SKELETON.mists.border_m.minY - 500 };
   assert.deepEqual(await mistsWallOn(CLONE, SKELETON, [{ x: 0, y: 0 }, past], last), { x: past.x, y: past.y });
@@ -149,7 +150,7 @@ test("AN AMEND ASKS ONLY ABOUT THE GROUND IT ADDS: the-sea's real outline, re-fi
   const { ringOf } = await import("../src/ring-box.mjs");
   const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const sea = worldState.marks.find((m) => m.id === "the-town/the-sea");
-  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const last = lastStandingCrossing(SKELETON.mists);
   const outline = ringOf(sea.points);
   assert.ok(outline?.length > 10, "the sea carries its outline");
   // the problem: the whole outline reaches behind the wall by the last keyframe
@@ -170,7 +171,7 @@ test("AN AMEND ASKS ONLY ABOUT THE GROUND IT ADDS: the-sea's real outline, re-fi
 });
 
 test("THE SIDES ARE ASKED, NOT ONLY THE CORNERS: a thin outline whose corners stand in town and in Pando's clearing is refused", { skip: !READY && WHY_NOT }, async () => {
-  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const last = lastStandingCrossing(SKELETON.mists);
   const pando = SKELETON.mists.clearings_m.find((k) => k.id === "pando");
   const thin = [{ x: 0, y: 0 }, { x: pando.x, y: pando.y }, { x: pando.x + 5, y: pando.y }];
   assert.equal(await mistsWallOn(CLONE, SKELETON, thin, last), null, "every corner stands clear (the bare-corner check would pass it)");
@@ -179,8 +180,8 @@ test("THE SIDES ARE ASKED, NOT ONLY THE CORNERS: a thin outline whose corners st
 });
 
 test("A FILLED NOTCH IS NEW GROUND: an amend that fills a concave notch reaching into the wall is refused, and one that keeps it is not", { skip: !READY && WHY_NOT }, async () => {
-  const last = SKELETON.mists.schedule.at(-1).crossing;
-  const m = SKELETON.mists, eastFace = m.border_m.maxX - m.schedule.at(-1).front_m;        // the east wall's face at the last keyframe
+  const last = lastStandingCrossing(SKELETON.mists);
+  const m = SKELETON.mists, eastFace = m.border_m.maxX - lastStandingKeyframe(m).front_m;   // the east wall's face at the last standing keyframe
   const x0 = eastFace - 300, x1 = eastFace + 200;                       // the mark straddles the face
   // an old mark already standing across the face, with a notch cut in from the west
   const notched = [[x0, 0], [x1, 0], [x1, 300], [x0, 300], [x0, 200], [eastFace + 100, 200], [eastFace + 100, 100], [x0, 100]].map(([x, y]) => ({ x, y }));

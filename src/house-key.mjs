@@ -58,8 +58,10 @@
 // recorded yet is minted under whatever key the ledger says when the pass
 // runs, so those two sentences are left out of the comparison.
 
+import { endWithNewline } from "./text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 import { join } from "node:path";
 import { DRAIN_KEY_PATH, signedRegistryLines } from "./ledger-pen.mjs";
 
@@ -71,7 +73,7 @@ export const registryLine = (date, handle, householdSlug) =>
 
 /** handle -> current mint key, from the clone's own `currentHouseholds`. */
 export function currentKeysOf(clone) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]); // POS-994: the pinned copy, checked against the clone
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { pathToFileURL } = await import('node:url');",
@@ -121,7 +123,7 @@ export function houseKeyLines(joins, { date, keys }) {
  * join over it would fix nothing. One sentence per defect, the town's.
  */
 export function householdKeySplits(clone, lines, registry) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "household-keys.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir] = process.argv.slice(1);",
     "const { readFileSync } = await import('node:fs');",
@@ -161,7 +163,7 @@ export function ledgerTail(text) {
  * the lines would add.
  */
 export function replayHolds(clone, { signed, handles, date }) {
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "stamp-verify.mjs"]); // POS-994
   const script = [
     "const [clone, engineDir, date] = process.argv.slice(1);",
     "const fs = (await import('node:fs')).default;",
@@ -195,11 +197,12 @@ export function replayHolds(clone, { signed, handles, date }) {
     "syncBuiltinESMExports();",
     "const { verifyStampLedger } = await import(pathToFileURL(engineDir + '/stamp-verify.mjs'));",
     "const owed = (p) => /mints owed|settlement owed/.test(p);",
-    "const withLines = (verifyStampLedger(clone).problems ?? []).filter((p) => !owed(p));",
+    "const pubkeyPem = fs.readFileSync(engineDir + '/stamp-pubkey.pem', 'utf8'); // POS-994: the PINNED key, the trust root",
+    "const withLines = (verifyStampLedger(clone, { pubkeyPem }).problems ?? []).filter((p) => !owed(p));",
     "let fresh = [];",
     "if (withLines.length) {",
     "  overlay = false;",
-    "  const standing = new Set(verifyStampLedger(clone).problems ?? []);",
+    "  const standing = new Set(verifyStampLedger(clone, { pubkeyPem }).problems ?? []);",
     "  fresh = withLines.filter((p) => !standing.has(p));",
     "}",
     "process.stdout.write(JSON.stringify({ holds: fresh.length === 0, checked: 'verified', active: [...active].sort(), fresh }));",
@@ -248,6 +251,22 @@ export function houseKeyBounce(refusal, detail = null) {
 }
 
 /**
+ * The two judgments `judgeHouseKey` makes BEFORE the pen's key is so much as
+ * looked for, extracted whole (POS-1033) so a read-only caller asks exactly what
+ * the lock asks: AHEAD (the ledger's tail past today) and SPLIT (the house left
+ * on two keys). Reads the clone, touches no key, signs and replays nothing,
+ * writes nothing. Answers `{ refusal, detail[, splits] }`, or null when neither
+ * refuses; the pen-key check, signing and the TODAY replay stay in `judgeHouseKey`.
+ */
+export function judgeHouseKeyBeforeSigning(clone, lines, { date, registry }) {
+  const tail = ledgerTail(readFileSync(join(clone, LEDGER_REL), "utf8"));
+  if (tail && tail > date) return { refusal: HOUSE_KEY_REFUSALS.AHEAD, detail: `the tail is ${tail}, today is ${date}` };
+  const splits = householdKeySplits(clone, lines, registry);
+  if (splits.length) return { refusal: HOUSE_KEY_REFUSALS.SPLIT, detail: splits.join(" · "), splits };
+  return null;
+}
+
+/**
  * Judge planned lines and sign them, before anything is written: the tail,
  * the split, the pen, the replay. Returns `{ signed, refusal, detail, splits,
  * replay }`; `refusal` is null when the lines may be written.
@@ -255,10 +274,8 @@ export function houseKeyBounce(refusal, detail = null) {
 export function judgeHouseKey(clone, planned, { date, registry }) {
   const lines = planned?.lines ?? [];
   if (!lines.length) return { signed: [], refusal: null };
-  const tail = ledgerTail(readFileSync(join(clone, LEDGER_REL), "utf8"));
-  if (tail && tail > date) return { signed: [], refusal: HOUSE_KEY_REFUSALS.AHEAD, detail: `the tail is ${tail}, today is ${date}` };
-  const splits = householdKeySplits(clone, lines, registry);
-  if (splits.length) return { signed: [], refusal: HOUSE_KEY_REFUSALS.SPLIT, detail: splits.join(" · "), splits };
+  const early = judgeHouseKeyBeforeSigning(clone, lines, { date, registry });
+  if (early) return { signed: [], ...early };
   if (!existsSync(DRAIN_KEY_PATH())) return { signed: [], refusal: HOUSE_KEY_REFUSALS.NO_PEN, detail: DRAIN_KEY_PATH() };
   const signed = signedRegistryLines(clone, lines.map((l) => l.line));
   const replay = replayHolds(clone, { signed, handles: [...new Set(lines.map((l) => l.handle))], date });
@@ -281,6 +298,19 @@ export function planHouseKey(clone, joins, { date, registry }) {
 }
 
 /**
+ * `planHouseKey` asked READ-ONLY and only as far as the lock asks before it looks
+ * for the pen's key (POS-1033): the same lines over the same clone, then AHEAD and
+ * SPLIT. Null when the clone carries no ledger, or nothing is planned, or neither
+ * refuses; else `{ refusal, detail }`. It never loads a key.
+ */
+export function planHouseKeyBeforeSigning(clone, joins, { date, registry }) {
+  if (!existsSync(join(clone, LEDGER_REL))) return null;
+  const planned = houseKeyLines(joins, { date, keys: currentKeysOf(clone) });
+  if (!planned.lines?.length) return null;
+  return judgeHouseKeyBeforeSigning(clone, planned.lines, { date, registry });
+}
+
+/**
  * Append signed lines to the clone's ledger. Returns the absolute path for
  * the road's pen commit, or null when there was nothing to append.
  */
@@ -288,7 +318,7 @@ export function appendHouseKey(clone, signed) {
   if (!signed?.length) return null;
   const abs = join(clone, LEDGER_REL);
   const prior = readFileSync(abs, "utf8");
-  writeFileSync(abs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+  writeFileSync(abs, endWithNewline(prior) + signed.join("\n") + "\n");
   return abs;
 }
 

@@ -138,8 +138,28 @@ export const LANDED = {
   "083_mail_blocks.sql":           { probe: `${rel("mail_blocks")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mail_block_stands' AND prosecdef)` },
   // 084 (POS-757): the private report post, its row policies, and office_api its only reader.
   "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
+  // 086 (POS-770): where a household came from, privately: two tables and their three definer functions.
+  "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
+  // 087 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
+  "087_invite_holds.sql":       { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
+  "088_letter_notes.sql":        { probe: rel("letter_notes") },
+  "092_household_likeness_state.sql": { probe: col("households", "likeness_state") },
+  // 093 (POS-962): the Hearth a household chose, on its row.
+  "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
+  // 094 (POS-485): the sign-in a token pair came from, and its index (the file's last statement).
+  "094_oauth_signin_family.sql": { probe: `${col("oauth_tokens", "family")} AND ${rel("oauth_tokens_family")}` },
+  // 096 (POS-939): a room purchase's retry key, private, office_api's only.
+  "096_parcel_room_nonces.sql": { probe: `${rel("parcel_room_nonces")} AND has_table_privilege('office_api', 'parcel_room_nonces', 'INSERT') AND NOT has_table_privilege('snapshot_reader', 'parcel_room_nonces', 'SELECT')` },
+  // 098 (POS-1003): the private record of a refused act, office_api's only (no UPDATE or DELETE), and its expiry function.
+  "098_refused_acts.sql": { probe: `${rel("refused_acts")} AND ${col("refused_acts", "held")} AND has_table_privilege('office_api', 'refused_acts', 'INSERT') AND NOT has_table_privilege('office_api', 'refused_acts', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'refused_acts', 'SELECT') AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'refused_acts_prune' AND prosecdef)` },
+  // 099 (POS-1095 b): the partial index the enter/exit count reads (the file's only statement).
+  "099_acts_passage_idx.sql": { probe: rel("acts_passage_idx") },
+  // 100 (POS-1095 b): the residents' two GitHub fields, stored (generated, jsonb), read through resident_json_doc (a NUL in an inbox does not fail the write).
+  "100_town_residents_github.sql": { probe: `${col("town_residents", "github_top")} AND ${col("town_residents", "github_address")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'resident_json_doc' AND provolatile = 'i')` },
+  // 097 (POS-497; was 088 until the train took it for letter_notes): discovery's two derived tables, their walk indexes, and the registry rows written last.
+  "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

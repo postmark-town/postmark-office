@@ -19,7 +19,9 @@
 //     candidates;
 //   · the stakes handed to the crossing hold NO open stamps on it
 //     (`(escrow.get(id) ?? 0) > 0` keeps it);
-//   · its registered path is on main.
+//   · its registered path is on main;
+//   · it is not printed as held (`held_by`, POS-688): a thing in someone's
+//     hands is published but unplaced, and never a candidate while held.
 //
 // THE RULE IS THE SWEEP'S OWN FUNCTION, NOT A COPY OF IT (postmark#3757). This
 // file asked the first two of those three and not the third, so kinofire's
@@ -72,6 +74,7 @@
 // `rulings` segment takes with claim-effects.mjs.
 import { nextSettlement, SETTLEMENT_CLOCK } from "./world-forecast.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { heldBy } from "./held.mjs"; // POS-688: the printed `held_by`, the world's own spelling (pure, no I/O)
 
 const defaultWorld = async () => {
   const [{ publishedState }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
@@ -103,6 +106,15 @@ export const REGISTRY_PATH = "WORLD/settlement-publications.json";
 export const SWEEP_RULE = "At each settlement, a commons mark with no stamps behind it leaves the world. A mark standing on your household's ground or the town's never does, whatever it was first filed as.";
 
 /**
+ * THE FRAME OF EVERY AT-RISK WORD (WLD-51, Wright 2026-11-03 19:25 EST). Whether a
+ * mark is held, and how much stands behind it, are read from the last settlement's
+ * print, so a thing set down since then is not in it. The warning says what it knows
+ * and when it knew it. Wright's words, plain; said wherever the warning or `at_risk`
+ * is shown, in a prose slot that already exists.
+ */
+export const SNAPSHOT_LIMIT = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+
+/**
  * A STAKE MADE SINCE THE COPY IS NOT HERE YET, AND THE READ SAYS SO (POS-412).
  *
  * Mari, 2026-10-05: staked ✦1 on mari/marigold-house at 17:17Z, read this
@@ -115,7 +127,7 @@ export const SWEEP_RULE = "At each settlement, a commons mark with no stamps beh
  * adds no reader. Making the copy current inside the act is POS-341 (the
  * ledger's lines in the store, appended in the act's own transaction).
  */
-export const LATER_STAKES = 'a stake or unstake made after escrow_ingested_at shows here at catches_up_at, the next clearing; world { read: "stake", args: { mark } } shows it now';
+export const LATER_STAKES = 'a stake or unstake made after escrow_ingested_at shows here at catches_up_at, the next clearing; world { read: "stake", args: { mark } } shows it now. ' + SNAPSHOT_LIMIT;
 
 /** The act that takes a mark off the at-risk list — the stake envelope, by name. */
 export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${mark}", stamps: 1 } }`;
@@ -152,10 +164,14 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
     // Founding estate (no row) is never swept; a row is the rule's to judge,
     // with the mark's standing as the fold walked it (`tier`), which the
     // sweep asks too: a mark that walks home is never taken (the safety half).
+    // And whether it is printed as held, which the sweep asks too: a thing in
+    // someone's hands is published but unplaced, never taken while held
+    // (POS-688; WLD-51). Until this was handed in, a held thing at ✦0 read as
+    // at risk here while the sweep kept it.
     const atRisk = escrow === null ? null
       : !entry ? false
       : typeof rule !== "function" ? null
-      : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null }).unpublish;
+      : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null, held: heldBy(m) != null }).unpublish;
     rows.push({
       mark: m.id, kind: m.kind ?? null, body: m.body ?? null, class: cls, escrow, at_risk: atRisk,
       ...(atRisk ? { act: stakeEnvelope(m.id) } : {}),
@@ -163,6 +179,45 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
   }
   rows.sort((a, b) => (Number(b.at_risk === true) - Number(a.at_risk === true)) || a.mark.localeCompare(b.mark));
   return rows;
+}
+
+/**
+ * THE NEWEST FEW (POS-902; Wright: "every growing list shows its newest few, with its true total and how to get the rest"). The chronology is the
+ * MARK'S OWN `date` on the published world (src/doorstep-stakes.mjs reads it off `state.marks`; it is not printed and nothing is invented): a mark
+ * with no readable date sorts after every dated one, and ties fall back to the mark id. Newest first.
+ */
+export function newestFirst(rows, dateOf) {
+  const at = (r) => { const t = Date.parse(dateOf(r.mark)); return Number.isFinite(t) ? t : -Infinity; };
+  return [...rows].sort((x, y) => (at(y) - at(x)) || x.mark.localeCompare(y.mark));
+}
+
+/**
+ * A PREVIEW OF THE ROWS, or all of them. With no `limit` the report is whole, in its own order (at-risk first, then mark id), and carries nothing
+ * extra, exactly as before. With a `limit` that cuts something it answers the NEWEST `limit` rows (newest first) and says what it is (a report that fits is answered whole, in its own order, with no preview fields): `shown` of `total`, whether it is
+ * `complete`, the `order` of THIS preview, and where the rest is: `next_offset` and `more_note`, the lists' own pager (POS-1102: the stakes read pages its
+ * marks part at 20 by default, and `offset` walks it; "every row" is reachable by paging, never in one answer). The
+ * report's `count` and `at_risk` stay the whole report's, never the preview's, and when at-risk rows are not among the shown rows the note says
+ * how many of the omitted ones are at risk (the preview is by date, not by risk, and must never read as "these are the at-risk ones").
+ */
+export function previewOf(rows, { limit = null, offset = 0, dateOf = () => null } = {}) {
+  if (limit == null) return { rows, meta: {} };
+  const lim = Math.max(Math.floor(Number(limit)) || 0, 1);
+  // POS-1102: the pager is the lists' own: `offset` walks past the first rows, `next_offset` and `more_note` say where the rest starts.
+  const start = Math.max(Math.floor(Number(offset)) || 0, 0);
+  const ordered = newestFirst(rows, dateOf);
+  const shown = ordered.slice(start, start + lim);
+  const next = start + shown.length;
+  const omitted = Math.max(rows.length - next, 0);
+  if (start === 0 && omitted <= 0) return { rows, meta: {} };   // nothing is left out, so nothing is disclosed: the page is what it always was, in the report's own order
+  const riskLeft = ordered.slice(next).filter((r) => r.at_risk === true).length;
+  return {
+    rows: shown,
+    meta: {
+      total: rows.length, shown: shown.length, limit: lim, offset: start, complete: omitted <= 0,
+      order: "the newest published marks first, by the mark's own date (not printed); the whole report is at-risk first, then by mark id",
+      ...(omitted > 0 ? { next_offset: next, more_note: `${omitted} further${riskLeft > 0 ? ` (${riskLeft} of them at risk)` : ""} — call again with offset: ${next}` } : {}),
+    },
+  };
 }
 
 /**
@@ -180,6 +235,12 @@ export async function stakesFor(handles, {
   rule = defaultRule,
   pathAt = defaultPathAt,
   now = new Date(),
+  limit = null,
+  offset = 0,   // POS-1102: where the marks part's page starts, the lists' own `offset`; with `allocationPage` it pages both parts in step
+  // POS-1100: everything the house has stamps behind, beside the marks above (household-stakes.mjs). `allocation` is the reader
+  // (a suite's seam); `allocationPage`, when given as { limit, offset }, answers the PAGED LIST (the stakes read) in place of the aggregate, and `false` carries none.
+  allocation: readAllocation = null,
+  allocationPage = null,
 } = {}) {
   const scope = [...new Set((handles ?? []).filter(Boolean))];
   const at = nextSettlement(now);
@@ -208,11 +269,15 @@ export async function stakesFor(handles, {
   try { pathOnMain = (await pathAt(ref)) ?? pathOnMain; } catch { /* every registered path reads unread: null, disclosed by the rows */ }
 
   const rows = stakesRowsFrom({ handles: scope, marks: state?.marks ?? [], registry: published, byMark: esc?.byMark ?? null, rule: verdict, pathOnMain });
+  const dates = new Map((state?.marks ?? []).map((m) => [m?.id, m?.date]));
   const escrowRead = esc?.byMark instanceof Map;
   const measured = escrowRead && !ruleNote;
   const atRisk = measured ? rows.filter((r) => r.at_risk === true).length : null;
   const unjudged = rows.filter((r) => r.at_risk === null).length;
-  return {
+  // POS-1100: what the house has stamps behind, marks AND posts AND pots AND ballots, from the ledger. Never throws: an unread
+  // ledger is `unavailable`, said, never a zero. At-risk is the sweep's verdict above (null while it was not measured).
+  const pager = allocationPage === false ? null : await allocationPager(scope, { read: readAllocation, atRisk: measured ? new Map(rows.map((r) => [r.mark, r.at_risk])) : null });
+  const make = (page, allocation) => ({
     ...base,
     ...(escrowRead ? {} : { unavailable: esc?.reason ?? "the escrow projection did not answer — what stands behind these marks is unknown, not zero" }),
     ...(escrowRead && ruleNote ? { unavailable: ruleNote } : {}),
@@ -226,12 +291,89 @@ export async function stakesFor(handles, {
     later_stakes: LATER_STAKES,
     count: rows.length,
     at_risk: atRisk,
+    ...page.meta,
     ...(measured && atRisk === 0 && unjudged === 0 && rows.length
-      ? { note: "nothing of yours is at risk at the next settlement — every commons mark you hold has stamps behind it, as of the town head named above" } : {}),
+      ? { note: "nothing of yours is at risk as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
-    rows,
+    ...(allocation ? { allocation } : {}),
+    rows: page.rows,
+  });
+  const dateOf = (id) => dates.get(id);
+  if (!pager) return make(previewOf(rows, { limit, offset, dateOf }), undefined);
+  if (!allocationPage) return make(previewOf(rows, { limit, offset, dateOf }), pager.aggregate());
+  // POS-1102 (Darko, 2026-11-17 09:09 EST, "Page it at 20"): the stakes read pages like every other list. ONE limit/offset pair pages BOTH parts, the marks
+  // and `allocation`, in step, so `next_offset` is the same number on each and one `offset` walks the whole read. The answer is held under the page cap as a
+  // whole: when the two parts together run past it, the page takes fewer rows of each (both say the smaller `limit`), never one part's more and the other's fewer.
+  const { textBytes, PAGE_BYTES } = await import("./household-read-page.mjs");
+  let n = Math.max(Math.floor(Number(limit ?? allocationPage.limit)) || 20, 1);
+  const start = offset || allocationPage.offset || 0;
+  for (;;) {
+    const allocation = pager.page({ limit: n, offset: start });
+    if (allocation?.limit != null && allocation.limit < n) { n = Math.max(allocation.limit, 1); continue; }   // its own byte trim: both parts take the smaller
+    const pg = previewOf(rows, { limit: n, offset: start, dateOf });
+    const out = withOneContract(make(pg, allocation), { allocation, marksLeft: Math.max(rows.length - (start + pg.rows.length), 0), marksShown: pg.rows.length, n, start });
+    if (n <= 1 || textBytes(out) <= PAGE_BYTES) return out;
+    n -= 1;
+  }
+}
+
+/**
+ * THE TOP LEVEL IS THE ONE PAGING CONTRACT (POS-1102 review): a walker that follows only the top level's `next_offset` must see every row of BOTH parts.
+ * `next_offset` is the larger of the two parts' next offsets while either part has more (in step they are the same number), and `complete` is true only
+ * when both parts are done. A part that is exhausted while the other goes on shows no rows on the later pages, and the top level still says to go on.
+ * Nothing changes when neither part has more and the page starts at the top (a house that fits one page carries no pager fields).
+ */
+function withOneContract(out, { allocation, marksLeft, marksShown, n, start }) {
+  const stakesMore = allocation && allocation.next_offset != null;
+  if (!stakesMore && marksLeft === 0 && !("complete" in out)) return out;
+  const nexts = [];
+  if (marksLeft > 0) nexts.push(start + marksShown);
+  if (stakesMore) nexts.push(allocation.next_offset);
+  const next = nexts.length ? Math.max(...nexts) : null;
+  const stakesLeft = stakesMore ? Math.max((allocation.count ?? 0) - allocation.next_offset, 0) : 0;
+  const note = marksLeft > 0 && stakesMore ? `${marksLeft} further marks and ${stakesLeft} further stakes — call again with offset: ${next}`
+    : stakesMore ? `${stakesLeft} further stake${stakesLeft === 1 ? "" : "s"} — call again with offset: ${next}`
+    : out.more_note;
+  const { next_offset: _n, more_note: _m, ...rest } = out;
+  return {
+    ...rest,
+    limit: out.limit ?? n, offset: out.offset ?? start,
+    complete: next == null,
+    ...(next != null ? { next_offset: next, more_note: note } : {}),
   };
+}
+
+/**
+ * THE HOUSE'S STAKES, AS THE SEGMENT CARRIES THEM (POS-1100): the ledger's one read, asked once, answered either as the aggregate (total, count, a count
+ * per kind, at risk) or as a page of the list with its key (`page({ limit, offset })`). The stakes read in household-stakes.mjs is the one owner of the
+ * number; this only asks. Never throws: an unread ledger is `unavailable`, said.
+ */
+async function allocationPager(handles, { read = null, atRisk = null } = {}) {
+  const unread = (e) => ({ unavailable: `what your house has stamps behind could not be read (${plainReason(e, "record", "the house's stakes")})` });
+  try {
+    const { houseStakes, aggregateOf, pageStakes, STAKES_KEY } = await import("./household-stakes.mjs");
+    const stakes = await (read ?? houseStakes)(handles, { atRisk });
+    return {
+      aggregate() {
+        const a = aggregateOf(stakes);
+        // The aggregate form (the needs-you and house reads): a house with nothing staked says nothing here.
+        return a.count > 0 ? a : undefined;
+      },
+      page(asked) {
+        // The paged form is the stakes read's, and the doorstep segment's own first page: the segment IS the read at its args (doorstep-bundle.test.mjs § THE BUNDLE).
+        // Both come through here, so they cannot drift. A house with nothing staked leaves it out (the morning page does not fatten); an unreadable ledger is said.
+        try {
+          const out = pageStakes(stakes, asked);
+          if (!out.unavailable && !(out.count > 0)) return undefined;
+          return { ...out, ...(out.unavailable ? {} : { key: STAKES_KEY }) };
+        } catch (e) { return unread(e); }
+      },
+    };
+  } catch (e) {
+    const u = unread(e);
+    return { aggregate: () => u, page: () => u };
+  }
 }
 
 /** The doorstep's own reader: one person when a handle is named, else the

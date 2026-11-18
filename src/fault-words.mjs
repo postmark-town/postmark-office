@@ -95,6 +95,12 @@ export function faultLogged(defect, e) {
 export const trippedError = (defect, e, code = 500) =>
   Object.assign(new Error(defect), { code, defect, hint: faultLogged(defect, e) });
 
+// A refusal from a door's own table of refusals ({ code, defect, hint }), as
+// the error the door's catch sends. `detail`, when given, leads the hint.
+export const refuse = (r, detail = null) => Object.assign(new Error(r.defect), {
+  code: r.code, defect: r.defect, hint: detail ? `${detail} — ${r.hint}` : r.hint,
+});
+
 // A FOREIGN CODE IS CLASSIFIED, NEVER SAID (POS-544, POS-568). A `code` that is
 // not an HTTP status came from pg, Node or the pool, never from a refusal: a
 // lost store is an outage (503, in the read's or the act's words); anything

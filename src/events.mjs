@@ -14,7 +14,7 @@
 // Everything in this file is a function of its arguments: no store, no clock
 // of its own, no network. The pen and the reads (src/events-store.mjs) and the
 // rebuild (world2/tools/events-rebuild.mjs) all call it, and that is the point.
-// `applyEventAct` is the ONE place an act becomes a row, so the row the pen
+// `applyPostAct` is the ONE place an act becomes a row, so the row the pen
 // writes beside an act and the row a rebuild derives from that act cannot come
 // to disagree. `phaseAt` is the ONE place a phase is decided, so no surface
 // works out its own.
@@ -46,6 +46,9 @@ export const ACT_ANNOUNCE = "announce";
 export const ACT_POST = "post";
 export const ACT_AMEND_POST = "amend";
 export const ACT_CLOSE = "close";
+// POS-1035: the town's INTERNAL completion of a staked event (the keep tick's, never a resident's door act): the event's spark made
+// and its stake come home in one act. The stored state stays as it was; "ended" is still the clock's (Rivet's seam response (3)).
+export const ACT_COMPLETE = "complete";
 // The bug class's one move along its lifecycle (Posts phase 2): the state it
 // moves to, and the class's own fields that stage sets.
 export const ACT_ADVANCE = "advance";
@@ -138,16 +141,15 @@ export function refuse(code, defect, hint, extra = {}) {
 
 // ── THE ID ──────────────────────────────────────────────────────────────────
 //
+// A MARK id is judged more loosely than an event's slug: a handle may carry a dot
+// (`victor-b.-rose-e.` is a live one), and a mark's owner is a handle.
+export const MARK_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*$/;
 // MEASURED: a mark does not mint its slug from a title. `world_leave_mark`
 // takes the slug from the caller and judges it (world.mjs: "slug must be
 // kebab-case ... lowercase letters, digits, single hyphens"). The office's one
 // title-to-slug minting is the letter's (write.mjs § slugify). So an event's
 // slug is minted from its title with that letter's rule, and the result obeys
 // the mark's rule, so an event id reads like a mark id.
-export const EVENT_ID_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
-// A MARK id is judged more loosely than an event's: a handle may carry a dot
-// (`victor-b.-rose-e.` is a live one), and a mark's owner is a handle.
-export const MARK_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*$/;
 export function slugFromTitle(title) {
   return String(title ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
 }
@@ -400,7 +402,6 @@ export function harnessPlan(existing, harness) {
 // It mutates `state` and returns the row it wrote, so the pen can write exactly
 // that row and the rebuild can fold a whole log with the same call.
 export const responseKey = (post, handle, kind = RESPONSE_RSVP) => `${post} ${handle} ${kind}`;
-export const rsvpKey = (post, handle) => responseKey(post, handle, RESPONSE_RSVP);
 
 const placeCols = (place) => ({
   place_mark: place?.mark ?? null,
@@ -452,6 +453,25 @@ export function applyPostAct(state, act) {
   if (act.action === ACT_CANCEL || act.action === ACT_CLOSE) {
     if (!prev) return null;
     const row = { ...prev, state: act.action === ACT_CANCEL ? STATE_CANCELLED : (p.state ?? STATE_CANCELLED), last_act: actId };
+    // POS-1035 (Darko 11:00 EST: "All 20 come home, no spark"): a staked event's whole stake returns IN the cancellation's own
+    // act, and the fold carries that it did — so a second cancellation, or a completion, can see it was paid and never pays twice
+    if (p.stake_returned && prev.fields?.stake)
+      row.fields = { ...prev.fields, stake: { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) } } };
+    state.posts.set(id, row);
+    return row;
+  }
+  // THE COMPLETION (POS-1035; call 22): `fields.completed { act, sparks, at }` — the identities of the sparks it made, one per room
+  // in their order, recorded ONCE — and the stake's whole return with the backing it now gives them (1 each). A FREE event's
+  // completion is `{ act, at, free: true }` and nothing more: its sparks are its host's private drafts, never named on the row.
+  // Nothing else about the row moves.
+  if (act.action === ACT_COMPLETE) {
+    if (!prev) return null;
+    const sparks = Array.isArray(p.sparks) ? p.sparks.map(String) : [];
+    const fields = { ...prev.fields, completed: p.free === true ? { act: actId, at: String(p.at), free: true } : { act: actId, sparks, at: String(p.at) } };
+    if (p.stake_returned && prev.fields?.stake)
+      fields.stake = { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) },
+        backing: { sparks, n: Number(p.backing ?? 0) } };
+    const row = { ...prev, fields, last_act: actId };
     state.posts.set(id, row);
     return row;
   }
@@ -589,7 +609,9 @@ export function eventView(row, rsvpHandles, now, announcements = []) {
 export function calendarFrom(rows, rsvpsByEvent, now, announcementsByEvent = new Map()) {
   const views = rows.map((r) => eventView(r, rsvpsByEvent.get(r.id) ?? [], now, announcementsByEvent.get(r.id) ?? []));
   const byStart = (a, b) => Date.parse(a.starts) - Date.parse(b.starts) || a.id.localeCompare(b.id);
-  const current = views.filter((v) => v.phase === "doors-open" || v.phase === "underway").sort(byStart);
+  // POS-909: in `now` a live event leads and a cancelled one follows (each by `byStart`); the cancelled one stays listed, marked.
+  const current = views.filter((v) => v.phase === "doors-open" || v.phase === "underway")
+    .sort((a, b) => Number(a.cancelled) - Number(b.cancelled) || byStart(a, b));
   const coming = views.filter((v) => v.phase === "announced").sort(byStart);
   const ended = views.filter((v) => v.phase === "ended" && now - Date.parse(v.ends) <= ENDED_LIST_DAYS * DAY_MS)
     .sort((a, b) => Date.parse(b.ends) - Date.parse(a.ends) || a.id.localeCompare(b.id));

@@ -35,8 +35,7 @@
 //   node tools/avatar-carry.mjs --dry-run --town ./town-clone --oauth-db ./oauth.db
 //   node tools/avatar-carry.mjs --apply   --town ./town-clone --oauth-db ./oauth.db
 
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { readProfile } from "../src/profiles.mjs";
@@ -116,8 +115,8 @@ if (isMain) {
   process.env.TOWN_CLONE = TOWN;
   if (DRY) for (const k of ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]) if (!process.env[k]) process.env[k] = "dry-run";
   const { uploadMedia, mediaConfigured } = await import("../src/media.mjs");
-  const { openOauthDb, oauthSchema, householdFor } = await import("../src/oauth.mjs");
-  const { openPaper } = await import("../src/paperwork.mjs");
+  const { householdFor } = await import("../src/oauth.mjs");
+  const { openLedger } = await import("./backfill-home-shelf.mjs");
   const { updateProfile } = await import("../src/edit.mjs");
   const { loadPins } = await import("../src/registry-store.mjs");
   if (!DRY && !mediaConfigured()) { console.error("the media door has no credentials here — run this on the box"); process.exit(2); }
@@ -139,11 +138,15 @@ if (isMain) {
     return ghId == null && !ghLogin ? null : householdFor(idx, ghId, ghLogin);
   };
 
-  let dbPath = OAUTH_DB, tmp = null;
-  if (DRY) { tmp = mkdtempSync(join(tmpdir(), "avatar-carry-")); dbPath = join(tmp, "oauth.db"); if (existsSync(OAUTH_DB)) copyFileSync(OAUTH_DB, dbPath); }
-  // The media ledger, opened as home-picture-carry.mjs opens it: --apply the
-  // way the server does, --dry-run a throwaway copy.
-  const odb = DRY ? openOauthDb(dbPath) : await openPaper(OAUTH_DB, { schema: oauthSchema });
+  // The media ledger, opened as home-picture-carry.mjs opens it (POS-271,
+  // backfill-home-shelf § openLedger): --apply the way the server does,
+  // --dry-run the same real state with nothing kept (a throwaway copy of the
+  // file, or, switched, the store inside one transaction rolled back at the
+  // end). A copy of the file on a switched office would be empty once the
+  // files are deleted.
+  const ledger = await openLedger({ path: OAUTH_DB, dry: DRY });
+  const odb = ledger.odb;
+  console.log(`  media ledger: ${ledger.where}`);
   const put = DRY ? async () => {} : undefined;
   const write = DRY ? async () => ({}) : (args, key) => updateProfile(args, key, null, TOWN);
 
@@ -154,6 +157,6 @@ if (isMain) {
       : e.ok ? `  ✓ ${e.handle}  ${e.file} → ${e.url}` : `  ✗ ${e.handle}  ${e.code ?? "-"}: ${e.why}`),
   });
   console.log(`\n${DRY ? "[dry-run] would mint" : "minted"} ${minted.length}; ${DRY ? "would clear" : "cleared"} ${cleared.length}; file missing ${skipped.missing.length}; no household ${skipped.noHousehold.length}; refused ${skipped.refused.length}`);
-  if (tmp) rmSync(tmp, { recursive: true, force: true });
+  await ledger.done();
   process.exit(skipped.refused.length ? 1 : 0);
 }

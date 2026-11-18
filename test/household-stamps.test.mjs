@@ -167,7 +167,7 @@ test("a keeping stake refuses what the law refuses, in the law's own words", () 
   assert.equal(at({ n: 1.5 }).error.code, 422);
   assert.equal(at({ pot: "nope" }).error.code, 404, "a pot the town does not post");
   assert.equal(at({ pot: "shut" }).error.code, 409, "a pot that is not open takes neither dollars nor stakes");
-  // stamps-v2: meeps neither mint nor stake — the same refusal clipApply gives,
+  // stamps-v2: meeps neither mint nor stake — the same refusal stakeInStore gives,
   // because it is the same law and not a second copy of it.
   assert.equal(at({ handle: "ferry" }).error.code, 403);
   assert.match(at({ handle: "ferry" }).error.defect, /meep accounts cannot stake/);
@@ -365,9 +365,12 @@ test("the mandated sentences are imported, never hand-typed, on every money surf
   // only the caption. It is now `WHAT_THIS_BUYS` in funding.mjs, imported at
   // both sites, and under the same discipline here. A probe that guards one
   // mandated sentence on a surface that carries two is a probe with a hole.
+  // (POS-1001, 2026-11-11: the disclosure's probe reads ANY string literal now.
+  // Until then it read the sentence's old opening, `what_this_buys: "this buys `,
+  // which a hand-typed copy of today's sentence would have walked past.)
   const HAND_TYPED = [
     [/caption: "a record of contribution, not a promise of profit"/g, "HOLO_CAPTION"],
-    [/what_this_buys: "this buys /g, "WHAT_THIS_BUYS"],
+    [/what_this_buys: ["'`]/g, "WHAT_THIS_BUYS"],
   ];
   for (const f of ["../src/fund.mjs", "../src/household-stamps.mjs"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");

@@ -14,12 +14,11 @@
 // stub takes. A store that cannot start FAILS (embedded-store.mjs § NO_STORE).
 
 import { execFileSync, spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { startStore } from "./embedded-store.mjs";
+import { startStore, freePort } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
@@ -28,12 +27,9 @@ import { standinClone } from "./clone-sparse.mjs";
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
 
-/** A port the OS says is free now. */
-export const freePort = () => new Promise((ok, no) => {
-  const s = createServer();
-  s.once("error", no);
-  s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
-});
+// A port the OS says is free now: embedded-store.mjs's probe, re-exported because
+// tools/sandbox.mjs and tools/read-eval/office.mjs import it from here.
+export { freePort };
 
 /**
  * A scratch clone with no remote, committing as the harness. SPARSE (POS-652): a stand-in
@@ -138,15 +134,29 @@ export async function localDevTarget({
     // the tool must refuse, and the same tool. Real residents' outboxes are then
     // set aside so only the rehearsal's letters cross.
     const { generateKeyPairSync } = await import("node:crypto");
-    const { resignDevTown } = await import("../../tools/dev-ledger-resign.mjs");
     const pemOf = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
     const keyPem = pemOf();
     const stampKey = join(dir, "stamp-key.pem");
     writeFileSync(stampKey, keyPem);
     const prodKey = join(dir, "prod-stamp-key.pem");
     writeFileSync(prodKey, pemOf());
-    const moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") });
-    if (moved.status !== "resigned") throw new Error(`the stand-in's re-sign: ${moved.status} ${moved.why ?? ""}`);
+    // DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16), as the box's freshen does
+    // (deploy/postmark-dev-freshen.sh): its own commands, each its own process, in its order:
+    // pin the seed (the engine the re-sign loads), re-sign, pin the re-signed town, into a
+    // folder outside the clone that the dev office and the rehearsal name (the dev units'
+    // TOWN_PINS_DIR). Each is a CHILD, as on the box: a process that has read a pin folder
+    // keeps that manifest (the dev office restarts after a re-pin), so this harness reads
+    // none of it itself before the rehearsal does.
+    const pinsDir = join(dir, "town-pins-dev");
+    const asFreshen = (rel, args) => execFileSync(process.execPath, [join(OFFICE, rel), ...args], {
+      encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinsDir }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const pin = () => asFreshen("tools/town-pins.mjs", ["--write", "--town", town, "--ref", "HEAD", "--out", pinsDir]);
+    pin();
+    try { asFreshen("tools/dev-ledger-resign.mjs", ["--town", town, "--key", stampKey, "--not-key", prodKey]); }
+    catch (e) { throw new Error(`the stand-in's re-sign: ${String(e.stderr ?? e.stdout ?? e.message).trim().split("\n").slice(-2).join(" | ")}`); }
+    pin();
+    log(`pins: dev's own, from the re-signed town, at ${pinsDir}`);
     const wp = join(town, "WHITE_PAGES");
     for (const room of readdirSync(wp, { withFileTypes: true })) {
       const ob = join(wp, room.name, "outbox");
@@ -224,6 +234,7 @@ export async function localDevTarget({
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
       OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
+      TOWN_PINS_DIR: pinsDir, // the dev units' line (deploy/postmark-office-dev.service-dropin-town-pins.conf)
       STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1",
       ...envOverrides,
     };
@@ -252,6 +263,6 @@ export async function localDevTarget({
       office = { child, stderr: () => errText };
       log(`office: listening on :${officePort}`);
     }
-    return { dir, store, town, world, envFile, rolesFile, prodKey, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
+    return { dir, store, town, world, envFile, rolesFile, prodKey, pinsDir, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
   } catch (e) { await stop(); throw e; }
 }

@@ -36,9 +36,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,7 +59,7 @@ const has = (cmd) => { try { execFileSync("sh", ["-c", cmd], { stdio: "ignore" }
 const WHY_SKIP = !has("true") ? "no POSIX sh"
   : !WORLD ? "no world checkout found (set POSTMARK_WORLD_CLONE)" : false;
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-shadow-source-"));
+const scratch = tempDir("postmark-shadow-source-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
 
 // The two copies of neth's stone as they stood on 2026-09-25, less `class: thing`:
@@ -110,7 +110,9 @@ function box({ canonDuplicate = false } = {}) {
     "---\nkind: sited\nby: the-town\ntier: constitution\nat: { x: 0, y: 0 }\n"
     + "extent: { w: 320000, h: 320000 }\ndate: 2026-07-01\n---\n\nthe frame\n");
   put(seed, "WORLD/households.json",
-    `${JSON.stringify({ town_sha: "a".repeat(40), households: { xf3s: "gh:1" }, logins: { xf3s: "gh:1" } }, null, 2)}\n`);
+    // WLD-122 (the S158 world's sweep): the drawer's `gh:1` login binds a house only through `pinned_ids`; without it the
+    // account is "known but pinned to no household", its drawer publishes nothing, and the git rehearsal cannot express the finding
+    `${JSON.stringify({ town_sha: "a".repeat(40), households: { xf3s: "hh:xf3s" }, logins: { xf3s: "gh:1" }, pinned_ids: { 1: "hh:xf3s" } }, null, 2)}\n`);
   // The suite step is not under test here; the world's own suite is the shadow's
   // later phase and would take minutes over a fixture it was not written for.
   put(seed, "package.json", JSON.stringify({ name: "world-fixture", type: "module", scripts: { test: "node -e 0" } }));

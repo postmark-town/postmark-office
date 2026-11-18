@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 
 import { NEWEST_SETTLEMENT_FORMAT, newestSettlementFromRefLines } from "./settlements.mjs";
 import { answerFrom, askRefresher, refresherBehind, replay } from "./world-refresher.mjs";
+import { ENGINE_CHECKOUTS, ownedRoot, pinEntry, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the cache prunes itself
 
 const HOUSEHOLD_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 const viewCache = new Map();
@@ -515,19 +516,71 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   // a tag still asks git, because a cache key must be the PEELED commit.
   const onDisk = /^refs\/(heads|remotes)\//.test(ref) ? refShaFromDisk(repo, ref) : undefined;
   const sha = onDisk || git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
-  const dir = join(cacheRoot, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
+  // THE PRUNABLE AREA IS A VERSIONED SUBFOLDER OF THE EXISTING ROOT (POS-989, lead review of d995401f): same sha/subdir keys, one
+  // level down (`<cacheRoot>/lease-v1/<key>`). An older helper (a staged or one-shot process on the same host's tmp) reads
+  // `<cacheRoot>/<key>` with no lease, so those paths are never read, copied or pruned here: only entries this code made, and
+  // leases, live under `lease-v1`. Callers use the returned path, not a layout.
+  const owned = ownedRoot(cacheRoot);
+  const dir = join(owned, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
   const stamp = join(dir, ".materialized");
-  if (existsSync(stamp)) return dir;
-  const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
-  const files = listing.split("\0").filter(Boolean);
-  if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
-  for (const rel of files) {
-    const out = join(dir, rel);
-    mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(out, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" }));
+  const name = basename(dir);
+  let built = false;
+  // The entry is returned only once this process HOLDS it (usedEngine): a pin that fails because the entry was removed or is
+  // being claimed means the path is not safe to hand out, so it is rebuilt and asked again, and refused if it keeps failing
+  // (engineDirAt's existing fallback then takes its working tree, as for any failed materialisation).
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!existsSync(stamp)) {
+      const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
+      const files = listing.split("\0").filter(Boolean);
+      if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
+      for (const [rel, bytes] of blobsAt(repo, sha, files)) {
+        const out = join(dir, rel);
+        mkdirSync(dirname(out), { recursive: true });
+        writeFileSync(out, bytes);
+      }
+      writeFileSync(stamp, `${sha}\n${ref}\n`);
+      built = true;
+    }
+    if (usedEngine(owned, name)) {
+      if (built) void pruneSoon(owned, ENGINE_CHECKOUTS);   // a new entry is the growth event: prune the stale ones, in the background
+      return dir;
+    }
   }
-  writeFileSync(stamp, `${sha}\n${ref}\n`);
-  return dir;
+  throw new Error(`the engine checkout ${name} could not be held: it kept being removed while it was asked for`);
+}
+
+// EVERY FILE OF THE TREE IN ONE GIT PROCESS (POS-1057). A cold extraction (a new blessing, or the first read under a new cache namespace) used to spawn one
+// `git show` per file, synchronously: 326 of them for tools/. A spawn forks the CALLING process, and a fork costs in proportion to its address space, so on a
+// small heap the extraction took ~1 s and with 2 GB resident it took 13.6 s (measured, test/pos-1057-cold-extraction.test.mjs's note), on the box's 3.4-4.6 GB
+// office more than a minute with every read worker doing it at once: the loops of the threads that took the first read after a blessing stood still, and the
+// pen connections their transactions held went idle until Postgres ended them. `git cat-file --batch` streams every blob of the list through one child: the
+// same bytes, two forks in all (this and the listing). A path git cannot name on one line of that input (a newline in it) takes the per-file route.
+function blobsAt(repo, sha, files) {
+  if (files.some((rel) => /[\r\n]/.test(rel))) return files.map((rel) => [rel, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" })]);
+  const out = execFileSync("git", ["-C", repo, "cat-file", "--batch"], {
+    input: files.map((rel) => `${sha}:${rel}`).join("\n") + "\n", stdio: ["pipe", "pipe", "pipe"], maxBuffer: GIT_MAX_BUFFER,
+  });
+  const got = [];
+  let pos = 0;
+  for (const rel of files) {
+    const eol = out.indexOf(10, pos);
+    const head = eol < 0 ? [] : out.toString("utf8", pos, eol).split(" ");
+    if (head[1] !== "blob" || !Number.isInteger(Number(head[2]))) throw new Error(`git cat-file --batch did not give ${rel} as a blob at ${sha}: ${eol < 0 ? "no answer" : head.join(" ")}`);
+    const size = Number(head[2]);
+    got.push([rel, Buffer.from(out.subarray(eol + 1, eol + 1 + size))]);
+    pos = eol + 1 + size + 1;
+  }
+  return got;
+}
+
+// THE ENGINE CHECKOUT IS IN USE FOR THE LIFE OF THIS PROCESS (POS-989). What a caller gets back is a path it imports from, and an
+// imported module can load a sibling file long after the lookup that found it, so the lookup takes a process-lifetime lease (once
+// per entry) and refreshes the entry's `.used` stamp (a stat per call). A pruner in ANY process sharing the root then keeps it
+// (cache-lifecycle.mjs). `false` when the entry was removed or is being claimed: the caller rebuilds it.
+function usedEngine(cacheRoot, name) {
+  if (!pinEntry(cacheRoot, name, ENGINE_CHECKOUTS)) return false;
+  touchUsed(cacheRoot, name);
+  return true;
 }
 
 // THE ENGINE THE DOORS RUN, AT THE BLESSING. The walk door, the land pen and
@@ -569,9 +622,30 @@ export function pathAtRef(repo, ref, path) {
   try { git(repo, ["cat-file", "-e", `${sha}:${String(path).replace(/\\/g, "/")}`]); return true; } catch { return false; }
 }
 
-export function readJsonAtRef(repo, ref, path) {
-  return JSON.parse(readAtRef(repo, ref, path));
+// THE PARSE IS KEPT WITH THE CONTENT (POS-1057). A file at a commit never changes, and `readAtRef` already keeps its text by (repo, sha, path); the text
+// was then parsed again on EVERY call. `WORLD/world-state.json` is 2.5 MB: about 25 ms of synchronous main-thread time per parse here, and a household's
+// glance parsed it once for each of the house's members (published marks) and again for its stances, its drafts and its stakes, a doorstep three times, so a
+// nine-member house's agents polling together spent a third of a second of the one thread apiece on a file that had not moved. Kept by the same key, a few
+// at a time (a sha's parse is ~20 MB of heap), and only for a ref git's own files resolve to a sha: any other ref is read and parsed as before. THE OBJECT
+// IS SHARED, so a caller reads it and never writes to it (every caller of this and of `publishedState().state` filters, maps or copies: audited on POS-1057 by
+// running the 229 world, household, doorstep, stake, mark, stance and guard test files with the parse deep-frozen, which threw nowhere).
+const PARSED_CAP = 3;
+const parsedCache = new Map(); // "repo\0sha\0path" -> parsed JSON, insertion-ordered for eviction
+export function readJsonAtRef(repo, ref, path, { afterResolve } = {}) {
+  const rel = String(path).replace(/\\/g, "/");
+  const sha = refShaFromDisk(repo, ref);
+  if (!sha) return JSON.parse(readAtRef(repo, ref, path));
+  const key = `${repo}\0${sha}\0${rel}`;
+  if (parsedCache.has(key)) return parsedCache.get(key);
+  afterResolve?.(sha); // tests only: the moment a concurrent writer could move the ref
+  // read the COMMIT we keyed by, never the name again: a ref that moved between the two resolutions would file the new commit's JSON under the old key
+  const parsed = JSON.parse(readAtRef(repo, sha, path));
+  parsedCache.set(key, parsed);
+  if (parsedCache.size > PARSED_CAP) parsedCache.delete(parsedCache.keys().next().value);
+  return parsed;
 }
+/** Tests only: forget the kept parses. */
+export const __forgetParsedForTest = () => parsedCache.clear();
 
 // Advance the SHARED clone's main when a pool worktree cannot (see below). The
 // shared clone stands on main after world-pool's one-time normalisation, so it

@@ -70,6 +70,7 @@ import assert from "node:assert/strict";
 
 import { markPage } from "../src/world.mjs";
 import { backedRow } from "../src/world-stake.mjs";
+import { lockedRowsFrom } from "../src/claim-effects.mjs";
 import { portfolioAnswerFrom, splitLive, publishedRowOf, PORTFOLIO_LABELS } from "../world2/tools/portfolio-reads.mjs";
 
 const env = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
@@ -139,7 +140,7 @@ const ESCROW_ROWS = [
   { mark: "wright/the-trueing-house", holder: "pos104-wright", household: HOUSEHOLD, own_household: HOUSEHOLD, n: 3, weight_k: 5 },
 ];
 
-function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESCROW_ROWS, townSha = TOWN_SHA } = {}) {
+function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESCROW_ROWS, townSha = TOWN_SHA, settlements = [], roster = ["pos104-wright"] } = {}) {
   const asked = [];
   const answer = async (sql, params) => {
     asked.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
@@ -166,8 +167,12 @@ function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESC
     }] };
     if (/FROM household_pins/i.test(sql)) return { rows: [] };
     if (/FROM registry_meta/i.test(sql)) return { rows: [{ key: "schema_version", value: 1 }] };
-    if (/FROM identities WHERE household/i.test(sql)) return { rows: [{ handle: "pos104-wright" }] };
+    if (/FROM identities WHERE household/i.test(sql)) return { rows: roster.map((handle) => ({ handle })) };
     if (/FROM projection_heads/i.test(sql)) return { rows: townSha ? [{ sha: townSha }] : [] };
+    // The settlements the store holds (bug post #4014): empty by default, which is the
+    // answer this door has always got from this fixture; the skipped acceptance below
+    // hands it one, for the repair that is not built to read.
+    if (/FROM settlements/i.test(sql)) return { rows: settlements };
     if (/FROM escrow_projection/i.test(sql)) return { rows: escrow };
     if (/FROM claims/i.test(sql)) return { rows: claims };
     if (/FROM acts/i.test(sql)) return { rows: [] };
@@ -181,7 +186,11 @@ function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESC
   };
 }
 
-const mine = (opts = {}) => world2MyMarks(KEY, { p: fixturePool(opts.pool ?? {}), ...(opts.offset != null ? { offset: opts.offset } : {}) });
+// The locked shelf's reader is injected the way `refusedReader` is (bug post #4014): the
+// default reads the docket store, and this fixture has no such store to read. A
+// suite that wants a locked claim hands its own reader, below.
+const noLocked = async () => ({ rows: [] });
+const mine = (opts = {}) => world2MyMarks(KEY, { p: fixturePool(opts.pool ?? {}), lockedReader: opts.lockedReader ?? noLocked, ...(opts.offset != null ? { offset: opts.offset } : {}) });
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1 · THE COMPOSITION IS 1.0'S
@@ -198,15 +207,24 @@ test("TWO LISTS, TWO LABELS — a pending claim is PUBLIC docket, a draft is pri
   assert.deepEqual(body.labels, PORTFOLIO_LABELS);
 });
 
-test("the splitter is a NEGATIVE filter and a sketchbook row files under drafts", () => {
-  // 1.0's own trap, carried: `drafts` is `claim_status !== "pending"`, which is
-  // correct only while LIVE_STATUSES is exactly draft+pending. A row with no
-  // claim status at all is a sketchbook row — private — and must land in drafts.
+test("the splitter is a POSITIVE filter: a draft or a sketchbook row files under drafts, a pending claim under docket, any other status under neither", () => {
+  // LAW (world2/schema/007_private_drafts.sql, as leave-mark-drafts-and-docket
+  // quotes it): "USING (status <> 'draft' OR household = current_setting('app.household', true))"
+  // — a draft is private to its household and EVERY OTHER STATUS IS PUBLIC. So the
+  // word the read puts on a locked, refused or held row must never be the private one.
+  //
+  // UNTIL 2026-11-02 THIS ASSERTED THE NEGATIVE FILTER, 1.0's trap carried across:
+  // `drafts` was `claim_status !== "pending"`, "correct only while LIVE_STATUSES is
+  // exactly draft+pending", and a row of any other status would have landed in drafts.
+  // Bug post #4014 made both doors positive. A row with no claim status at all is a
+  // sketchbook row — private — and must still land in drafts.
   const { drafts, docket } = splitLive([
     { id: "a", claim_status: "draft" }, { id: "b", claim_status: "pending" }, { id: "c" },
+    { id: "d", claim_status: "locked" }, { id: "e", claim_status: "refused" }, { id: "f", claim_status: "held_review" },
   ]);
-  assert.deepEqual(drafts.map((m) => m.id), ["a", "c"]);
-  assert.deepEqual(docket.map((m) => m.id), ["b"]);
+  assert.deepEqual(drafts.map((m) => m.id), ["a", "c"],
+    "LAW 007: a draft and a sketchbook row are the private ones; a locked, refused or held row is public and never filed under the private word");
+  assert.deepEqual(docket.map((m) => m.id), ["b"], "and only a pending claim is on the docket");
 });
 
 test("a backed mark is NOT also published — the three lists do not double-count", async () => {
@@ -349,8 +367,160 @@ test("`refused` is the one derivation, handed THIS door's own residents", async 
     calls.push([...handles]);
     return { since_crossing: 10, through_crossing: 12, count: 1, rows: [{ mark: "pos104-wright/x", window: 212, says: "refused at window 212: harm: y" }] };
   };
-  const body = await world2MyMarks(KEY, { p: fixturePool(), refusedReader });
+  const body = await world2MyMarks(KEY, { p: fixturePool(), refusedReader, lockedReader: noLocked });
   assert.equal(calls.length, 1, "asked once");
   assert.deepEqual(calls[0], body.residents, "the reader was handed the twin's own roster");
   assert.equal(body.refused.rows[0].says, "refused at window 212: harm: y");
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Bug post #4014 · the locked shelf reaches the twin as it reaches 1.0
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// RULED (Wright, 2026-11-02, on postmark-office#839): "The twin door gets the same
+// fix in this PR: the positive drafts split, the `locked` shelf, and `published` no
+// longer calling a locked, uncarried mark 'on the world'". The split and the shelf shipped in #839. The `published`
+// repair was held for a ruling, which Wright gave at POS-865 (2026-11-05): "the twin adopts the receipt's window
+// rule ... so a locked mark that isn't carried doesn't read 'ON THE WORLD'". It is built, and its acceptance, once skipped,
+// is the first test of the section at the foot of this file.
+
+/** A `claim-locked` event as claim-effects.mjs § claimEffectsFrom makes it. */
+const lockedEvent = (mark, over = {}) => ({
+  kind: "claim-locked", mark, at: "2026-11-02T05:00:00.000Z", crossing: 400, window: 259,
+  yours: true, on_your_ground: false, summary: `${mark} was locked at candle 259 — the candle ruled for it`, ...over,
+});
+
+test("`locked` is a shelf of its own in the composer: counted whole, paged by 1.0's pager, its overflow named", () => {
+  const rows = Array.from({ length: 25 }, (_, i) => ({ id: `wright/l${String(i).padStart(2, "0")}`, by: "wright", window: 259, locked_at: null, says: "locked" }));
+  const body = portfolioAnswerFrom({ household: HOUSEHOLD, residents: ["wright"], live: [], locked: rows, published: [], backed: [], pager: markPage });
+  const page = markPage(rows, 0);
+  assert.equal(body.counts.locked, 25, "the count is the whole of what is waiting, counted before the page cuts it");
+  assert.equal(body.shown.locked, page.page.length);
+  assert.deepEqual(body.locked.map((m) => m.id), page.page.map((m) => m.id), "the page is 1.0's pager's");
+  assert.equal(body.complete, false, "a shelf the page did not hold whole makes the answer incomplete");
+  assert.deepEqual(body.withheld.locked, page.rest, "and names what it withheld, by id");
+  assert.match(body.withheld_note, new RegExp(`${25 - page.page.length} of your marks`), "and the note counts the locked shelf's overflow in the total");
+  assert.deepEqual(portfolioAnswerFrom({ household: HOUSEHOLD, live: [], pager: markPage }).locked, [], "no locked claim, no rows — an empty shelf, present");
+});
+
+test("THE LOCKED SHELF reaches the twin from the one derivation, handed this door's whole roster and its own canon", async () => {
+  const calls = [];
+  const NEW = "pos104-wright/the-new-bowl";          // locked, and standing nowhere
+  const STANDING = "wright/the-trueing-house";        // locked once, and it stands in this fixture's `marks`
+  const events = [lockedEvent(NEW), lockedEvent(STANDING)];
+  // The real pure function behind the real reader's shape: what this door passes it is the test.
+  const lockedReader = async (handles, opts) => {
+    calls.push({ handles: [...handles], key: opts.key, canonIds: [...opts.canonIds] });
+    return { rows: lockedRowsFrom(events, opts.canonIds) };
+  };
+  // A housemate with no standing mark yet: the roster names two handles, canon names one author.
+  const body = await mine({ lockedReader, pool: { roster: ["pos104-newcomer", "pos104-wright"] } });
+  assert.deepEqual(body.residents, ["pos104-wright"], "the premise: canon names one resident of this household");
+  assert.equal(calls.length, 1, "asked once");
+  assert.deepEqual(calls[0].handles, ["pos104-newcomer", "pos104-wright"], "handed the household's whole roster (every handle the store's identities name), not only the authors of standing marks");
+  assert.equal(calls[0].key, KEY, "and the key, so the docket read is scoped by the policy");
+  assert.ok(calls[0].canonIds.includes(STANDING) && !calls[0].canonIds.includes(NEW), "and this door's own canon: the ids it holds standing");
+  assert.deepEqual(body.locked.map((m) => m.id), [NEW], "the shelf lists the one the canon does not hold");
+  assert.equal(body.counts.locked, 1);
+  assert.equal(body.shown.locked, 1);
+  assert.equal(body.labels.locked, PORTFOLIO_LABELS.locked);
+  const both = body.locked.filter((m) => body.published.some((q) => q.id === m.id));
+  assert.deepEqual(both, [], "a mark is never on `locked` and `published` at once");
+});
+
+test("an unread docket is `locked_unavailable`, never an empty shelf that reads as nothing waiting", async () => {
+  const down = await mine({ lockedReader: async () => ({ rows: [], unavailable: "the docket store could not be read — that is not the same as nothing waiting to be carried" }) });
+  assert.deepEqual(down.locked, []);
+  assert.match(down.locked_unavailable, /could not be read/);
+  // Until 2026-11-06 this read the default fixture, which holds no settlement. An unreadable settled window now says so on this same
+  // field (POS-865), so "absent whenever the docket was read" is asserted with the window readable too.
+  assert.ok(!("locked_unavailable" in (await mine({ pool: { settlements: [SETTLED_260] } }))), "and the field is absent whenever the docket and the settled window were read");
+});
+
+test("the twin's `locked` label is the ruled one", () => {
+  // RULED (Wright, 2026-11-02, on postmark-office#839): "PUBLIC — the candle ruled for these
+  // and no settlement has carried them to the world yet; they reach it at the settlement that
+  // carries their candle." plus the receipt pointer the docket label carries.
+  assert.equal(PORTFOLIO_LABELS.locked,
+    "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.");
+});
+
+// ── WHICH STANDING MARKS A SETTLEMENT HAS CARRIED (POS-865, bug post #4014) ───────────────────
+//
+// The clearing writes a standing `marks` row at the lock (world2/schema/001: "Materialized cleared state. Writer:
+// clearing_job only, inside the window transaction"), before any settlement carries it. This door reads CARRIED by
+// the receipt's rule (world2-serve.mjs § CARRIED, NOT MERELY STANDING): a standing mark locked at a window beyond the
+// newest window a settlement closed has not been carried. Until 2026-11-06 the first test below was SKIPPED
+// (MY_MARKS_TWIN_CARRIED=1 ran it, red): the twin called such a mark "ON THE WORLD".
+
+const SETTLED_260 = { number: 120, tag_sha: "c315bd7671639257ebeccc9b8af7c5aaf250fe8a", published_at: new Date("2026-10-20T06:00:00Z"), window_id: 260, blessed_at: new Date("2026-10-20T07:23:00Z") };
+const BOWL = "pos104-wright/the-locked-bowl";
+const bowlAt = (locked_window) => ({ ...markRow({ slug: BOWL, body: "locked, maybe not yet carried" }), locked_window });
+const shelfOf = (events) => async (_handles, opts) => ({ rows: lockedRowsFrom(events, opts.canonIds) });
+const listsOf = (body, id) => ({ published: body.published.some((m) => m.id === id), locked: body.locked.some((m) => m.id === id) });
+
+test("ACCEPTANCE: a mark standing in `marks` whose lock no settlement has carried is not `published`, and is on `locked`, counted once", async () => {
+  // The clearing wrote this standing row at the lock, window 261; the newest window a settlement closed is 260.
+  const body = await mine({ pool: { marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [SETTLED_260] }, lockedReader: shelfOf([lockedEvent(BOWL, { window: 261 })]) });
+  assert.ok(!body.published.some((m) => m.id === BOWL),
+    `${BOWL} is under published, "ON THE WORLD — carried by a settlement", while the newest window a settlement closed is 260 and it locked at 261`);
+  assert.ok(body.locked.some((m) => m.id === BOWL),
+    `${BOWL} is on no locked shelf: this door's canon is every standing mark, the locked one included`);
+  assert.equal(body.counts.locked, 1);
+  assert.equal(body.locked.filter((m) => m.id === BOWL).length, 1, "and it is on the shelf once");
+  const without = await mine({ pool: { settlements: [SETTLED_260] } });
+  assert.equal(body.counts.published, without.counts.published, "the published count is what it was without the uncarried mark: it is not counted there");
+  assert.ok(!("locked_unavailable" in body), "the window was read, so nothing is said to be unknown");
+});
+
+test("THE BOUNDARY: locked at the settled window, or before it, is carried and stays on its ordinary shelf; one window beyond is not", async () => {
+  for (const [lockedAt, carried] of [[259, true], [260, true], [261, false], [262, false]]) {
+    const body = await mine({ pool: { marks: [...PUBLISHED_ROWS, bowlAt(lockedAt)], settlements: [SETTLED_260] }, lockedReader: shelfOf([lockedEvent(BOWL, { window: lockedAt })]) });
+    assert.deepEqual(listsOf(body, BOWL), { published: carried, locked: !carried }, `locked at ${lockedAt}, settled through 260`);
+    assert.equal(body.counts.locked, carried ? 0 : 1);
+  }
+});
+
+test("the canon the shelf is handed is the CARRIED marks only: an uncarried standing mark is not in it", async () => {
+  const seen = [];
+  const lockedReader = async (_h, opts) => { seen.push([...opts.canonIds]); return { rows: [] }; };
+  await mine({ pool: { marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [SETTLED_260] }, lockedReader });
+  assert.equal(seen.length, 1);
+  assert.ok(!seen[0].includes(BOWL), "the uncarried mark is not canon for the shelf's canon-absence rule");
+  assert.ok(seen[0].includes("wright/the-trueing-house"), "a mark with no lock window to compare stays canon, as today");
+});
+
+test("a BACKED uncarried mark stays on `backed`, is not published, and is on the locked shelf once", async () => {
+  const stakedBowl = { mark: BOWL, holder: "pos104-wright", household: HOUSEHOLD, own_household: HOUSEHOLD, n: 2, weight_k: 5 };
+  const body = await mine({ pool: { marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [SETTLED_260], escrow: [...ESCROW_ROWS, stakedBowl] }, lockedReader: shelfOf([lockedEvent(BOWL, { window: 261 })]) });
+  assert.ok(body.backed.some((r) => r.id === BOWL), "it is still backed");
+  assert.ok(!body.published.some((m) => m.id === BOWL));
+  assert.ok(body.locked.some((m) => m.id === BOWL), "and, uncarried, it is on the locked shelf, as 1.0's is");
+});
+
+test("another household's uncarried mark is on none of this household's shelves", async () => {
+  const theirs = { ...markRow({ slug: "stranger/their-bowl", owner: "stranger", body: "theirs" }), locked_window: 261 };
+  const body = await mine({ pool: { marks: [...PUBLISHED_ROWS, theirs], settlements: [SETTLED_260] }, lockedReader: shelfOf([lockedEvent("stranger/their-bowl", { window: 261, yours: false })]) });
+  assert.deepEqual(listsOf(body, "stranger/their-bowl"), { published: false, locked: false });
+});
+
+test("UNKNOWN IS NOT ESTABLISHED: with no settled window to read, the marks stay where this door has always put them, and the answer says carriage cannot be told", async () => {
+  const unreadable = fixturePool({ marks: [...PUBLISHED_ROWS, bowlAt(261)] });
+  const asked = unreadable.query;
+  unreadable.query = async (sql, params) => { if (/FROM settlements/i.test(sql)) throw new Error("settlements unreadable"); return asked(sql, params); };
+  const cases = {
+    "no settlement row at all": { p: fixturePool({ marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [] }) },
+    "settlements that name no window": { p: fixturePool({ marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [{ ...SETTLED_260, window_id: null }] }) },
+    "a settlements table that cannot be read": { p: unreadable },
+  };
+  for (const [what, { p }] of Object.entries(cases)) {
+    const body = await world2MyMarks(KEY, { p, lockedReader: shelfOf([lockedEvent(BOWL, { window: 261 })]) });
+    assert.ok(body.published.some((m) => m.id === BOWL), `${what}: it stays where it was; nothing is invented`);
+    assert.match(body.locked_unavailable ?? "", /cannot be told/, `${what}: and the answer says carriage is unknown, on the existing field`);
+    assert.match(body.locked_unavailable, /not the same as every one being on the world/);
+  }
+  // an unread docket AND an unread window: both sentences, neither lost
+  const both = await world2MyMarks(KEY, { p: fixturePool({ settlements: [] }), lockedReader: async () => ({ rows: [], unavailable: "the docket store could not be read" }) });
+  assert.match(both.locked_unavailable, /docket store could not be read/);
+  assert.match(both.locked_unavailable, /cannot be told/);
 });

@@ -46,13 +46,25 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # USAGE
-#   remote-deploy.sh preflight <root> <service> <port>
+#   remote-deploy.sh preflight <root> <service> <port> <sha> <event>
 #   remote-deploy.sh apply     <root> <service> <port> <tag> <sha>
 #
 # Preflight runs BEFORE the rsync on purpose. Every reason a deploy can fail for
 # permissions is knowable before a single byte is copied, and finding out
 # afterwards is how you end up with new code on disk and the old process serving
 # it — the one state worse than not deploying at all.
+#
+# THE ROLLBACK GUARD'S BOX-SIDE HALF (POS-971). A tag push runs the workflow file
+# as it stands in the tagged commit, so a tag cut at an old commit runs an old
+# workflow, one with no rollback guard (2026-11-09 01:28Z: 4a823b9f, from before
+# w46, deployed to prod for about 1m10s). Every version of that workflow takes
+# THIS script from main and runs preflight before a byte moves, and none before
+# POS-971 passes <sha> and <event>. So preflight refuses a call without them,
+# first, before any box check: the caller predates the guard and cannot be
+# checked against what is live. <event> is one the callers name: push and
+# workflow_dispatch from release-train.yml, hand-carry from
+# deploy/dev-office-carry.sh. test/release-guard.test.mjs finds every preflight
+# caller in the repo and requires all five arguments of each.
 
 set -euo pipefail
 
@@ -66,7 +78,18 @@ say() { echo "  $*"; }
 
 # ── preflight ────────────────────────────────────────────────────────────────
 if [ "$MODE" = "preflight" ]; then
+  BRINGS="${5:-}"
+  EVENT="${6:-}"
+  [ -n "$BRINGS" ] && [ -n "$EVENT" ] \
+    || die "this run's workflow predates the rollback guard (POS-971): it calls preflight without the commit it brings and its event, so that commit cannot be checked against what is live. A release tag cut at an old commit runs its own old workflow, and this is where it stops. To deploy on purpose, run release-train.yml by workflow_dispatch from main, naming the tag. A hand-carry to dev passes its commit and the event hand-carry (deploy/dev-office-carry.sh)."
+  [[ "$BRINGS" =~ ^[0-9a-f]{40}$ ]] \
+    || die "preflight was handed '$BRINGS' as the commit this run brings; the rollback guard (POS-971) needs the full 40-character sha."
+  case "$EVENT" in
+    push|workflow_dispatch|hand-carry) ;;
+    *) die "preflight was handed '$EVENT' as the event; the rollback guard (POS-971) knows push and workflow_dispatch (release-train.yml) and hand-carry (deploy/dev-office-carry.sh)." ;;
+  esac
   echo "== preflight: $SERVICE at $ROOT (loopback :$PORT) =="
+  say "brings $BRINGS ($EVENT)"
 
   [ -d "$ROOT" ] || die "$ROOT does not exist on this box. This deploy does not create an office; the one-time setup in deploy/DEPLOY.md does."
   [ -d "$ROOT/src" ] || die "$ROOT/src is missing — this does not look like an office tree."
@@ -221,8 +244,19 @@ systemctl is-active --quiet "$SERVICE" || die "$SERVICE is not active after the 
 # ── 6. the town's own door still answers ─────────────────────────────────────
 # The release probe proves the new code booted; this proves it can still do the
 # job. /town is the read the whole site is built on, and DEPLOY.md's own smoke.
-curl -fsS --max-time 10 "http://127.0.0.1:$PORT/town" >/dev/null \
-  || die "$SERVICE booted the new release but GET /town does not answer. The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office')."
+# Patient like the release probe (2026-11-03, release/2026-w45.4: the restart landed
+# in the 06:00Z settlement window, the one 10 s try timed out on a cold /town, and a
+# healthy deploy read DEPLOY FAILED; /town answered 200 in 2.6 s 40 s later). It
+# retries for 90 s, each try 20 s; only a door that never answers in the window is
+# "up and broken".
+deadline=$(( $(date +%s) + 90 ))
+town_ok=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  if curl -fsS --max-time 20 "http://127.0.0.1:$PORT/town" >/dev/null 2>&1; then town_ok=1; break; fi
+  sleep 5
+done
+[ -n "$town_ok" ] \
+  || die "$SERVICE booted the new release but GET /town did not answer within 90s. The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office'). Last try: $(curl -sS -o /dev/null -w '%{http_code} in %{time_total}s' --max-time 20 "http://127.0.0.1:$PORT/town" 2>&1 | head -c 200)"
 say "GET /town answers"
 
 echo "== deployed $TAG @ ${SHA:0:12} to $SERVICE =="

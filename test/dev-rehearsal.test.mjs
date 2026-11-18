@@ -13,12 +13,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, mistsSafeBox, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, groundTakenInCanon, mistsSafeBox, parseEnvFile, rehearsalGround, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { lastStandingCrossing, standingKeyframes, withdrawnFrom } from "./helpers/mists-standing.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -59,7 +60,7 @@ test("the guard refuses a pen that names any database but the dev office's", () 
 });
 
 test("the CLI refuses before it connects, and its first line says why", () => {
-  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-cli-"));
+  const dir = tempDir("dev-rehearsal-cli-");
   try {
     // port 1: a connection attempt would answer ECONNREFUSED, so its absence proves none was made
     writeFileSync(join(dir, "dev.env"), `WORLD2_PG_URL=${url("office_api", PROD_DB, 1)}\nTOWN_PUSH=0\n`);
@@ -87,7 +88,7 @@ test("the table census reads this tree's migrations, drops included", () => {
 });
 
 test("the GitHub stub answers the pen's join road and records the PR's files, never another repo", async () => {
-  const town = mkdtempSync(join(tmpdir(), "dev-rehearsal-stub-"));
+  const town = tempDir("dev-rehearsal-stub-");
   try {
     const g = (...a) => execFileSync("git", ["-C", town, ...a], { encoding: "utf8" }).trim();
     g("init", "-q", "-b", "main");
@@ -134,9 +135,16 @@ test("the GitHub stub answers the pen's join road and records the PR's files, ne
 /** Every job a box shell text runs: office scripts as office-relative paths, the town's (run from the clone) as `town:`. */
 function jobsIn(text) {
   const out = new Set();
-  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1/g)) {
+  // POS-994: the town-tool sandbox's client is one script with three jobs, so its first word is part of the job
+  for (const m of text.matchAll(/(?:\/usr\/bin\/node|\bnode|\/bin\/bash)\s+("?)(\/srv\/postmark-office\/)?([A-Za-z0-9_./-]+\.(?:mjs|sh))\1(?:\s+(?:run\s+([A-Za-z0-9_.-]+\.mjs)|(ferry|verify|quests)\b))?/g)) {
     if (m[3].startsWith("$")) continue;
-    out.add(m[2] ? m[3] : `town:${m[3]}`);
+    // POS-994: `src/town-tool.mjs run X --clone …` IS the town's job X, run as the
+    // office's pinned copy; the census names it as before, `town:tools/X`. The
+    // witness was never in this census (the unit named it by "$TOWN_CLONE/…", which
+    // the line above skips) and the rehearsal does not run it, so it stays out.
+    if (m[3] === "src/town-tool.mjs" && m[4]) { if (m[4] !== "witness-chain.mjs") out.add(`town:tools/${m[4]}`); continue; }
+    const job = m[5] ? `${m[3]} ${m[5]}` : m[3];
+    out.add(m[2] ? job : `town:${job}`);
   }
   return out;
 }
@@ -152,6 +160,27 @@ test("the rehearsal's crossing runs every job postmark-ferry.service runs, and n
   const mine = crossingJobs("ferry");
   assert.deepEqual(diff(box, mine), [], "the box's ferry runs jobs the rehearsal does not");
   assert.deepEqual(diff(mine, box), [], "the rehearsal runs ferry jobs the box does not");
+});
+
+// POS-988 (Truey's review of #1007): the socket installs only after the release
+// that carries it is live, so the w47 pre-tag rehearsal runs on a box without
+// it. The seal job then skips, naming why, rather than reddening the tag's gate;
+// with the socket there, it runs like every other job.
+test("the seal job skips, naming the uninstalled socket, and runs once the socket is there", () => {
+  const seal = CROSSING.find((j) => j.name === "seal");
+  assert.equal(seal.box, "tools/town-seal-sandbox.mjs");
+  const was = process.env.TOWN_SEAL_SOCKET;
+  const dir = tempDir("seal-socket-");
+  try {
+    process.env.TOWN_SEAL_SOCKET = join(dir, "absent.sock");
+    assert.match(seal.skipIf({}), /absent\.sock is not here: postmark-town-seal\.socket installs after the release that carries it is live \(POS-988\)/);
+    writeFileSync(join(dir, "present.sock"), "");
+    process.env.TOWN_SEAL_SOCKET = join(dir, "present.sock");
+    assert.equal(seal.skipIf({}), null, "the FLIP: with the socket there, the seal is rehearsed");
+  } finally {
+    if (was === undefined) delete process.env.TOWN_SEAL_SOCKET; else process.env.TOWN_SEAL_SOCKET = was;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the rehearsal's tick runs every job the keep tick runs under its lock, and no other", () => {
@@ -202,7 +231,7 @@ test("a failed, running or missing sandbox run is red, and so is a GitHub that d
 });
 
 test("what was carried is release.json's sha and tag (the carry writes both), else the tree's HEAD and branch", () => {
-  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-sha-"));
+  const dir = tempDir("dev-rehearsal-sha-");
   try {
     writeFileSync(join(dir, "release.json"), JSON.stringify({ tag: "train/2026-w42", sha: "65c5e6d", target: "dev" }));
     assert.deepEqual(carried(dir), { sha: "65c5e6d", ref: "train/2026-w42" });
@@ -239,8 +268,10 @@ test("ground chosen at crossing 244 is still clear of the wall and its fringe at
   const { skeleton } = publishedSkeleton(WORLD);
   assert.ok(skeleton?.mists?.schedule?.length, "the pinned world's blessed skeleton carries the Mists (POS-466)");
   const safe = mistsSafeBox(skeleton.mists, mistsAt);
-  assert.deepEqual(safe.keyframes, skeleton.mists.schedule.map((k) => k.crossing));
-  const last = skeleton.mists.schedule.at(-1).crossing;
+  // WLD-147: mistsSafeBox skips a keyframe the engine answers null at (the withdrawal's own), so the safe box is the
+  // standing keyframes'; with no `withdrawn_from` on the record these are all of them, as before
+  assert.deepEqual(safe.keyframes, standingKeyframes(skeleton.mists));
+  const last = lastStandingCrossing(skeleton.mists);
   // the old ground, the control: behind the wall from the first keyframe on
   assert.equal(mistsHere({ x: 30000, y: 30000 }, mistsAt(244, skeleton.mists)).inWall, true);
   // many runs' ground, the run id's walk from several starts, every corner of all four footprints
@@ -248,6 +279,10 @@ test("ground chosen at crossing 244 is still clear of the wall and its fringe at
     const g = await findGround({ run, safe, parcelM: 25, taken: async () => null });
     for (const crossing of [244, 260, 272, last, 400]) {
       const m = mistsAt(crossing, skeleton.mists);
+      // WLD-147 (the S158 world names `withdrawn_from`): from that crossing the engine answers null, no Mists at all, so
+      // there is no wall or fringe to stand in; the probe is the engine's own null, and every standing crossing is still read
+      if (crossing >= withdrawnFrom(skeleton.mists)) { assert.equal(m, null, `crossing ${crossing} is past the withdrawal, so the engine answers no Mists`); continue; }
+      assert.ok(m, `crossing ${crossing} stands, so the engine answers a state to probe`);
       for (const f of g.footprints) for (const q of corners(f)) {
         const h = mistsHere(q, m);
         assert.equal(h.inWall, false, `run ${run}: ${f.name}'s corner (${q.x}, ${q.y}) is behind the wall at crossing ${crossing}`);
@@ -301,6 +336,66 @@ test("the run id picks where the walk starts, so two runs a minute apart stand o
   const c = await findGround({ run: (1000).toString(36), safe, parcelM: 25, taken: twoCovered });
   assert.equal(c.tried, 3);
   assert.deepEqual(c.parcelAt, { x: a.parcelAt.x + 120, y: a.parcelAt.y });
+});
+
+// ── free in canon, not only in the store (POS-928) ───────────────────────────
+//
+// The suite's stand-in seeds its store with no marks, so the store called every
+// place free, and on about 0.7% of run ids one of the rehearsal's parcels stood on
+// a parcel the pinned world holds. The clearing locked it and the sweep set its
+// sketchbook aside: office #951's red, "the copy's main … carries no file for
+// rh-9kew-by-hand after the crossing (receipt: quiet: nothing eligible; …)".
+
+test("canon's parcels answer for a place by name, the edge included, and the walk goes past them", async () => {
+  const { mistsAt } = await engine();
+  const safe = mistsSafeBox(publishedSkeleton(WORLD).skeleton.mists, mistsAt);
+  const run = (1000).toString(36);
+  const free = await findGround({ run, safe, parcelM: 25, taken: async () => null });
+  const parcel = (at, id = "rei/a-parcel") => ({ id, at, extent: { w: 25, h: 25 } });
+  // on the by-hand parcel's ground alone: the first parcel is clear, and the walk still moves on
+  const byHand = groundTakenInCanon([parcel(free.parcelAt2)]);
+  assert.equal(byHand(free.footprints), `the canon parcel "rei/a-parcel"`);
+  // a parcel's width east of the first, sharing only an edge: covered, as the clearing's OVERLAP reads it; one metre on, free
+  assert.equal(groundTakenInCanon([parcel({ x: free.parcelAt.x + 25, y: free.parcelAt.y })])(free.footprints), `the canon parcel "rei/a-parcel"`);
+  assert.equal(groundTakenInCanon([parcel({ x: free.parcelAt.x + 26, y: free.parcelAt.y })])(free.footprints), null);
+  const g = await findGround({ run, safe, parcelM: 25, taken: async (f) => byHand(f) });
+  assert.equal(g.tried, 2);
+  assert.deepEqual(g.parcelAt, { x: free.parcelAt.x + 60, y: free.parcelAt.y });
+});
+
+test("the rehearsal's ground keeps off the world's parcels when its store holds none (POS-928, the stand-in's store, the pinned world)", async () => {
+  const { mistsAt } = await engine();
+  const safe = mistsSafeBox(publishedSkeleton(WORLD).skeleton.mists, mistsAt);
+  const { loadMarks, overlapArea, rect } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
+  const parcels = loadMarks(join(WORLD, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at).map((m) => { const r = rect(m); return { id: m.id, r: { ...r, w: r.w || 25, h: r.h || 25 } }; });
+  // judged by the world's own overlap, the sweep's question, and not by the code under test
+  const onCanon = (f) => parcels.find((p) => overlapArea(p.r, rect(f)) > 0)?.id ?? null;
+  // A run id whose first place puts the by-hand parcel on a parcel canon holds, found from the world at hand so no pin move can stale it.
+  // findGround's walk from run 0 asks every place in order; the id naming place k is k in base 36.
+  const places = [];
+  await assert.rejects(findGround({ run: "0", safe, parcelM: 25, maxTries: Infinity, taken: async (f) => { places.push(f); return "covered"; } }));
+  const k = places.findIndex((f) => !onCanon(f[0]) && onCanon(f[1]));
+  assert.ok(k >= 0, `some place of ${places.length} sets the by-hand parcel on one of canon's ${parcels.length} parcels`);
+  const emptyStore = { q: async () => [] };
+  const g = await rehearsalGround({ t: { officeRoot: OFFICE, worldClone: WORLD }, s: emptyStore, run: k.toString(36) });
+  for (const f of g.footprints) assert.equal(onCanon(f), null, `the ground it answered has ${f.name} on the canon parcel`);
+  assert.ok(g.tried > 1, "the run's first place was walked past");
+  assert.ok(g.line.includes(`clear of its ${parcels.length} parcels)`), g.line);
+});
+
+test("a world clone that reads no parcels refuses, by name: couldn't read is never a world with none (POS-928)", async () => {
+  // the world's own git and tools, and no WORLD/marks on disk: a half-failed checkout, or a sparse set that drops it. loadMarks answers [] and throws nothing.
+  const dir = tempDir("dev-rehearsal-nomarks-");
+  try {
+    const clone = join(dir, "world");
+    execFileSync("git", ["clone", "--quiet", "--no-checkout", WORLD, clone], { windowsHide: true });
+    execFileSync("git", ["-C", clone, "checkout", "HEAD", "--", "tools"], { windowsHide: true });
+    execFileSync("git", ["-C", clone, "update-ref", "refs/heads/main", "HEAD"], { windowsHide: true }); // the pool's clones sit detached, and the blessed read asks for main
+    const { loadMarks } = await import(pathToFileURL(join(clone, "tools", "marks-fold.mjs")).href);
+    assert.deepEqual(loadMarks(join(clone, "WORLD", "marks")), [], "the control: this clone's read finds nothing and does not throw");
+    await assert.rejects(rehearsalGround({ t: { officeRoot: OFFICE, worldClone: clone }, s: { q: async () => [] }, run: "abc1" }),
+      (e) => { assert.equal(e.refusal, true); assert.match(e.message, /reads no parcels \(is WORLD\/marks there\?\)/); return true; });
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
 });
 
 test("a world with no Mists keeps the old strip of ground, still asked for free ground", async () => {

@@ -45,9 +45,6 @@ export const ROLE_PRINCIPAL = "principal";
 
 let principals = new Set();
 
-/** The subjects (gh_id digit strings) holding the principal role, as last loaded. */
-export const principalSubjects = () => principals;
-
 /** Reload the set from the registry. A failed read keeps the last good set. */
 export async function loadPrincipals(rdb) {
   const rows = await listRoles(rdb, { role: ROLE_PRINCIPAL });

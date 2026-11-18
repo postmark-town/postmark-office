@@ -20,7 +20,7 @@
 //
 // The world half is postmark-world#146: `resolveConsent({ …, townWords })`
 // takes the map `townWordsOf` builds here. Wiring it into the clearing is
-// POS-362's; the settlement reads `townWordsAtOffice()` below.
+// POS-362's; the settlement reads `townWordsOf` directly (world-settlement.mjs § vetoesFrom).
 //
 // ── WHAT A "VERSION" IS ─────────────────────────────────────────────────────
 //
@@ -374,7 +374,7 @@ const isTownRow = (r) => r?.actor === TOWN_SPEAKER && r?.payload?.as === AS_TOWN
  * version is absent, so an amendment puts the mark back to awaiting the town.
  *
  * World #146's `resolveConsent({ …, townWords })` reads exactly this. The
- * settlement reads it through `townWordsAtOffice` (POS-362 wires it).
+ * settlement calls it directly (world-settlement.mjs § vetoesFrom).
  */
 export function townWordsOf(rows, { versions = null } = {}) {
   const latest = new Map();
@@ -390,23 +390,62 @@ export function townWordsOf(rows, { versions = null } = {}) {
   return new Map([...latest].map(([id, r]) => [id, r.payload.stance]));
 }
 
-/**
- * The town's words as the settlement will read them: the stance rows from the
- * record, their versions from the store. `{ townWords }` or `{ unreachable }`.
- */
-export async function townWordsAtOffice({ rows = null, versionsQuery = undefined } = {}) {
-  const all = rows ?? await (await import("./world-stance.mjs")).stanceRows();
-  const town = all.filter(isTownRow);
-  const read = await readVersions(town.map((r) => r.object), { query: versionsQuery });
-  if (read.unreachable) return { unreachable: read.unreachable };
-  return { townWords: townWordsOf(town, { versions: read.versions }) };
-}
-
 // ── who a mark awaits ───────────────────────────────────────────────────────
 
 const dateMs = (m) => Date.parse(m?.date ?? "") || 0;
 /** Precedence: the ground stood first. The id breaks a tie (world-stance.mjs § standsBefore). */
 const before = (g, m) => (dateMs(g) !== dateMs(m) ? dateMs(g) < dateMs(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+
+/**
+ * The same precedence on FIRST-LAID instants (postmark#4450; POS-449, "an amend
+ * does not make an elder mark young"). PURE. `firstLaid` is `Map(id → instant)`,
+ * an ISO string as world-snapshot.mjs § firstClaimedBySlug returns it, or
+ * milliseconds; a mark with no entry keeps its own date, as before. The label
+ * and the inbox both build their `elder` here, so the two read seniority one way.
+ */
+export function elderByFirstLaid(firstLaid) {
+  const read = (m) => {
+    const v = firstLaid?.get?.(String(m?.id));
+    const at = typeof v === "number" ? v : Date.parse(String(v ?? ""));
+    return Number.isFinite(at) ? at : dateMs(m);
+  };
+  // ONE READ PER MARK (POS-1057). The inbox asks this of every pair of marks, and a mark with no first-laid entry parsed its date
+  // twice at every ask. The age is kept beside the mark object, for as long as that object and this comparison live; a caller that
+  // hands a fresh object gets a fresh read.
+  const ages = new WeakMap();
+  const ageOf = (m) => {
+    if (m === null || typeof m !== "object") return read(m);
+    let at = ages.get(m);
+    if (at === undefined) ages.set(m, at = read(m));
+    return at;
+  };
+  return (g, m) => { const ag = ageOf(g), am = ageOf(m); return ag !== am ? ag < am : String(g?.id ?? "") < String(m?.id ?? ""); };
+}
+
+/**
+ * SENIORITY ON THE CELLS TWO MARKS SHARE, as the fold reads it (POS-571; world
+ * LOGOS conflict-matrix § Roles from seniority, RULED 2026-10-04: "per-cell
+ * (whoever first covered a cell is that cell's incumbent)", "an expansion is a
+ * newcomer on its new cells"). PURE. `firstCoverOrder` is the blessed engine's
+ * own (world tools/consent.mjs § firstCoverOrder), never a copy: it answers
+ * `{ grantorFirst }` where a footprint history decides, and null where the cells
+ * prove nothing. `recordOf(m)` is the mark as that engine reads it (its first-laid
+ * instant and footprints beside its shape). Where the engine has no per-cell
+ * answer, or predates one, `wholeMark` answers as it always has
+ * (`elderByFirstLaid`). Only the yes or no crosses into `awaitingOf`.
+ */
+export function elderByFirstCover({ firstCoverOrder = null, recordOf, wholeMark }) {
+  if (typeof firstCoverOrder !== "function") return wholeMark;
+  return (g, m) => {
+    // A PARCEL KEEPS ITS OWN LAW, whole-mark on both sides: it "speaks only on what
+    // came after it", by first-laid instant (world consent.mjs § cameAfter), and
+    // the engine's seniority at contact refuses a parcel on either side before any
+    // cell is read (§ seniorAtContact). So the cells are never asked of a parcel.
+    if (g?.kind === "parcel" || m?.kind === "parcel") return wholeMark(g, m);
+    const byCell = firstCoverOrder(recordOf(g), recordOf(m));
+    return byCell ? byCell.grantorFirst === true : wholeMark(g, m);
+  };
+}
 
 /** A handle's household, with the town's own ground and pen folded into the town. */
 export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? TOWN : householdOf(h) ?? h);
@@ -429,8 +468,16 @@ export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? T
  *
  * → `[{ who, ground }]`, the town first, then households by key. Empty means
  * nothing awaits.
+ *
+ * Two optional readers, both handed in so this stays pure (postmark#4450):
+ * `isThing(g)` leaves a thing out of the ground (the-town/the-not-ground: a
+ * thing is not ground), and `elder(g, mark)` says whether `g` stood first. It
+ * defaults to `before`, the current date; a caller that has read each mark's
+ * first-laid instant passes a comparison on that instead (POS-449: an amend
+ * does not make an elder mark young). Only the yes or no crosses in, so no
+ * date reaches anything this function returns.
  */
-export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null } = {}) {
+export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null, isThing = null, elder = before } = {}) {
   if (!mark?.id) return [];
   const own = houseOf(householdOf, mark.by);
   const spoke = new Set();
@@ -444,8 +491,12 @@ export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf
   if (mark.at && mark.extent) {
     for (const g of marks) {
       if (!g?.id || g.id === mark.id || !g.at || !g.extent) continue;
+      if (isThing && isThing(g)) continue;
       const hh = houseOf(householdOf, g.by);
-      if (hh === own || !before(g, mark) || !overlaps(g, mark)) continue;
+      // OVERLAP FIRST (POS-1057). Both are yes-or-no questions with no effect, so the order changes no answer. Overlap is rectangle
+      // arithmetic and is false for nearly every pair; seniority reads footprints cell by cell since POS-571 and was asked of every
+      // pair, overlapping or not.
+      if (hh === own || !overlaps(g, mark) || !elder(g, mark)) continue;
       if (!grounds.has(hh)) grounds.set(hh, []);
       grounds.get(hh).push(g.id);
     }

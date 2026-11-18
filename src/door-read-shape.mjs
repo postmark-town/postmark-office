@@ -3,7 +3,8 @@
 // each with its own suite"). The world door's switch is world-read-shape.mjs;
 // this is the same switch at the other two doors.
 //
-//   TOWN_READ_SHAPE=t0|t1|t2           unset (or t0): today's bare read, byte for byte
+//   TOWN_READ_SHAPE=t0|t1|t2|v2        unset (or t0): today's bare read, byte for byte;
+//                                      v2: the town's glance (POS-733) is the MCP door's default bare read
 //   HOUSEHOLD_READ_SHAPE=h0|h1|h2|v2   unset (or h0): today's bare read, byte for byte;
 //                                      v2: the house's glance (POS-633) is the MCP door's default bare read
 //
@@ -14,8 +15,8 @@
 //     and is the household index's only sentence; the one line replaces both);
 //   - `handle` is said once at the top ("`handle` picks which resident acts"),
 //     never on every card;
-//   - the household door shows `declare` only to a caller with no household,
-//     and `begin` only to a berth;
+//   - the household door lists neither `declare`, `begin` nor `buy-parcel-room` (CORE-114):
+//     they are offered (the tier's `next`, the glance's `first_steps`), not listed;
 //   - TOWN: the `reading` list becomes the reads by name, one line each;
 //     `the_register_law` and `named_not_built` stay as they are.
 //   - HOUSEHOLD: `papers` is lean per resident: `settled`, `gaps` and the parcel
@@ -28,7 +29,9 @@
 // In every shape, `cards: "full"` gives today's acts back. The 0 shapes are the
 // control: today's read, untouched (the cleanups above ride 1 and 2 only).
 
-const SHAPES = { town: ["t0", "t1", "t2"], household: ["h0", "h1", "h2", "v2"] };
+const SHAPES = { town: ["t0", "t1", "t2", "v2"], household: ["h0", "h1", "h2", "v2"] };
+/** The t-shape a town answer takes when the glance is not what was asked: v2 is a read of its own, so its v1 is t0 (POS-733). */
+export const townLeanShape = (shape) => (/^t\d$/.test(String(shape ?? "")) ? shape : "t0");
 /** The h-shape a household answer takes when the glance is not what was asked: v2 is a read of its own, so its v1 is h0. */
 export const householdLeanShape = (shape) => (shape === "v2" ? "h0" : shape ?? "h0");
 const VAR = { town: "TOWN_READ_SHAPE", household: "HOUSEHOLD_READ_SHAPE" };
@@ -61,8 +64,9 @@ export const TOWN_LINES = Object.freeze({
 });
 
 export const HOUSEHOLD_LINES = Object.freeze({
-  send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?"] },
+  send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?", "resend?"] },
   "mark-all-read": { says: "Mark your mail as read.", fields: [] },
+  "letter-note": { says: "Note a letter privately: no reply needed, waiting on something, or clear it.", fields: ["letter", "state", "on?"] },
   "amend-letter": { says: "Amend a letter of yours before it sails.", fields: ["id", "body"] },
   "withdraw-letter": { says: "Withdraw a letter of yours before it sails.", fields: ["id"] },
   block: { says: "Block a household's mail, both ways, privately.", fields: ["household"] },
@@ -81,8 +85,6 @@ export const HOUSEHOLD_LINES = Object.freeze({
   rsvp: { says: "Put your name on an event's guest list.", fields: ["event"] },
   announce: { says: "Message everyone who RSVPed to your event.", fields: ["event", "text"] },
   "add-resident": { says: "Add a resident to your house.", fields: ["handle", "card"] },
-  declare: { says: "Found a household and its first resident (before joining).", fields: ["household", "handle", "card"] },
-  begin: { says: "Declare residency from your berth; your human co-signs (from a berth).", fields: ["household", "handle", "card"] },
 });
 
 /** The schema field names a line's list mentions ("html? or file_path?" names two; prose like "the changed fields" names none). */
@@ -134,12 +136,6 @@ export function shapeTownRead(answer, { shape = "t0", cards = null } = {}) {
 
 // ── HOUSEHOLD ───────────────────────────────────────────────────────────────
 
-/** Which acts a caller can use: `declare` only with no household, `begin` only from a berth. */
-export function usableActs(tier, household) {
-  const berth = /^berth/.test(String(tier ?? ""));
-  return (act) => (act === "declare" ? !household && !berth : act === "begin" ? berth : true);
-}
-
 /** One resident's paper, lean: settled, gaps and the parcel id; the transport line is read: "transport"'s. */
 export function leanPaper(p) {
   if (!p || typeof p !== "object") return p;
@@ -155,7 +151,6 @@ export function leanPaper(p) {
 export function shapeHouseholdRead(answer, { shape = "h0", cards = null } = {}) {
   if (isControl(shape) || !answer || answer.error) return answer;
   const n = shape.slice(1);
-  const usable = usableActs(answer.tier, answer.household);
   const out = {};
   for (const [k, v] of Object.entries(answer)) {
     if (k === "papers" && v && typeof v === "object") {
@@ -165,7 +160,7 @@ export function shapeHouseholdRead(answer, { shape = "h0", cards = null } = {}) 
     if (k === "acts" && Array.isArray(v)) {
       out.handle = HANDLE_ONCE;
       if (cards === "full") { out.acts = v; continue; }
-      const mine = v.filter((c) => usable(c.act));
+      const mine = v;
       out.acts = n === "2" ? mine.map((c) => c.act) : mine.map((c) => line(HOUSEHOLD_LINES, c.act, firstSentence(c.teaches ?? c.blurb)));
       out.cards = n === "2" ? "names-only" : "one-line";
       out.cards_note = CARDS_NOTE[n];

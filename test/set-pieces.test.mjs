@@ -21,13 +21,13 @@ import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 
 import { LivingSet, loadCreatureLaw, reactTo, advanceFight, unmaskFight } from "../src/creatures.mjs";
-import { NERVE_ACTION, nerveOf, windowAt } from "../src/encounter.mjs";
+import { NERVE_ACTION, nerveOf, nerveSpentSaid, windowAt } from "../src/encounter.mjs";
 import {
   PHASE_ACTION, HURL_ACTION, HURLED_ACTION, SANITY_ACTION, UNMASKED_ACTION, PERSUADE_ACTION, LINE_ACTION, GLANCES,
   pieceOf, sanityOf, barsOf, nextPiece, openHurls, answerOf, STRIKE_UNDER_FEINT, persuadeScore, repeats, persuadedThisWindow,
 } from "../src/set-pieces.mjs";
 import { encounterTick, settleResolve, worldEncounter, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
-import { whyNot, persuadeGuard, PERSUADED_SQL } from "../src/creature-verbs.mjs";
+import { whyNot, persuadeGuard, PERSUADED_SQL, worldCreature } from "../src/creature-verbs.mjs";
 import { creaturesInWho, creatureToYou, investigateCreature, lookerOf } from "../src/creatures-read.mjs";
 import { planFightEnding, fightSanity } from "../world2/tools/creature-endings.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
@@ -196,6 +196,9 @@ test("the target's next act in the ring answers it: dodge, walk or exit flinch (
   assert.deepEqual([payloadOf(hd[0]).outcome, payloadOf(hd[0]).hurl], ["flinched", dodged.h.id]);
   assert.deepEqual(rowsOf(dodged.w, NERVE_ACTION).filter((r) => payloadOf(r).why === "flinched").map((r) => payloadOf(r).by), [-3]);
   assert.deepEqual(dodged.answer.feint, { outcome: "flinched", nerve: -3 });
+  // WLD-153: the dodge's answer adds the flinch (3) to the act's own 1, and says what is left
+  const dodgeAct = payloadOf(rowsOf(dodged.w, NERVE_ACTION).find((r) => payloadOf(r).why === "flinched")).act;
+  assert.equal(nerveSpentSaid(dodged.living, "kai", dodgeAct, NOW), "That cost you 4 nerve; you have 6 of 10 left.");
   const walked = await run("walk");
   assert.equal(payloadOf(rowsOf(walked.w, HURLED_ACTION)[0]).outcome, "flinched");
   const said = await run("say");
@@ -321,8 +324,11 @@ test("persuade: only in the unbreakable piece, once per household each settlemen
   // the cost and the score
   const { w, d } = turnDeps(living, { env: { TYPESAFE_API_KEY: "k" },
     ask: async (state, q) => ({ response: { answers: { reaction: { probabilities: { hum: 1 } }, persuade_score: { probabilities: { s8: 0.9, s3: 0.1 } } } } }) });
-  const [answer] = await reactTo(act({ verb: "persuade", words: "You waited for it once. Wait with us.", actor: "kai" }), { ...d, aimed: living.byId.get(ID) });
+  const persuasion = act({ verb: "persuade", words: "You waited for it once. Wait with us.", actor: "kai" });
+  const [answer] = await reactTo(persuasion, { ...d, aimed: living.byId.get(ID) });
   assert.deepEqual(rowsOf(w, NERVE_ACTION).filter((r) => r.object === "kai").map((r) => payloadOf(r).by), [-8], "its nerve, in place of an act's 1");
+  // WLD-153: the persuade's answer says its own cost (the piece's nerve, not an act's 1) and what is left
+  assert.equal(nerveSpentSaid(living, "kai", persuasion.actId, NOW), "That cost you 8 nerve; you have 2 of 10 left.");
   assert.deepEqual(rowsOf(w, SANITY_ACTION).map((r) => payloadOf(r).by), [8]);
   assert.equal(answer.persuaded.sanity, 8);
 });
@@ -337,6 +343,37 @@ test("a persuade's score: Jev's, clamped to the piece's range by code; the low e
   assert.equal(persuadeScore({ s8: 1 }, def, { repeated: true }), 3);
   assert.ok(repeats("Wait with us, like everyone else.", ["wait with us like everyone else"]));
   assert.ok(!repeats("You promised your friends you would wait.", ["wait with us like everyone else"]));
+});
+
+// WLD-153: dodge and persuade through their own door (worldCreature), not the helper alone: the reply says what each cost
+const aimedDoor = (living, over = {}) => {
+  const { d } = turnDeps(living, { env: { TYPESAFE_API_KEY: "k" }, ...over });
+  let next = 60000; // the record's ids only rise: an act after the hurl has a higher one
+  return (args) => worldCreature(args, { handles: new Set(["kai"]), household: "solo:kai" }, {
+    now: () => NOW, clock: () => NOW, env: d.env, freeze: () => null, creatures: async () => ({ living, law: living.law }), standpoint: async () => ({ x: 10, y: 0 }),
+    householdOf: async () => "solo:kai", carryingConsumable: async () => false,
+    write: async () => ({ actId: String(++next), written_at: iso(NOW) }),
+    answer: async (a, d2) => reactTo(a, { ...d2, ...d, aimed: d2.aimed }), others: async () => [],
+  });
+};
+
+test("WLD-153 DODGE through its door: the flinch and the act's own 1 are said, with what is left", async () => {
+  const living = livingWith(lawWith(), hurl("kai"));
+  const out = await aimedDoor(living)({ act: "dodge", creature: ID });
+  assert.equal(Object.keys(out)[0], "nerve_said");
+  assert.equal(out.nerve_said, "That cost you 4 nerve; you have 6 of 10 left.");
+  assert.equal(nerveOf(living, "kai", NOW), 6, "3 for the flinch, 1 for the act: the charges are the fight's own");
+  const none = await aimedDoor(livingWith(lawWith()))({ act: "dodge", creature: ID }).catch((e) => e);
+  assert.ok(none.code === 409 && !("nerve_said" in none), "nothing thrown at you to dodge: refused, nothing said");
+});
+
+test("WLD-153 PERSUADE through its door: the piece's nerve (8, not an act's 1) is said, with what is left", async () => {
+  const living = livingWith(lawWith(), phase(2, NOW - 30 * 60_000));
+  const ask = async () => ({ response: { answers: { reaction: { probabilities: { hum: 1 } }, persuade_score: { probabilities: { s8: 0.9, s3: 0.1 } } } } });
+  const out = await aimedDoor(living, { ask })({ act: "persuade", creature: ID, words: "You waited for it once. Wait with us." });
+  assert.equal(Object.keys(out)[0], "nerve_said");
+  assert.equal(out.nerve_said, "That cost you 8 nerve; you have 2 of 10 left.");
+  assert.equal(nerveOf(living, "kai", NOW), 2);
 });
 
 test("a repeated persuade is never asked of Jev, and counts the low end", async () => {

@@ -29,9 +29,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { pathToFileURL } from "node:url";
 
 // ⚑ THE FIXTURE AND THE IMPORT COME BEFORE EVERY `test()` IN THIS FILE, AND
@@ -84,8 +84,8 @@ const enteredAnswer = () => ({
 // `centreM === 0`). So leg 5 walks 6,865 m — Kogane's distance — and leg 6
 // walks to the mark the resident is already standing on.
 
-const repo = mkdtempSync(join(tmpdir(), "pos171-world-"));
-const pool = mkdtempSync(join(tmpdir(), "pos171-pool-"));
+const repo = tempDir("pos171-world-");
+const pool = tempDir("pos171-pool-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 after(() => rmSync(pool, { recursive: true, force: true }));
 
