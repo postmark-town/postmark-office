@@ -86,3 +86,23 @@ test("no PG* at all rebuilds nothing, and says so", { skip }, () => {
   assert.match(r.stderr, /TOWN INDEX AND WORLD GRAPH NOT REBUILT/);
   assert.doesNotMatch(r.called, /node /);
 });
+
+// POS-940 (POS-354 fix e, Darko 2026-10-10): run as root, the reset and clean left ~9,900 root-owned files in the
+// dev clones and the next freshen failed with EACCES. Every git step on a clone runs as meepo, the clones' owner.
+test("every git step on the clones runs as meepo, never as whoever ran the script (POS-940)", { skip }, () => {
+  const r = run({ PGDATABASE: "w2_devsandbox_20260925", PGUSER: "law_ingester" });
+  assert.equal(r.status, 0, r.stderr);
+  const lines = r.called.split("\n").filter(Boolean);
+  assert.deepEqual(lines.filter((l) => l.startsWith("git ")), [], "no git ran bare (as root, on the box)");
+  for (const clone of ["town-clone", "world-clone"])
+    for (const step of [/fetch origin --tags --force -q$/, /reset --hard refs\/tags\/sandbox\/seed -q$/, /clean -fd -q$/])
+      assert.ok(lines.some((l) => l.startsWith(`sudo -u meepo git -C `) && l.includes(`/${clone} `) && step.test(l)), `${clone}: ${step} as meepo\n${r.called}`);
+});
+
+test("the retired world-hydrate step stays gone: no --db, and the store's snapshot is rebuilt --to-store (POS-940)", () => {
+  // POS-354 fix e: the 10-10 reset failed on `world-hydrate --db` (world.db retired, POS-270); it was replaced by
+  // the live --to-store rebuild in the w42 ship, which stays: nothing else writes dev's snapshot (dev-seed-advance.sh, step 7)
+  const text = readFileSync(SCRIPT, "utf8");
+  assert.doesNotMatch(text, /world-hydrate\.mjs[^\n]*--db\b/);
+  assert.match(text, /node src\/world-hydrate\.mjs --world "\$D\/world-clone" --office "\$D" --to-store/);
+});

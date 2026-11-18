@@ -260,8 +260,20 @@ cd /srv/postmark-office-dev && sudo bash -c '
 `world2-lib.sh § w2_db` falls back to `world2_dev` (PROD) when `WORLD2_DB` is
 unset, so the line sets it and asserts it before anything writes.
 
-**8. The switch.** Add `STAMP_LINES=store` to `/etc/postmark-office-dev.env`
-(sudoedit), then `sudo systemctl restart postmark-office-dev`.
+**8. The switch, behind the mint's gate.** First `stamp-mint-parity`, read-only,
+with the dev office's env (POS-341's ruling, 10-04 Q3: before anything mints from
+the store, its key base, deliveries, ledger and replay equal the clone's; prod's
+switch has the same line, § The store mint at the crossing, step 6):
+```sh
+cd /srv/postmark-office-dev && node --env-file=<(sudo cat /etc/postmark-office-dev.env) world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office-dev/town-clone
+#   expect: … PARITY (exit 0). A DIFFERENCE stops here: report it, reconcile nothing.
+```
+A key-base difference is a registry that lags the clone (on 10-10 dev's
+`household_pins` was a 09-25 copy, and the rehearsal's mint diverged): refresh it
+as § The dev seed advance, step 3 does, then run the gate again. Only on PARITY,
+add `STAMP_LINES=store` to `/etc/postmark-office-dev.env` (sudoedit), then
+`sudo systemctl restart postmark-office-dev`. The rehearsal's preflight runs the
+same gate on every rehearsal (step 10).
 
 **9. The pens file**, `/etc/postmark-dev-rehearsal.env` (root 0600, sudoedit),
 both URLs naming dev's database (the tool refuses any other):
@@ -280,7 +292,8 @@ cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --
 The first line names the store it writes. The preflight names anything still
 missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
 `tools/stamp-pubkey.pem` must be its public half), the town index off the
-clone's history, a stamp chain that disagrees with the clone.
+clone's history, a stamp chain that disagrees with the clone, and a red
+`stamp-mint-parity` (step 8's gate, run as the dev office's job).
 
 The last step is the stamp sandbox (POS-366). It cannot run on the box (the
 carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
@@ -379,6 +392,8 @@ dev's. Then, in order, stopping at the first failure and naming it:
    moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
    database but the sandbox and any count of open windows but one. A close still ahead
    is left alone. The step prints the close: rehearse before it, or run the advance again.
+   Since POS-940 the rehearsal's clearings pull a past close to now as well, so this
+   step is a second guard, kept.
 9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
