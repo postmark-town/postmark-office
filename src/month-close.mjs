@@ -199,6 +199,8 @@ const tailDateOf = (entries) => entries.reduce((mx, e) => { const d = /^- (\d{4}
 
 // ── THE PLANNER (pure) ──────────────────────────────────────────────────────
 
+/** The town engine's own words for a pot with nothing to close: no stakes and no unsettled receipts, an elastic roll under its floor, or an empty derived block. */
+const EMPTY_CLOSE = /has nothing to close|rolled \$\d+ of the \$\d+ its close needs|derives an empty close/;
 const holoFor = (derived, ref) => derived.rows.find((r) => r.kind === "holo" && r.ref === ref);
 
 /**
@@ -261,7 +263,15 @@ export function derivePlan({ engine, town, month, date, attested, order = MONTH_
     if (entryAt.length) { pots.push({ ...row, status: "blocked", code: "provisional-without-close", reason: `a provisional entry stands for ${pot} ${month} but the pot is not closed: an inconsistent pair is a reconciliation, never an append` }); continue; }
 
     const derived = engine.deriveEpochClose({ entries: prefix, households, pot, potMeta: meta, epoch: month, date, dial });
-    if (!derived.ok) { pots.push({ ...row, status: "blocked", code: "close-refused", reason: derived.error }); continue; }
+    if (!derived.ok) {
+      // Darko, 2026-11-18: an empty or below-floor pot is SKIPPED with a note and the other pots still close. Any other refusal of the engine (no beneficiary, no target, a meep beneficiary) still blocks.
+      if (EMPTY_CLOSE.test(derived.error)) {
+        if (att) pots.push({ ...row, status: "blocked", code: "attested-empty-pot", reason: `Starforge attests ${pot}, which has nothing to close this month (${derived.error}): a provisional entry is never written for a pot no close settles` });
+        else pots.push({ ...row, status: "skipped", code: "empty", reason: `nothing to close this month: ${derived.error}` });
+        continue;
+      }
+      pots.push({ ...row, status: "blocked", code: "close-refused", reason: derived.error }); continue;
+    }
     const lines = derived.rows.map(engine.keepingLine);
     const result = { ...row, status: "selected", lines, report: derived.report, ledger_before: lineCount.at(-1) };
     // The town's close takes the WHOLE unsettled roll and windows nothing by date (deriveEpochClose § dollars). A receipt dated
@@ -298,8 +308,9 @@ export function derivePlan({ engine, town, month, date, attested, order = MONTH_
     pots.push(result);
   }
 
-  if (!pots.some((p) => p.status === "selected" || p.status === "already-complete") && !pots.some((p) => p.status === "blocked"))
-    refusals.push(refusal("nothing-to-close", `none of the reviewed pots has a ${month} close to make: an empty month is an error here, never a silent success`));
+  // every reviewed pot empty is a plan with nothing to apply, said plainly; only a town with NONE of the reviewed pots' files is an error
+  if (pots.filter((p) => p.order).every((p) => p.code === "no-pot-file"))
+    refusals.push(refusal("nothing-to-close", `none of the reviewed pots (${order.join(", ")}) has a pot file: there is nothing here to close`));
   for (const p of pots) if (p.status === "blocked") refusals.push(refusal(p.code, p.reason, p.pot));
   const seals = engine.sealChain(prefix.map((e) => e.canonical));
   for (const p of pots) if (p.status === "selected") { p.tail_seal_before = p.ledger_before ? seals[p.ledger_before - 1] ?? null : null; p.tail_seal_after = seals[p.ledger_after - 1]; }
@@ -317,7 +328,7 @@ export function fingerprintOf({ month, date, town, plan, attested, townCommit, e
     pot_files: town.pots.map((p) => [p.id, sha256(p.text)]),
     provisional: town.provisional.exists ? sha256(town.provisional.text) : null,
     attested,
-    plan: plan.pots.map((p) => ({ pot: p.pot, status: p.status, code: p.code ?? null, lines: p.lines ?? null, provisional: p.provisional ? { entry: p.provisional.entry, after: p.provisional.after_sha } : null })),
+    plan: plan.pots.map((p) => ({ pot: p.pot, status: p.status, code: p.code ?? null, reason: p.status === "skipped" ? p.reason : null, lines: p.lines ?? null, provisional: p.provisional ? { entry: p.provisional.entry, after: p.provisional.after_sha } : null })),
   };
   return sha256(JSON.stringify(inputs));
 }
@@ -404,7 +415,10 @@ export function renderPlan({ ok, refusals, plan, fingerprint }) {
   }
   L.push("");
   if (refusals.length) { L.push("REFUSED — nothing can be applied:", ...refusals.map((r) => `  · ${r.code}${r.pot ? ` (${r.pot})` : ""}: ${r.message}`)); }
-  else L.push(`plan fingerprint: ${fingerprint}`, "dry run: nothing was appended, pushed or signed.");
+  else {
+    if (plan && !plan.pots.some((p) => p.status === "selected")) L.push("NOTHING TO APPLY: no reviewed pot has a close to make this month (see the skipped pots above). This is a plan, not an error.");
+    L.push(`plan fingerprint: ${fingerprint}`, "dry run: nothing was appended, pushed or signed.");
+  }
   return L.join("\n");
 }
 

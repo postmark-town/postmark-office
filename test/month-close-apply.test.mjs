@@ -126,6 +126,28 @@ test("THE APPLY: three stamped pen commits, one per pot, each the plan's own row
   assert.equal(await rows(), 20);
 });
 
+test("A SKIPPED EMPTY POT lands no commit: the other two close in order, and a month with nothing to apply completes with nothing written", { skip }, async () => {
+  const t = await freshTown({ ledger: (M, { gift, stake, receipt }) => [M.rulesLine("2026-06-12"), gift("ana", 20), gift("bo", 100), gift("cy", 100), gift("dee", 10),
+    stake("cy", "darko-fund", 12), stake("bo", "meeps-fund", 40), receipt("darko-fund", "dee", 20, "t-dee-1"), receipt("meeps-fund", "ana", 200, "t-ana-meeps")] });
+  const p = await plan(t, { attestations: null });
+  assert.equal(p.ok, true, JSON.stringify(p.refusals));
+  const res = await apply(t, p.fingerprint, { attestations: null });
+  assert.equal(res.status, "completed", JSON.stringify(res));
+  assert.deepEqual(outcomes(res), [["darko-fund", "closed"], ["meeps-fund", "closed"]], "no pot entry, no commit for keeping-ec2");
+  assert.equal(originCount(t), 3, "the seed and two closes");
+  assert.deepEqual(git(t.origin, "log", "--format=%s", "-2", "main").trim().split("\n").reverse().map((s) => s.split(" (")[0]), ["close: darko-fund 2026-10", "close: meeps-fund 2026-10"]);
+  assert.deepEqual(ledgerOf(t).filter((l) => /keeping-ec2/.test(l)), [], "nothing was written for the skipped pot");
+  assert.deepEqual(res.pots.map((x) => x.ledger_after), [ledgerOf(t).length - selected(p)[1].lines.length, ledgerOf(t).length]);
+
+  const empty = await freshTown({ ledger: (M, { gift }) => [M.rulesLine("2026-06-12"), gift("ana", 20)] });
+  const pe = await plan(empty, { attestations: null });
+  assert.equal(pe.ok, true);
+  const before = await state(empty);
+  const none = await apply(empty, pe.fingerprint, { attestations: null });
+  assert.deepEqual([none.status, none.pots, none.not_attempted], ["completed", [], []]);
+  assert.deepEqual(await state(empty), before, "nothing was written");
+});
+
 test("THE APPLY IS BOUND TO THE REVIEWED PLAN: no fingerprint, a different one, a moved input (a receipt, a pot's metadata) each refuse and change nothing; the switches and the key are checked first", { skip }, async () => {
   const t = await freshTown();
   const p = await plan(t);

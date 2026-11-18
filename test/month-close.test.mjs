@@ -149,15 +149,46 @@ test("not this command's: a once pot, a draft pot and the reserved treasury; an 
   assert.deepEqual(pure(t).refusals.map((r) => r.code), ["unreadable-pot"]);
 });
 
-test("an empty pot is an ERROR, never a silent success: no unsettled receipts and no stakes; an elastic pot below its floor", { skip }, async () => {
+// THE RULING (Darko, 2026-11-18 16:5x EST, on #1139): an empty or below-floor pot is SKIPPED WITH A NOTE, and the other pots still close.
+test("an empty pot in the middle is skipped with a note and the other two close, on the prefix the first one made; Starforge attesting it blocks (no entry for a pot no close settles)", { skip }, async () => {
+  const t = await freshTown({ ledger: (M, { gift, stake, receipt }) => [M.rulesLine("2026-06-12"), gift("ana", 20), gift("bo", 100), gift("cy", 100), gift("dee", 10), gift("wright", 100),
+    stake("cy", "darko-fund", 12), stake("bo", "meeps-fund", 40), receipt("darko-fund", "dee", 20, "t-dee-1"), receipt("meeps-fund", "ana", 200, "t-ana-meeps")] });
+  const d = pure(t);
+  assert.deepEqual(d.refusals, [], "the month is not refused");
+  assert.deepEqual(d.pots.filter((p) => p.order).map((p) => [p.pot, p.status, p.code ?? null]), [["darko-fund", "selected", null], ["keeping-ec2", "skipped", "empty"], ["meeps-fund", "selected", null]]);
+  assert.match(byPot(d, "keeping-ec2").reason, /nothing to close this month: .*no open stakes, no unsettled receipts/, "a plain reason in the plan");
+  assert.equal(byPot(d, "meeps-fund").ledger_before, byPot(d, "darko-fund").ledger_after, "the skipped pot adds nothing to the prefix: meeps-fund is derived on darko-fund's");
+  assert.match(renderPlan({ ok: true, refusals: [], plan: { month: MONTH, date: CLOSE_DATE, tz: "America/New_York", order: [...MONTH_CLOSE_ORDER], town_commit: "0".repeat(40), ledger: { lines_before: 1, lines_after: 1 }, pots: d.pots }, fingerprint: "f" }), /\[SKIPPED\] keeping-ec2 \(#2\) — nothing to close this month/);
+  assert.deepEqual(pure(t, [{ pot: "keeping-ec2", usd: 40, ref: "inv-1" }]).refusals.map((r) => r.code), ["attested-empty-pot"]);
+  // the skip is in the fingerprint: a receipt arriving for the empty pot changes it
+  const fp = () => { const town = readTown(t.dir, t.engine); const x = derivePlan({ engine: t.engine, town, month: MONTH, date: CLOSE_DATE, attested: [] }); return fingerprintOf({ month: MONTH, date: CLOSE_DATE, town, plan: { pots: x.pots }, attested: [], townCommit: readPins().town_commit, engineSeals: x.seals }); };
+  const a = fp();
+  t.M.appendSigned(t.dir, [t.M.potReceiptLine({ date: "2026-10-20", pot: "keeping-ec2", rail: "stripe", usd: 150, from: "ana", ref: "t-ec2-late" })], t.pem);
+  assert.notEqual(fp(), a);
+  assert.equal(byPot(pure(t), "keeping-ec2").status, "selected", "and with a receipt it closes");
+});
+
+test("every reviewed pot empty is a plan with NOTHING TO APPLY, said plainly, not an error", { skip }, async () => {
+  const t = await freshTown({ ledger: (M, { gift }) => [M.rulesLine("2026-06-12"), gift("ana", 20)] });
+  const d = pure(t);
+  assert.deepEqual(d.refusals, []);
+  assert.deepEqual(d.pots.filter((p) => p.order).map((p) => [p.pot, p.status, p.code]), [["darko-fund", "skipped", "empty"], ["keeping-ec2", "skipped", "empty"], ["meeps-fund", "skipped", "empty"]]);
+  const r = await plan(t);
+  assert.equal(r.ok, true, JSON.stringify(r.refusals));
+  assert.match(r.fingerprint, /^[0-9a-f]{64}$/);
+  assert.match(renderPlan(r), /NOTHING TO APPLY: .* This is a plan, not an error\./);
+});
+
+test("an elastic pot below its floor, and a pot with no stakes and no receipts, are skipped; any OTHER refusal of the town's engine (a pot with no beneficiary) still blocks", { skip }, async () => {
   const t = await freshTown({ ledger: (M, { gift, stake, receipt }) => [M.rulesLine("2026-06-12"), gift("ana", 20), gift("bo", 100), gift("dee", 10),
     stake("bo", "keeping-ec2", 40), receipt("keeping-ec2", "ana", 150, "t-1"), receipt("darko-fund", "dee", 3, "t-2")] });
   const d = pure(t);
-  const why = Object.fromEntries(d.pots.filter((p) => p.status === "blocked").map((p) => [p.pot, p.reason]));
-  assert.match(why["meeps-fund"], /nothing to close/, "no stakes and no receipts: the engine's own refusal");
-  assert.match(why["darko-fund"], /rolled \$3 of the \$5 its close needs/, "the elastic floor");
-  assert.equal(byPot(d, "keeping-ec2").status, "selected");
-  assert.deepEqual(d.refusals.map((r) => r.code).sort(), ["close-refused", "close-refused"], "the plan is refused as a whole: a pot that cannot close stops the month");
+  assert.match(byPot(d, "meeps-fund").reason, /nothing to close/, "no stakes and no receipts: the engine's own words");
+  assert.match(byPot(d, "darko-fund").reason, /rolled \$3 of the \$5 its close needs/, "the elastic floor");
+  assert.deepEqual(d.pots.filter((p) => p.order).map((p) => p.status), ["skipped", "selected", "skipped"]);
+  assert.deepEqual(d.refusals, []);
+  const noBen = await freshTown({ pots: { "keeping-ec2": { pot: "keeping-ec2", status: "open", epoch_cadence: "monthly", target_usd_per_epoch: 150 } } });
+  assert.deepEqual(pure(noBen).refusals.map((r) => r.code), ["close-refused"], "a pot that cannot close for a reason other than being empty still stops the month");
 });
 
 test("a month nothing closes in is an error, never a quiet success: none of the reviewed pots exists", { skip }, async () => {
