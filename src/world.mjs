@@ -4681,27 +4681,18 @@ export async function markStandsOnOwnGround(clean, canon = null) {
 // `plan` (POS-1035): every read, judgement and guard of a real leave, then the entry it would write handed back instead of written
 // — for an act that must land with others in ONE transaction (the event's completion: world-journal § prepareActFlipped).
 /**
- * THE FOOTPRINT CAPS, AT EVERY DOOR THAT WRITES A MARK (POS-1126, WLD-193; mark-footprint.mjs is the rule).
- * Darko: an outline holds at most 256 points, and a resident's mark on common ground is at most 2 km a side. The
- * numbers are the mark class's two properties, read here through classDials and nowhere held; a dial the law has not
- * published is no boundary. Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it
- * answers the same refusal as the write. The point cap judges any ring a write carries. The SIDE cap is a resident's
- * PLACED mark standing on COMMON ground, in the door's own representation: a sited mark (either form; a parcel lineage
- * and a spark are not), carrying an `at`, whose ground verdict (§ groundMinimumStake, the one the stake door reads) is
- * commons, not the household's own parcel; and not a CONSTITUTION mark (an existing record whose tier is `constitution`, the
- * town's own five: the side cap is a resident's, Wright 2026-11-18). An amendment is judged on what it carries, like a leave.
+ * THE OUTLINE CAP, AT EVERY DOOR THAT WRITES A MARK (POS-1126, WLD-193; mark-footprint.mjs is the rule).
+ * Darko, 2026-11-17: "yeah 256 is good": a mark's 2D `points:` outline holds at most 256 points. The number is the mark class's
+ * `outline-point-cap` property, read here through classDials and nowhere held; a dial the law has not published is no boundary.
+ * Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it answers the same refusal as the write. The cap
+ * judges any ring a write carries (a parcel's, a constitution mark's); it never judges a footprint's size: Darko, 2026-11-18 14:42 EST,
+ * "I'm actually just going to err on not having a cap for now", Wright: "There's no size refusal." An amendment is judged on what it carries.
  */
-export async function footprintGate(clean, { canon = canonForGuards() } = {}) {
-  if (clean?.points === undefined && clean?.extent === undefined) return;
+export function footprintGate(clean) {
+  if (clean?.points === undefined) return;
   const caps = footprintCaps(classDials("mark"));
-  if (caps.points == null && caps.side == null) return;
-  let sideScope = false;
-  const constitution = canon?.byId?.get(`${clean.by}/${clean.slug}`)?.tier === "constitution";
-  if (caps.side != null && !constitution && clean.at && isSited(clean, classExtendsOf()) && clean.kind !== "spark") {
-    const line = [clean.kind, clean.class].filter((k) => k != null).flatMap((k) => lineageOf(String(k), classExtendsOf()));
-    if (clean.kind !== "parcel" && !line.includes("parcel")) sideScope = (await groundMinimumStake(clean, canon)).min >= 1;
-  }
-  const r = footprintRefusal(clean, { caps, sideScope });
+  if (caps.points == null) return;
+  const r = footprintRefusal(clean, { caps });
   if (r) throw Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, hint: r.hint });
 }
 
@@ -4731,9 +4722,9 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     if (clean.amend === true && !exists)
       throw bounce(404, `no mark "${id}" to amend`, "ids are <by>/<slug> — leave it first, or drop amend: true");
 
-    // ── THE FOOTPRINT CAPS (POS-1126): before the preview answers and before any write, for every caller of this pass —
+    // ── THE OUTLINE CAP (POS-1126): before the preview answers and before any write, for every caller of this pass —
     // the public door, the event's spark, the town's own amend tools. An amendment is judged against what it supersedes.
-    await footprintGate(clean, { canon });
+    footprintGate(clean);
 
     // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
@@ -5877,9 +5868,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
-  // THE FOOTPRINT CAPS on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
+  // THE OUTLINE CAP on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
   // the canon's declaration, before the exec or a preview of it. The journal pass below asks it itself, against the live layer.
-  if (!singleLogEnabled()) await footprintGate(clean);
+  if (!singleLogEnabled()) footprintGate(clean);
   if (singleLogEnabled()) {
     // POS-5 slice 1. The journal door throws its bounces directly (they are the
     // same grammar the exec answers with, one process earlier), so only the

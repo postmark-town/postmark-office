@@ -1,23 +1,23 @@
-// mark-footprint-caps.test.mjs — the ruled footprint caps at the writing doors (POS-1126, WLD-193).
+// mark-footprint-caps.test.mjs — the 256-point outline cap at the writing doors (POS-1126, WLD-193).
 //
-// Darko, 2026-11-17: "yeah 256 is good" (a mark's 2D `points:` outline). 2026-11-18 09:28 EST: "Cap at 2 km a side", then "What are the marks? Set the max to whatever allows them" (16 km, Wright 18:58Z)
-// (a resident's mark on common ground; a parcel keeps its own extent dial). Wright: "World owns the law, and Rivet owns
-// the writing doors." The numbers are two properties of the class `mark` (Bevel, 2026-11-18: `outline-point-cap` = 256,
-// `common-ground-side-cap` = 16000 m per planar side, the census's largest published resident side rounded up), read through the existing law reader (classDials). The office
-// holds no number: every limit below is a property of the LAW FIXTURE the test loads, and moving the property moves it.
+// Darko, 2026-11-17: "yeah 256 is good" (a mark's 2D `points:` outline). NO SIZE CAP: Darko, 2026-11-18 14:42 EST, "I'm actually just
+// going to err on not having a cap for now", Wright: "POS-1126's door now refuses only an outline over 256 points. There's no size
+// refusal." The number is the class `mark`'s `outline-point-cap` property (Bevel, WLD-193), read through the existing law reader
+// (classDials). The office holds no number: every limit below is a property of the LAW FIXTURE the test loads, and moving the property
+// moves the limit.
 //
-// Every house, handle and mark here is INVENTED, except that the amend legs run on a real resident mark of the pinned
-// world clone (the way town-centre-amend.test.mjs does), against an embedded store.
+// Every house, handle and mark here is INVENTED, except that the amend legs run on a real resident mark of the pinned world clone
+// (the way town-centre-amend.test.mjs does), against an embedded store.
 //
-//   F1  the rule, pure: the boundaries (256/257, 16000/16001 each side), the dial read, the scope exemptions and the words
-//   F2  THE DOOR, REAL: leave-mark through leaveMarkViaOffice — 257 points, width 16001, depth 16001 refuse with the cap
-//       named; 256 and 16000 pass; `preview: true` answers the SAME refusal and writes nothing (no act, no draft)
+//   F1  the rule, pure: 256/257, the dial read, the words, and that size is never judged
+//   F2  THE DOOR, REAL: leave-mark through leaveMarkViaOffice — 257 points refuse naming the cap, 256 pass, `preview: true` answers the
+//       SAME refusal and writes nothing (no act, no draft); large footprints with permitted point counts are allowed
 //   F3  NO HIDDEN CONSTANT: the same marks under a changed property default, and under no property at all
-//   F4  AMENDMENTS are judged on what they carry, like a leave: a real resident mark amended over either cap refuses,
-//       and so does one re-sent over a lowered cap (published records are not resized, but nothing re-writes them over it)
+//   F4  AMENDMENTS are judged on what they carry, like a leave: a real resident mark amended with 257 points refuses, with 256 points
+//       and with a huge extent passes
+//   F5  THE DIRECT CALLERS: the journal pass refuses the same way (preview and write); the gate judges a parcel's and a constitution
+//       mark's ring too, and judges no footprint's size
 //   F6  the git door (flag off): refusals only, answered before its exec (which would pull into the shared world clone)
-//   F5  THE DIRECT CALLERS: the journal pass refuses the same way (preview and write); the side cap's SCOPE is the door's
-//       ground verdict: a parcel, a spark, an unplaced mark and a mark on the household's own parcel are not judged by it
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test --test-concurrency=1 test/mark-footprint-caps.test.mjs
 
@@ -26,7 +26,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { footprintCaps, footprintRefusal, pointCount, sidesOf } from "../src/mark-footprint.mjs";
+import { footprintCaps, footprintRefusal, pointCount } from "../src/mark-footprint.mjs";
 
 const CLONE = join(process.cwd(), "world-clone");
 const SKIP = !existsSync(CLONE) && "no pinned world clone in this tree";
@@ -44,14 +44,13 @@ after(async () => {
   await store.stop();
 });
 
-// ── the law fixture: the class `mark` and its two properties (WLD-196's shape), plus the parcel's own dial ──────────
+// ── the law fixture: the class `mark` and its one property (WLD-196's shape), plus the parcel's own dial ───────────
 const SHA = "d".repeat(40);
 const classRow = (key, data = {}) => ({ number: 281, tag_sha: SHA, newest: 281, kind: "class", key, data: { class: key, ...data } });
 const propRow = (klass, name, dflt, id) => ({ number: 281, tag_sha: SHA, newest: 281, kind: "property", key: `${klass}/${name}`, data: { class: klass, parent: null, name, tier: "constitution", default: dflt, id } });
-async function lawWith({ points = 256, side = 16000 } = {}) {
+async function lawWith({ points = 256 } = {}) {
   const rows = [classRow("mark"), classRow("parcel"), propRow("parcel", "extent_m", 25, "the-town/parcel-extent-m"),
-    ...(points == null ? [] : [propRow("mark", "outline-point-cap", points, "the-town/mark-outline-point-cap")]),
-    ...(side == null ? [] : [propRow("mark", "common-ground-side-cap", side, "the-town/mark-common-ground-side-cap")])];
+    ...(points == null ? [] : [propRow("mark", "outline-point-cap", points, "the-town/mark-outline-point-cap")])];
   await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 281, pinned: 281 }] : rows }) });
   const { resetClassRosterCache } = await import("../src/world-classes.mjs");
   resetClassRosterCache();
@@ -63,32 +62,28 @@ const ring = (n, w = 100, h = 100, cx = 40000, cy = 40000) => {
   for (let i = 0; pts.length < n; i++) pts.push([cx - w / 2 + (w * (i + 1)) / (n + 1), cy - h / 2]);
   return pts;
 };
-const box = (w, h, cx = 40000, cy = 40000) => ring(4, w, h, cx, cy);
 
 // ── F1 the rule, pure ───────────────────────────────────────────────────────
 
-test("F1 · the rule: the boundaries, the dial read, the scope, amendments judged like leaves, and the words", () => {
-  const caps = footprintCaps({ "outline-point-cap": 256, "common-ground-side-cap": 16000 });
-  assert.deepEqual(caps, { points: 256, side: 16000 });
-  assert.deepEqual(footprintCaps({}), { points: null, side: null }, "no property, no boundary: the office holds no number");
-  assert.deepEqual(footprintCaps({ "outline-point-cap": "x", "common-ground-side-cap": 0 }), { points: null, side: null }, "a value that is no positive number is no boundary");
+test("F1 · the rule: 256 passes, 257 refuses with the count and the cap; the dial read; size is never judged", () => {
+  const caps = footprintCaps({ "outline-point-cap": 256 });
+  assert.deepEqual(caps, { points: 256 });
+  assert.deepEqual(footprintCaps({}), { points: null }, "no property, no boundary: the office holds no number");
+  assert.deepEqual(footprintCaps({ "outline-point-cap": "x" }), { points: null }, "a value that is no positive number is no boundary");
+  assert.deepEqual(footprintCaps({ "common-ground-side-cap": 2000 }), { points: null }, "the withdrawn size property is not read");
   assert.equal(pointCount(ring(256)), 256);
-  assert.deepEqual(sidesOf({ points: box(16000, 1500) }), { w: 16000, h: 1500 }, "the ring's own box");
-  assert.deepEqual(sidesOf({ extent: { w: 30, h: 20 } }), { w: 30, h: 20 });
-  const judge = (c, o = {}) => footprintRefusal(c, { caps, ...o });
+  assert.equal(pointCount("1,1 2,2 3,3"), 3);
+  const judge = (c) => footprintRefusal(c, { caps });
   assert.equal(judge({ points: ring(256) }), null, "256 points are permitted");
   assert.match(judge({ points: ring(257) }).defect, /^an outline holds at most 256 points; this one has 257$/);
-  assert.equal(judge({ extent: { w: 16000, h: 16000 } }), null, "16000 m a side is permitted");
-  assert.match(judge({ extent: { w: 16001, h: 100 } }).defect, /^a mark on common ground is at most 16000 m a side; this one is 16001 m wide$/);
-  assert.match(judge({ extent: { w: 100, h: 16001 } }).defect, /16001 m deep$/);
-  assert.match(judge({ points: box(16001, 100) }).defect, /16001 m wide/, "a ring is judged by its own box");
-  assert.equal(judge({ extent: { w: 99999, h: 99999 } }, { sideScope: false }), null, "a parcel, a spark and the town's own marks are not judged by the side cap");
-  assert.match(judge({ points: ring(257), extent: { w: 99999, h: 99999 } }, { sideScope: false }).defect, /257/, "but the point cap judges any ring");
-  assert.equal(judge({ kind: "sited", body: "no footprint at all" }), null);
-  // an amendment is judged on what it carries: a re-sent over-cap footprint refuses like a new one
-  assert.match(judge({ extent: { w: 20000, h: 3000 } }).defect, /20000 m wide/);
-  assert.equal(judge({ extent: { w: 15300, h: 13470 } }), null, "the census's largest resident mark (Pando Plains, 15300 × 13470) fits: nothing published is over the cap");
-  assert.match(judge({ points: ring(300) }).defect, /has 300/);
+  assert.equal(judge({ points: ring(257) }).code, 422);
+  assert.match(judge({ points: ring(257) }).hint, /Nothing was written\.$/);
+  assert.equal(judge({ kind: "sited", body: "no outline at all" }), null);
+  // NO SIZE REFUSAL: however large, a footprint is not this door's business
+  assert.equal(judge({ extent: { w: 99999, h: 99999 } }), null, "a huge extent");
+  assert.equal(judge({ points: ring(256, 50000, 50000), extent: { w: 50000, h: 50000 } }), null, "256 points over a 50 km box");
+  assert.equal(judge({ extent: { w: 15300, h: 13470 } }), null);
+  assert.equal(judge({ points: ring(256, 16001, 16001) }), null, "nor the withdrawn 16001 m");
 });
 
 // ── F2 the real door ────────────────────────────────────────────────────────
@@ -108,46 +103,46 @@ const leave = async (payload, key = KEY) => {
 };
 const refusal = (re) => (e) => e?.code === 422 && re.test(e.defect) && /Nothing was written/.test(e.hint);
 
-test("F2 · THE DOOR: 257 points, width 16001 and depth 16001 refuse naming the cap; 256 and 16000 pass; a preview answers the same and writes nothing", { skip: SKIP }, async () => {
+test("F2 · THE DOOR: 257 points refuse naming the cap; 256 pass; a preview answers the same and writes nothing; large footprints are allowed", { skip: SKIP }, async () => {
   await lawWith();
   for (const preview of [true, false]) {
     const tag = preview ? "preview" : "write";
     const before = await actsCount();
     await assert.rejects(leave({ points: ring(257), preview }), refusal(/an outline holds at most 256 points; this one has 257/), `${tag}: 257 points`);
-    await assert.rejects(leave({ points: box(16001, 1000), preview }), refusal(/at most 16000 m a side; this one is 16001 m wide/), `${tag}: width 16001`);
-    await assert.rejects(leave({ points: box(1000, 16001), preview }), refusal(/this one is 16001 m deep/), `${tag}: depth 16001`);
-    await assert.rejects(leave({ at: { x: 40000, y: 40000 }, extent: { w: 16001, h: 10 }, preview }), refusal(/16001 m wide/), `${tag}: a bare extent is judged as well`);
+    await assert.rejects(leave({ points: ring(300, 5000, 5000), preview }), refusal(/this one has 300/), `${tag}: a large ring over the cap refuses by its points`);
     assert.equal(await actsCount(), before, `${tag}: a refusal writes nothing`);
   }
   const before = await actsCount();
-  const ok = await leave({ points: ring(256, 16000, 16000), preview: true });
-  assert.equal(ok.preview, true, `256 points over a 16000 × 16000 box previews: ${JSON.stringify(ok).slice(0, 300)}`);
+  const ok = await leave({ points: ring(256), preview: true });
+  assert.equal(ok.preview, true, `256 points previews: ${JSON.stringify(ok).slice(0, 300)}`);
   assert.equal(ok.would, "leave");
-  assert.equal(await actsCount(), before, "the preview that passes writes nothing either: no act, no draft, no stake");
+  // large footprints with permitted point counts get no size refusal
+  for (const [what, p] of [["256 points over a 30 km box", { points: ring(256, 30000, 30000) }], ["a 4-point 50 km ring", { points: ring(4, 50000, 50000) }],
+    ["a bare 20 km extent", { at: { x: 40000, y: 40000 }, extent: { w: 20000, h: 20000 } }], ["Pando Plains' 15300 × 13470", { points: ring(4, 15300, 13470) }]]) {
+    const r = await leave({ ...p, preview: true });
+    assert.equal(r.preview, true, `${what} previews (no size refusal): ${JSON.stringify(r).slice(0, 200)}`);
+  }
+  assert.equal(await actsCount(), before, "the previews that pass write nothing either: no act, no draft, no stake");
 });
 
 // ── F3 no hidden constant ───────────────────────────────────────────────────
 
 test("F3 · NO HIDDEN CONSTANT: a changed property default changes the limit, and no property means no boundary", { skip: SKIP }, async () => {
-  await lawWith({ points: 300, side: 3000 });
-  const wider = await leave({ points: ring(257, 100, 100), preview: true });
-  assert.equal(wider.preview, true, "257 points pass when the law says 300");
-  assert.equal((await leave({ points: box(2001, 100), preview: true })).preview, true, "2001 m passes when the law says 3000");
+  await lawWith({ points: 300 });
+  assert.equal((await leave({ points: ring(257), preview: true })).preview, true, "257 points pass when the law says 300");
   await assert.rejects(leave({ points: ring(301), preview: true }), refusal(/at most 300 points; this one has 301/), "and 301 refuses by the law's number");
-  await assert.rejects(leave({ points: box(3001, 100), preview: true }), refusal(/at most 3000 m a side; this one is 3001 m wide/));
-  await lawWith({ points: 100, side: 500 });
+  await lawWith({ points: 100 });
   await assert.rejects(leave({ points: ring(101), preview: true }), refusal(/at most 100 points; this one has 101/), "a lower default lowers it");
-  await assert.rejects(leave({ points: box(501, 50), preview: true }), refusal(/at most 500 m a side/));
-  await lawWith({ points: null, side: null });
+  assert.equal((await leave({ points: ring(100), preview: true })).preview, true);
+  await lawWith({ points: null });
   assert.equal((await leave({ points: ring(300, 5000, 5000), preview: true })).preview, true, "no property, no boundary: nothing is refused until the law says it");
-  await lawWith({ points: 256, side: null });
-  assert.equal((await leave({ points: box(9000, 9000), preview: true })).preview, true, "each cap is its own property");
+  await lawWith();
   await assert.rejects(leave({ points: ring(257), preview: true }), refusal(/256/));
 });
 
 // ── F4 amendments ───────────────────────────────────────────────────────────
 
-test("F4 · AMENDMENTS are judged on what they carry: over either cap refuses, kept-over-a-lowered-cap refuses too, inside passes", { skip: SKIP }, async () => {
+test("F4 · AMENDMENTS are judged on what they carry: 257 points refuse, 256 points and a huge extent pass", { skip: SKIP }, async () => {
   const { canonForGuards } = await import("../src/world.mjs");
   const canon = canonForGuards();
   const real = canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && m.extent && Number(m.extent.w) > 20 && Number(m.extent.w) < 1800
@@ -155,86 +150,53 @@ test("F4 · AMENDMENTS are judged on what they carry: over either cap refuses, k
   assert.ok(real, "a resident's plain sited mark in the pinned canon");
   const slug = real.id.slice(real.by.length + 1);
   const key = { household: real.household, handles: new Set([real.by]) };
-  const amend = (extent, extra = {}) => leave({ slug, by: real.by, at: real.at, extent, amend: true, preview: true, body: `${real.body ?? "a mark"} (amended)`, ...extra }, key);
+  const amend = (extra) => leave({ slug, by: real.by, amend: true, preview: true, body: `${real.body ?? "a mark"} (amended)`, ...extra }, key);
 
-  await lawWith({ points: 256, side: 16000 });
-  await assert.rejects(amend({ w: 16001, h: real.extent.h }), refusal(/this one is 16001 m wide/), "an amendment past the cap");
-  await assert.rejects(amend({ w: real.extent.w, h: 16001 }), refusal(/16001 m deep/));
-  await assert.rejects(leave({ slug, by: real.by, amend: true, preview: true, body: "ring", points: ring(257, 10, 10, real.at.x, real.at.y) }, key), refusal(/at most 256 points; this one has 257/));
-  const same = await amend(real.extent);
-  assert.equal(same.preview, true, `an amendment inside the cap previews: ${JSON.stringify(same).slice(0, 200)}`);
-
-  // the law is lowered under the mark: its published record is OVER the cap and is not touched, but an amendment that carries it is refused like any other
-  const cap = Math.floor(Math.max(Number(real.extent.w), Number(real.extent.h))) - 1;
-  await lawWith({ points: 256, side: cap });
-  await assert.rejects(amend(real.extent), refusal(new RegExp(`at most ${cap} m a side`)), "no keep/shrink allowance: the amendment carries an over-cap footprint");
-  assert.equal((await amend({ w: cap, h: cap })).preview, true, "an amendment that fits the law passes");
+  await lawWith();
+  const before = await actsCount();
+  await assert.rejects(amend({ points: ring(257, 10, 10, real.at.x, real.at.y) }), refusal(/at most 256 points; this one has 257/), "an amendment over the cap");
+  const same = await amend({ at: real.at, extent: real.extent });
+  assert.equal(same.preview, true, `an amendment that carries no outline previews: ${JSON.stringify(same).slice(0, 200)}`);
+  assert.equal((await amend({ points: ring(256, 10, 10, real.at.x, real.at.y) })).preview, true, "an amendment at the cap");
+  assert.equal((await amend({ at: real.at, extent: { w: 30000, h: 30000 } })).preview, true, "an amendment that makes the mark large is not refused for its size");
+  assert.equal(await actsCount(), before, "no preview wrote anything");
   assert.equal(canonForGuards().byId.get(real.id).extent.w, real.extent.w, "and the published record is exactly as it was");
 });
 
 // ── F5 the direct callers and the scope ─────────────────────────────────────
 
-test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on preview and write; the side cap's scope is the door's ground verdict", { skip: SKIP }, async () => {
-  const { journalLeaveMark, footprintGate } = await import("../src/world.mjs");
+test("F5 · THE JOURNAL PASS, for every direct caller: the same refusal on preview and write; a parcel's and a constitution mark's ring are judged, no footprint's size is", { skip: SKIP }, async () => {
+  const { journalLeaveMark, footprintGate, canonForGuards } = await import("../src/world.mjs");
   await lawWith();
   const base = { slug: `fp-direct-${process.pid}`, kind: "sited", body: "a direct call", by: "cap-fixture", household: "cap-fixture", date: new Date().toISOString() };
   for (const preview of [true, false]) {
     const before = await actsCount();
-    await assert.rejects(journalLeaveMark({ ...base, at: { x: 40000, y: 40000 }, extent: { w: 16001, h: 100 }, ...(preview ? { preview } : {}) }),
-      (e) => e?.code === 422 && /16001 m wide/.test(e.defect), `preview ${preview}`);
     await assert.rejects(journalLeaveMark({ ...base, at: { x: 40000, y: 40000 }, extent: { w: 100, h: 100 }, points: ring(257), ...(preview ? { preview } : {}) }),
       (e) => e?.code === 422 && /257/.test(e.defect), `preview ${preview}`);
     assert.equal(await actsCount(), before, `preview ${preview}: nothing written`);
   }
-  // the scope, asked of the gate itself: the door's own ground verdict (the household's own parcel is not common ground)
-  const big = { at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 } };
-  const none = { marks: [], byId: new Map(), ids: new Set() };
-  const gate = (c, canon = none) => footprintGate(c, { canon });
-  await gate({ ...base, kind: "parcel", ...big });
-  await gate({ ...base, kind: "spark", ...big });
-  await gate({ ...base, kind: "sited", class: "parcel", ...big });
-  await gate({ ...base, at: undefined, extent: big.extent });
-  await assert.rejects(gate({ ...base, ...big }), (e) => e.code === 422 && /20000 m wide/.test(e.defect), "a resident's placed sited mark on common ground is judged");
-  await assert.rejects(gate({ ...base, by: "the-town", household: "the-town", ...big }), (e) => /20000 m wide/.test(e.defect), "no author-name exemption: the ground verdict decides");
-  await assert.rejects(gate({ ...base, kind: "parcel", points: ring(257) }), (e) => /257/.test(e.defect), "the point cap judges a parcel's ring too");
-  await gate({ ...base, kind: "predicated", slot: "x", value: "y" });
-  // OWN PARCEL: a mark standing inside its household's own parcel is not common ground. The law is lowered so a parcel-sized mark is over it.
-  await lawWith({ points: 256, side: 10 });
-  const parcel = { id: "cap-fixture/the-plot", by: "cap-fixture", household: "cap-fixture", kind: "parcel", tier: "home", at: { x: 40000, y: 40000 }, extent: { w: 25, h: 25 },
-    points: [[39987.5, 39987.5], [40012.5, 39987.5], [40012.5, 40012.5], [39987.5, 40012.5]] };
-  const owned = { marks: [parcel], byId: new Map([[parcel.id, parcel]]), ids: new Set([parcel.id]) };
-  const shed = { ...base, at: { x: 40000, y: 40000 }, extent: { w: 20, h: 20 } };
-  await gate(shed, owned);
-  await assert.rejects(gate({ ...shed, at: { x: 41000, y: 41000 } }, owned), (e) => /at most 10 m a side; this one is 20 m wide/.test(e.defect), "the same mark off the parcel is common ground");
-  await assert.rejects(gate(shed, none), (e) => /20 m wide/.test(e.defect), "and with no parcel under it");
-  await assert.rejects(gate({ ...shed, by: "someone-else", household: "someone-else" }, owned), (e) => /20 m wide/.test(e.defect), "another household's mark on that parcel is on common ground");
-
-  // CONSTITUTION MARKS are out of the side gate (Wright, 11-18: the town's own five; it is a resident's cap). The record says so: the existing mark's tier.
-  await lawWith();
-  const mk = (o) => ({ kind: "sited", household: o.by, ...o });
-  const centre = mk({ id: "the-town/a-test-centre", by: "the-town", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 } });
-  const sameSize = mk({ id: "cap-fixture/same-size", by: "cap-fixture", tier: "market", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 } });
-  const townMarket = mk({ id: "the-town/a-market-mark", by: "the-town", tier: "market", at: { x: 0, y: 0 }, extent: { w: 20000, h: 20000 } });
-  const withMarks = (...m) => ({ marks: m, byId: new Map(m.map((x) => [x.id, x])), ids: new Set(m.map((x) => x.id)) });
-  const canonC = withMarks(centre, sameSize, townMarket);
-  const amendOf = (m, over = {}) => ({ ...base, slug: m.id.slice(m.by.length + 1), by: m.by, household: m.household, at: m.at, extent: m.extent, amend: true, ...over });
-  await gate(amendOf(centre), canonC);
-  await assert.rejects(gate(amendOf(sameSize), canonC), (e) => /20000 m wide/.test(e.defect), "the same footprint on a resident's market-tier mark is judged");
-  await assert.rejects(gate(amendOf(townMarket), canonC), (e) => /20000 m wide/.test(e.defect), "and on a town mark that is not constitution-tier: no author-name exemption, the record's tier decides");
-  await assert.rejects(gate({ ...amendOf(centre), points: ring(257) }, canonC), (e) => /257/.test(e.defect), "the point cap still judges a constitution mark's ring");
-  await assert.rejects(gate({ ...base, slug: "a-test-centre", by: "someone-else", household: "someone-else", ...big }, canonC), (e) => /20000 m wide/.test(e.defect), "a different author's id is a different mark, not the constitution one");
-  // and the real thing: every constitution-tier mark of the pinned canon is out of the side gate, whatever the dial
-  const { canonForGuards } = await import("../src/world.mjs");
-  const real = canonForGuards();
-  const constitutional = real.marks.filter((m) => m.tier === "constitution" && m.kind === "sited" && m.at && m.extent);
+  // the gate: points only, whoever writes and whatever it is
+  const huge = { at: { x: 0, y: 0 }, extent: { w: 90000, h: 90000 } };
+  for (const [what, c] of [["a resident's sited mark", {}], ["a parcel", { kind: "parcel" }], ["a spark", { kind: "spark" }], ["a parcel-lineage class", { class: "parcel" }],
+    ["the town's own mark", { by: "the-town", household: "the-town" }], ["an unplaced mark", { at: undefined }]])
+    assert.doesNotThrow(() => footprintGate({ ...base, ...huge, ...c }), `${what}: a huge footprint with no outline is not refused`);
+  for (const [what, c] of [["a resident's sited mark", {}], ["a parcel", { kind: "parcel" }], ["a spark", { kind: "spark" }], ["the town's own mark", { by: "the-town", household: "the-town" }]])
+    assert.throws(() => footprintGate({ ...base, ...c, points: ring(257) }), (e) => e.code === 422 && /this one has 257/.test(e.defect), `${what}: the point cap judges any ring`);
+  assert.doesNotThrow(() => footprintGate({ ...base, ...huge, points: ring(256, 90000, 90000) }), "256 points over 90 km pass");
+  assert.doesNotThrow(() => footprintGate({ ...base, kind: "predicated", slot: "x", value: "y" }), "a mark with no outline is not judged");
+  // and the real thing: every constitution-tier mark of the pinned canon, large as it is, is not refused for its size
+  const constitutional = canonForGuards().marks.filter((m) => m.tier === "constitution" && m.kind === "sited" && m.at && m.extent);
   assert.ok(constitutional.length >= 1, "the pinned canon holds constitution-tier sited marks");
-  await lawWith({ points: 256, side: 10 });
-  for (const m of constitutional) await gate(amendOf(m), real);
+  for (const m of constitutional) {
+    const as = { ...base, slug: m.id.slice(m.by.length + 1), by: m.by, household: m.household, amend: true, at: m.at, extent: m.extent };
+    assert.doesNotThrow(() => footprintGate(as), `${m.id}: no size refusal`);
+    assert.throws(() => footprintGate({ ...as, points: ring(257) }), (e) => /this one has 257/.test(e.defect), `${m.id}: its ring over the cap refuses`);
+  }
 });
 
 // ── F6 the git door (flag off): refusals only ───────────────────────────────
 
-test("F6 · THE GIT DOOR (WORLD_SINGLE_LOG off): the gate answers before its exec, so 257 points and a 16001 m side refuse on a leave and an amendment, preview and write, and nothing is run", { skip: SKIP }, async () => {
+test("F6 · THE GIT DOOR (WORLD_SINGLE_LOG off): the gate answers before its exec, so 257 points refuse on a leave and an amendment, preview and write, and nothing is run", { skip: SKIP }, async () => {
   const prev = process.env.WORLD_SINGLE_LOG;
   delete process.env.WORLD_SINGLE_LOG;
   try {
@@ -242,12 +204,12 @@ test("F6 · THE GIT DOOR (WORLD_SINGLE_LOG off): the gate answers before its exe
     const { canonForGuards } = await import("../src/world.mjs");
     for (const preview of [true, false]) {
       await assert.rejects(leave({ points: ring(257), preview }), refusal(/at most 256 points; this one has 257/), `leave, preview ${preview}`);
-      await assert.rejects(leave({ points: box(1000, 16001), preview }), refusal(/this one is 16001 m deep/), `leave, preview ${preview}`);
+      await assert.rejects(leave({ points: ring(400, 3000, 3000), preview }), refusal(/this one has 400/), `leave, preview ${preview}`);
     }
     const real = canonForGuards().marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && m.extent && Number(m.extent.w) > 20 && Number(m.extent.w) < 1800
       && !m.points && String(m.id).startsWith(`${m.by}/`) && m.parent_id == null && m.household);
     const key = { household: real.household, handles: new Set([real.by]) };
     const slug = real.id.slice(real.by.length + 1);
-    await assert.rejects(leave({ slug, by: real.by, at: real.at, extent: { w: 16001, h: real.extent.h }, amend: true, preview: true, body: "amended" }, key), refusal(/16001 m wide/), "an amendment past the cap");
+    await assert.rejects(leave({ slug, by: real.by, points: ring(257, 10, 10, real.at.x, real.at.y), amend: true, preview: true, body: "amended" }, key), refusal(/this one has 257/), "an amendment over the cap");
   } finally { if (prev == null) delete process.env.WORLD_SINGLE_LOG; else process.env.WORLD_SINGLE_LOG = prev; }
 });

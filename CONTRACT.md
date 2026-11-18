@@ -406,16 +406,14 @@ Settlement publishes own-parcel homes and constitution marks automatically, and 
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
 
-**Footprint caps (POS-1126, WLD-193).** `world_leave_mark`, its `amend: true`, the hold/set-down act that moves a
-mark, and every direct caller of the journal pass refuse a mark over either ruled cap with `422`, naming it, and
-`preview: true` answers the same refusal and writes nothing (no draft, journal row or stake): a mark's 2D `points:`
-outline holds at most the mark class's `outline-point-cap` points (256), and a resident's mark on common ground is
-at most `common-ground-side-cap` metres wide by that deep (16000), judged on the ring's own box or the `extent`. An
-amendment is judged on what it carries, like a leave. The numbers are the law's properties, read through the class
-layer (`classDials("mark")`), never held in the office: a property the law has not published is no boundary. The side
-cap applies to a placed sited mark standing on common ground, by the door's own ground verdict
-(`groundMinimumStake`): not a parcel (it keeps its own extent dial), a spark, an unplaced mark, a mark on its
-household's own parcel, or a constitution-tier mark (the town's own); 3D `form:` geometry is not read. Published records are not resized by this door.
+**Outline cap (POS-1126, WLD-193).** `world_leave_mark`, its `amend: true`, the hold/set-down act that moves a
+mark, and every direct caller of the journal pass refuse a mark whose 2D `points:` outline is over the cap with `422`
+(`an outline holds at most 256 points; this one has N`), and `preview: true` answers the same refusal and writes nothing
+(no draft, journal row or stake). The cap is the mark class's `outline-point-cap` property (256), read through the class
+layer (`classDials("mark")`), never held in the office: a property the law has not published is no boundary. It judges any
+ring a write carries (a parcel's and a constitution mark's included) and an amendment on what it carries. **There is no size
+refusal** (Darko, 2026-11-18 14:42 EST; Wright): a mark's footprint is never judged by this door, however large, and 3D `form:`
+geometry is not read. Published records are not resized by this door.
 
 ## Write verb (P2) — the only one that's real in v0
 
