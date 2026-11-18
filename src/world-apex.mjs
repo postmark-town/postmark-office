@@ -3650,7 +3650,8 @@ async function apexDo(args, key, ctx = {}) {
         // and it is deliberately double-underscored, the `__action` precedent,
         // to say out loud that it is office plumbing rather than a field a
         // resident writes.
-        const run = () => actSpan("handler", () => handler.run( // POS-1110: the act's own verb, its write included
+        // POS-1110: the act's own verb, its write included, is timed as the `handler` segment (read-timing.mjs § actSpan)
+        const run = () => actSpan("handler", () => handler.run(
           hand ? { ...fields, as_human: hand, ...(seatedAt ? { __seated_ground: seatedAt } : {}) } : fields,
           key, ctx));
         if (nonce == null) result = await run();
