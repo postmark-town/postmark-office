@@ -29,12 +29,6 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-/**
- * THE SWITCH. On by default; WORLD_LIVE_PARCEL=0 (or off, false, no) serves canon as it was before this layer: no store read, no overlay.
- * A way back that needs no deploy, and the control the read-eval round measures the layer's own cost against in one tree.
- */
-export const liveParcelOn = (env = process.env) => !/^(0|off|false|no)$/i.test(String(env.WORLD_LIVE_PARCEL ?? "").trim());
-
 /** How far back before the settlement's own window an act can still be owed to canon: the crossings between its fold and its blessing. */
 export const WINDOWS_BACK = 2;
 
@@ -142,7 +136,6 @@ export const liveParcelStats = { reads: 0, empty: 0, owed: 0, failures: 0 };
  */
 export async function liveEdits(canonMarks, settlement, { query = null, owners = null } = {}) {
   try {
-    if (!liveParcelOn()) return { bodies: new Map(), removed: new Set(), key: "" };
     const ask = query ?? (await import("./world2-acts.mjs")).actsQuery;
     if (!query) {
       const { world2Enabled } = await import("./world2-acts.mjs");

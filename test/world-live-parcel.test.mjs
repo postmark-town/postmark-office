@@ -10,7 +10,7 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { editsFrom, overlayMarks, editedIds, liveEdits, liveMarks, liveParcelStats, markEditsSql, liveScope, liveBypass, liveParcelOn } from "../src/world-live-parcel.mjs";
+import { editsFrom, overlayMarks, editedIds, liveEdits, liveMarks, liveParcelStats, markEditsSql, liveScope, liveBypass } from "../src/world-live-parcel.mjs";
 import { stakesFor } from "../src/doorstep-stakes.mjs";
 
 const canon = () => [
@@ -221,17 +221,4 @@ test("17 · each house keeps its own authors' rows out of the one read a request
   assert.deepEqual([...w.removed], ["wright/the-keystone"]); assert.equal(w.bodies.size, 0);
   assert.equal(a.bodies.get("ada/a-lamp"), "B"); assert.equal(a.removed.size, 0);
   assert.equal(n.key, "");
-});
-
-test("18 · the switch: WORLD_LIVE_PARCEL=0 is canon as before, with no store read at all; on by default", async () => {
-  assert.equal(liveParcelOn({}), true);
-  for (const off of ["0", "off", "false", "No"]) assert.equal(liveParcelOn({ WORLD_LIVE_PARCEL: off }), false, off);
-  assert.equal(liveParcelOn({ WORLD_LIVE_PARCEL: "1" }), true);
-  const was = process.env.WORLD_LIVE_PARCEL;
-  process.env.WORLD_LIVE_PARCEL = "0";
-  try {
-    let reads = 0;
-    const e = await liveEdits(canon(), 1, { query: async () => { reads += 1; return [withdraw("wright/the-keystone")]; } });
-    assert.equal(e.key, ""); assert.equal(reads, 0);
-  } finally { if (was === undefined) delete process.env.WORLD_LIVE_PARCEL; else process.env.WORLD_LIVE_PARCEL = was; }
 });
