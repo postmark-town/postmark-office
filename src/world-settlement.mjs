@@ -479,8 +479,18 @@ export function stanceReturnsWhole(inputs, state) {
  * state, and a limit the engine found and could not apply (an engine older than
  * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
  * settlement cannot be folded; the caller withholds the clearing's forecast instead.
+ *
+ * A TOWN RETURN LEAVES GIT ONLY WITH ITS STAMPS HOME (POS-1138; Darko
+ * 2026-11-18: "Back to each staker", "Town-authored return"). A town stance
+ * return takes its mark and subtree away only when the live ledger holds no
+ * open stamps on any of them (src/town-return.mjs § the gate). With
+ * `townReturns.write` (the crossing that removes them) the town's return is
+ * written first, under this settlement's `S<n>`, then the ledger is read; a
+ * return that did not land leaves the mark standing for the next settlement.
+ * Without it nothing is written and the gate alone decides. `town_returns`
+ * says what was returned, what waits and why.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
   // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
@@ -497,6 +507,8 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
+  const town = await townReturnsAt(header, gate, state, { townRepo, townReturns });
+  const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
   // WHAT LEAVES WITH A RETURN IS THE ENGINE'S `subtree` (Darko's ruling B,
@@ -509,6 +521,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   // (`stance_returns_whole` says so), never with a fold this office did not run.
   for (const r of state.returned ?? []) {
     if (r?.state !== "returned" && !r?.law) continue;
+    if (waiting.has(String(r.mark))) continue;          // its stamps are not home yet: it stands (POS-1138)
     slugs.add(String(r.mark));
     for (const s of r.subtree ?? []) slugs.add(String(s));
     if (r.law) limitParcels.push(String(r.mark));
@@ -526,6 +539,39 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
     stances: gate.recorded,
     ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
     ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
+    ...(town ? { town_returns: town } : {}),
+  };
+}
+
+/**
+ * THE TOWN'S RETURNS AT A SETTLEMENT (POS-1138): null when there is nothing to
+ * return and nothing to write; otherwise src/town-return.mjs § settleTownReturns
+ * over this World's town returns.
+ *
+ * THE REMOVAL AND ITS DATE ARE THE SEAL'S, never a receipt's (review of Town
+ * #4796, B2/B3): `S<n>` is the number this snapshot was sealed as (its
+ * settlements row, else the seal's recorded reading of itself), and the line's
+ * date is the seal's day in town time. A snapshot that names neither writes
+ * nothing (`unnamed` says so); the gate still reads.
+ */
+async function townReturnsAt(header, gate, state, { townRepo, townReturns }) {
+  const { townReturnTargets, settleTownReturns, removalOf, townDate } = await import("./town-return.mjs");
+  const targets = townReturnTargets(state);
+  if (!targets.length) return null;
+  const write = townReturns?.write ?? null;
+  const number = header?.settlement ?? gate.recorded?.settlement_inferred ?? null;
+  const removal = number == null ? null : removalOf(number);
+  const date = header?.taken_at ? townDate(new Date(header.taken_at)) : null;
+  const named = removal && date;
+  // The snapshot's stakes never decide what leaves (reviews of #1143, F1/F2):
+  // the live ledger, or this run's own successful write, or nothing leaves.
+  const settled = await settleTownReturns({
+    targets, removal, date, townClone: townRepo, write: named ? write : null,
+  });
+  return {
+    ...settled,
+    ...(townReturns?.why ? { not_written: townReturns.why } : {}),
+    ...(write && !named ? { unnamed: `snapshot ${header?.id ?? "?"} names no settlement number or seal time, so no return could name its removal and nothing was written` } : {}),
   };
 }
 

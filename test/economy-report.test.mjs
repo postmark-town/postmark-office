@@ -17,10 +17,16 @@
 // OWN stamp tools copied in — the live-import contract the ops/votes tests use).
 // Nothing here can reach a network or a real ledger.
 
+// The office's own pins, not the suite clone's (town-pins-env.mjs): "" names them. POS-1142: the report classifies the ledger with
+// the Town's accepted classifier (town #4796, `world-town-return`), which the suite's clone predates; the generator's town below is
+// the office's pinned engine byte for byte (test/helpers/pinned-town.mjs), the code it ships with. Child processes inherit this.
+process.env.TOWN_PINS_DIR = "";
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { copyTownTools } from "./helpers/town-tools.mjs";
+import { pinnedTown } from "./helpers/pinned-town.mjs";
+import { PIN_ROOT } from "../src/town-tool.mjs";
 import { join, resolve, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -30,12 +36,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const GEN = join(ROOT, "tools", "economy-report.mjs");
 
-// The town tools this generator imports live. Sourced from the office's town
-// clone exactly like ops.test.mjs; if it is absent the suite says so rather than
-// silently passing on a stub.
-const TOWN_TOOLS = process.env.TOWN_CLONE
-  ? join(process.env.TOWN_CLONE, "tools")
-  : resolve(ROOT, "town-clone", "tools");
+// The town tools this generator imports live: the office's own pinned copies (src/town-pins), so the report and the fixture read
+// the same code. If they are absent the suite says so rather than silently passing on a stub.
+const TOWN_TOOLS = join(PIN_ROOT, "tools");
 const NEEDED = ["stamp-mint.mjs", "world-stake.mjs"];
 const haveTools = NEEDED.every((f) => existsSync(join(TOWN_TOOLS, f)));
 
@@ -62,7 +65,7 @@ function buildTown(root, { extraLines = [] } = {}) {
   const town = join(root, "town");
   initRepo(town);
   mkdirSync(join(town, "tools"), { recursive: true });
-  copyTownTools(join(TOWN_TOOLS, ".."), town);
+  pinnedTown(town);
   mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
 
   const lines = [
@@ -197,6 +200,55 @@ test("FALSIFIER — an unknown mint class turns issuance RED rather than shrinki
     assert.deepEqual(data.issuance.unclassified, { unknown: { stamps: 7, lines: 1 } });
     assert.match(html, /a line the town's grammar does not parse 7 \(1 line\(s\)\)/);
     assert.doesNotMatch(html, /every minted stamp is classified/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// ── POS-1142 · THE TOWN'S RETURN IS ITS OWN FLOW, NEVER A RESIDENT'S UNSTAKE ────────────────────────────
+// Wright 2026-11-19 03:24Z: "Both readers show the town's return as the town's act, never a resident unstake." Invented: cy, an
+// outside staker, is backed out by the town twice (a prior-window removal of ada's shed, a current-window one of bo's hill, which
+// ada also held 4 on since June) and takes 2 back himself in between. Dates are the report's own windows (7 days, now and before).
+const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const RETURN_LINES = () => [
+  giftLine(daysAgo(20), "cy", 30, "welcome", "founder"),
+  `- ${daysAgo(11)} · cy → stake:world-mark/ada/the-shed · 5 · via: mail:cy-prior-stake`,
+  `- ${daysAgo(9)} · stake:world-mark/ada/the-shed → cy · 5 · for: town-return:S11`,
+  `- ${daysAgo(6)} · cy → stake:world-mark/bo/the-hill · 9 · via: mail:cy-cur-stake`,
+  `- ${daysAgo(5)} · stake:world-mark/bo/the-hill → cy · 2 · for: unstake`,
+  `- ${daysAgo(2)} · stake:world-mark/bo/the-hill → ada · 4 · for: town-return:S12`,
+  `- ${daysAgo(2)} · stake:world-mark/bo/the-hill → cy · 7 · for: town-return:S12`,
+];
+
+test("POS-1142 — the town's return is its own flow in both windows, JSON and page: not minted, not a resident's unstake, and the net reconciles once", { skip }, () => {
+  const root = tempDir("econ-");
+  try {
+    const { data, html } = run(buildTown(root, { extraLines: RETURN_LINES() }), buildWorld(root), join(root, "out"));
+    const r = data.recent;
+    assert.deepEqual(r.town_returned, { cur: 11, prev: 5 }, "what the town handed back, by the classifier's raw principal, in each window");
+    assert.deepEqual(r.unstaked, { cur: 2, prev: 0 }, "the resident's own unstake stays its own, and the town's return is not added to it");
+    assert.deepEqual(r.staked, { cur: 9, prev: 5 });
+    assert.deepEqual([r.minted.cur, r.gifted.cur], [0, 0], "nothing was minted in the window (cy's gift is twenty days old): the return is not new money");
+    assert.equal(data.supply.escrow, 0, "every stamp staked (4 + 5 + 9) is out again (2 unstaked + 5 + 11 returned): nothing left, so the flows reconcile");
+    // the page says it, in words, beside the unstake, and the net counts the return once: 9 staked - 2 unstaked - 11 returned
+    assert.match(html, /2 unstaked/);
+    assert.match(html, /11 returned by the town/);
+    assert.match(html, /net -4/);
+    assert.doesNotMatch(html, /13 unstaked/, "the return is not folded into the resident unstake");
+    assert.match(html, /returned by the town, its own act when a mark it removed was backed/, "the figure's note names whose act it was");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("POS-1142 — controls: with no town return the report has a zero flow and says what it said before", { skip }, () => {
+  const root = tempDir("econ-");
+  try {
+    const { data, html } = run(buildTown(root, { extraLines: [
+      giftLine(daysAgo(20), "cy", 30, "welcome", "founder"),
+      `- ${daysAgo(6)} · cy → stake:world-mark/bo/the-hill · 9 · via: mail:cy-cur-stake`,
+      `- ${daysAgo(5)} · stake:world-mark/bo/the-hill → cy · 2 · for: unstake`,
+    ] }), buildWorld(root), join(root, "out"));
+    assert.deepEqual(data.recent.town_returned, { cur: 0, prev: 0 });
+    assert.deepEqual(data.recent.unstaked, { cur: 2, prev: 0 });
+    assert.match(html, /2 unstaked · net \+7/);
+    assert.doesNotMatch(html, /returned by the town/, "no return, no line about one");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

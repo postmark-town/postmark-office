@@ -1104,9 +1104,18 @@ if [ "$SOURCE" = "store" ]; then
   # own docket — the repair for a window cleared outside this script's timing
   # (2026-09-12: window 184 cleared by hand at 05:52Z, its two marks never folded
   # by the 17:45Z crossing, and nothing would ever have revisited them).
+  #
+  # THE TOWN'S RETURN IS THIS PATH'S TO WRITE, AND ONLY ON A REAL CROSSING
+  # (POS-1138; Wright, 2026-11-19 00:35Z, A: "only on a real, non-dry crossing:
+  # it checks that SETTLEMENT_DRY is unset and passes an explicit write flag
+  # from the real path"). `--town-returns` goes only when SETTLEMENT_DRY is
+  # absent from the environment, not merely 0, and fold-input-cli checks the
+  # same again before the office pen writes. settlement-shadow.sh never passes it.
+  TOWN_RETURNS=""
+  if [ -z "${SETTLEMENT_DRY+set}" ]; then TOWN_RETURNS="--town-returns"; fi
   if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/fold-input-cli.mjs" \
         --world-sha "$WORLD_FROM" --town-clone "$TOWN" --town-sha "$TOWN_SHA" \
-        --window "$DOCKET_WINDOW" --world-repo "$SWEEP") > "$FOLD_INPUT" 2>"$WORK/fold.err"; then
+        --window "$DOCKET_WINDOW" --world-repo "$SWEEP" $TOWN_RETURNS) > "$FOLD_INPUT" 2>"$WORK/fold.err"; then
     report refused "the store could not answer this crossing: $(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.refused||"unknown")+" — "+String(r.detail||""))' "$FOLD_INPUT" 2>/dev/null || head -c 200 "$WORK/fold.err" | tr '\n"' ' .')"
     echo "[settlement-auto] STORE REFUSED — publishing nothing" >&2
     cat "$FOLD_INPUT" >&2 2>/dev/null || true; cat "$WORK/fold.err" >&2
