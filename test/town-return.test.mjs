@@ -1,12 +1,14 @@
-// town-return.test.mjs — THE SETTLEMENT RETURNS EACH STAKER'S STAMPS ON A MARK
-// THE TOWN REMOVES, AND NO SUCH MARK LEAVES BEFORE THEY ARE HOME (POS-1138).
+// town-return.test.mjs — THE REAL CROSSING RETURNS EACH STAKER'S STAMPS ON A
+// MARK THE TOWN REMOVES, AND DOES NOT TAKE IT AWAY BEFORE THEY ARE HOME (POS-1138).
 //
 //   node --test test/town-return.test.mjs
 //
 // Darko, 2026-11-18 15:0x EST: stamps on a town-opposed mark go "Back to each
 // staker" when it leaves, the owner included. 16:3x: "Town-authored return",
-// recorded as the town's act. The Town's half is POS-1139 (worldTownReturnApply,
-// `for: town-return:S<n>`); this is the settlement's.
+// recorded as the town's act. Wright, 2026-11-19 00:35Z (A): written "only on a
+// real, non-dry crossing: it checks that SETTLEMENT_DRY is unset and passes an
+// explicit write flag from the real path". The Town's half is POS-1139
+// (worldTownReturnApply, `for: town-return:S<n>`); this is the crossing's.
 //
 // THE RIG, for the seam. A real Postgres with S10 and S11 sealed
 // (test/helpers/settlement-seed.mjs); the town's opposed word on bo/shed spoken
@@ -15,9 +17,11 @@
 // which is the shape WLD-203 gives the town's return (the pinned world clone's
 // engine still keeps the escrow guard for the town, so a staked mark would only
 // stand there); and a scratch town whose tools are the office's OWN pins, the
-// POS-1139 candidate, with a test key. The writer is the real one: runTownReturn
-// spawns src/town-return-exec.mjs under the flock, which runs the pinned engine
-// and lands the ledger with the pen's ceremony. Nothing is pushed.
+// POS-1139 code, with a test key. The caller is the real one: fold-input-cli's
+// § townReturnsOf decides from an argv and an environment, § settlementWithhold
+// runs the crossing's block, and the writer spawns src/town-return-exec.mjs
+// under the flock, which runs the pinned engine and lands the ledger with the
+// pen's ceremony. Nothing is pushed.
 //
 // Synthetic handles and marks.
 
@@ -29,18 +33,20 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { pinnedTown } from "./helpers/pinned-town.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { settlementRig, MARKS, git } from "./helpers/settlement-seed.mjs";
 import { PIN_ROOT } from "../src/town-tool.mjs";
 import {
-  townReturnTargets, heldTownReturns, openFromStakes, lateTownReturns, lateUnpaid, settleTownReturns,
-  runTownReturn, removalOf, TOWN_AUTHORITY,
+  townReturnTargets, heldTownReturns, openFromStakes, settleTownReturns, townReturnWrite, removalOf, TOWN_AUTHORITY,
 } from "../src/town-return.mjs";
-import { settlementTakesAway, servedSettlement, resetSettlementCaches } from "../src/world-settlement.mjs";
+import { settlementTakesAway } from "../src/world-settlement.mjs";
+import { settlementWithhold, townReturnsOf } from "../world2/tools/fold-input-cli.mjs";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ─────────────────────────── the pure half ──────────────────────────────────
 
@@ -70,64 +76,72 @@ test("the gate holds a return while any mark it takes carries open stamps, and n
   assert.deepEqual(heldTownReturns(targets, new Map()), []);
 });
 
-test("a late stake is paid only under a removal the record establishes; one only the ledger shows is named, never paid", () => {
-  const open = new Map([["a/one", 2], ["b/two", 1], ["c/three", 5], ["d/four", 3]]);
-  const sealed = [{ removal: "S11", date: "2026-10-02", marks: ["a/one", "c/three", "d/four", "e/five"] }];
-  assert.deepEqual(lateTownReturns(sealed, { open }, new Set(["d/four"])), [
-    { removal: "S11", date: "2026-10-02", marks: ["a/one", "c/three"] },
-  ], "a mark still held is not late; a mark with nothing open is not paid");
-  const returnedBy = new Map([["a/one", "S11"], ["b/two", "S9"], ["c/three", "S11"], ["d/four", "S10"]]);
-  assert.deepEqual(lateUnpaid({ open, returnedBy }, new Set(["d/four"]), new Set(["a/one", "c/three"])), [
-    { mark: "b/two", open: 1, last_returned_by: "S9" },
-  ], "b/two's removal is only a ledger line here: named, not paid");
-});
-
 test("a removal is named S<n> by its settlement, and nothing else names one", () => {
   assert.equal(removalOf(11), "S11");
   assert.equal(removalOf("172"), "S172");
   for (const bad of [0, -1, 1.5, null, "S11", "x"]) assert.throws(() => removalOf(bad), /settlement number/);
 });
 
+test("ONLY A REAL CROSSING WRITES: the explicit flag AND SETTLEMENT_DRY unset, literally; any value of it refuses", async () => {
+  assert.deepEqual(townReturnWrite({ flag: true, env: {} }), { write: true });
+  assert.match(townReturnWrite({ flag: false, env: {} }).why, /no --town-returns/);
+  for (const v of ["1", "0", "", "no"])
+    assert.match(townReturnWrite({ flag: true, env: { SETTLEMENT_DRY: v } }).why, /SETTLEMENT_DRY is set/, `SETTLEMENT_DRY=${JSON.stringify(v)}`);
+  // the CLI's own decision, from its argv and environment
+  const runs = [];
+  const run = async (a) => { runs.push(a); return { appended: false }; };
+  assert.equal((await townReturnsOf({ argv: ["node", "fold-input-cli.mjs"], env: {}, run })).write, null);
+  assert.equal((await townReturnsOf({ argv: ["node", "fold-input-cli.mjs", "--town-returns"], env: { SETTLEMENT_DRY: "0" }, run })).write, null);
+  const real = await townReturnsOf({ argv: ["node", "fold-input-cli.mjs", "--town-returns"], env: {}, townClone: "/t", run });
+  assert.equal(typeof real.write, "function");
+  assert.equal(real.why, null);
+});
+
+test("THE BOX'S CALLERS: settlement-auto.sh passes the flag only with SETTLEMENT_DRY unset; the shadow never passes it", () => {
+  const auto = readFileSync(join(ROOT, "deploy", "settlement-auto.sh"), "utf8");
+  const guard = auto.split("\n").find((l) => l.includes('TOWN_RETURNS="--town-returns"'));
+  assert.equal(guard?.trim(), 'if [ -z "${SETTLEMENT_DRY+set}" ]; then TOWN_RETURNS="--town-returns"; fi');
+  assert.match(auto, /fold-input-cli\.mjs" \\\n[^\n]*\n[^\n]*--world-repo "\$SWEEP" \$TOWN_RETURNS\)/, "the real call carries it");
+  // the guard as the script runs it, under each environment
+  const said = (env) => execFileSync("/bin/sh", ["-c", `set -eu\nTOWN_RETURNS=""\n${guard.trim()}\nprintf %s "$TOWN_RETURNS"`], { encoding: "utf8", env });
+  const base = { PATH: process.env.PATH };
+  assert.equal(said(base), "--town-returns");
+  for (const v of ["1", "0", ""]) assert.equal(said({ ...base, SETTLEMENT_DRY: v }), "", `SETTLEMENT_DRY=${JSON.stringify(v)}`);
+  const shadow = readFileSync(join(ROOT, "deploy", "settlement-shadow.sh"), "utf8");
+  assert.match(shadow, /fold-input-cli\.mjs/);
+  assert.doesNotMatch(shadow, /--town-returns|TOWN_RETURNS/, "a rehearsal never pays");
+});
+
 test("settleTownReturns: written first, then read; a failed write leaves the return waiting; no writer writes nothing", async () => {
   const targets = [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"] }];
-  let ledger = new Map([["bo/shed", 4], ["bo/shed-name", 1], ["x/late", 2]]);
-  ledger.set("y/ledger-only", 1);
-  const read = async () => ({ open: new Map(ledger), returnedBy: new Map([["x/late", "S10"], ["y/ledger-only", "S7"]]) });
+  let ledger = new Map([["bo/shed", 4], ["bo/shed-name", 1]]);
+  const read = async () => ({ open: new Map(ledger) });
   const calls = [];
-  const write = async (a) => { calls.push(a); for (const m of a.marks) ledger.delete(m); return { appended: true, returned: a.marks.map((mark) => ({ mark })) }; };
-  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", holds: new Set(["bo/shed", "bo/shed-name"]),
-    late: [{ removal: "S10", date: "2026-10-04", marks: ["x/late"] }], read, write });
-  assert.deepEqual(calls, [
-    { marks: ["bo/shed", "bo/shed-name"], removal: "S11", date: "2026-10-05" },
-    { marks: ["x/late"], removal: "S10", date: "2026-10-04" },
-  ], "this settlement's return, then the late one under the previous settlement's sealed removal and day");
+  const write = async (a) => { calls.push(a); for (const m of a.marks) ledger.delete(m); return { appended: true }; };
+  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", read, write });
+  assert.deepEqual(calls, [{ marks: ["bo/shed", "bo/shed-name"], removal: "S11", date: "2026-10-02" }], "one batch, the seal's removal and day");
   assert.deepEqual(ok.held, []);
-  assert.equal(ok.receipts.length, 2);
-  assert.equal(ok.receipts[1].late, true);
-  assert.deepEqual(ok.late_unpaid, [{ mark: "y/ledger-only", open: 1, last_returned_by: "S7" }], "named, not paid");
+  assert.deepEqual(ok.receipt, { appended: true });
 
   ledger = new Map([["bo/shed", 4]]);
-  const failed = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", read, write: async () => ({ error: { code: 503, defect: "the office pen is busy" } }) });
+  const failed = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", read, write: async () => ({ error: { code: 503, defect: "the office pen is busy" } }) });
   assert.deepEqual(failed.held, [{ ...targets[0], open: { "bo/shed": 4 } }], "a return that did not land holds its mark");
-  assert.equal(failed.receipts[0].error.code, 503);
+  assert.equal(failed.receipt.error.code, 503);
 
-  const none = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", read });
-  assert.deepEqual(none.receipts, []);
+  const none = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", read });
+  assert.equal(none.receipt, undefined);
   assert.deepEqual(none.held.map((h) => h.mark), ["bo/shed"]);
 });
 
-test("settleTownReturns: a ledger that cannot be read falls back to the fold's own stakes, and writes no late return", async () => {
+test("settleTownReturns: a ledger that cannot be read falls back to the fold's own stakes, in the office's own words", async () => {
   const targets = [{ mark: "bo/shed", leaving: ["bo/shed"] }, { mark: "al/arch", leaving: ["al/arch"] }];
-  const calls = [];
   const r = await settleTownReturns({
-    targets, removal: "S11", date: "2026-10-05", stakes: [{ mark: "bo/shed", n: 2 }],
+    targets, removal: "S11", date: "2026-10-02", stakes: [{ mark: "bo/shed", n: 2 }],
     read: async () => { throw new Error("the town lock was not free"); },
-    write: async (a) => { calls.push(a); return { error: { code: 503, defect: "busy" } }; },
   });
   assert.equal(r.source, "snapshot");
   assert.equal(r.unread, "the live ledger could not be read (the office's log says why)", "a fault's own text goes to the log, never into the answer");
   assert.deepEqual(r.held.map((h) => h.mark), ["bo/shed"], "staked at the snapshot: waits; unstaked: leaves, as before");
-  assert.deepEqual(calls.map((c) => c.removal), ["S11"], "only this settlement's own return; a late pass needs the live ledger");
 });
 
 // ─────────────────────────── the seam ───────────────────────────────────────
@@ -135,7 +149,7 @@ test("settleTownReturns: a ledger that cannot be read falls back to the fold's o
 const store = await startStore({ db: "town_return_test" });
 after(() => store.stop());
 const skip = store.skip ?? false;
-const { owner, asOffice, seal, seed } = settlementRig(store);
+const { asOffice, seed } = settlementRig(store);
 
 // The stand-in engine: the town's word returns the mark with its declared
 // children, whatever is staked on them (WLD-203's town return).
@@ -155,7 +169,7 @@ git(ENGINE, "-c", "user.name=t", "-c", "user.email=t@t", "add", ".");
 git(ENGINE, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "stand-in engine: the town's return, WLD-203's shape");
 const LAW = git(ENGINE, "rev-parse", "HEAD");
 
-// The scratch town: the office's pinned tools (the POS-1139 candidate), a test key.
+// The scratch town: the office's pinned tools (the POS-1139 code), a test key.
 const SHED = "bo/shed", NAME = "bo/shed-name";
 const TOWN = tempDir("town-return-town-");
 pinnedTown(TOWN);
@@ -187,142 +201,115 @@ setEnv("TOWN_CLONE", TOWN);
 setEnv("STAMP_KEY", KEY);
 setEnv("TOWN_LOCK", join(tempDir("town-return-lock-"), "town.lock"));
 setEnv("BOT_NAME", "fixture"); setEnv("BOT_EMAIL", "fixture@test.invalid");
-setEnv("TOWN_PUSH", undefined); setEnv("STAMP_LINES", undefined);
+setEnv("TOWN_PUSH", undefined); setEnv("STAMP_LINES", undefined); setEnv("SETTLEMENT_DRY", undefined);
 if (!skip) { setEnv("WORLD2_PG", "1"); setEnv("WORLD2_PG_URL", store.url("office_api")); } // the exec holds each mark's lock in the store
 after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
 
 const ledger = () => readFileSync(join(TOWN, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
 const entries = () => MINT.parseStampLedger(ledger());
 const balances = () => MINT.foldBalances(entries());
-const openOn = (mark) => [...MINT.foldWorldMarkPositions(entries())].filter(([k]) => k.startsWith(`${mark}|`)).reduce((a, [, n]) => a + n, 0);
-const write = (a) => runTownReturn(a, { townClone: TOWN });
-const header = (id = 2) => asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = $1", [id])).rows[0]);
-const takesAway = async (o = {}) => asOffice(async (p) => settlementTakesAway(p, await header(o.id), { worldRepo: ENGINE, townRepo: TOWN, ...o.opts }));
-const TOWN_WORD = async () => ({ actor: (await import("../src/town-stance.mjs")).TOWN_SPEAKER, on: SHED, stance: "opposed", as: "town" });
-const seedOpposed = async () => seed({ lawSha: LAW, cutover: "S10", sealWords: [await TOWN_WORD()] });
+const header = () => asOffice(async (p) => (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]);
+const TOWN_WORD = async (stance = "opposed") => ({ actor: (await import("../src/town-stance.mjs")).TOWN_SPEAKER, on: SHED, stance, as: "town" });
+const seedWord = async (stance = "opposed") => seed({ lawSha: LAW, cutover: "S10", sealWords: [await TOWN_WORD(stance)] });
 const verify = async () => {
   const { verifyStampLedger } = await import(pathToFileURL(join(PIN_ROOT, "tools", "stamp-verify.mjs")).href);
   return verifyStampLedger(TOWN, { pubkeyPem: PUB });
 };
 
-test("THE GATE ALONE: no writer, so nothing is written, and the town-opposed shed and its name stand in git while their stamps are open", { skip }, async () => {
-  await seedOpposed();
+// THE CROSSING'S BLOCK as fold-input-cli runs it: its docket, its selection,
+// and the writer its argv and environment decide (§ townReturnsOf).
+const DOCKET = [MARKS.plot, MARKS.bench, MARKS.yard, MARKS.shed, MARKS.name].map((m) => ({ slug: m.slug }));
+const SELECTION = { entry: "fold-delta.mjs § foldDelta", docket_claims: DOCKET.length, carried_absent: { checked: true, count: 0, slugs: [] } };
+const NOT_DRY = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "SETTLEMENT_DRY"));
+const cross = async ({ argv = ["node", "fold-input-cli.mjs", "--town-returns"], env = NOT_DRY } = {}) => {
+  const townReturns = await townReturnsOf({ argv, env, townClone: TOWN });
+  return asOffice((p) => settlementWithhold(p, {
+    window: 501, worldRepo: ENGINE, townClone: TOWN, out: { marks: DOCKET, as_of: { window: 501 } }, selection: SELECTION, townReturns,
+  }));
+};
+const written = (r) => r.out.marks.map((m) => m.slug);
+
+test("NO FLAG, OR ANY SETTLEMENT_DRY: nothing is paid, and the town-opposed shed and its name stay in this crossing's write-down", { skip }, async () => {
+  await seedWord();
   const before = ledger();
-  const away = await takesAway();
-  assert.ok(!away.slugs.has(SHED) && !away.slugs.has(NAME), "neither leaves git");
-  assert.equal(away.town_returns.removal, "S11");
-  assert.deepEqual(away.town_returns.receipts, []);
-  assert.equal(away.town_returns.source, "live");
-  assert.deepEqual(away.town_returns.held, [{ mark: SHED, leaving: [SHED, NAME], open: { [SHED]: 12, [NAME]: 2 } }]);
-  assert.equal(ledger(), before, "the ledger is untouched");
+  for (const run of [{ argv: ["node", "fold-input-cli.mjs"] }, { env: { ...NOT_DRY, SETTLEMENT_DRY: "0" } }, { env: { ...NOT_DRY, SETTLEMENT_DRY: "1" } }, { env: { ...NOT_DRY, SETTLEMENT_DRY: "" } }]) {
+    const r = await cross(run);
+    const t = r.selection.settlement.town_returns;
+    assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "neither leaves this crossing");
+    assert.equal(t.receipt, undefined, "no write was made");
+    assert.match(t.not_written, /no --town-returns|SETTLEMENT_DRY is set/);
+    assert.deepEqual(t.held, [{ mark: SHED, leaving: [SHED, NAME], open: { [SHED]: 12, [NAME]: 2 } }]);
+    assert.equal(ledger(), before, "the ledger is untouched");
+  }
 });
 
-test("THE FALSIFIER: the writer returns the owner and every other staker exactly their remaining deposits, once, as the town's act; then the shed and its name leave", { skip }, async () => {
-  await seedOpposed();
-  const away = await takesAway({ opts: { townReturns: { write, date: "2026-10-05" } } });
-  const [r] = away.town_returns.receipts;
-  assert.equal(r.removal, "S11");
-  assert.equal(r.appended, true);
-  assert.deepEqual(r.returned, [
+test("THE FALSIFIER: the real crossing returns the owner and every other staker exactly their remaining deposits, once, as the town's act, under the seal's S11 and day; then the shed and its name leave", { skip }, async () => {
+  await seedWord();
+  const r = await cross();
+  const t = r.selection.settlement.town_returns;
+  assert.equal(t.removal, "S11");
+  assert.equal(t.date, "2026-10-02", "S11 was sealed at 2026-10-03T00:00Z, the 2nd in town time");
+  assert.equal(t.receipt.removal, "S11");
+  assert.equal(t.receipt.appended, true);
+  assert.deepEqual(t.receipt.returned, [
     { mark: SHED, handle: "ann", n: 3 },
     { mark: SHED, handle: "bo", n: 4 },       // the owner: 6 staked, 2 taken back by his own hand
     { mark: SHED, handle: "cy", n: 5 },
     { mark: NAME, handle: "cy", n: 2 },
   ]);
-  assert.deepEqual(r.open_after, { [SHED]: 0, [NAME]: 0 });
-  assert.match(r.commit ?? "", /^[0-9a-f]{40}$/, "the landing's own commit");
-  assert.deepEqual(away.town_returns.held, []);
-  assert.ok(away.slugs.has(SHED) && away.slugs.has(NAME), "with the stamps home, the shed and its name leave git");
+  assert.deepEqual(t.receipt.open_after, { [SHED]: 0, [NAME]: 0 });
+  assert.match(t.receipt.commit ?? "", /^[0-9a-f]{40}$/, "the landing's own commit");
+  assert.deepEqual(t.held, []);
+  assert.ok(!written(r).includes(SHED) && !written(r).includes(NAME), "with the stamps home, the shed and its name leave this crossing");
+  assert.ok(r.selection.settlement.taken_away.includes(SHED));
   const bal = balances();
   for (const h of ["bo", "ann", "cy"]) assert.equal(bal.get(h), FUNDED[h], `${h} is whole`);
   assert.equal(bal.get("dot"), FUNDED.dot - 4, "a stake on a mark nobody opposed is untouched");
   assert.equal((ledger().match(/ · for: town-return:S11 · sig: /g) ?? []).length, 4, "recorded as the town's act");
-  // S11 was sealed at 2026-10-03T00:00Z, the 2nd in town time: the removal and its day are the seal's (B2/B3)
-  assert.match(ledger(), /\n- 2026-10-02 · stake:world-mark\/bo\/shed → ann · 3 · for: town-return:S11 · sig: /);
   assert.equal((ledger().match(/ · for: unstake · sig: /g) ?? []).length, 1, "the owner's own unstake is the only unstake");
+  assert.match(ledger(), /\n- 2026-10-02 · stake:world-mark\/bo\/shed → ann · 3 · for: town-return:S11 · sig: /);
   const v = await verify();
   assert.equal(v.ok, true, (v.problems ?? []).join("; "));
 });
 
 test("REPLAY: the crossing run again finds every position closed, writes nothing, and the marks still leave", { skip }, async () => {
-  await seedOpposed();
+  await seedWord();
   const before = ledger();
-  const again = await takesAway({ opts: { townReturns: { write, date: "2026-10-06" } } });
-  const [r] = again.town_returns.receipts;
-  assert.equal(r.appended, false);
-  assert.deepEqual(r.returned, []);
-  assert.deepEqual(r.nothing_open, [SHED, NAME]);
+  const r = await cross();
+  const t = r.selection.settlement.town_returns;
+  assert.equal(t.receipt.appended, false);
+  assert.deepEqual(t.receipt.returned, []);
+  assert.deepEqual(t.receipt.nothing_open, [SHED, NAME]);
   assert.equal(ledger(), before, "byte for byte");
-  assert.ok(again.slugs.has(SHED) && again.slugs.has(NAME));
+  assert.ok(!written(r).includes(SHED) && !written(r).includes(NAME));
 });
 
-test("SERVED: the shed is not served as gone while its stamps are open, and is once they are home", { skip }, async () => {
-  await seedOpposed();
-  // a stake lands after the town's word; the served World must hold the shed for it
-  STAKE.worldStakeApply(TOWN, { handle: "ann", mark: SHED, n: 1, via: "api", date: "2026-10-07" }, PEM);
-  commitTown("ann stakes again");
-  resetSettlementCaches();
-  const waiting = await asOffice((p) => servedSettlement(p, { worldRepo: ENGINE, townRepo: TOWN }));
-  assert.ok(waiting.marks.some((m) => m.id === SHED), "the shed stands while ann's stamp is on it");
-  assert.deepEqual(waiting.meta.town_returns_waiting, [{ mark: SHED, open: { [SHED]: 1 } }]);
-  assert.match(waiting.meta.town_returns_note, /stands until the stamps staked on it are returned to each staker/);
-  assert.deepEqual(waiting.meta.opposed.town, [SHED], "the town's word still stands on it");
-
-  const done = await takesAway({ opts: { townReturns: { write, date: "2026-10-07" } } });
-  assert.deepEqual(done.town_returns.receipts[0].returned, [{ mark: SHED, handle: "ann", n: 1 }], "the late stake is returned at the crossing");
-  resetSettlementCaches();
-  const gone = await asOffice((p) => servedSettlement(p, { worldRepo: ENGINE, townRepo: TOWN }));
-  assert.ok(!gone.marks.some((m) => m.id === SHED || m.id === NAME), "home, so served as gone");
-  assert.equal(gone.meta.town_returns_waiting, undefined);
-});
-
-test("LATE, AFTER IT LEFT: a stake landing after the World dropped the shed goes home at the next settlement, under S11", { skip }, async () => {
-  await seedOpposed();
-  STAKE.worldStakeApply(TOWN, { handle: "dot", mark: SHED, n: 2, via: "api", date: "2026-10-08" }, PEM);
-  commitTown("dot stakes on a mark that has left");
-  // S12 no longer holds the shed or its name
-  await owner(async (c) => {
-    await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (502, '2026-10-02T06:00:00Z', '2026-10-02T18:00:00Z', 'closed', '2026-10-02T06:00:00Z')");
-    await seal(c, { id: 3, window: 502, number: 12, marks: [MARKS.plot, MARKS.bench, MARKS.yard], lawSha: LAW,
-      stances: { counted: true, cutover: "S10", settlement_inferred: 12, how: "row" } });
-  });
-  const next = await takesAway({ id: 3, opts: { townReturns: { write, date: "2026-10-09" } } });
-  const late = next.town_returns.receipts.find((x) => x.late);
-  assert.equal(late.removal, "S11", "returned under the removal S11's own sealed World established");
-  assert.equal(late.date, "2026-10-02", "and on S11's seal day");
-  assert.deepEqual(late.returned, [{ mark: SHED, handle: "dot", n: 2 }]);
-  assert.equal(openOn(SHED), 0);
-  const v = await verify();
-  assert.equal(v.ok, true, (v.problems ?? []).join("; "));
-
-  // A stake no sealed removal covers (S12 removed nothing): named on the receipt, never paid.
-  STAKE.worldStakeApply(TOWN, { handle: "dot", mark: SHED, n: 1, via: "api", date: "2026-10-09" }, PEM);
-  commitTown("dot stakes once more");
-  await owner(async (c) => {
-    await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (503, '2026-10-02T18:00:00Z', '2026-10-03T06:00:00Z', 'closed', '2026-10-02T18:00:00Z')");
-    await seal(c, { id: 4, window: 503, number: 13, marks: [MARKS.plot, MARKS.bench, MARKS.yard], lawSha: LAW,
-      stances: { counted: true, cutover: "S10", settlement_inferred: 13, how: "row" } });
-  });
-  const before = ledger();
-  const s13 = await takesAway({ id: 4, opts: { townReturns: { write } } });
-  assert.deepEqual(s13.town_returns.receipts, []);
-  assert.deepEqual(s13.town_returns.late_unpaid, [{ mark: SHED, open: 1, last_returned_by: "S11" }]);
-  assert.equal(ledger(), before, "a ledger line is not a removal: nothing is paid on it");
-});
-
-test("WRITER FAILURE: a pen with no key returns nothing, so the staked return waits and nothing leaves", { skip }, async () => {
-  await seedOpposed();
-  STAKE.worldStakeApply(TOWN, { handle: "cy", mark: NAME, n: 1, via: "api", date: "2026-10-10" }, PEM);
+test("WRITER FAILURE: a pen with no key returns nothing and says so; the staked return waits, and nothing leaves", { skip }, async () => {
+  await seedWord();
+  STAKE.worldStakeApply(TOWN, { handle: "cy", mark: NAME, n: 1, via: "api", date: "2026-10-02" }, PEM);
   commitTown("cy backs the name again");
   const before = ledger();
-  setEnv("STAMP_KEY", join(tempDir("town-return-nokey-"), "absent.pem"));
-  try {
-    const away = await takesAway({ opts: { townReturns: { write, date: "2026-10-10" } } });
-    assert.equal(away.town_returns.receipts[0].error.code, 409);
-    assert.deepEqual(away.town_returns.held.map((h) => h.mark), [SHED]);
-    assert.ok(!away.slugs.has(SHED) && !away.slugs.has(NAME), "the removal waits for its return");
-    assert.equal(ledger(), before);
-  } finally { process.env.STAMP_KEY = KEY; }
+  const env = { ...NOT_DRY, STAMP_KEY: join(tempDir("town-return-nokey-"), "absent.pem") };
+  const r = await cross({ env });
+  const t = r.selection.settlement.town_returns;
+  assert.equal(t.receipt.error.code, 409, "never a success");
+  assert.equal(t.receipt.appended, undefined);
+  assert.deepEqual(t.held.map((h) => h.mark), [SHED]);
+  assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "the removal waits for its return");
+  assert.equal(ledger(), before);
+});
+
+test("PIN MISMATCH: a town clone the office did not pin returns nothing and says so; the return waits", { skip }, async () => {
+  await seedWord();
+  const before = ledger();
+  const env = { ...NOT_DRY, TOWN_PINS_DIR: join(tempDir("town-return-otherpins-")) };
+  writeFileSync(join(env.TOWN_PINS_DIR, "PINS.json"), JSON.stringify({ town_commit: "0".repeat(40), files: {} }));
+  const r = await cross({ env });
+  const t = r.selection.settlement.town_returns;
+  assert.equal(t.receipt.error.defect, "town-pin-mismatch");
+  assert.deepEqual(t.held.map((h) => h.mark), [SHED]);
+  assert.ok(written(r).includes(SHED));
+  assert.equal(ledger(), before);
 });
 
 test("NO LIVE LEDGER: the stakes at the settlement's own ledger position decide, as before POS-1138", { skip }, async () => {
@@ -335,11 +322,10 @@ test("NO LIVE LEDGER: the stakes at the settlement's own ledger position decide,
 });
 
 test("SILENCE AND NEUTRAL: no town opposition is no town return, and nothing is written", { skip }, async () => {
-  await seed({ lawSha: LAW, cutover: "S10", sealWords: [{ ...(await TOWN_WORD()), stance: "neutral" }] });
+  await seedWord("neutral");
   const before = ledger();
-  const away = await takesAway({ opts: { townReturns: { write, date: "2026-10-11" } } });
-  assert.ok(!away.slugs.has(SHED));
-  assert.deepEqual(away.town_returns?.held ?? [], []);
-  assert.ok((away.town_returns?.receipts ?? []).every((r) => r.late), "only a late pass could write, and none is owed");
+  const r = await cross();
+  assert.ok(written(r).includes(SHED));
+  assert.equal(r.selection.settlement.town_returns, undefined);
   assert.equal(ledger(), before);
 });

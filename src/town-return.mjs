@@ -21,27 +21,25 @@
 // `subtree` (ruling B: the mark continued), so those are the marks whose stamps
 // go home; a child in `stays` stands with its own stakes.
 //
-// ── THE GATE: NO MARK LEAVES WHILE STAMPS STAND ON IT ────────────────────────
+// ── ONLY THE REAL CROSSING WRITES (Wright, 2026-11-19 00:35Z, A) ─────────────
 //
-// The return is the progress; the gate is the safety, and it does not trust
-// the return. A town return leaves (git, and the served World) only when every
-// mark it takes has no open position in the LIVE ledger. A return that was not
-// written, failed, was refused by the pin, or could not land leaves its stakes
-// open, so the mark stays where it stands and the next settlement asks again.
-// When the live ledger cannot be read at all, the fold's own stakes (the
-// snapshot's ledger position) decide instead: a staked return waits and an
-// unstaked one leaves, which is exactly what the settlement did before this.
+// "only on a real, non-dry crossing: it checks that SETTLEMENT_DRY is unset and
+// passes an explicit write flag from the real path, never inferred from the
+// script's name." Both, literally (§ townReturnWrite): the flag, and no
+// SETTLEMENT_DRY in the environment at all, whatever its value. The shadow and
+// every rehearsal call the same tool without the flag, so they never pay.
 //
-// ── A STAKE THAT ARRIVES LATE ────────────────────────────────────────────────
+// ── THE GATE: THE CROSSING DOES NOT TAKE A MARK AWAY WHILE STAMPS STAND ON IT ─
 //
-// The stake door asks published canon, so a stake can still land on a mark
-// between its return and the World that drops it, and never after. Such a mark
-// is no longer in the next settlement's sources, so that settlement's crossing
-// returns it under the removal the record establishes: the previous
-// settlement's own sealed World (world-settlement.mjs § sealedTownReturns),
-// never a removal read off a ledger line (review of Town #4796, B2). Stamps
-// open on a mark the ledger shows town-returned that no such removal covers
-// are named on the receipt (`late_unpaid`), never paid and never silent.
+// The return is the progress; the gate is the crossing's write boundary, and it
+// does not trust the return. A town return leaves git only when every mark it
+// takes has no open position in the LIVE ledger, read after the return. A
+// return that was not written, failed, was refused by the pin, or could not
+// land leaves its stakes open, so this crossing does not take the mark away and
+// says why on its receipt. When the live ledger cannot be read at all, the
+// fold's own stakes (the snapshot's ledger position) decide instead: a staked
+// return waits and an unstaked one leaves, which is what the crossing did
+// before this.
 
 import { execUnderTownLock, lockTimedOut, withTownLockHeld, LOCK_BUSY } from "./town-lock.mjs";
 import { importTownTool, isPinStop } from "./town-tool.mjs";
@@ -54,9 +52,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /** The authority consent.mjs writes on a return the town's word made. */
 export const TOWN_AUTHORITY = "the town (absolute)";
 
-/** Today in town time, the date a ledger line carries (TOWN_TZ, as every pen act's). */
-export const townDate = (now = new Date()) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: process.env.TOWN_TZ ?? "America/New_York" }).format(now);
+/** A day in town time, the date a ledger line carries (TOWN_TZ, as every pen act's). */
+export const townDate = (at = new Date()) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: process.env.TOWN_TZ ?? "America/New_York" }).format(at);
 
 /** A removal is named by its settlement: `S<n>`, as the Town's line carries it. */
 export const removalOf = (n) => {
@@ -64,6 +62,19 @@ export const removalOf = (n) => {
   if (!Number.isInteger(k) || k < 1) throw new Error(`a removal is named by its settlement number, got ${JSON.stringify(n)}`);
   return `S${k}`;
 };
+
+/**
+ * MAY THIS RUN WRITE THE TOWN'S RETURN? `{ write: true }` only when the real
+ * path asked for it (`flag`) AND the environment carries no SETTLEMENT_DRY at
+ * all: "unset", literally, so "1", "0" and "" all refuse. Otherwise
+ * `{ write: false, why }`. PURE over its arguments; never reads a script name.
+ */
+export function townReturnWrite({ flag, env = process.env }) {
+  if (!flag) return { write: false, why: "this run did not ask to write the town's return (no --town-returns), so nothing was written: the gate alone decided" };
+  if (Object.prototype.hasOwnProperty.call(env, "SETTLEMENT_DRY"))
+    return { write: false, why: `SETTLEMENT_DRY is set (${JSON.stringify(env.SETTLEMENT_DRY)}), so this is no real crossing and nothing was written: the gate alone decided` };
+  return { write: true };
+}
 
 /**
  * The town's stance returns in a World: `[{ mark, leaving }]`, sorted, where
@@ -105,32 +116,23 @@ export function heldTownReturns(targets, open) {
 }
 
 /**
- * THE LIVE LEDGER, READ SETTLED: `{ open, returnedBy }` from the town clone's
- * HEAD through the office's pinned engine, under town.lock SHARED, so every
- * writer (they hold it exclusively for their append and its landing) has
- * finished. `open` is stamps open per mark; `returnedBy` maps each mark the
- * ledger shows the town has returned to the newest removal that returned it.
- * Throws when the clone, the pin or the lock does not answer; the caller then
- * falls back to the fold's own stakes.
+ * THE LIVE LEDGER, READ SETTLED: `{ open }`, stamps open per mark, from the
+ * town clone's HEAD through the office's pinned engine, under town.lock
+ * SHARED, so every writer (they hold it exclusively for their append and its
+ * landing) has finished. Throws when the clone, the pin or the lock does not
+ * answer; the caller then falls back to the fold's own stakes.
  */
 export async function liveLedgerOpen(townClone, { held = withTownLockHeld, waitSec = 10 } = {}) {
   if (!townClone) throw new Error("no town clone to read the ledger in");
   return held(async ({ signal }) => {
     const { worldStakeState } = await importTownTool(townClone, "world-stake.mjs");
-    const { classifyEntry } = await importTownTool(townClone, "stamp-mint.mjs");
     if (signal?.aborted) throw new Error("the town lock was let go before the ledger was read");
-    const state = worldStakeState(townClone);
     const open = new Map();
-    for (const [key, n] of state.positions) {
+    for (const [key, n] of worldStakeState(townClone).positions) {
       const mark = key.slice(0, key.lastIndexOf("|"));
       if (n > 0) open.set(mark, (open.get(mark) ?? 0) + n);
     }
-    const returnedBy = new Map();
-    for (const e of state.entries) {
-      const c = classifyEntry(e.canonical);
-      if (c.kind === "world-town-return") returnedBy.set(c.mark, c.removal);
-    }
-    return { open, returnedBy };
+    return { open };
   }, { shared: true, waitSec });
 }
 
@@ -148,45 +150,15 @@ export function unreadSaid(e) {
 
 /**
  * The gate's reading: the live ledger when it answers, the fold's own stakes
- * when it does not (`unread` says why). `{ open, returnedBy, source, unread? }`.
+ * when it does not (`unread` says why). `{ open, source, unread? }`.
  */
 export async function townReturnOpen({ townClone, stakes, read = liveLedgerOpen }) {
   try {
     const live = await read(townClone);
     return { ...live, source: "live" };
   } catch (e) {
-    return {
-      open: openFromStakes(stakes), returnedBy: new Map(), source: "snapshot",
-      unread: unreadSaid(e),
-    };
+    return { open: openFromStakes(stakes), source: "snapshot", unread: unreadSaid(e) };
   }
-}
-
-/**
- * THE LATE RETURNS TO PAY: of the removals the record establishes (`sealed`,
- * `[{ removal, date, marks }]`, a sealed settlement's own town returns), the
- * marks the settlement no longer holds that carry open stamps again. PURE.
- */
-export function lateTownReturns(sealed, { open }, holds) {
-  const out = [];
-  for (const s of sealed ?? []) {
-    const marks = (s.marks ?? []).filter((m) => !holds.has(m) && (open.get(m) ?? 0) > 0).sort();
-    if (marks.length) out.push({ removal: s.removal, date: s.date, marks });
-  }
-  return out;
-}
-
-/**
- * Stamps open on a mark the ledger shows the town returned, that the
- * settlement no longer holds, and that no established removal here pays:
- * NAMED, never paid (a ledger line is not a removal, review of Town #4796 B2),
- * so no stake is silently orphaned. `[{ mark, open, last_returned_by }]`. PURE.
- */
-export function lateUnpaid({ open, returnedBy }, holds, paying) {
-  return [...returnedBy]
-    .filter(([m]) => !holds.has(m) && !paying.has(m) && (open.get(m) ?? 0) > 0)
-    .map(([mark, removal]) => ({ mark, open: open.get(mark), last_returned_by: removal }))
-    .sort((a, b) => a.mark.localeCompare(b.mark));
 }
 
 /**
@@ -208,39 +180,24 @@ export async function runTownReturn({ marks, removal, date }, { townClone, exec 
 }
 
 /**
- * THE SETTLEMENT'S RETURNS AND ITS GATE, in that order. `targets` are the
- * settlement's town returns, `removal` and `date` its seal's (the caller's to
- * establish, never a receipt's), `holds` every mark its sources hold, `late`
- * the previous settlement's own sealed town returns. With `write` (the crossing
- * that removes them) each removal is returned first: this settlement's, then
- * any late one the live ledger shows open. Then the ledger is read and every
- * target still carrying stamps is held. `write: null` returns nothing and only
- * reads (a rehearsal, a reader). → `{ removal, receipts, held, source,
- * late_unpaid?, unread? }`; `receipts` are the exec's answers, one per removal.
+ * THE CROSSING'S RETURN AND ITS GATE, in that order. `targets` are this
+ * settlement's town returns; `removal` and `date` its seal's (the caller's to
+ * establish, never a receipt's). With `write` (the real crossing) the removal
+ * is returned first, all its marks in one signed batch; then the ledger is read
+ * and every target still carrying stamps is held. `write: null` returns nothing
+ * and only reads. → `{ removal, date, receipt?, held, source, unread? }`;
+ * `receipt` is the exec's answer as it gave it.
  */
-export async function settleTownReturns({ targets, removal, date, holds = new Set(), late = [], townClone, stakes = [], write = null, read = liveLedgerOpen }) {
-  const receipts = [];
-  let unpaid = [];
-  if (write) {
-    const before = await townReturnOpen({ townClone, stakes, read });
-    const runs = [];
-    if (targets.length) runs.push({ removal, date, marks: [...new Set(targets.flatMap((t) => t.leaving))].sort() });
-    if (before.source === "live") {
-      const paying = lateTownReturns(late, before, holds);
-      for (const l of paying) runs.push({ ...l, late: true });
-      unpaid = lateUnpaid(before, holds, new Set([...runs.flatMap((r) => r.marks)]));
-    }
-    for (const r of runs) {
-      const answer = await write({ marks: r.marks, removal: r.removal, date: r.date });
-      receipts.push({ removal: r.removal, ...(r.late ? { late: true } : {}), marks: r.marks, ...answer });
-    }
-  }
+export async function settleTownReturns({ targets, removal, date, townClone, stakes = [], write = null, read = liveLedgerOpen }) {
+  let receipt = null;
+  if (write && targets.length)
+    receipt = await write({ marks: [...new Set(targets.flatMap((t) => t.leaving))].sort(), removal, date });
   const after = await townReturnOpen({ townClone, stakes, read });
   return {
-    removal, receipts,
+    removal, date,
+    ...(receipt ? { receipt } : {}),
     held: heldTownReturns(targets, after.open),
     source: after.source,
-    ...(unpaid.length ? { late_unpaid: unpaid } : {}),
     ...(after.unread ? { unread: after.unread } : {}),
   };
 }

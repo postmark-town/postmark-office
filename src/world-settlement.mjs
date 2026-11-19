@@ -507,7 +507,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
-  const town = await townReturnsAt(p, header, gate, state, inputs, { worldRepo, townRepo, townReturns });
+  const town = await townReturnsAt(header, gate, state, inputs, { townRepo, townReturns });
   const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
@@ -553,57 +553,25 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
  * settlements row, else the seal's recorded reading of itself), and the line's
  * date is the seal's day in town time. A snapshot that names neither writes
  * nothing (`unnamed` says so); the gate still reads.
- *
- * A LATE STAKE is paid only under a removal the record establishes: the
- * previous settlement's own sealed World (§ sealedTownReturns). A stake can
- * land on a removed mark only between its crossing's gate and the World that
- * drops it from canon (the door refuses a mark canon does not hold), so the
- * previous settlement is where every late stake's removal is.
  */
-async function townReturnsAt(p, header, gate, state, inputs, { worldRepo, townRepo, townReturns }) {
+async function townReturnsAt(header, gate, state, inputs, { townRepo, townReturns }) {
   const { townReturnTargets, settleTownReturns, removalOf, townDate } = await import("./town-return.mjs");
   const targets = townReturnTargets(state);
+  if (!targets.length) return null;
   const write = townReturns?.write ?? null;
-  if (!targets.length && !write) return null;
   const number = header?.settlement ?? gate.recorded?.settlement_inferred ?? null;
   const removal = number == null ? null : removalOf(number);
   const date = header?.taken_at ? townDate(new Date(header.taken_at)) : null;
   const named = removal && date;
-  const holds = new Set([...(inputs.args.marks ?? []).map((m) => String(m.id)), ...(townReturns?.holds ?? [])]);
-  const late = write && named ? await sealedTownReturns(p, number - 1, { worldRepo, townRepo }) : [];
   const settled = await settleTownReturns({
-    targets, removal, date, holds, late, townClone: townRepo,
+    targets, removal, date, townClone: townRepo,
     stakes: inputs.args.stakes, write: named ? write : null,
   });
-  return { ...settled, ...(write && !named ? { unnamed: `snapshot ${header?.id ?? "?"} names no settlement number or seal time, so no return could name its removal and nothing was written` } : {}) };
-}
-
-/**
- * A sealed settlement's own town returns, as removals the record establishes:
- * `[{ removal, date, marks }]` (one, or none). Its World is the one kept under
- * its digest, its seal's words applied, or folded again from its sources when
- * none is kept; a settlement this store does not hold, or cannot fold, names
- * none. Read-only.
- */
-async function sealedTownReturns(p, number, { worldRepo, townRepo }) {
-  if (!Number.isInteger(number) || number < 1) return [];
-  try {
-    const { townReturnTargets, removalOf, townDate } = await import("./town-return.mjs");
-    const found = await settlementHeader(p, { number });
-    const prev = found?.header;
-    if (!prev || Number(prev.settlement) !== number || !prev.taken_at) return [];
-    const gate = stancesOf(prev);
-    if (!gate.counts) return [];
-    const keptMayHoldWords = prev.stance_through != null && prev.stances == null;
-    const text = keptMayHoldWords ? null : await cachedFoldText(p, prev.digest);
-    const world = text != null ? JSON.parse(text)
-      : foldWithWords(await settlementFoldInputs(p, prev, { worldRepo, townRepo }), await wordsAtSeal(p, prev, { worldRepo })).state;
-    const marks = [...new Set(townReturnTargets(world).flatMap((t) => t.leaving))].sort();
-    return marks.length ? [{ removal: removalOf(number), date: townDate(new Date(prev.taken_at)), marks }] : [];
-  } catch (e) {
-    faultLogged(`the town returns of S${number} could not be read for the late pass`, e);
-    return [];
-  }
+  return {
+    ...settled,
+    ...(townReturns?.why ? { not_written: townReturns.why } : {}),
+    ...(write && !named ? { unnamed: `snapshot ${header?.id ?? "?"} names no settlement number or seal time, so no return could name its removal and nothing was written` } : {}),
+  };
 }
 
 /**
@@ -797,34 +765,7 @@ const NOW = { at: 0, key: null, value: null };
 export const REFRESH_MS = 60_000;
 
 /** Test seam: forget every cached read. */
-export function resetSettlementCaches() { SERVED.clear(); LABELLED.clear(); ARGS.clear(); SEALS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; LEDGER.at = 0; LEDGER.value = null; }
-
-// The live ledger's open stamps, for the served gate (POS-1138): read at most
-// once per REFRESH_MS, like the words, and never waiting long on the town lock
-// (a ferry crossing holds it for minutes; a busy read falls back, below).
-const LEDGER = { at: 0, value: null };
-
-/**
- * Which of a served World's town returns wait for their stamps:
- * `{ held, unread? }`. The live ledger decides when it answers; otherwise the
- * stakes at the settlement's own ledger position do, so a staked return waits
- * and an unstaked one goes, as before POS-1138.
- */
-async function servedTownWaits(p, header, state, { worldRepo, townRepo, now = Date.now() }) {
-  const { townReturnTargets, heldTownReturns, liveLedgerOpen, openFromStakes, unreadSaid } = await import("./town-return.mjs");
-  const targets = townReturnTargets(state);
-  if (!targets.length) return { held: [] };
-  try {
-    if (!LEDGER.value || now - LEDGER.at >= REFRESH_MS) {
-      LEDGER.value = await liveLedgerOpen(townRepo, { waitSec: 2 });
-      LEDGER.at = now;
-    }
-    return { held: heldTownReturns(targets, LEDGER.value.open) };
-  } catch (e) {
-    const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-    return { held: heldTownReturns(targets, openFromStakes(inputs.args.stakes)), unread: unreadSaid(e) };
-  }
-}
+export function resetSettlementCaches() { SERVED.clear(); LABELLED.clear(); ARGS.clear(); SEALS.clear(); NOW.at = 0; NOW.key = null; NOW.value = null; }
 
 /** A seal's words, read once per digest: a sealed settlement's words never change. */
 async function sealWordsOf(p, header, { worldRepo }) {
@@ -1006,31 +947,8 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
     if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
   }
 
-  // A TOWN RETURN IS NOT SERVED AS DONE BEFORE ITS STAMPS ARE HOME (POS-1138).
-  // Read at serve time, on top of the World kept under the digest (which stays
-  // the seal's words, as --verify re-derives it): a town return whose marks
-  // still carry open stamps in the live ledger is folded again without that
-  // town word, so the mark stands here exactly as it stands in git, and meta
-  // names it waiting. Once its returns land, the next read lets it go.
-  const waits = await servedTownWaits(p, header, state, { worldRepo, townRepo, now });
-  // The labels are kept by this key too, so a World with waiting marks is labelled as itself.
-  const labelKey = waits.held.length ? `${servedKey}|waiting:${waits.held.map((h) => h.mark).join(",")}` : servedKey;
-  if (waits.held.length) {
-    const gatedKey = labelKey;
-    let gated = SERVED.get(gatedKey) ?? null;
-    if (!gated) {
-      const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-      const holding = new Set(waits.held.map((h) => h.mark));
-      const words = { ...applied, townWords: new Map([...(applied.townWords ?? new Map())].filter(([id]) => !holding.has(String(id)))) };
-      gated = foldWithWords(inputs, words).state;
-      if (state.__vetoes) gated.__vetoes = state.__vetoes;
-      SERVED.set(gatedKey, gated);
-      if (SERVED.size > 6) SERVED.delete(SERVED.keys().next().value);
-    }
-    state = gated;
-  }
   const { __vetoes, ...world } = state;
-  const labels = await labelsFor(p, header, world, applied, { worldRepo, servedKey: labelKey, seal: asked ? seal : null });
+  const labels = await labelsFor(p, header, world, applied, { worldRepo, servedKey, seal: asked ? seal : null });
   if (labels.marks) world.marks = labels.marks;
   const n = Number(header.settlement);
   return {
@@ -1066,9 +984,6 @@ export async function servedSettlement(p, { settlement = null, worldRepo, townRe
       ...(__vetoes?.town_unread ? { opposed_unread: __vetoes.town_unread } : {}),
       ...(__vetoes?.stance_returns_whole ? { stance_returns_whole: __vetoes.stance_returns_whole } : {}),
       ...(applied.unread ? { opposed_unread: `the standing words could not be read, so nothing opposed since the seal is taken away here: ${words.unread}` } : {}),
-      ...(waits.held.length ? { town_returns_waiting: waits.held.map(({ mark, open }) => ({ mark, open })) } : {}),
-      ...(waits.held.length ? { town_returns_note: `the town opposed ${waits.held.length === 1 ? "this mark" : "these marks"}, and ${waits.held.length === 1 ? "it stands" : "they stand"} until the stamps staked on ${waits.held.length === 1 ? "it are" : "them are"} returned to each staker at a settlement` } : {}),
-      ...(waits.unread ? { town_returns_unread: `the live ledger could not be read (${waits.unread}), so the stakes at the settlement's own ledger position decided which town returns wait` } : {}),
       ...(built ? { built: "derived from the snapshot's sources on this read, and kept" } : {}),
       ...(labels.unread ? { labels_unread: labels.unread } : {}),
       ...(labels.omitted ? { labels_omitted: labels.omitted } : {}),
