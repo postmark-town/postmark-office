@@ -46,6 +46,24 @@ function scratchClone(which, source, dest) {
   return dest;
 }
 
+/**
+ * Run `fn` with this target's own pins named as TOWN_PINS_DIR, and put the variable back as it was (set, or absent) on every path out.
+ *
+ * WHY (POS-686). The stand-in's children (`asFreshen` below) are handed the generated pin folder, but the seed's IN-PROCESS steps (the index's derivation, the stamp lines'
+ * sync) load the town's pinned tools through src/town-tool.mjs, which reads TOWN_PINS_DIR at each call. With none set they read the office's committed pins (the town
+ * commit the office ships with), a different town from this stand-in's re-signed clone, and stopped with TownPinMismatch (the refusal is right and stays: the pinned code
+ * and the clone it is checked against must be one town). Naming the target's pins here makes the in-process steps check the clone they actually read, the same check the
+ * children make. Nothing leaks into another round: the manifest is cached per pin ROOT and the pinned modules load by their own path, so a second target's folder is a
+ * second root, and the variable is restored before any later work in this process.
+ */
+export async function withTownPins(pinsDir, fn) {
+  const had = Object.hasOwn(process.env, "TOWN_PINS_DIR");
+  const was = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = pinsDir;
+  try { return await fn(); }
+  finally { if (had) process.env.TOWN_PINS_DIR = was; else delete process.env.TOWN_PINS_DIR; }
+}
+
 /** The world's law into the store at the world clone's HEAD (world2/tools/law-ingest.mjs, its main run). */
 export async function ingestLaw(store, world) {
   const { deriveLaw, writeLaw, lossyRefusal } = await import("../../world2/tools/law-ingest.mjs");
@@ -188,7 +206,7 @@ export async function localDevTarget({
     // for the same rows)
     const t0 = Date.now();
     const { deriveTownIndex, TOWN_TABLES } = await import("../../src/town-index.mjs");
-    const { tables } = await deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } });
+    const { tables } = await withTownPins(pinsDir, () => deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } }));
     const rows = Object.fromEntries(Object.entries(TOWN_TABLES).map(([name, { cols }]) =>
       [name, (tables[name] ?? []).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])))]));
     const { seedTownIndex } = await import("./index-to-store.mjs");
@@ -214,7 +232,7 @@ export async function localDevTarget({
     const pen = await store.connect("office_api");
     try {
       await pen.query("BEGIN");
-      const synced = await syncStampLinesVia(pen, town);
+      const synced = await withTownPins(pinsDir, () => syncStampLinesVia(pen, town));
       await pen.query("COMMIT");
       log(`store: stamp_lines holds the clone's ${synced.inserted} ledger lines`);
     } catch (e) { await pen.query("ROLLBACK").catch(() => {}); throw e; }

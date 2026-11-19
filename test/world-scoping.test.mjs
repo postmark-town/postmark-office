@@ -15,6 +15,9 @@ process.env.WORLD_POOL_DIR = pool;
 after(() => rmSync(pool, { recursive: true, force: true }));
 const town = tempDir("postmark-town-scope-");
 after(() => rmSync(town, { recursive: true, force: true }));
+// This file's own town lock: the checkout's town.lock is shared with every other test file running at once,
+// and one that holds it for minutes made ruling 9's write wait out flock's 30 s and come back LOCK_BUSY (POS-1141).
+process.env.TOWN_LOCK = join(town, "town.lock");
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
 });

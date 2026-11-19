@@ -151,6 +151,8 @@ const ROSTER = {
   "tools/media-takedown.mjs": { args: [], code: 2, needle: "media-takedown: which file? --url" },
   // POS-722: with no telemetry dir it refuses by name before reading anything
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
+  // POS-904: bare, with no credential in reach, it refuses for want of --state before it reads a clone or sends anything
+  "tools/bluesky-publish.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "--state <dir> is required" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
@@ -165,6 +167,7 @@ const ROSTER = {
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
+  "tools/month-close.mjs": { args: [], code: 2, needle: "usage: month-close.mjs plan --month YYYY-MM" }, // POS-851: the manual monthly close; no verb is a usage refusal before it reads anything
   "tools/harbor-watch.mjs": { args: [], code: 2, needle: "usage: harbor-watch.mjs" },
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
