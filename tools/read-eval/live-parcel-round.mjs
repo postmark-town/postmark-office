@@ -213,6 +213,18 @@ summarise("after the withdrawal");
 {
   const tellAfter = await tellAt();
   say(""); say("### The telling (anonymous `GET /world/eyes` at the withdrawn leaf's own spot)");
+  // the records and the spine every presentation block serves (orient `you.within`, the bare apex read's `within` and full `records`), at each edited mark's own spot
+  const servedAt = async (pos, id) => {
+    const o = JSON.parse((await GET(`/world/orient?x=${pos.x}&y=${pos.y}`, { auth: false })).text);
+    const ap = (await MCP("world", { x: pos.x, y: pos.y })).body ?? {};
+    const row = (rows) => (rows ?? []).find((r) => r.id === id);
+    return { orient: row(o.you?.within), apexWithin: row(ap.within), record: ap.records?.[id] };
+  };
+  const tbl = await servedAt(aboutTarget.at, TARGET), key = await servedAt(keyAt, WITHDRAW);
+  const has = (x) => (x ? (x.body?.includes(NEW_TOKEN2) ? "NEW words" : "OLD words") : "absent");
+  say(""); say("### Records and spine as served (anonymous orient, bare apex read at the mark's own spot)");
+  say(`- the amended mark ${TARGET}: orient you.within ${has(tbl.orient)}; apex within ${has(tbl.apexWithin)}; apex records ${has(tbl.record)}`);
+  say(`- the withdrawn mark ${WITHDRAW}: orient you.within ${has(key.orient)}; apex within ${has(key.apexWithin)}; apex records ${has(key.record)}`);
   say(`- before the withdrawal: the telling names ${WITHDRAW} ${tellBefore.names ? "YES" : "no"}, the compact objects list it ${tellBefore.objects ? "YES" : "no"}; after: names ${tellAfter.names ? "YES (still named)" : "no (not named)"}, objects ${tellAfter.objects ? "YES" : "no"}`);
 }
 say(""); say("### Where the marks appear in the served answers (JSON paths holding the id or the new body)");
