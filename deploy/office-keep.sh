@@ -635,13 +635,15 @@ fi
 # (posted, already, busy, skipped) is ok; 3 (waiting, held, unconfigured, or
 # unstarted until the operator names the first event) is skip; 1 or 2 is refused.
 # No env file means it was never installed: one skip line, nothing run.
-if [ -r /etc/postmark-bsky.env ]; then
+BSKY_ENV_FILE="${BSKY_ENV_FILE:-/etc/postmark-bsky.env}"
+BSKY_STATE="${BSKY_STATE:-/var/lib/postmark-bsky}"
+if [ -r "$BSKY_ENV_FILE" ]; then
   bsky_rc=0
   for bsky_kind in crossing settlement; do
     if [ "$bsky_kind" = crossing ]; then bsky_src="--town $TOWN_CLONE"; else bsky_src="--world $WORLD_CLONE"; fi
     bsky_r=0
-    ( set -a; . /etc/postmark-bsky.env; set +a
-      exec node tools/bluesky-publish.mjs "$bsky_kind" $bsky_src --state /var/lib/postmark-bsky ) || bsky_r=$?
+    ( set -a; . "$BSKY_ENV_FILE"; set +a
+      exec node tools/bluesky-publish.mjs "$bsky_kind" $bsky_src --state "$BSKY_STATE" ) || bsky_r=$?
     # the most urgent of the two calls: 1 failed, then 2 usage, then 3 waiting, then 0
     case "$bsky_r" in
       1) bsky_rc=1 ;;
@@ -654,7 +656,7 @@ if [ -r /etc/postmark-bsky.env ]; then
     3) keep_step bluesky skip "exit:3" ;;
     *) keep_step bluesky refused "exit:$bsky_rc" ;;
   esac
-else keep_step bluesky skip "no /etc/postmark-bsky.env"
+else keep_step bluesky skip switch-off
 fi
 
 # ── outside the lock: the panes, from the frozen snapshot ────────────────────

@@ -274,7 +274,9 @@ function projected(fx) {
     ? execFileSync(which("git"), ["-C", OFFICE, "show", `${ref}:deploy/office-keep.sh`], { encoding: "utf8" })
     : readFileSync(join(OFFICE, "deploy", "office-keep.sh"), "utf8");
   for (const [from, to] of [["/srv/postmark-office", fx.office], ["/srv/postmark-harbor", fx.harbor],
-    ["/var/www/postmark-panes", fx.panes], ["/tmp/postmark-tick", join(fx.tmp, "postmark-tick")]]) {
+    ["/var/www/postmark-panes", fx.panes], ["/tmp/postmark-tick", join(fx.tmp, "postmark-tick")],
+    // POS-904: the Bluesky publisher's credential file and state, moved into the fixture (no file there: the step skips)
+    ["/etc/postmark-bsky.env", join(fx.root, "postmark-bsky.env")], ["/var/lib/postmark-bsky", join(fx.root, "postmark-bsky")]]) {
     assert.ok(text.includes(from), `the script no longer names ${from}; the seam would miss it`);
     text = text.replaceAll(from, to);
   }
