@@ -115,7 +115,7 @@ const pathsOf = (v, p = "", d = 0, out = new Map()) => {
   return out;
 };
 const changedPaths = (a, b, noise) => { const A = pathsOf(J(a)), B = pathsOf(J(b)); const out = []; for (const k of new Set([...A.keys(), ...B.keys()])) if (A.get(k) !== B.get(k) && !noise.has(k)) out.push(`${k}: ${A.get(k) ?? "(absent)"} → ${B.get(k) ?? "(absent)"}`); return out; };
-const CAPTURE = ["doorstep REST (wright, key)", "doorstep REST (anonymous)", "my marks (wright, key)", "my marks, store twin (wright, key)", "world investigate the amended mark (wright, key)", "investigate the withdrawn leaf (wright, key)"];
+const CAPTURE = ["town marks of the editing house (wright, key)", "doorstep REST (wright, key)", "doorstep REST (anonymous)", "my marks (wright, key)", "my marks, store twin (wright, key)", "world investigate the amended mark (wright, key)", "investigate the withdrawn leaf (wright, key)"];
 async function phase(name, { cold = false } = {}) {
   const t0 = Date.now(); const rows = {};
   for (const r of READERS) {
@@ -123,7 +123,7 @@ async function phase(name, { cold = false } = {}) {
     for (let i = 0; i < r.n; i++) samples.push(await r.run());
     rows[r.id] = { r, samples, w0: samples[0]?.t0w, w1: samples.at(-1)?.t1w };
   }
-  phases[name] = { t0, t1: Date.now(), rows, text: Object.fromEntries(CAPTURE.map((id) => [id, [rows[id].samples[1]?.text, rows[id].samples.at(-1).text]])) };
+  phases[name] = { t0, t1: Date.now(), rows, text: Object.fromEntries(CAPTURE.map((id) => { const t = (x) => (x?.body ? JSON.stringify(x.body) : x?.text); return [id, [t(rows[id].samples[1]), t(rows[id].samples.at(-1))]]; })) };
   return rows;
 }
 const summarise = (name) => {
