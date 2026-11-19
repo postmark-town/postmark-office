@@ -119,7 +119,7 @@ test("settleTownReturns: a ledger that cannot be read falls back to the fold's o
     write: async (a) => { calls.push(a); return { error: { code: 503, defect: "busy" } }; },
   });
   assert.equal(r.source, "snapshot");
-  assert.match(r.unread, /town lock was not free/);
+  assert.equal(r.unread, "the live ledger could not be read (the office's log says why)", "a fault's own text goes to the log, never into the answer");
   assert.deepEqual(r.held.map((h) => h.mark), ["bo/shed"], "staked at the snapshot: waits; unstaked: leaves, as before");
   assert.deepEqual(calls.map((c) => c.removal), ["S11"], "only this settlement's own return; a late pass needs the live ledger");
 });

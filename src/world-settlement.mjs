@@ -770,7 +770,7 @@ const LEDGER = { at: 0, value: null };
  * and an unstaked one goes, as before POS-1138.
  */
 async function servedTownWaits(p, header, state, { worldRepo, townRepo, now = Date.now() }) {
-  const { townReturnTargets, heldTownReturns, liveLedgerOpen, openFromStakes } = await import("./town-return.mjs");
+  const { townReturnTargets, heldTownReturns, liveLedgerOpen, openFromStakes, unreadSaid } = await import("./town-return.mjs");
   const targets = townReturnTargets(state);
   if (!targets.length) return { held: [] };
   try {
@@ -781,7 +781,7 @@ async function servedTownWaits(p, header, state, { worldRepo, townRepo, now = Da
     return { held: heldTownReturns(targets, LEDGER.value.open) };
   } catch (e) {
     const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
-    return { held: heldTownReturns(targets, openFromStakes(inputs.args.stakes)), unread: String(e?.defect ?? e?.message ?? e).slice(0, 200) };
+    return { held: heldTownReturns(targets, openFromStakes(inputs.args.stakes)), unread: unreadSaid(e) };
   }
 }
 

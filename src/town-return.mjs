@@ -43,6 +43,7 @@
 
 import { execUnderTownLock, lockTimedOut, withTownLockHeld, LOCK_BUSY } from "./town-lock.mjs";
 import { importTownTool, isPinStop } from "./town-tool.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -132,6 +133,18 @@ export async function liveLedgerOpen(townClone, { held = withTownLockHeld, waitS
 }
 
 /**
+ * Why the live ledger did not answer, in the office's own words: the pin's
+ * stop, a refusal's own defect (a busy or untakeable lock), or a fault, whose
+ * text goes to the office's log (POS-578), never into an answer.
+ */
+export function unreadSaid(e) {
+  if (isPinStop(e)) return "the town's engine is not the one the office pinned";
+  if (e?.defect) return String(e.defect);
+  faultLogged("the live ledger could not be read", e);
+  return "the live ledger could not be read (the office's log says why)";
+}
+
+/**
  * The gate's reading: the live ledger when it answers, the fold's own stakes
  * when it does not (`unread` says why). `{ open, returnedBy, source, unread? }`.
  */
@@ -142,7 +155,7 @@ export async function townReturnOpen({ townClone, stakes, read = liveLedgerOpen 
   } catch (e) {
     return {
       open: openFromStakes(stakes), returnedBy: new Map(), source: "snapshot",
-      unread: isPinStop(e) ? "the town's engine is not the one the office pinned" : String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      unread: unreadSaid(e),
     };
   }
 }
@@ -174,7 +187,7 @@ export async function runTownReturn({ marks, removal, date }, { townClone, exec 
     out = await exec(join(HERE, "town-return-exec.mjs"), JSON.stringify({ marks, removal, date }), { ...env, ...(townClone ? { TOWN_CLONE: townClone } : {}) });
   } catch (e) {
     if (lockTimedOut(e)) return { error: { code: LOCK_BUSY.code, defect: LOCK_BUSY.defect } };
-    return { error: { code: 500, defect: `the town's return could not be run: ${String(e?.stderr ?? e?.message ?? e).trim().split("\n").pop().slice(0, 200)}` } };
+    return { error: { code: 500, defect: "the town's return could not be run", hint: faultLogged("the town's return could not be run", e) } };
   }
   try { return JSON.parse(String(out).trim().split("\n").pop()); }
   catch { return { error: { code: 500, defect: "the town's return answered nothing readable" } }; }
