@@ -113,6 +113,7 @@ import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLA
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
+import { liveBypass } from "./world-live-parcel.mjs"; // POS-686: an act that writes an edit stops sharing its request's earlier read of the owed edits
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -5359,7 +5360,7 @@ async function namedMadeRecord(payload, by, key, bounce) {
   return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
 }
 
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { liveBypass(); return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 // `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
 // draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
@@ -5962,6 +5963,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
 // that left a mark may withdraw it) and the LEDGER (escrow anchors a mark; the
 // stake ledger lives town-side, so the check runs here before anything spawns).
 export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false } = {}) {
+  liveBypass(); // POS-686: a request that writes an edit reads the store afresh, so what it composes after its write has the write in it
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const mark = String(args.mark ?? "").trim();

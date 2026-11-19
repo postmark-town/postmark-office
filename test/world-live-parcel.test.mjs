@@ -10,7 +10,7 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { editsFrom, overlayMarks, editedIds, liveEdits, liveMarks, liveParcelStats, markEditsSql } from "../src/world-live-parcel.mjs";
+import { editsFrom, overlayMarks, editedIds, liveEdits, liveMarks, liveParcelStats, markEditsSql, liveScope, liveBypass } from "../src/world-live-parcel.mjs";
 import { stakesFor } from "../src/doorstep-stakes.mjs";
 
 const canon = () => [
@@ -192,4 +192,30 @@ test("15 · the doorstep's stakes rows carry the house's own body now and drop a
   assert.deepEqual(other.rows.map((r) => [r.mark, r.body]), [["ada/a-lamp", "A lamp."]]);
   assert.deepEqual(seen, [["wright"], ["ada"]], "each read asks for its own handles only");
   assert.equal(marks[1].id, "wright/the-keystone", "canon's array is untouched");
+});
+
+test("16 · a request is one snapshot: the store is read once however many times the world is asked for; a request that writes reads afresh; no scope reads every time", async () => {
+  const marks = canon();
+  let reads = 0;
+  const query = async () => { reads += 1; return [{ object: "wright/the-keystone", action: "withdraw", act_id: 5, crossing: 320, claim_id: null, claim_status: null, body: null }]; };
+  const ask = () => liveEdits(marks, 1, { query });
+  await liveScope(async () => { for (let i = 0; i < 44; i++) await ask(); });
+  assert.equal(reads, 1, "44 asks in one request, one read");
+  reads = 0;
+  await liveScope(async () => { await ask(); await ask(); liveBypass(); await ask(); await ask(); });
+  assert.equal(reads, 3, "two shared, then each ask after a write reads");
+  reads = 0;
+  await ask(); await ask();
+  assert.equal(reads, 2, "outside a request scope nothing is shared");
+  reads = 0;
+  await Promise.all([liveScope(() => ask()), liveScope(() => ask())]);
+  assert.equal(reads, 2, "two requests never share one snapshot");
+});
+
+test("17 · the owners asked about are part of the snapshot's key", async () => {
+  const marks = canon();
+  const seen = [];
+  const query = async (_sql, params) => { seen.push(params[1]); return []; };
+  await liveScope(async () => { await liveEdits(marks, 1, { query, owners: ["wright"] }); await liveEdits(marks, 1, { query, owners: ["ada"] }); await liveEdits(marks, 1, { query, owners: ["wright"] }); });
+  assert.deepEqual(seen, [["wright"], ["ada"]]);
 });

@@ -74,6 +74,7 @@ import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this p
 import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { blessed, blessedSha } from "./world-branches.mjs";
+import { liveScope } from "./world-live-parcel.mjs"; // POS-686: one snapshot of the owed own-parcel edits per request
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
 // The rows fold needs the store engaged; a flag set on an office with no store falls through to the file, loudly.
@@ -3204,11 +3205,12 @@ async function lawMovedRefused(res) {
   return true;
 }
 // POS-1064/b: the request's timing context begins where `t0` does, before the credential is resolved. A read worker runs under the context its handover made.
+// POS-686: each request is one snapshot of the owed own-parcel edits (world-live-parcel.mjs § liveScope); the read worker's entry opens the same scope.
 const handleRequest = (req, res) => {
-  if (IN_READ_WORKER) return handleRequestBody(req, res);
+  if (IN_READ_WORKER) return liveScope(() => handleRequestBody(req, res));
   let tm;
   try { tm = newTiming(); req.tm = tm; } catch { tm = undefined; }
-  return tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res);
+  return liveScope(() => (tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res)));
 };
 // POS-1096: the planned-maintenance switch (src/maintenance.mjs). Asked FIRST, before the bearer's lookup (a store read) and before any door, so every
 // door answers at once while the store restarts. The manifest, /release and the keyless in-memory ops reads stay up (the switch names which).

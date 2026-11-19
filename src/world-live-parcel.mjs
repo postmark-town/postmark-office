@@ -27,6 +27,7 @@
 // public act, and the query declares no household.
 
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /** How far back before the settlement's own window an act can still be owed to canon: the crossings between its fold and its blessing. */
 export const WINDOWS_BACK = 2;
@@ -110,6 +111,17 @@ export const editedIds = (edits) => new Set([...(edits?.bodies?.keys() ?? []), .
 
 // ── the store read ─────────────────────────────────────────────────────────
 
+// ONE READ OF THE STORE PER REQUEST. A read can ask for the world many times (GET /world/present asks 44 times), and every ask
+// would be one query for the same answer. A request is a snapshot: it reads the owed edits once (per settlement and set of
+// owners) and every ask inside it shares that answer, so a request never sees two different worlds and never pays the read twice.
+// A request that WRITES an edit (leave-mark, withdraw) reads the store each time (`liveBypass`), so what it composes after its own
+// write is the world with its write in it. Outside a request scope (a script, a suite) every ask reads the store.
+const scope = new AsyncLocalStorage();
+/** Run one request inside its own snapshot scope: the server's and the read worker's request entry. */
+export const liveScope = (fn) => scope.run({ memo: new Map(), bypass: false }, fn);
+/** This request writes edits: stop sharing what it read before its write. */
+export const liveBypass = () => { const st = scope.getStore(); if (st) { st.bypass = true; st.memo.clear(); } };
+
 /** Counters the instrument and the tests read: store reads made, overlay requests that found nothing owed, and ones that did. */
 export const liveParcelStats = { reads: 0, empty: 0, owed: 0, failures: 0 };
 
@@ -130,11 +142,20 @@ export async function liveEdits(canonMarks, settlement, { query = null, owners =
       const { world2Enabled } = await import("./world2-acts.mjs");
       if (!world2Enabled()) return { bodies: new Map(), removed: new Set(), key: "" };
     }
-    liveParcelStats.reads += 1;
     // the one store read this layer adds to a read, timed under the request as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
     const { segSpan } = await import("./read-timing.mjs");
-    const rows = await segSpan("live_parcel", () => ask(markEditsSql, [Number.isFinite(Number(settlement)) ? Number(settlement) : -1, owners ? [...owners] : null]));
-    const edits = editsFrom(rows ?? [], canonMarks);
+    const params = [Number.isFinite(Number(settlement)) ? Number(settlement) : -1, owners ? [...owners].sort() : null];
+    const st = scope.getStore();
+    const memoKey = st && !st.bypass ? JSON.stringify(params) : null;
+    let pending = memoKey ? st.memo.get(memoKey) : null;
+    if (!pending) {
+      liveParcelStats.reads += 1;
+      pending = segSpan("live_parcel", () => ask(markEditsSql, params));
+      if (memoKey) st.memo.set(memoKey, pending);
+    }
+    const rows = await pending;
+    if (!rows?.length) { liveParcelStats.empty += 1; return { bodies: new Map(), removed: new Set(), key: "" }; }
+    const edits = editsFrom(rows, canonMarks);
     if (edits.key) liveParcelStats.owed += 1; else liveParcelStats.empty += 1;
     return edits;
   } catch {
