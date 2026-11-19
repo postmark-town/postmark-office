@@ -235,6 +235,27 @@ export function judgePlaceShape(place) {
   throw refuse(422, "an event needs a place", hint, { field: "place" });
 }
 
+// POS-1133 (postmark#4577, Moose's bug post; Wright's CORE-105 ruling): the Origin is the town's null bucket, not a place.
+// Hosting a NEW event with no mark and the point (0, 0) is refused, in these words, at the door and under `preview: true`.
+// It is a rule of CREATING an event only: `judgePlaceShape` above is shared with amendments and is not widened, an event
+// already on the calendar at (0, 0) stays as it is, a standing mark that happens to be centred at (0, 0) is a mark (named,
+// with an extent) and stays valid, and a point with only one axis at zero is a real point.
+export const BARE_ORIGIN_DEFECT = "an event needs a place: name a mark, or give its x and y";
+const BARE_ORIGIN_HINT = 'the Origin (0, 0) is the null bucket of the town, where what has no place is kept, not a place of its own — place: { mark: "<owner>/<slug>" } names a standing mark, or place: { at: { x, y } } gives a real point, such as { at: { x: 120, y: 64 } }';
+
+/** Is this `place` (as sent) a bare-Origin point: well-formed, no mark, x and y both zero? Never throws. */
+export function isBareOrigin(place) {
+  let shape;
+  try { shape = judgePlaceShape(place); } catch { return false; }
+  return Boolean(shape.at) && shape.at.x === 0 && shape.at.y === 0;
+}
+
+/** Refuse a judged place shape that is the bare Origin; returns it otherwise. */
+export function refuseBareOrigin(shape) {
+  if (shape?.at && shape.at.x === 0 && shape.at.y === 0) throw refuse(422, BARE_ORIGIN_DEFECT, BARE_ORIGIN_HINT, { field: "place" });
+  return shape;
+}
+
 /**
  * A mark row as a place. The row is the store's `marks` row for the slug, of
  * ANY status, or null. A draft is not in `marks` at all (it is a claim), so it
