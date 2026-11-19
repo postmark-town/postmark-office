@@ -2362,6 +2362,24 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope))) {
     return bounce(422, "`args` must be an object", `the act's own fields ride inside it — household { do: "${act}", args: { … } }`);
   }
+  // ── POS-1133: THE BARE-ORIGIN PREVIEW ─────────────────────────────────────
+  // `host` declares no `preview` and takes no dry run: `preview: true` in args is refused below as an unknown field, and
+  // at the top level it is dropped by hostAtOffice's input translation. Neither is changed here, and no flag is ADMITTED (a
+  // preview must never become a write). What the ruling asks (Wright, CORE-105: refuse new hosting at no mark and (0, 0),
+  // "the same answer under `preview: true`") is that this ONE request, asked as a preview, hears the same refusal the real
+  // host gives. So when `preview` is sent with a NEW event (no `event:`) whose place is the bare Origin, the refusal is
+  // answered here, in the creation rule's own words, before the field check and before anything could be written. Every
+  // other preview keeps what it did: refused by name when it rides args, ignored when it rides the top level.
+  if (act === "host") {
+    const asked = { ...Object.fromEntries(Object.entries(args).filter(([k]) => k !== "do" && k !== "read" && k !== "args")),
+      ...(envelope && typeof envelope === "object" && !Array.isArray(envelope) ? envelope : {}) };
+    if (asked.preview !== undefined && String(asked.event ?? "").trim() === "") {
+      const { isBareOrigin, refuseBareOrigin } = await import("./events.mjs");
+      if (isBareOrigin(asked.place)) {
+        try { refuseBareOrigin({ at: { x: 0, y: 0 } }); } catch (e) { return householdActCaught(e, { did: act, dispatched_to: spec.tool }); }
+      }
+    }
+  }
   // One validator, the target's: unknown fields bounce by name against the
   // flat tool's own schema (declare and begin both validate against
   // DECLARE_SCHEMA; begin asks POS-292's question too, from POS-570).
