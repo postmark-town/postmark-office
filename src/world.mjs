@@ -5360,10 +5360,11 @@ async function namedMadeRecord(payload, by, key, bounce) {
   return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
 }
 
-export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { liveBypass(); return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
+export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 // `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
 // draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
+  liveBypass(); // POS-686: a request that writes an edit reads the store afresh, so what it composes after its write has the write in it
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
