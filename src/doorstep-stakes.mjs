@@ -81,10 +81,7 @@ const defaultWorld = async () => {
   const [{ publishedState }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
   return publishedState(WORLD_CLONE);
 };
-const defaultLiveEdits = async (state, _ref, handles) => {
-  const [{ liveEdits }, { blessed }, { WORLD_CLONE }] = await Promise.all([import("./world-live-parcel.mjs"), import("./world-branches.mjs"), import("./world.mjs")]);
-  return liveEdits(state?.marks ?? [], blessed(WORLD_CLONE).n ?? null, { owners: handles });
-};
+const defaultLiveEdits = async (state, _ref, handles) => (await import("./world-live-parcel.mjs")).liveEdits(state?.marks ?? [], { owners: handles });
 const defaultRegistry = async (ref) => {
   const [{ readJsonAtRef }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
   return readJsonAtRef(WORLD_CLONE, ref, REGISTRY_PATH)?.published ?? {};

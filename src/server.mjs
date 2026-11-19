@@ -73,7 +73,7 @@ import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.
 import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
 import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
-import { blessed, blessedSha } from "./world-branches.mjs";
+import { blessedSha } from "./world-branches.mjs";
 import { liveScope } from "./world-live-parcel.mjs"; // POS-686: one snapshot of the owed own-parcel edits per request
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
@@ -1739,9 +1739,12 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           .then(async (r) => (asked == null && Array.isArray(r?.marks) ? { ...r, marks: (await heldPlaced({ marks: r.marks })).marks } : r))
           // POS-686: an own-parcel amendment or a dependency-free withdrawal the crossing has not carried yet, for every viewer
           // (world-live-parcel.mjs); canon's own array when none is owed, so the answer is byte-for-byte today's
-          .then(async (r) => (asked == null && Array.isArray(r?.marks)
-            ? { ...r, marks: (await (await import("./world-live-parcel.mjs")).liveMarks(r.marks, blessed(WORLD_CLONE).n)).marks }
-            : r))
+          .then(async (r) => {
+            if (asked != null || !Array.isArray(r?.marks)) return r;
+            const { editsForRepo, overlayMarks } = await import("./world-live-parcel.mjs");
+            const edits = await editsForRepo(WORLD_CLONE);   // asked of the published world's own marks (a stable array), laid over the marks as answered
+            return edits.key ? { ...r, marks: overlayMarks(r.marks, edits) } : r;
+          })
           .then((r) => (r?.error === "bounce" ? bounce(res, r.code, r.defect, r.hint) : j(res, 200, r)))
           .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint, undefined, e) : bounceFault(res, "the world door tripped", e)));
       }

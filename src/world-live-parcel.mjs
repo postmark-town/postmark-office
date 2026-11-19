@@ -2,68 +2,79 @@
 //
 // WHAT THIS IS. Between two settlements canon (the blessed world-state.json, and every cache keyed on its sha, a digest or a
 // snapshot) is the world. An amendment to the authored content of a mark its author already published, and a withdrawal of a
-// published mark nothing depends on, are written to the store at once (a pending `claims` row and an `acts` row, or an
-// `acts` row alone: a published withdrawal files no claim) but reach canon only at the crossing. This module lays those two
-// facts over canon at READ time, for every viewer, the way `heldPlaced` lays a hold over it (world.mjs, POS-688):
+// published mark nothing depends on, are written to the store at once (a pending `claims` row and an `acts` row, or an `acts`
+// row alone: a published withdrawal files no claim) but reach canon only at the crossing. This module lays those two facts over
+// canon at the point where a reader SERVES a mark's body or its existence, for every viewer:
 //
 //     canon (immutable, shared, never touched)  +  the edits the store holds that canon has not carried yet  =  what is served
 //
 // WHAT IT TOUCHES, AND WHAT IT NEVER DOES.
-//   · Content only: `body`. A mark's geometry, kind, tier, household, stamps and place stay canon's, whatever the pending claim
-//     says (Darko: geometry and ground changes, opposition and the canonical fold stay settled).
+//   · Only marks standing on their author's household's OWN PARCEL (Darko, 2026-11-18: "your own parcel only; common-ground market
+//     marks stay settled, because others may have staked on them or welcomed them"). The ground fact is canon's own `tier`: the
+//     standing walk's answer, recomputed at every settlement, which is `home` exactly when the mark stands on its household's parcel
+//     (or continues a mark that does): world2/tools/standing.mjs, the same walk `groundMinimumStake` asks (`world.mjs`). Measured on
+//     the pinned world (S179, 3,005 marks): every `home` mark with a site is contained by a parcel of its own household, no `market`
+//     mark is, and the 89 `constitution` marks with a site are not (the Town Centre's backing rule is another judgement and stays
+//     settled). A parcel is ground, so it is never withdrawn here (a ground change); its words may be amended.
+//   · Content only: `body`. A mark's geometry, kind, tier, household, stamps and place stay canon's, whatever the pending claim says.
+//   · Never the shared world: `world()`, every canon-keyed cache (the assembled world, the id, ground, room and interior indexes,
+//     the stance world's kept slow half, the fold, the settlement) are not given a new object, a new key or a rebuild by an edit,
+//     anyone's. The overlay is applied where a reader serves: the marks it lists (an array copy, built once per edit set), the body
+//     in an investigate answer. Orient, eyes and the presence telling are the SIGHT of canon's geometry and stay canon's.
 //   · A mark leaves a read only by its author's own withdraw act, the newest owner act on it (the very rule the crossing's
 //     `WITHDRAWN_OWED_SELECT` uses, world2/tools/fold-delta.mjs), so a later re-leave or amend by the author cancels it.
-//   · Never a canon cache, never the fold, never the settlement: nothing here clears or keys anything global. With no edit
-//     pending the answer is canon's own object, so every identity-keyed cache downstream keeps hitting. With edits, the
-//     overlaid copy is built once per (canon object, edit set) and shared by every reader on the thread.
-//   · No resurrection: the edits are read from the store every time, so a refused or retracted claim stops showing, and a
-//     crossing that carries the edit makes the overlay a no-op (the body is canon's now; the mark is gone from canon).
+//   · No age: an edit is visible while the store still owes it (the newest owner act on the mark, the newest live claim on it, canon
+//     not yet carrying it), however old, and stops by the store's own facts (claim refused or retracted, a re-leave, canon carrying
+//     it). No window count, no time-to-live, no mode.
 //
-// WHICH EDITS. Newest mark act (leave-mark, amend, withdraw) BY THE MARK'S OWNER per object, among the acts of the last two
-// crossings before the blessed settlement's own window (older ones are canon's by construction: a crossing carries or refuses
-// everything filed before it). One indexed read, no scan of history. `markEditsSql`.
-//
-// WHO SEES IT. Everyone. Pending and locked claims are public rows (007's row policy hides only `draft`), a withdraw act is a
-// public act, and the query declares no household.
+// HOW THE OWED SET IS FOUND WITHOUT A HISTORY SCAN. The candidates are canon's own-parcel marks (about a third of the world), probed
+// by the two indexes that answer "newest act on this object" (`acts_object_idx`) and "newest claim on this slug" (`claims_slug_idx`).
+// That is run only when the store's facts moved, and the thing that says so is one cheap read per request: the newest mark act
+// (`acts_class_idx`) and the windows' state (`windows` primary key). A claim's status changes only at a clearing (a window closes,
+// the next opens) or by an act of its author (a mark act), so those numbers and canon's own object are the whole key: the same
+// key means the same owed set, a different one means one rescan per process, never a rebuild of anything canon keeps.
 
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-/** How far back before the settlement's own window an act can still be owed to canon: the crossings between its fold and its blessing. */
-export const WINDOWS_BACK = 2;
+/** The ground fact: canon's standing walk says the mark stands on its own household's parcel. */
+export const ownParcel = (m) => m?.tier === "home";
+
+/** What the store's facts are keyed by: the newest mark act and the windows. A cheap read; an unchanged answer is an unchanged owed set. */
+export const watchSql = `
+  SELECT COALESCE((SELECT max(a.id) FROM acts a WHERE a.class = 'mark'), 0) AS mark_act,
+         COALESCE((SELECT max(w.id) FROM windows w), 0) AS window_top,
+         COALESCE((SELECT max(w.id) FROM windows w WHERE w.status = 'closed'), 0) AS window_closed,
+         (SELECT count(*) FROM windows w WHERE w.status = 'clearing')::int AS clearing`;
 
 /**
- * The newest owner act per mark, with the newest pending-or-locked claim on it, for every author: the owed set is small (what the
- * last crossings have not carried yet), so ONE read serves every house a request composes and the reader keeps only its own
- * owners' rows (a bulk of 25 doorsteps reads the store once). `$1` = the blessed settlement's number (the
- * lower bound is the window it closed, minus `WINDOWS_BACK`); when the store holds no such row (or no window for it) the bound is open (every
- * act is considered: correct first, bounded where the store knows the settlement).
+ * The newest owner act per candidate mark, with the newest pending-or-locked claim on it. `$1` = the candidate ids (canon's own-parcel
+ * marks). Both probes are by index; there is no bound on how old an act is, because nothing that is still owed is old by anyone's clock.
  */
-export const markEditsSql = `
-  SELECT l.object, l.action, l.act_id, l.crossing, c.id AS claim_id, c.status AS claim_status, c.body
-    FROM (
-      SELECT DISTINCT ON (a.object) a.object, a.action, a.id AS act_id, a.crossing
-        FROM acts a
-       WHERE a.class = 'mark'
+export const owedSql = `
+  SELECT s.slug AS object, la.action, la.id AS act_id, la.crossing, c.id AS claim_id, c.status AS claim_status, c.body
+    FROM unnest($1::text[]) AS s(slug)
+    JOIN LATERAL (
+      SELECT a.action, a.id, a.crossing FROM acts a
+       WHERE a.object = s.slug AND a.class = 'mark'
+         AND a.actor = split_part(s.slug, '/', 1)
          AND a.action IN ('leave-mark', 'amend', 'withdraw')
-         AND a.object IS NOT NULL
-         AND a.actor = split_part(a.object, '/', 1)
-         AND a.crossing >= COALESCE((SELECT s.window_id FROM settlements s WHERE s.number = $1), 0) - ${WINDOWS_BACK}
-       ORDER BY a.object, a.id DESC
-    ) l
+       ORDER BY a.id DESC LIMIT 1
+    ) la ON true
     LEFT JOIN LATERAL (
       SELECT c.id, c.status, c.body FROM claims c
-       WHERE c.slug = l.object AND c.claimant = split_part(l.object, '/', 1) AND c.status IN ('pending', 'locked')
+       WHERE c.slug = s.slug AND c.claimant = split_part(s.slug, '/', 1) AND c.status IN ('pending', 'locked')
        ORDER BY c.submitted_at DESC, c.id DESC LIMIT 1
-    ) c ON true
-   ORDER BY l.object`;
+    ) c ON la.action <> 'withdraw'
+   ORDER BY s.slug`;
 
 /**
  * THE EDITS, from the rows. PURE.
- * `{ bodies: Map(id -> body), removed: Set(id), key }`; `key` is empty when nothing is owed, else a short print of the set
- * (the memo key; a different edit, in any reader or worker, is a different key).
+ * `{ bodies: Map(id -> body), removed: Set(id), key }`; `key` is empty when nothing is owed, else a short print of the set (the memo
+ * key; a different edit, in any reader or worker, is a different key).
  *
- * Applicable only against canon: an amend whose body is already canon's, or an object canon does not hold, is no edit.
+ * Applicable only against canon and only to an own-parcel mark: an object canon does not hold, a mark that is not `home` tier, an
+ * amend whose body is already canon's, and (withdrawals) a parcel, are no edit.
  */
 export function editsFrom(rows, canonMarks) {
   const byId = new Map();
@@ -72,8 +83,8 @@ export function editsFrom(rows, canonMarks) {
   const removed = new Set();
   for (const r of rows ?? []) {
     const m = byId.get(r.object);
-    if (!m) continue;
-    if (r.action === "withdraw") { removed.add(m.id); continue; }
+    if (!m || !ownParcel(m)) continue;
+    if (r.action === "withdraw") { if (m.kind !== "parcel") removed.add(m.id); continue; }
     // an amend or a re-leave: the author's newest claim, while the candle has not refused or retracted it
     if (r.claim_status && typeof r.body === "string" && r.body !== m.body) bodies.set(m.id, r.body);
   }
@@ -83,6 +94,7 @@ export function editsFrom(rows, canonMarks) {
   return { bodies, removed, key: parts.join("|") };
 }
 
+const NONE = Object.freeze({ bodies: new Map(), removed: new Set(), key: "" });
 const memo = new WeakMap(); // canon marks array -> Map(edit key -> the overlaid array)
 
 /**
@@ -105,84 +117,147 @@ export function overlayMarks(canonMarks, edits) {
   return out;
 }
 
-/** The ids an edit set touches (for a reader that serves one house: whether anything of its own moved). */
+/**
+ * An investigate answer with the owed edits laid over it: the focus's body (and any other edited mark's body the answer carries,
+ * `alongside` and the rest), a removed mark dropped from the lists it sits in. Returns the answer itself when nothing it names is
+ * edited. `null` when the FOCUS is a mark its author has withdrawn: the reader answers "no such mark" as it does for any miss. PURE.
+ */
+export function patchServed(answer, edits, focusId = null) {
+  if (!edits?.key || !answer || typeof answer !== "object") return answer;
+  if (focusId != null && edits.removed.has(String(focusId))) return null;
+  const walk = (v, depth) => {
+    if (depth > 6 || v === null || typeof v !== "object") return v;
+    if (Array.isArray(v)) {
+      let out = null;
+      v.forEach((x, i) => {
+        const dropped = x && typeof x === "object" && typeof x.id === "string" && edits.removed.has(x.id);
+        const next = dropped ? undefined : walk(x, depth + 1);
+        if (dropped || next !== x) out ??= v.slice(0, i);
+        if (out && !dropped) out.push(next);
+      });
+      return out ?? v;
+    }
+    let out = null;
+    const set = (k, val) => { out ??= { ...v }; out[k] = val; };
+    if (typeof v.id === "string" && typeof v.body === "string" && edits.bodies.has(v.id)) set("body", edits.bodies.get(v.id));
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "body" && out && out.body !== v.body) continue;
+      const next = walk(x, depth + 1);
+      if (next !== x) set(k, next);
+    }
+    return out ?? v;
+  };
+  return walk(answer, 0);
+}
+
+/** The ids an edit set touches (for a reader serving one house: whether anything of its own moved). */
 export const editedIds = (edits) => new Set([...(edits?.bodies?.keys() ?? []), ...(edits?.removed ?? [])]);
 
 // ── the store read ─────────────────────────────────────────────────────────
 
-// ONE READ OF THE STORE PER REQUEST. A read can ask for the world many times (GET /world/present asks 44 times), and every ask
-// would be one query for the same answer. A request is a snapshot: it reads the owed edits once (per settlement and set of
-// owners) and every ask inside it shares that answer, so a request never sees two different worlds and never pays the read twice.
-// A request that WRITES an edit (leave-mark, withdraw) reads the store each time (`liveBypass`), so what it composes after its own
-// write is the world with its write in it. Outside a request scope (a script, a suite) every ask reads the store.
+/** Counters the instrument and the tests read: reads of the watch, rescans of the owed set, empty and owed answers, failures. */
+export const liveParcelStats = { watches: 0, scans: 0, empty: 0, owed: 0, failures: 0 };
+
+// ONE WATCH PER REQUEST. A read can ask for the world's edits many times (GET /world/present asks 44 times); a request is a snapshot:
+// it reads the store's facts once and every ask inside it shares that answer, so a request never sees two different worlds and
+// never pays twice. A request that WRITES an edit (leave-mark, withdraw) reads afresh (`liveBypass`), so what it composes after its
+// own write has the write in it. Outside a request scope (a script, a suite) every ask reads the store.
 const scope = new AsyncLocalStorage();
-const builtFrom = new WeakMap(); // one snapshot's rows array -> Map(owners key -> { canon marks, the edit set built from them })
 /** Run one request inside its own snapshot scope: the server's and the read worker's request entry. */
 export const liveScope = (fn) => scope.run({ memo: new Map(), bypass: false }, fn);
 /** This request writes edits: stop sharing what it read before its write. */
 export const liveBypass = () => { const st = scope.getStore(); if (st) { st.bypass = true; st.memo.clear(); } };
 
-/** Counters the instrument and the tests read: store reads made, overlay requests that found nothing owed, and ones that did. */
-export const liveParcelStats = { reads: 0, empty: 0, owed: 0, failures: 0 };
+// What this thread knows of the owed set, per reader of the store (the default store read, or a suite's): the watch it was found
+// under, the canon marks it was found for, and the rows. One rescan per change of the watch or of canon, shared by whoever asks while it runs.
+const known = new WeakMap(); // ask function -> { watch, canon, rows, pending }
+const candidates = new WeakMap(); // canon marks array -> the own-parcel ids
+
+const candidateIds = (canonMarks) => {
+  let ids = candidates.get(canonMarks);
+  if (!ids) { ids = canonMarks.filter((m) => m?.id && ownParcel(m)).map((m) => m.id); candidates.set(canonMarks, ids); }
+  return ids;
+};
+
+async function owedRows(ask, canonMarks) {
+  const w = (await ask(watchSql, []))?.[0];
+  if (!w) return null;
+  const watch = `${w.mark_act}|${w.window_top}|${w.window_closed}|${w.clearing}`;
+  let k = known.get(ask);
+  if (!k) { k = { watch: null, canon: null, rows: null, pending: null }; known.set(ask, k); }
+  if (k.canon === canonMarks && k.watch === watch && k.rows) return k.rows;
+  if (k.pending && k.pending.canon === canonMarks && k.pending.watch === watch) return k.pending.promise;
+  liveParcelStats.scans += 1;
+  const { segSpan } = await import("./read-timing.mjs");
+  const promise = segSpan("live_parcel_scan", () => ask(owedSql, [candidateIds(canonMarks)])).then((rows) => {
+    if (k.pending?.promise === promise) { k.pending = null; k.watch = watch; k.canon = canonMarks; k.rows = rows ?? []; }
+    return rows ?? [];
+  }, (e) => { if (k.pending?.promise === promise) k.pending = null; throw e; });
+  k.pending = { canon: canonMarks, watch, promise };
+  return promise;
+}
+
+const builtFrom = new WeakMap(); // one snapshot's rows array -> Map(owners key -> { canon marks, the edit set built from them })
 
 /**
- * The edits canon (the marks array and the settlement number it came from) is owed, read from the store now.
- * Never throws: a store that is not configured or will not answer is NO overlay (canon as it stands, as before this lane),
- * counted in `failures`, never a failed read.
+ * The edits canon (the blessed marks array) is owed, read from the store now.
+ * Never throws: a store that is not configured or will not answer is NO overlay (canon as it stands, as before this lane), counted in
+ * `failures`, never a failed read.
  *
- * @param {object[]} canonMarks   the blessed marks
- * @param {number|null} settlement the blessed settlement's number (`blessed.n`)
- * @param {Function} [query] (sql, params) => Promise<rows>; defaults to the office's store read (`actsQuery`)
- * @param {string[]|null} [owners] only these authors' edits (null = every author's)
+ * @param {object[]} canonMarks the blessed marks
+ * @param {object} [o]
+ * @param {Function} [o.query] (sql, params) => Promise<rows>; defaults to the office's store read (`actsQuery`)
+ * @param {string[]|null} [o.owners] only these authors' edits (null = every author's)
  */
-export async function liveEdits(canonMarks, settlement, { query = null, owners = null } = {}) {
+export async function liveEdits(canonMarks, { query = null, owners = null } = {}) {
   try {
     const ask = query ?? (await import("./world2-acts.mjs")).actsQuery;
     if (!query) {
       const { world2Enabled } = await import("./world2-acts.mjs");
-      if (!world2Enabled()) return { bodies: new Map(), removed: new Set(), key: "" };
+      if (!world2Enabled()) return NONE;
     }
-    // the one store read this layer adds to a read, timed under the request as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
+    if (!Array.isArray(canonMarks) || !canonMarks.length) return NONE;
+    // the one watch a request makes, timed under it as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
     const { segSpan } = await import("./read-timing.mjs");
-    const params = [Number.isFinite(Number(settlement)) ? Number(settlement) : -1];
     const st = scope.getStore();
-    const memoKey = st && !st.bypass ? JSON.stringify(params) : null;
+    const memoKey = st && !st.bypass ? canonMarks : null; // one snapshot per canon marks array
     let pending = memoKey ? st.memo.get(memoKey) : null;
     if (!pending) {
-      liveParcelStats.reads += 1;
-      pending = segSpan("live_parcel", () => ask(markEditsSql, params));
+      liveParcelStats.watches += 1;
+      pending = segSpan("live_parcel", () => owedRows(ask, canonMarks));
       if (memoKey) st.memo.set(memoKey, pending);
     }
     const all = await pending;
+    if (!all?.length) { liveParcelStats.empty += 1; return NONE; }
     // a house-scoped reader keeps its own authors' rows (the object is `<author>/<slug>`); every other house's are not its to overlay
-    const rows = owners && all?.length ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
-    if (!rows?.length) { liveParcelStats.empty += 1; return { bodies: new Map(), removed: new Set(), key: "" }; }
-    // the rows of one snapshot are one array, so the edit set built from them (a map over every canon mark) is built once per (rows, owners, canon marks), not once per ask
     const ownerKey = owners ? [...owners].sort().join(",") : "";
     let per = builtFrom.get(all);
     if (!per) { per = new Map(); builtFrom.set(all, per); }
     let hit = per.get(ownerKey);
-    if (!hit || hit.canon !== canonMarks) { hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks) }; per.set(ownerKey, hit); }
+    if (!hit || hit.canon !== canonMarks) {
+      const rows = owners ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
+      hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks) };
+      per.set(ownerKey, hit);
+    }
     const edits = hit.edits;
     if (edits.key) liveParcelStats.owed += 1; else liveParcelStats.empty += 1;
     return edits;
   } catch {
     liveParcelStats.failures += 1;
-    return { bodies: new Map(), removed: new Set(), key: "" };
+    return NONE;
   }
 }
 
-/** Canon's marks with the store's owed edits laid over, for every viewer. The one call a reader makes. */
-export async function liveMarks(canonMarks, settlement, opts = {}) {
-  const edits = await liveEdits(canonMarks, settlement, opts);
+/** Canon's marks with the store's owed edits laid over, for every viewer. */
+export async function liveMarks(canonMarks, opts = {}) {
+  const edits = await liveEdits(canonMarks, opts);
   return { marks: overlayMarks(canonMarks, edits), edits };
 }
 
-/** The edits owed to the published world of `repo` (the readers that take canon from `publishedState` directly: the town's marks, the doorstep's stakes). */
+/** The edits owed to the published world of `repo` (the readers that take canon from `publishedState` directly: the town's marks, the doorstep's stakes, the media). */
 export async function editsForRepo(repo, opts = {}) {
   try {
     const { publishedState } = await import("./world-branches.mjs");
-    const ps = publishedState(repo);
-    return await liveEdits(ps.state?.marks ?? [], ps.blessed?.n ?? null, opts);
-  } catch { return { bodies: new Map(), removed: new Set(), key: "" }; }
+    return await liveEdits(publishedState(repo).state?.marks ?? [], opts);
+  } catch { return NONE; }
 }
