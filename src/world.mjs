@@ -234,6 +234,24 @@ let _worldSeam = null;
 export const __setWorldForTest = (w) => { _worldSeam = w ?? null; };
 async function world() {
   if (_worldSeam) return _worldSeam;
+  return liveWorldOf(await canonWorld());
+}
+
+// ── THE EDITS CANON HAS NOT CARRIED YET, LAID OVER IT FOR EVERY VIEWER (POS-686) ──
+// An own-parcel amendment (a pending claim) and a dependency-free published withdrawal (an act) are in the store at once and
+// in canon at the crossing. Every resident read asks `world()`, so this is the one place they are laid over (world-live-parcel.mjs
+// says what and why). With nothing owed the answer is canon's own object, so every cache keyed on it, the room and ground
+// WeakMaps included, keeps hitting; with an edit owed it is one overlaid copy per (canon, edit set), shared by every reader.
+const _liveWorlds = new WeakMap(); // the overlaid marks array -> the world carrying it
+async function liveWorldOf(canon) {
+  const { liveMarks } = await import("./world-live-parcel.mjs");
+  const { marks } = await liveMarks(canon.marks, canon._raw?.blessed?.n ?? null);
+  if (marks === canon.marks) return canon;
+  let w = _liveWorlds.get(marks);
+  if (!w) { w = { ...canon, marks }; _liveWorlds.set(marks, w); }
+  return w;
+}
+async function canonWorld() {
   _worldAsks += 1;
   const selected = publishedState(WORLD_CLONE);
   const cached = _worlds.get(selected.ref);
