@@ -9,13 +9,14 @@
 //     canon (immutable, shared, never touched)  +  the edits the store holds that canon has not carried yet  =  what is served
 //
 // WHAT IT TOUCHES, AND WHAT IT NEVER DOES.
-//   · Only marks standing on their author's household's OWN PARCEL (Darko, 2026-11-18: "your own parcel only; common-ground market
-//     marks stay settled, because others may have staked on them or welcomed them"). The ground fact is canon's own `tier`: the
-//     standing walk's answer, recomputed at every settlement, which is `home` exactly when the mark stands on its household's parcel
-//     (or continues a mark that does): world2/tools/standing.mjs, the same walk `groundMinimumStake` asks (`world.mjs`). Measured on
-//     the pinned world (S179, 3,005 marks): every `home` mark with a site is contained by a parcel of its own household, no `market`
-//     mark is, and the 89 `constitution` marks with a site are not (the Town Centre's backing rule is another judgement and stays
-//     settled). A parcel is ground, so it is never withdrawn here (a ground change); its words may be amended.
+//   · Only marks standing on a parcel HELD BY THEIR AUTHOR'S OWN HOUSEHOLD (Darko, 2026-11-18: "your own parcel only; common-ground market
+//     marks stay settled, because others may have staked on them or welcomed them"). The author's household is the fold's own
+//     `declared_household` (the author's household as the registry resolved it, not anything derived from the ground), and the ground is
+//     a parcel mark whose holder is that same household and which CONTAINS the mark (the engine's own `marksContain`, the containment
+//     `groundMinimumStake` asks in world.mjs); a de-sited mark continues its parent and follows the parent's answer. Canon's `tier` is NOT
+//     the test: the standing walk (world2/tools/standing.mjs § groundVerdict, :539-545) also returns `home` for a mark WELCOMED onto
+//     another household's parcel, which is exactly the case that stays settled. A parcel is ground, so it is never withdrawn here (a
+//     ground change); its words may be amended. Without the geometry engine nothing is eligible (the settled direction).
 //   · Content only: `body`. A mark's geometry, kind, tier, household, stamps and place stay canon's, whatever the pending claim says.
 //   · Never the shared world: `world()`, every canon-keyed cache (the assembled world, the id, ground, room and interior indexes,
 //     the stance world's kept slow half, the fold, the settlement) are not given a new object, a new key or a rebuild by an edit,
@@ -37,12 +38,56 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-/** The ground fact: canon's standing walk says the mark stands on its own household's parcel. */
-export const ownParcel = (m) => m?.tier === "home";
+/**
+ * THE GROUND FACT. The ids of canon's marks that stand on a parcel held by their author's own household. PURE over a containment
+ * function `contains(parcel, { at, extent, points }) -> boolean`.
+ * A parcel is its own ground. A sited mark is own when a parcel of ITS household contains it. A de-sited mark is own when its
+ * parent (`placementParent`) is, and is held by the same household. A mark with no declared household is never own.
+ */
+export function ownGroundIds(marks, contains) {
+  const byId = new Map(), parcels = new Map();
+  for (const m of marks ?? []) {
+    if (!m?.id) continue;
+    byId.set(m.id, m);
+    if (m.kind === "parcel" && m.declared_household) {
+      if (!parcels.has(m.declared_household)) parcels.set(m.declared_household, []);
+      parcels.get(m.declared_household).push(m);
+    }
+  }
+  const memo = new Map();
+  const own = (m, depth = 0) => {
+    if (memo.has(m.id)) return memo.get(m.id);
+    memo.set(m.id, false); // a cycle is not own
+    const house = m.declared_household;
+    let ok = false;
+    if (house) {
+      if (m.kind === "parcel") ok = true;
+      else if (m.at && m.extent) ok = (parcels.get(house) ?? []).some((g) => g.id !== m.id && contains(g, { at: m.at, extent: m.extent, ...(m.points ? { points: m.points } : {}) }));
+      else {
+        const parent = byId.get(m.placementParent);
+        ok = Boolean(parent) && depth < 8 && parent.declared_household === house && own(parent, depth + 1);
+      }
+    }
+    memo.set(m.id, ok);
+    return ok;
+  };
+  const out = new Set();
+  for (const m of byId.values()) if (own(m)) out.add(m.id);
+  return out;
+}
 
-/** What the store's facts are keyed by: the newest mark act and the windows. A cheap read; an unchanged answer is an unchanged owed set. */
+/**
+ * What the store's facts are keyed by: how many mark acts are COMMITTED, the newest id, and the windows. A cheap read; an unchanged answer is an
+ * unchanged owed set. THE COUNT IS THE COMMIT-ORDERED PART: an `acts.id` is drawn when a row is inserted, not when it commits, so a transaction
+ * holding a LOWER id can commit after a higher id has been seen and `max(id)` alone would not move. Acts are append-only (the table's trigger
+ * forbids UPDATE and DELETE), so the number of committed mark acts moves on every commit, in whatever order the ids commit. The newest id stays
+ * in the key for the reader of the log. (There is no producer-order guarantee to lean on: mark acts are written by the pen in per-household
+ * transactions, by the office's several processes and workers, with no lock across households.) A claim's status changes only at a clearing
+ * (a window closes, the next opens, one transaction) or with a mark act of its author (a retract rides one), so the windows complete the key.
+ */
 export const watchSql = `
-  SELECT COALESCE((SELECT max(a.id) FROM acts a WHERE a.class = 'mark'), 0) AS mark_act,
+  SELECT (SELECT count(*) FROM acts a WHERE a.class = 'mark')::bigint AS mark_acts,
+         COALESCE((SELECT max(a.id) FROM acts a WHERE a.class = 'mark'), 0) AS mark_act,
          COALESCE((SELECT max(w.id) FROM windows w), 0) AS window_top,
          COALESCE((SELECT max(w.id) FROM windows w WHERE w.status = 'closed'), 0) AS window_closed,
          (SELECT count(*) FROM windows w WHERE w.status = 'clearing')::int AS clearing`;
@@ -73,17 +118,17 @@ export const owedSql = `
  * `{ bodies: Map(id -> body), removed: Set(id), key }`; `key` is empty when nothing is owed, else a short print of the set (the memo
  * key; a different edit, in any reader or worker, is a different key).
  *
- * Applicable only against canon and only to an own-parcel mark: an object canon does not hold, a mark that is not `home` tier, an
+ * Applicable only against canon and only to a mark on its own household's parcel (`own`, from `ownGroundIds`): an object canon does not hold, any other mark (a welcomed one included), an
  * amend whose body is already canon's, and (withdrawals) a parcel, are no edit.
  */
-export function editsFrom(rows, canonMarks) {
+export function editsFrom(rows, canonMarks, own) {
   const byId = new Map();
   for (const m of canonMarks ?? []) byId.set(m.id, m);
   const bodies = new Map();
   const removed = new Set();
   for (const r of rows ?? []) {
     const m = byId.get(r.object);
-    if (!m || !ownParcel(m)) continue;
+    if (!m || !own?.has(m.id)) continue;
     if (r.action === "withdraw") { if (m.kind !== "parcel") removed.add(m.id); continue; }
     // an amend or a re-leave: the author's newest claim, while the candle has not refused or retracted it
     if (r.claim_status && typeof r.body === "string" && r.body !== m.body) bodies.set(m.id, r.body);
@@ -150,6 +195,35 @@ export function patchServed(answer, edits, focusId = null) {
   return walk(answer, 0);
 }
 
+/**
+ * THE TELLING, WITHOUT A MARK ITS AUTHOR HAS WITHDRAWN. The engine's telling (orient, eyes, the presence read) names a resident's mark and never
+ * quotes it (POS-393): a band line is `  · 4 m SSE — a mark by wright  [wright/the-ledger-shelf, ✦0]`, the place you stand is `You are within a
+ * mark by wright [a] · a mark by wright [b].`. No body is in it, so nothing stale is served, but a withdrawn mark is still NAMED as present
+ * there until the crossing while every record the same answer carries omits it. This drops the existence: the band lines that name a removed
+ * id, and the removed id's own segment of the within chain. Geometry and consent are not touched (the sight stays canon's; only what is NAMED
+ * moves); the "+N more" counts the engine printed are the engine's and are left as it printed them. Returns the text itself when nothing is
+ * removed or named. PURE.
+ */
+export function servedTelling(text, edits) {
+  if (typeof text !== "string" || !edits?.removed?.size) return text;
+  const tagged = (line) => { for (const id of edits.removed) if (line.includes(`[${id}]`) || line.includes(`[${id},`)) return true; return false; };
+  if (![...text.split("\n")].some(tagged)) return text;
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!tagged(line)) { out.push(line); continue; }
+    if (/^\s*·/.test(line)) continue; // a band line naming it: the mark is not there
+    // the place you stand: "You are within a mark by x [a] · a mark by x [b]." (a chain; the removed ids' segments go)
+    const trail = /\.\s*$/.test(line) ? "." : "";
+    const parts = line.replace(/\.\s*$/, "").split(" · ");
+    const prefix = parts[0].slice(0, Math.max(parts[0].indexOf("a mark"), 0));
+    const kept = parts.filter((p) => !tagged(p));
+    if (!kept.length) continue;
+    if (tagged(parts[0]) && prefix && !kept[0].startsWith(prefix.trim())) kept[0] = prefix + kept[0];
+    out.push(kept.join(" · ") + trail);
+  }
+  return out.join("\n");
+}
+
 /** The ids an edit set touches (for a reader serving one house: whether anything of its own moved). */
 export const editedIds = (edits) => new Set([...(edits?.bodies?.keys() ?? []), ...(edits?.removed ?? [])]);
 
@@ -171,25 +245,33 @@ export const liveBypass = () => { const st = scope.getStore(); if (st) { st.bypa
 // What this thread knows of the owed set, per reader of the store (the default store read, or a suite's): the watch it was found
 // under, the canon marks it was found for, and the rows. One rescan per change of the watch or of canon, shared by whoever asks while it runs.
 const known = new WeakMap(); // ask function -> { watch, canon, rows, pending }
-const candidates = new WeakMap(); // canon marks array -> the own-parcel ids
+const ownCache = new WeakMap(); // canon marks array -> Map(containment function -> Promise<Set of own-ground ids>)
 
-const candidateIds = (canonMarks) => {
-  let ids = candidates.get(canonMarks);
-  if (!ids) { ids = canonMarks.filter((m) => m?.id && ownParcel(m)).map((m) => m.id); candidates.set(canonMarks, ids); }
-  return ids;
-};
+/** Canon's own-ground ids, once per (canon marks, containment): the engine's `marksContain` unless a suite hands one in. An engine that cannot answer gives none. */
+async function ownIdsOf(canonMarks, contains) {
+  const fn = contains ?? (await import("./world.mjs")).liveParcelContains;
+  let per = ownCache.get(canonMarks);
+  if (!per) { per = new Map(); ownCache.set(canonMarks, per); }
+  if (!per.has(fn)) {
+    per.set(fn, (async () => {
+      const c = contains ?? (await fn());
+      return typeof c === "function" ? ownGroundIds(canonMarks, c) : new Set();
+    })());
+  }
+  return per.get(fn);
+}
 
-async function owedRows(ask, canonMarks) {
+async function owedRows(ask, canonMarks, own) {
   const w = (await ask(watchSql, []))?.[0];
   if (!w) return null;
-  const watch = `${w.mark_act}|${w.window_top}|${w.window_closed}|${w.clearing}`;
+  const watch = `${w.mark_acts}|${w.mark_act}|${w.window_top}|${w.window_closed}|${w.clearing}`;
   let k = known.get(ask);
   if (!k) { k = { watch: null, canon: null, rows: null, pending: null }; known.set(ask, k); }
   if (k.canon === canonMarks && k.watch === watch && k.rows) return k.rows;
   if (k.pending && k.pending.canon === canonMarks && k.pending.watch === watch) return k.pending.promise;
   liveParcelStats.scans += 1;
   const { segSpan } = await import("./read-timing.mjs");
-  const promise = segSpan("live_parcel_scan", () => ask(owedSql, [candidateIds(canonMarks)])).then((rows) => {
+  const promise = segSpan("live_parcel_scan", () => ask(owedSql, [[...own]])).then((rows) => {
     if (k.pending?.promise === promise) { k.pending = null; k.watch = watch; k.canon = canonMarks; k.rows = rows ?? []; }
     return rows ?? [];
   }, (e) => { if (k.pending?.promise === promise) k.pending = null; throw e; });
@@ -208,8 +290,9 @@ const builtFrom = new WeakMap(); // one snapshot's rows array -> Map(owners key 
  * @param {object} [o]
  * @param {Function} [o.query] (sql, params) => Promise<rows>; defaults to the office's store read (`actsQuery`)
  * @param {string[]|null} [o.owners] only these authors' edits (null = every author's)
+ * @param {Function|null} [o.contains] the containment function (a suite's); the engine's `marksContain` by default
  */
-export async function liveEdits(canonMarks, { query = null, owners = null } = {}) {
+export async function liveEdits(canonMarks, { query = null, owners = null, contains = null } = {}) {
   try {
     const ask = query ?? (await import("./world2-acts.mjs")).actsQuery;
     if (!query) {
@@ -224,7 +307,7 @@ export async function liveEdits(canonMarks, { query = null, owners = null } = {}
     let pending = memoKey ? st.memo.get(memoKey) : null;
     if (!pending) {
       liveParcelStats.watches += 1;
-      pending = segSpan("live_parcel", () => owedRows(ask, canonMarks));
+      pending = segSpan("live_parcel", async () => owedRows(ask, canonMarks, await ownIdsOf(canonMarks, contains)));
       if (memoKey) st.memo.set(memoKey, pending);
     }
     const all = await pending;
@@ -236,7 +319,7 @@ export async function liveEdits(canonMarks, { query = null, owners = null } = {}
     let hit = per.get(ownerKey);
     if (!hit || hit.canon !== canonMarks) {
       const rows = owners ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
-      hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks) };
+      hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks, await ownIdsOf(canonMarks, contains)) };
       per.set(ownerKey, hit);
     }
     const edits = hit.edits;

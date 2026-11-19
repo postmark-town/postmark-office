@@ -113,7 +113,7 @@ import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLA
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
-import { liveBypass } from "./world-live-parcel.mjs"; // POS-686: an act that writes an edit stops sharing its request's earlier read of the owed edits
+import { liveBypass, overlayMarks } from "./world-live-parcel.mjs"; // POS-686: an act that writes an edit stops sharing its request's earlier read of the owed edits
 
 // ── engine + world cache ─────────────────────────────────────────────────────
 let _mods = null;         // { verbs, build }
@@ -1464,15 +1464,23 @@ export async function placeWords({ x, y, aboard = false, moving = false, handle 
   // cached answer is the OUTSIDE one: a point on a room's spot reads as the dungeon itself, never the room, whatever stands there.
   // A reader who entered the room (`handle`) is told its name, by the one function sight reads (standpointSight over their stack).
   if (aboard) return moving ? `aboard ${VESSEL_NAME}, mid-crossing` : `aboard ${VESSEL_NAME}`;
-  const both = await placeWordsBoth({ x, y });
+  let both = await placeWordsBoth({ x, y });
   if (both == null) return null;
+  // POS-686: the place a point is in is NAMED by a mark, and a mark its author has withdrawn (an own-parcel one, not yet carried) is not named as the
+  // place any more. The cached words (`_places`) stay canon's and keyed as they were; with a removal owed the words are derived again for this answer
+  // over the marks as served, so no cache is keyed by an edit and nothing is rebuilt for anyone else.
+  const gone = await liveServing();
+  const asServed = (marks) => (gone.removed.size ? overlayMarks(marks, gone) : marks);
+  if (gone.removed.size) {
+    try { const w0 = await world(); const { verbs } = await mods(); both = bothWords({ ...w0, marks: asServed(w0.marks ?? []) }, { x, y }, verbs); } catch { /* the cached words stand */ }
+  }
   if (!handle || both.outside === both.inside) return both.outside;
   const stack = await (await import("./creature-sight.mjs")).stackOf(handle);
   if (!stack.length) return both.outside;
   try {
     const w = await world();
     const { verbs } = await mods();
-    return placeWordsFrom(sightedWorld(w, { verbs, handle: String(handle), stack }).marks ?? [], { x, y }, verbs);
+    return placeWordsFrom(asServed(sightedWorld(w, { verbs, handle: String(handle), stack }).marks ?? []), { x, y }, verbs);
   } catch { return both.outside; }
 }
 
@@ -3148,7 +3156,8 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
-  const engineTelling = typeof r.tell === "function" ? r.tell() : r.tell ?? null;
+  const eyesLive = await liveServing(); // POS-686: a mark its author has withdrawn is not NAMED as here (the geometry is canon's, the existence is not)
+  const engineTelling = (await import("./world-live-parcel.mjs")).servedTelling(typeof r.tell === "function" ? r.tell() : r.tell ?? null, eyesLive);
   const { tell, ...rest } = r;
   // Residents, seen. The engine's telling is left exactly as the engine rendered
   // it and the presence section is APPENDED — the office composes its own
@@ -3191,7 +3200,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   if (args.diagnostic === true) return diagnosticEyes(full);
 
   const markById = new Map((w.marks ?? []).map((mark) => [mark.id, mark]));
-  const seen = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((object) => {
+  const seen = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].filter((object) => !eyesLive.removed.has(object.id)).map((object) => {
     const mark = markById.get(object.id);
     const objectAt = object.at ?? mark?.at ?? {};
     return {
@@ -3210,7 +3219,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // band and `lifted`, with each place's name (its naming mark, else its slug)
   // and whether it has a picture. `_fov` never reaches an answer: the apex
   // composes its answer field by field and only v2's shaping reads this.
-  const eyesEdits = v2 ? await liveServing() : null; // POS-686: the body served now
+  const eyesEdits = eyesLive; // POS-686: the body served now
   const v2Rows = v2 ? [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].filter((o) => !eyesEdits.removed.has(o.id)).map((o) => {
     const mark = markById.get(o.id);
     return { id: o.id, name: o.far && o.label ? o.label : markName(mark ?? { id: o.id }, w.marks ?? [], determinedOf(w)), body: eyesEdits.bodies.get(o.id) ?? mark?.body ?? o.body ?? "",
@@ -4414,6 +4423,11 @@ export async function witnessStampAt(handle, here, known = null) {
 /** The clone's own dials, read at the engine ref rather than out of whatever branch the tree is parked on. */
 async function foldConstants() {
   try { return await engineImport("marks-fold.mjs"); } catch { return {}; }
+}
+/** POS-686: the engine's own containment (`marksContain`), for the own-ground test of world-live-parcel.mjs; null when the engine cannot be read. */
+export async function liveParcelContains() {
+  const { marksContain } = await foldConstants();
+  return typeof marksContain === "function" ? marksContain : null;
 }
 
 // THE SWEEP'S UNPUBLISH RULE, from the engine at the blessed ref (postmark#3757):
