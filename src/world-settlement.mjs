@@ -563,9 +563,12 @@ async function townReturnsAt(header, gate, state, inputs, { townRepo, townReturn
   const removal = number == null ? null : removalOf(number);
   const date = header?.taken_at ? townDate(new Date(header.taken_at)) : null;
   const named = removal && date;
+  // `asked` is the real crossing's request, whether or not this snapshot names
+  // a removal it could be made under: on that path a stale snapshot never
+  // releases a mark (review of #1143, F1).
   const settled = await settleTownReturns({
     targets, removal, date, townClone: townRepo,
-    stakes: inputs.args.stakes, write: named ? write : null,
+    stakes: inputs.args.stakes, asked: !!write, write: named ? write : null,
   });
   return {
     ...settled,

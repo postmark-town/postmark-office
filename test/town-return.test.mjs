@@ -133,7 +133,7 @@ test("settleTownReturns: written first, then read; a failed write leaves the ret
   assert.deepEqual(none.held.map((h) => h.mark), ["bo/shed"]);
 });
 
-test("settleTownReturns: a ledger that cannot be read falls back to the fold's own stakes, in the office's own words", async () => {
+test("settleTownReturns, NO WRITE ASKED: a ledger that cannot be read falls back to the fold's own stakes, as before, in the office's own words", async () => {
   const targets = [{ mark: "bo/shed", leaving: ["bo/shed"] }, { mark: "al/arch", leaving: ["al/arch"] }];
   const r = await settleTownReturns({
     targets, removal: "S11", date: "2026-10-02", stakes: [{ mark: "bo/shed", n: 2 }],
@@ -142,6 +142,30 @@ test("settleTownReturns: a ledger that cannot be read falls back to the fold's o
   assert.equal(r.source, "snapshot");
   assert.equal(r.unread, "the live ledger could not be read (the office's log says why)", "a fault's own text goes to the log, never into the answer");
   assert.deepEqual(r.held.map((h) => h.mark), ["bo/shed"], "staked at the snapshot: waits; unstaked: leaves, as before");
+});
+
+test("F1 · ON THE REAL WRITE PATH THE SNAPSHOT NEVER RELEASES: unreadable ledger + failed, absent or incomplete write holds every target", async () => {
+  const targets = [{ mark: "al/arch", leaving: ["al/arch"] }, { mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"] }];
+  const unreadable = async () => { throw new Error("the pin stopped the read"); };
+  const zero = [];                                       // nothing staked at the snapshot's ledger position
+  for (const [why, o] of [
+    ["the write failed", { write: async () => ({ error: { code: 503, defect: "town-pin-mismatch" } }) }],
+    ["the write could not be named (asked, none made)", { write: null }],
+    ["the write answered without open_after", { write: async () => ({ appended: true }) }],
+    ["open_after misses a mark", { write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0 } }) }],
+    ["open_after is not a count", { write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0, "bo/shed-name": "0" } }) }],
+  ]) {
+    const r = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", stakes: zero, asked: true, read: unreadable, ...o });
+    assert.equal(r.source, "unknown", why);
+    assert.deepEqual(r.held, targets.map((t) => ({ ...t, open: null })), `${why}: every target is held`);
+    assert.match(r.unknown, /none is taken away/, why);
+  }
+  // the successful write's own reading, complete, decides
+  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", stakes: zero, asked: true, read: unreadable,
+    write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0, "bo/shed-name": 1 } }) });
+  assert.equal(ok.source, "receipt");
+  assert.deepEqual(ok.held, [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"], open: { "bo/shed-name": 1 } }], "closed leaves; still open waits");
+  assert.equal(ok.unknown, undefined);
 });
 
 // ─────────────────────────── the seam ───────────────────────────────────────
@@ -297,6 +321,31 @@ test("WRITER FAILURE: a pen with no key returns nothing and says so; the staked 
   assert.deepEqual(t.held.map((h) => h.mark), [SHED]);
   assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "the removal waits for its return");
   assert.equal(ledger(), before);
+});
+
+test("F1 · ZERO AT THE SNAPSHOT, PRINCIPAL SINCE, AND BOTH THE WRITE AND THE LIVE READ FAIL: nothing leaves and nothing claims success", { skip }, async () => {
+  await seedWord();                                             // the snapshot's ledger position holds nothing on the shed
+  STAKE.worldStakeApply(TOWN, { handle: "dot", mark: SHED, n: 2, via: "api", date: "2026-10-02" }, PEM);
+  commitTown("dot stakes on the shed after the snapshot");
+  const before = ledger();
+  // One cause stops both, as on the box: the office's pins do not match the clone,
+  // so the exec refuses AND the crossing's own live read cannot load the engine.
+  const other = tempDir("town-return-stalepins-");
+  writeFileSync(join(other, "PINS.json"), JSON.stringify({ town_commit: "0".repeat(40), files: {} }));
+  const was = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = other;
+  try {
+    const r = await cross({ env: { ...NOT_DRY, TOWN_PINS_DIR: other } });
+    const t = r.selection.settlement.town_returns;
+    assert.equal(t.receipt.error.defect, "town-pin-mismatch", "the write failed, and says so");
+    assert.equal(t.receipt.appended, undefined, "never a success");
+    assert.equal(t.source, "unknown");
+    assert.ok(t.unread, "the live ledger could not be read");
+    assert.deepEqual(t.held, [{ mark: SHED, leaving: [SHED, NAME], open: null }], "held as unknown, not released by the snapshot's zero");
+    assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "no removal: the shed and its name stay in this crossing's write-down");
+    assert.ok(!r.selection.settlement.taken_away.includes(SHED));
+    assert.equal(ledger(), before, "nothing was written");
+  } finally { process.env.TOWN_PINS_DIR = was; }
 });
 
 test("PIN MISMATCH: a town clone the office did not pin returns nothing and says so; the return waits", { skip }, async () => {

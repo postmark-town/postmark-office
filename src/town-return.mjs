@@ -36,9 +36,11 @@
 // takes has no open position in the LIVE ledger, read after the return. A
 // return that was not written, failed, was refused by the pin, or could not
 // land leaves its stakes open, so this crossing does not take the mark away and
-// says why on its receipt. When the live ledger cannot be read at all, the
-// fold's own stakes (the snapshot's ledger position) decide instead: a staked
-// return waits and an unstaked one leaves, which is what the crossing did
+// says why on its receipt. When the live ledger cannot be read at all, the real
+// crossing's path takes a target away only if its own successful write read
+// every mark closed under its locks; otherwise nothing leaves (a zero at the
+// snapshot is not evidence: stamps may have been staked since). Only a run that
+// asked for no write lets the fold's own stakes decide, as the crossing did
 // before this.
 
 import { execUnderTownLock, lockTimedOut, withTownLockHeld, LOCK_BUSY } from "./town-lock.mjs";
@@ -180,6 +182,23 @@ export async function runTownReturn({ marks, removal, date }, { townClone, exec 
 }
 
 /**
+ * What a write's own answer establishes: stamps open per mark as the exec read
+ * them under the same locks as its append, right after it landed, when the
+ * write SUCCEEDED and named every mark the targets take; otherwise null (it
+ * establishes nothing). PURE.
+ */
+export function closedByReceipt(receipt, targets) {
+  if (!receipt || receipt.error || typeof receipt.open_after !== "object" || receipt.open_after == null) return null;
+  const open = new Map();
+  for (const m of new Set(targets.flatMap((t) => t.leaving))) {
+    const n = receipt.open_after[m];
+    if (!Number.isInteger(n) || n < 0) return null;
+    if (n > 0) open.set(m, n);
+  }
+  return open;
+}
+
+/**
  * THE CROSSING'S RETURN AND ITS GATE, in that order. `targets` are this
  * settlement's town returns; `removal` and `date` its seal's (the caller's to
  * establish, never a receipt's). With `write` (the real crossing) the removal
@@ -187,17 +206,35 @@ export async function runTownReturn({ marks, removal, date }, { townClone, exec 
  * and every target still carrying stamps is held. `write: null` returns nothing
  * and only reads. → `{ removal, date, receipt?, held, source, unread? }`;
  * `receipt` is the exec's answer as it gave it.
+ *
+ * ON THE REAL CROSSING'S PATH (`asked`: a write was asked for, whether or not it
+ * could be made) THE SNAPSHOT NEVER RELEASES A TARGET (review of #1143, F1): a
+ * zero at the snapshot's ledger position says nothing of stamps staked since.
+ * When the live ledger cannot be read, a target leaves only if the write's own
+ * answer establishes it closed (§ closedByReceipt); otherwise every target is
+ * held, `open: null`, as unknown. Only a run that asked for no write keeps the
+ * snapshot's answer, as the crossing did before POS-1138.
  */
-export async function settleTownReturns({ targets, removal, date, townClone, stakes = [], write = null, read = liveLedgerOpen }) {
+export async function settleTownReturns({ targets, removal, date, townClone, stakes = [], asked = false, write = null, read = liveLedgerOpen }) {
   let receipt = null;
   if (write && targets.length)
     receipt = await write({ marks: [...new Set(targets.flatMap((t) => t.leaving))].sort(), removal, date });
   const after = await townReturnOpen({ townClone, stakes, read });
+  let held, source = after.source;
+  if (after.source === "live" || !asked) held = heldTownReturns(targets, after.open);
+  else {
+    const closed = closedByReceipt(receipt, targets);
+    if (closed) { held = heldTownReturns(targets, closed); source = "receipt"; }
+    else {
+      held = targets.map((t) => ({ ...t, open: null }));
+      source = "unknown";
+    }
+  }
   return {
     removal, date,
     ...(receipt ? { receipt } : {}),
-    held: heldTownReturns(targets, after.open),
-    source: after.source,
+    held, source,
     ...(after.unread ? { unread: after.unread } : {}),
+    ...(source === "unknown" ? { unknown: "the live ledger could not be read and the write established nothing, so no town return is known to be closed and none is taken away" } : {}),
   };
 }

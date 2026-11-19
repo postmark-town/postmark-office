@@ -3070,9 +3070,12 @@ takes away. The script must pass `--town-returns` (`deploy/settlement-auto.sh`
 does so only when `SETTLEMENT_DRY` is absent), and `SETTLEMENT_DRY` must be
 unset. The return goes through the office pen (`src/town-return-exec.mjs`,
 under the town lock, with the Town's `worldTownReturnApply`), named by the
-seal's `S<n>` and the seal's day. A town-opposed mark leaves git only when every
-mark it takes has no open stamps after that write. A failed, refused or absent
-write takes nothing away, and the crossing's receipt says why
+seal's `S<n>` and the seal's day. A town-opposed mark leaves git only when every mark it takes is
+known to have no open stamps after that write: the live ledger, or, when that
+cannot be read, the successful write's own reading under its locks. A failed,
+refused or unnamed write, read against an unreadable ledger, takes nothing
+away. A zero at the snapshot is no evidence, because stamps may have been
+staked since. The crossing's receipt says what happened
 (`selection.settlement.town_returns`). The shadow and every rehearsal never
 write.
 
