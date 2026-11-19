@@ -1663,6 +1663,90 @@ name:
 remove the file or the `include` lines: without the file, `nginx -t` refuses the
 whole config.
 
+## The town's day on Bluesky (POS-904 Part 1, 2026-11-19)
+
+The office posts as @postmark.town: after each crossing, Ferry's Daily headline
+and its link; after each **blessed** settlement, its two literal record counts
+and its replay link. The code is `src/bluesky-publisher.mjs` and its one door,
+`tools/bluesky-publish.mjs`. **Nothing here is installed by the PR that adds it:**
+the env file, the unit lines and the hook are Jetto's box half, and they wait for
+Darko's look (and his answer that the login file holds an app password, not the
+account password). Nothing posts until then.
+
+**The posts, exactly as rendered from the real record on 2026-11-19:**
+```
+Crossing 320 · Ferry's Daily: A porch hello
+https://postmark.town/daily/
+
+Settlement S175 is blessed. New marks published: 10 · household records added: 1.
+https://postmark.town/replay/#S175
+```
+- **The crossing post:** the Daily committed at the town clone's HEAD, which Ferry
+  curates hours after the boat. It is posted only when it names the current
+  crossing or the one before, so a Daily left standing never posts its crossing
+  late. The headline is its lead `##` (`tools/site-sentinel.mjs § dailyFingerprint`),
+  as plain words.
+- **The settlement post:** the newest `settlement/S<n>` tag (the keeper's
+  blessing; a mechanical publish is not one), blessed within the last day, or
+  exactly `--settlement <n>`.
+  - **"New marks published"** is the number of `published` keys in
+    `WORLD/settlement-publications.json` at S<n> and not at the previous blessed tag.
+  - **"Household records added"** is the number of `households` keys in
+    `WORLD/households.json` at S<n> and not at the previous tag. A rename can add
+    one, so it is never called "joined".
+  - Retirements are not counted (Wright, 2026-11-19, option C). A record that
+    can't be read is no post, never a guessed zero.
+
+**The runtime contract (Jetto 2026-11-19 03:55Z; Wright 03:56Z):**
+- **The credential:** exactly `BSKY_IDENTIFIER` and `BSKY_APP_PASSWORD`. Proposed
+  home: `/etc/postmark-bsky.env` (owner meepo, 0600), filled file to file from the
+  login file and never printed. Neither value, nor the session token, nor any
+  Authorization header is ever printed, written to state or put in a receipt.
+- **The calls:** `com.atproto.server.createSession`, then
+  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at the deterministic
+  rkey `crossing-<n>` or `settlement-<n>`.
+  - **After anything but success:** the key is asked with `com.atproto.repo.getRecord`
+    before anything else is sent. A record there means delivered, and it is kept,
+    never overwritten.
+  - **Sends:** at most two per event, then the event is `failed` and never sent again.
+  - **When the key can't be read:** a `getRecord` that cannot answer sends nothing
+    and spends nothing; the next run asks again.
+
+**The interface for the hook:**
+```sh
+node tools/bluesky-publish.mjs crossing   --town  <town clone>  --state <dir>
+node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [--settlement <n>]
+```
+- **`--state <dir>` (required):** one directory both calls share, outside any
+  checkout, writable by the posting unit. It holds one file per event
+  (`<rkey>.json`: the event, the payload as first composed, every attempt and its
+  outcome, the posted uri), plus a lock per event while a run holds it. It is
+  the event's whole history: keep it.
+- **Safe to repeat:** every call is safe on every tick and from a repeated or
+  concurrent hook. A posted event is answered from its file with no network, and
+  an event another run holds is left to it.
+- **Stdout:** one JSON line, `{event, rkey, outcome, sends, uri?, detail?}`, or
+  `{outcome: "skipped", detail}` when there is nothing to post.
+- **Exit codes:**
+  - `0`: posted, reconciled, already, busy or skipped;
+  - `1`: failed (both sends spent; logged);
+  - `3`: waiting or unconfigured (nothing sent; the next run asks again);
+  - `2`: cannot run.
+  The hook treats every exit as non-fatal.
+- **Where it fits (proposed; the hook is Jetto's):** both calls in the keep tick
+  (`postmark-office-keep.service`, every 15 minutes), after the world fetch that
+  brings the keeper's tags in, with `--town /srv/postmark-office/town-clone` and
+  `--world` the tick's world clone.
+  - **Scope the credential:** that unit already reads a secret file and
+    `office-keep.sh` unsets those names before its other children, so give the
+    two Bluesky names to the publisher's call alone, in the same manner.
+  - **A late Daily:** a Daily curated at any hour is posted by the next tick
+    after it lands.
+- **Reading it back, with no key:**
+  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/crossing-<n>`.
+  Confirm the account's handle and did first: `tools/ops-awareness.mjs` reads
+  `postmark-town.bsky.social`, while the issue names `@postmark.town`.
+
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
 Branch builds of the town site, served noindexed at

@@ -129,43 +129,34 @@ export function crossingEvent({ markdown, headline, current }) {
 }
 
 /**
- * WHAT A BLESSED SETTLEMENT CHANGED, counted from the World's own record at the
- * two blessed tags, never written by hand and never the receipt's channel totals:
- *   marks newly published   WORLD/settlement-publications.json's `published`
- *                           keys at S<n> and not at the previous blessed tag,
- *                           each counted by its own mark's `kind:` at S<n>
- *   households joined       WORLD/households.json's household keys at S<n> and
- *                           not at the previous blessed tag
- * `kindOf(key)` reads a published mark's kind (null when it cannot be read).
- * A record that cannot be read makes the count null, never zero. PURE.
+ * WHAT A BLESSED SETTLEMENT CHANGED: the literal record counts between the two
+ * blessed tags (Wright, 2026-11-19 04:14:32Z, option C), read from the World's
+ * own record at each tag, never written by hand and never the receipt's channel
+ * totals:
+ *   new marks published       WORLD/settlement-publications.json's `published`
+ *                             keys at S<n> and not at the previous blessed tag
+ *   household records added   WORLD/households.json's `households` keys at S<n>
+ *                             and not at the previous blessed tag
+ * No mark taxonomy and no retirements (Part 1). A rename can add a household
+ * record, so this count is never called "joined". A record that cannot be read
+ * makes its count null, never zero. PURE.
  */
-export function settlementChanges({ before, after, kindOf }) {
-  if (!before?.published || !after?.published) return null;
-  const added = Object.keys(after.published).filter((k) => !Object.hasOwn(before.published, k)).sort();
-  const byKind = {};
-  for (const k of added) { const kind = kindOf(k) ?? "unread"; byKind[kind] = (byKind[kind] ?? 0) + 1; }
-  const households = before.households && after.households
-    ? Object.keys(after.households).filter((h) => !Object.hasOwn(before.households, h)).length : null;
-  return { published: added.length, byKind, households };
+export function settlementChanges({ before, after }) {
+  const added = (b, a) => (b && a ? Object.keys(a).filter((k) => !Object.hasOwn(b, k)).length : null);
+  return { marks: added(before?.published, after?.published), households: added(before?.households, after?.households) };
 }
 
-const counted = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-
 /**
- * THE SETTLEMENT'S POST: its number, what it changed, and its replay link (the
- * site's /replay/ gives every blessed settlement its own anchor, `#S<n>`).
- * `changes` null (the record could not be read) is a skip, never a guessed zero.
+ * THE SETTLEMENT'S POST: its number, the two counts under their own words, and
+ * its replay link (the site's /replay/ gives every blessed settlement its own
+ * anchor, `#S<n>`). A count that cannot be read is a skip, never a guessed zero.
  * PURE.
  */
 export function settlementEvent({ n, changes }) {
-  if (!changes || changes.households == null || changes.byKind.unread)
-    return { skip: `settlement S${n}'s changes cannot be read whole from its blessed record${changes?.byKind?.unread ? ` (${changes.byKind.unread} published mark(s) whose kind cannot be read)` : ""}: no post, never a guessed count` };
-  const parcels = changes.byKind.parcel ?? 0;
-  const things = changes.byKind.thing ?? 0;
-  const marks = changes.published - parcels - things;
-  const said = [counted(marks, "mark drawn", "marks drawn"), counted(parcels, "parcel chartered", "parcels chartered"),
-    counted(things, "thing built", "things built"), counted(changes.households, "household joined", "households joined")];
-  return { event: { kind: "settlement", n, text: `Settlement S${n} is blessed: ${said.join(", ")}.`, link: replayLink(n) } };
+  if (changes?.marks == null || changes?.households == null)
+    return { skip: `settlement S${n}'s counts cannot be read whole from its blessed record: no post, never a guessed count` };
+  return { event: { kind: "settlement", n,
+    text: `Settlement S${n} is blessed. New marks published: ${changes.marks} · household records added: ${changes.households}.`, link: replayLink(n) } };
 }
 
 // ── the wire ─────────────────────────────────────────────────────────────────

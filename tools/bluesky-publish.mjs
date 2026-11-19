@@ -39,14 +39,13 @@
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_SERVICE, crossingEvent, publishEvent, settlementChanges, settlementEvent } from "../src/bluesky-publisher.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { parseSettlementTags, readSettlementTags } from "../src/settlements.mjs";
 import { dailyFingerprint } from "./site-sentinel.mjs";
 
-const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const DAILY_PATH = "TOWN_BULLETIN/ferrys-daily.md";
 export const BLESSED_WITHIN_MS = 24 * 3600 * 1000;
 
@@ -78,13 +77,7 @@ export function settlementFromWorld(world, { n = null, now = Date.now() } = {}) 
     published: json(show(world, `settlement/S${t.n}`, "WORLD/settlement-publications.json"))?.published ?? null,
     households: json(show(world, `settlement/S${t.n}`, "WORLD/households.json"))?.households ?? null,
   });
-  const after = record(at);
-  const kindOf = (key) => {
-    const path = after.published?.[key]?.path;
-    const md = path ? show(world, `settlement/S${at.n}`, path) : null;
-    return md == null ? null : (/^kind:\s*(\S+)/m.exec(md)?.[1] ?? null);
-  };
-  return settlementEvent({ n: at.n, changes: settlementChanges({ before: record(prev), after, kindOf }) });
+  return settlementEvent({ n: at.n, changes: settlementChanges({ before: record(prev), after: record(at) }) });
 }
 
 const EXIT = { posted: 0, reconciled: 0, already: 0, busy: 0, skipped: 0, failed: 1, waiting: 3, unconfigured: 3 };
