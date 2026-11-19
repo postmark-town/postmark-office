@@ -222,3 +222,14 @@ test("17 · each house keeps its own authors' rows out of the one read a request
   assert.equal(a.bodies.get("ada/a-lamp"), "B"); assert.equal(a.removed.size, 0);
   assert.equal(n.key, "");
 });
+
+test("18 · the edit set of one snapshot is built once per (owners, canon marks): every ask in a request gets the same object", async () => {
+  const marks = canon();
+  const query = async () => [withdraw("wright/the-keystone")];
+  const [a, b, c, d] = await liveScope(async () => [await liveEdits(marks, 1, { query }), await liveEdits(marks, 1, { query }), await liveEdits(marks, 1, { query, owners: ["wright"] }), await liveEdits(marks, 1, { query, owners: ["wright"] })]);
+  assert.strictEqual(a, b);
+  assert.strictEqual(c, d);
+  const e = await liveScope(async () => liveEdits(canon(), 1, { query }));
+  assert.notStrictEqual(e, a, "another canon is another edit set");
+  assert.strictEqual(overlayMarks(marks, a), overlayMarks(marks, a), "and one overlaid array");
+});

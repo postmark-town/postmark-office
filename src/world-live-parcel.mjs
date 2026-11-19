@@ -116,6 +116,7 @@ export const editedIds = (edits) => new Set([...(edits?.bodies?.keys() ?? []), .
 // A request that WRITES an edit (leave-mark, withdraw) reads the store each time (`liveBypass`), so what it composes after its own
 // write is the world with its write in it. Outside a request scope (a script, a suite) every ask reads the store.
 const scope = new AsyncLocalStorage();
+const builtFrom = new WeakMap(); // one snapshot's rows array -> Map(owners key -> { canon marks, the edit set built from them })
 /** Run one request inside its own snapshot scope: the server's and the read worker's request entry. */
 export const liveScope = (fn) => scope.run({ memo: new Map(), bypass: false }, fn);
 /** This request writes edits: stop sharing what it read before its write. */
@@ -156,7 +157,13 @@ export async function liveEdits(canonMarks, settlement, { query = null, owners =
     // a house-scoped reader keeps its own authors' rows (the object is `<author>/<slug>`); every other house's are not its to overlay
     const rows = owners && all?.length ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
     if (!rows?.length) { liveParcelStats.empty += 1; return { bodies: new Map(), removed: new Set(), key: "" }; }
-    const edits = editsFrom(rows, canonMarks);
+    // the rows of one snapshot are one array, so the edit set built from them (a map over every canon mark) is built once per (rows, owners, canon marks), not once per ask
+    const ownerKey = owners ? [...owners].sort().join(",") : "";
+    let per = builtFrom.get(all);
+    if (!per) { per = new Map(); builtFrom.set(all, per); }
+    let hit = per.get(ownerKey);
+    if (!hit || hit.canon !== canonMarks) { hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks) }; per.set(ownerKey, hit); }
+    const edits = hit.edits;
     if (edits.key) liveParcelStats.owed += 1; else liveParcelStats.empty += 1;
     return edits;
   } catch {
