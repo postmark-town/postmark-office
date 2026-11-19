@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 process.env.WORLD2_PG = "1";
 process.env.WORLD2_PG_URL = "postgres://live-parcel-wiring/none";
+process.env.WORLD_APEX = "1"; // the bare apex read is listed only where it is switched on
 const office = await import("../src/world.mjs");
 const acts = await import("../src/world2-acts.mjs");
 const live = await import("../src/world-live-parcel.mjs");
@@ -41,31 +42,30 @@ const ALDER = "alden/the-alder-at-the-green-lamp", STALL = "ada/ada-stall";
 
 // the store, as the office reads it: the two statements the layer makes, counted
 let owed = [];
-const store = { watch: { mark_acts: 1, mark_act: 1, window_top: 321, window_closed: 320, clearing: 0 }, statements: [] };
+const store = { statements: [] };
 const fakePool = {
   query: async (sql) => {
-    store.statements.push(sql === live.watchSql ? "watch" : sql === live.owedSql ? "owed" : "other");
-    if (sql === live.watchSql) return { rows: [store.watch] };
+    store.statements.push(sql === live.owedSql ? "owed" : "other");
     if (sql === live.owedSql) return { rows: owed };
     return { rows: [] };
   },
 };
 const amendRow = (object, body) => ({ object, action: "amend", act_id: 10, crossing: 320, claim_id: "c1", claim_status: "pending", body });
 const withdrawRow = (object) => ({ object, action: "withdraw", act_id: 11, crossing: 320, claim_id: null, claim_status: null, body: null });
-const stateOf = (rows) => { owed = rows; store.watch = { ...store.watch, mark_acts: store.watch.mark_acts + 1, mark_act: store.watch.mark_act + 1 }; };
+const stateOf = (rows) => { owed = rows; };
 
 before(() => { acts.__setPoolForTest(fakePool); office.__setWorldForTest(WORLD); });
 after(() => { acts.__setPoolForTest(null); office.__setWorldForTest(null); });
 
 const rowOf = async (id) => (await office.markRows([id], WORLD))[0] ?? null;
 
-test("1 · nothing owed: every reader serves canon exactly as before, and the store is asked one watch for the whole request", async () => {
+test("1 · nothing owed: every reader serves canon exactly as before, and the store is read once for the whole request", async () => {
   stateOf([]);
   store.statements.length = 0;
   const r = await live.liveScope(async () => ({ row: await rowOf("wright/the-keystone"), hit: JSON.stringify(await office.worldFind({ q: "keystone" }, null)) }));
   assert.equal(r.row.body, "A keystone.");
   assert.match(r.hit, /wright\/the-keystone/);
-  assert.equal(store.statements.filter((s) => s === "watch").length, 1, "one watch for the whole request, the two readers sharing it");
+  assert.equal(store.statements.filter((s) => s === "owed").length, 1, "one read for the whole request, the two readers sharing it");
 });
 
 test("2 · AMEND (own ground): every serving reader carries the new body, for anonymous and keyed callers, and canon's own mark is not edited", async () => {
@@ -127,7 +127,7 @@ test("5 · SCOPE on the pinned world's real canon: the real market mark is no ca
   const guest = { ...guestHome, id: "guest/planted", by: "guest", declared_household: "hh:guest-planted", at: hostHome.at, extent: { w: 1, h: 1 }, tier: "home" };
   assert.equal(live.ownGroundIds([...marks, guest], contains).has("guest/planted"), false, "a mark of another household standing on a parcel is not own ground");
   const asked = [];
-  await live.liveEdits(marks, { contains, query: async (sql, p) => (sql === live.watchSql ? [store.watch] : (asked.push(...p[0]), [])) });
+  await live.liveEdits(marks, { contains, query: async (sql, p) => (asked.push(...p[0]), []) });
   assert.ok(asked.includes(home.id) && !asked.includes(market.id), "the store is asked about own-ground marks only");
 });
 
@@ -213,7 +213,7 @@ test("8 · the doorstep's stakes rows, asked for the house's own authors: the ne
     const other = await stakesFor(["ada"], readers);
     assert.deepEqual(other.rows.map((r) => r.mark).sort(), ["ada/a-lamp", "ada/a-lantern", "ada/ada-stall", "ada/the-plot"]);
   });
-  assert.equal(store.statements.filter((s) => s === "watch").length, 1, "two houses composed in one request: one watch");
+  assert.equal(store.statements.filter((s) => s === "owed").length, 1, "two houses composed in one request: one read");
 });
 
 test("9 · the household media: an amendment that adds a media URL is embedded now, a withdrawn mark's URL is not", async () => {
@@ -266,5 +266,109 @@ test("10 · EXISTENCE AGREES (real canon, real engine): a withdrawn own-ground m
     stateOf([withdrawRow(market.id)]);
     const kept = await live.liveScope(() => office.worldEyes({ x: market.at.x, y: market.at.y }, null, {}));
     assert.ok(kept.telling.includes(`[${market.id}`), "a market mark is still named");
+  } finally { office.__setWorldForTest(WORLD); }
+});
+
+// ── the SERVED RECORDS and the spine, in every presentation block (the main world read, orient, v2) ─────────────────────────────────────────────────
+const apex = await import("../src/world-apex.mjs");
+const KEYED = { handles: new Set(["wright"]), household: "wright" };
+
+test("11 · RECORDS AND WITHIN (real canon, real engine): an amended own-ground mark has its new words, and a withdrawn one is absent, in the full records, the bare apex read's `within`, orient's `you.within` and v2's `you.within`, anonymous and keyed; with nothing owed (the control) the same blocks carry the canon body and the record", async () => {
+  office.__setWorldForTest(null);
+  try {
+    const { publishedState } = await import("../src/world-branches.mjs");
+    const { WORLD_CLONE } = await import("../src/world.mjs");
+    const real = publishedState(WORLD_CLONE).state.marks;
+    const own = live.ownGroundIds(real, await office.liveParcelContains());
+    const table = real.find((m) => m.id === "wright/the-drafting-table"), keystone = real.find((m) => m.id === "wright/the-keystone");
+    assert.ok(own.has(table.id) && own.has(keystone.id));
+    const NEW = "THE TABLE, AS ITS AUTHOR NOW WRITES IT";
+    const reads = async (mark, key) => {
+      const at = { x: mark.at.x, y: mark.at.y };
+      return live.liveScope(async () => ({
+        v0: await apex.worldApex(at, key, { roll: [] }),
+        orient: await office.worldOrient(at, key, { roll: [] }),
+        v2: await apex.worldApex({ ...at, read_shape: "v2" }, key, { roll: [] }),
+        records: await office.markRecords([mark.id]),
+      }));
+    };
+    const bodyIn = (rows, id) => (rows ?? []).find((r) => r.id === id)?.body;
+    for (const key of [null, KEYED]) {
+      const who = key ? "keyed" : "anonymous";
+      // CONTROL: nothing owed: canon's body, canon's record
+      stateOf([]);
+      const control = await reads(table, key);
+      assert.equal(bodyIn(control.v0.within, table.id), table.body, `control v0 within (${who})`);
+      assert.equal(control.v0.records[table.id].body, table.body, `control v0 records (${who})`);
+      assert.equal(bodyIn(control.orient.you.within, table.id), table.body, `control orient (${who})`);
+      assert.equal(bodyIn(control.v2.you?.within, table.id), table.body, `control v2 (${who})`);
+      assert.equal(control.records[table.id].body, table.body, `control markRecords (${who})`);
+      const kControl = await reads(keystone, key);
+      for (const [name, rows] of [["v0 within", kControl.v0.within], ["orient", kControl.orient.you.within], ["v2", kControl.v2.you?.within]]) assert.ok((rows ?? []).some((r) => r.id === keystone.id), `control ${name} lists the leaf (${who})`);
+      assert.ok(kControl.records[keystone.id] && kControl.v0.records[keystone.id], "control records carry the leaf");
+      // AMEND: the new words in every block
+      stateOf([amendRow(table.id, NEW)]);
+      const a = await reads(table, key);
+      assert.equal(bodyIn(a.v0.within, table.id), NEW, `v0 within (${who})`);
+      assert.equal(a.v0.records[table.id].body, NEW, `v0 records (${who})`);
+      assert.equal(bodyIn(a.orient.you.within, table.id), NEW, `orient you.within (${who})`);
+      assert.equal(bodyIn(a.v2.you?.within, table.id), NEW, `v2 you.within (${who})`);
+      assert.equal(a.records[table.id].body, NEW, `markRecords (${who})`);
+      assert.ok(!JSON.stringify(a).includes(table.body), "the old words are in none of them");
+      // WITHDRAW: absent from every block, v2's fallback does not bring it back
+      stateOf([withdrawRow(keystone.id)]);
+      const w = await reads(keystone, key);
+      for (const [name, rows] of [["v0 within", w.v0.within], ["orient you.within", w.orient.you.within], ["v2 you.within", w.v2.you?.within]]) assert.ok(!(rows ?? []).some((r) => r.id === keystone.id), `${name} (${who})`);
+      assert.equal(w.records[keystone.id], undefined, "markRecords"); assert.equal(w.v0.records[keystone.id], undefined, "v0 records");
+      assert.ok((w.v0.within ?? []).some((r) => r.id === "wright/the-trueing-terrace"), "the enclosing marks are still there: only the withdrawn id went");
+    }
+    // SETTLED: a market mark off the author's own ground keeps its words and its place in every block, edited and withdrawn in the store
+    const market = real.find((m) => m.tier === "market" && m.kind !== "parcel" && m.at && !own.has(m.id) && typeof m.body === "string");
+    stateOf([amendRow(market.id, "SYNTHETIC LIVE BODY"), withdrawRow(market.id)]);
+    const m = await reads(market, null);
+    assert.ok(!JSON.stringify(m).includes("SYNTHETIC LIVE BODY"));
+    assert.ok(m.records[market.id] && m.records[market.id].body === market.body, "markRecords");
+  } finally { office.__setWorldForTest(WORLD); }
+});
+
+test("12 · THE CLUSTER (real engine, the pinned terrain): a withdrawn representative of a far household's cluster, and a withdrawn member, leave the telling WITHOUT hiding the live members or overstating their count", async () => {
+  office.__setWorldForTest(null);
+  const real = await office.__worldForTest();
+  // a far household of six own-ground marks (a parcel and five on it) past the cluster distance, one line in the telling, and a near house
+  const farm = (n, x) => mk(`far/the-mark-${n}`, "far", "hh:far", x, 20, `the mark ${n}`, { weight: 9 - n, household: "far" });
+  const frame = real.marks.find((m) => m.id === "the-town/let-there-be-light");
+  const marks = [parcel("far/the-farm", "far", "hh:far", 1500, 20, { extent: { w: 400, h: 100 }, household: "far-estate", weight: 0 }) /* the cluster key is `household`: the parcel stands apart from the household's marks, and is its author's household's ground all the same */, farm(1, 1420), farm(2, 1460), farm(3, 1500), farm(4, 1540), farm(5, 1580)];
+  office.__setWorldForTest({ ...real, _raw: undefined, marks: [frame, ...marks] }); // the fixture's own marks are its canon
+  try {
+    const eyes = (at) => live.liveScope(async () => office.worldEyes(at, null, {}));
+    const more = (l) => Number((l.match(/\(\+(\d+) more of /) ?? [])[1] ?? 0);
+    const clusterOf = (t) => t.split("\n").find((l) => l.includes("[far/") ) ?? "";
+    const at = { x: 0, y: 20 };
+    stateOf([]);
+    const base = await eyes(at);
+    const baseLine = clusterOf(base.telling);
+    const rep = (baseLine.match(/\[(far\/[a-z0-9-]+),/) ?? [])[1];
+    const n0 = more(baseLine);
+    assert.ok(rep && n0 >= 3, "premise: the far household is one line with its members folded into the count: " + baseLine);
+    // withdraw the representative only
+    stateOf([withdrawRow(rep)]);
+    const a = await eyes(at);
+    const aLine = clusterOf(a.telling), aRep = (aLine.match(/\[(far\/[a-z0-9-]+),/) ?? [])[1];
+    assert.ok(aRep && aRep !== rep, "a live member represents the cluster now: " + aLine + " (base: " + baseLine + ")");
+    assert.ok(!a.telling.includes(`[${rep},`) && !a.telling.includes(`[${rep}]`), "the withdrawn representative is not named");
+    assert.equal(more(aLine), n0 - 1, "the live members are counted, the withdrawn one is not");
+    // a member that is not the representative, alone
+    const other = marks.find((m) => m.by === "far" && m.kind !== "parcel" && m.id !== rep && m.id !== aRep);
+    stateOf([withdrawRow(other.id)]);
+    const c = await eyes(at);
+    assert.ok(c.telling.includes(`[${rep},`), "the representative stays when only a member goes");
+    assert.ok(!c.telling.includes(other.id));
+    assert.equal(more(clusterOf(c.telling)), n0 - 1, "and the count drops by exactly the one withdrawn member");
+    // both together
+    stateOf([withdrawRow(rep), withdrawRow(other.id)]);
+    const b = await eyes(at);
+    assert.ok(!b.telling.includes(rep) && !b.telling.includes(other.id));
+    assert.equal(more(clusterOf(b.telling)), n0 - 2, "two withdrawn, the live rest counted: " + clusterOf(b.telling));
+    assert.equal((b.objects ?? []).some((o) => o.id === rep || o.id === other.id), false, "the compact objects agree");
   } finally { office.__setWorldForTest(WORLD); }
 });

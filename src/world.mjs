@@ -233,6 +233,8 @@ async function geomMod() {
 let _worldSeam = null;
 /** Tests only: `w` is the published world, or null to read the clone again. */
 export const __setWorldForTest = (w) => { _worldSeam = w ?? null; };
+/** Tests only: the world `world()` would answer (the production one unless a seam is set), for a suite that stands a fixture on its terrain. */
+export const __worldForTest = () => world();
 // POS-686: `world()` is canon, and only canon: the same object for everyone, whatever the store owes (an own-parcel edit is laid over
 // where a reader SERVES a body or an existence, world-live-parcel.mjs), so every cache keyed on it (the id, ground, room and interior
 // indexes below, the place words, the engine's own) is built once per fold and never by an edit.
@@ -354,6 +356,13 @@ export const __derivedBuildsForTest = () => ({ ...derivedBuilds });
  * POS-686: the own-parcel edits canon has not carried yet, asked of the published world's own marks (never of a sighted copy, so the
  * owed set is one per canon and request), for the readers that SERVE a mark's body or existence. Never touches the shared world.
  */
+const _servedWorlds = new WeakMap(); // the overlaid marks array -> the world copy the engine renders (a copy for one answer; canon's world and caches are never keyed on it)
+function servedWorldOf(w, edits) {
+  const marks = overlayMarks(w.marks ?? [], edits);
+  let s = _servedWorlds.get(marks);
+  if (!s) { s = { ...w, marks }; _servedWorlds.set(marks, s); }
+  return s;
+}
 async function liveServing() {
   const { liveEdits } = await import("./world-live-parcel.mjs");
   return liveEdits(canonMarksOf(await world()));
@@ -2723,7 +2732,9 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // being wrong together. The falsifier asserts that agreement directly.
   // an entered mark is shelter (§ roadShelter): a body's read carries what it is within
   const entered = choice.coords ? null : await enteredNow(choice.handle, { verbs, w, crossing });
-  const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
+  // POS-686: `you.within` (the spine, rows with their bodies) as served: an amended mark's new words, no withdrawn mark; the geometry and the engine's world are canon's
+  const oEngine = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
+  const o = (await import("./world-live-parcel.mjs")).patchServed(oEngine, await liveServing());
   // the note is embodied property: only the body's standpoint carries it — a
   // spectator glance (coords) is nobody's, so it reads nobody's note.
   const { note, unavailable: noteUnavailable } = choice.handle && withNote ? await noteForHandle(key, choice.handle) : { note: null };
@@ -3001,6 +3012,7 @@ export async function markRecords(ids = [], w = null) {
   let byId = _byIds.get(w);
   if (!byId) { derivedBuilds.byIds += 1; _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m]))); }
   const out = {};
+  const edits = await liveServing(); // POS-686: the record as served: an amended mark's new words, no withdrawn mark
   // NO CLASS RIDES HERE BY NAME (WLD-29, the pointer model: Wright, AUTHORITY
   // 2026-10-13T19:16:02.257Z). `the-town/resident` used to be added to every
   // read so a page could price a walk from its dials (2026-09-13). A page reads
@@ -3009,8 +3021,9 @@ export async function markRecords(ids = [], w = null) {
   // are World law, public in postmark-world (APEX_DESCRIPTION § DIALS).
   for (const id of [...ids, ...(await groundMarkIds(w))]) {
     if (id == null || out[id]) continue;
+    if (edits.removed.has(id)) continue;
     const mark = byId.get(id);
-    if (mark) out[id] = withClassDials(mark);
+    if (mark) out[id] = withClassDials(edits.bodies.has(id) ? { ...mark, body: edits.bodies.get(id) } : mark);
   }
   return out;
 }
@@ -3176,11 +3189,21 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // an entered mark is shelter (§ roadShelter): nothing inside it is cut from this reader's eyes
   // (`given`: the stack orient already read for this same read, handed on by the apex)
   const entered = choice.coords ? null : given !== undefined ? given : await enteredNow(choice.handle, { verbs, w, crossing });
-  const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
+  const eyesOpts = { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) };
+  let r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, eyesOpts);
+  // POS-686: a mark its author has withdrawn (an own-ground one, not yet carried) is not told as present, and a cluster it headed keeps its live
+  // members and its true count. The telling, its clusters, its counts and its compact objects are the ENGINE'S OWN RENDERING, over the marks as
+  // served (the canonical world and every cache keyed on it are not touched; the served set is a copy for this answer, built once per edit set).
+  // Only a read with a removed mark in its sight pays for a second rendering.
+  const eyesLive = await liveServing();
+  if (eyesLive.removed.size) {
+    const reach = (r.fov?.sightReachM ?? 5000) + 1000;
+    const near = (await worldMarksAll()).some((m) => eyesLive.removed.has(m.id) && m.at && Math.hypot(m.at.x - at.x, m.at.y - at.y) <= reach);
+    if (near) r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, servedWorldOf(w, eyesLive), eyesOpts);
+  }
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
-  const eyesLive = await liveServing(); // POS-686: a mark its author has withdrawn is not NAMED as here (the geometry is canon's, the existence is not)
-  const engineTelling = (await import("./world-live-parcel.mjs")).servedTelling(typeof r.tell === "function" ? r.tell() : r.tell ?? null, eyesLive);
+  const engineTelling = typeof r.tell === "function" ? r.tell() : r.tell ?? null;
   const { tell, ...rest } = r;
   // Residents, seen. The engine's telling is left exactly as the engine rendered
   // it and the presence section is APPENDED — the office composes its own
@@ -3223,7 +3246,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   if (args.diagnostic === true) return diagnosticEyes(full);
 
   const markById = new Map((w.marks ?? []).map((mark) => [mark.id, mark]));
-  const seen = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].filter((object) => !eyesLive.removed.has(object.id)).map((object) => {
+  const seen = [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((object) => {
     const mark = markById.get(object.id);
     const objectAt = object.at ?? mark?.at ?? {};
     return {

@@ -21,19 +21,19 @@
 //   · Never the shared world: `world()`, every canon-keyed cache (the assembled world, the id, ground, room and interior indexes,
 //     the stance world's kept slow half, the fold, the settlement) are not given a new object, a new key or a rebuild by an edit,
 //     anyone's. The overlay is applied where a reader serves: the marks it lists (an array copy, built once per edit set), the body
-//     in an investigate answer. Orient, eyes and the presence telling are the SIGHT of canon's geometry and stay canon's.
+//     in an investigate answer, the spine rows and records an orient or bare apex read serves; the eyes' telling is the ENGINE'S OWN RENDERING over the marks as
+//     served (world.mjs § worldEyes), so a cluster a withdrawn mark headed keeps its live members and its true counts. Geometry and consent stay canon's.
 //   · A mark leaves a read only by its author's own withdraw act, the newest owner act on it (the very rule the crossing's
 //     `WITHDRAWN_OWED_SELECT` uses, world2/tools/fold-delta.mjs), so a later re-leave or amend by the author cancels it.
 //   · No age: an edit is visible while the store still owes it (the newest owner act on the mark, the newest live claim on it, canon
 //     not yet carrying it), however old, and stops by the store's own facts (claim refused or retracted, a re-leave, canon carrying
 //     it). No window count, no time-to-live, no mode.
 //
-// HOW THE OWED SET IS FOUND WITHOUT A HISTORY SCAN. The candidates are canon's own-parcel marks (about a third of the world), probed
-// by the two indexes that answer "newest act on this object" (`acts_object_idx`) and "newest claim on this slug" (`claims_slug_idx`).
-// That is run only when the store's facts moved, and the thing that says so is one cheap read per request: the newest mark act
-// (`acts_class_idx`) and the windows' state (`windows` primary key). A claim's status changes only at a clearing (a window closes,
-// the next opens) or by an act of its author (a mark act), so those numbers and canon's own object are the whole key: the same
-// key means the same owed set, a different one means one rescan per process, never a rebuild of anything canon keeps.
+// HOW THE OWED SET IS FOUND: A BOUNDED READ, ONCE PER REQUEST. The candidates are canon's own-ground marks (about a third of the world), probed
+// by the two indexes that answer "newest act on this object" (`acts_object_idx`) and "newest claim on this slug" (`claims_slug_idx`): two
+// index probes per candidate, bounded by the candidates and never by how many acts the town has ever made. The read is made once per request
+// and shared by everything that request serves (a request is a snapshot); nothing is kept between requests, so the next request asks the
+// store again and sees whatever has committed, in whatever order its rows were written, with no signature of the store to get wrong.
 
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -96,28 +96,13 @@ export function ownGroundIds(marks, contains) {
 }
 
 /**
- * What the store's facts are keyed by: how many mark acts are COMMITTED, the newest id, and the windows. A cheap read; an unchanged answer is an
- * unchanged owed set. THE COUNT IS THE COMMIT-ORDERED PART: an `acts.id` is drawn when a row is inserted, not when it commits, so a transaction
- * holding a LOWER id can commit after a higher id has been seen and `max(id)` alone would not move. Acts are append-only (the table's trigger
- * forbids UPDATE and DELETE), so the number of committed mark acts moves on every commit, in whatever order the ids commit. The newest id stays
- * in the key for the reader of the log. (There is no producer-order guarantee to lean on: mark acts are written by the pen in per-household
- * transactions, by the office's several processes and workers, with no lock across households.) A claim's status changes only at a clearing
- * (a window closes, the next opens, one transaction) or with a mark act of its author (a retract rides one), so the windows complete the key.
- */
-export const watchSql = `
-  SELECT (SELECT count(*) FROM acts a WHERE a.class = 'mark')::bigint AS mark_acts,
-         COALESCE((SELECT max(a.id) FROM acts a WHERE a.class = 'mark'), 0) AS mark_act,
-         COALESCE((SELECT max(w.id) FROM windows w), 0) AS window_top,
-         COALESCE((SELECT max(w.id) FROM windows w WHERE w.status = 'closed'), 0) AS window_closed,
-         (SELECT count(*) FROM windows w WHERE w.status = 'clearing')::int AS clearing`;
-
-/**
- * The newest owner act per candidate mark, with the newest pending-or-locked claim on it. `$1` = the candidate ids (canon's own-parcel
- * marks). Both probes are by index; there is no bound on how old an act is, because nothing that is still owed is old by anyone's clock.
+ * The newest owner act per candidate mark, with the newest pending-or-locked claim on it, kept only where something is OWED: a withdrawal, or a live claim
+ * whose body is not the body canon already carries (`$2`, canon's own md5 per candidate), so a request moves a handful of rows and not one per candidate.
+ * `$1` = the candidate ids (canon's own-ground marks). Both probes are by index; there is no bound on how old an act is, because nothing that is still owed is old by anyone's clock.
  */
 export const owedSql = `
   SELECT s.slug AS object, la.action, la.id AS act_id, la.crossing, c.id AS claim_id, c.status AS claim_status, c.body
-    FROM unnest($1::text[]) AS s(slug)
+    FROM unnest($1::text[], $2::text[]) AS s(slug, canon_md5)
     JOIN LATERAL (
       SELECT a.action, a.id, a.crossing FROM acts a
        WHERE a.object = s.slug AND a.class = 'mark'
@@ -130,6 +115,7 @@ export const owedSql = `
        WHERE c.slug = s.slug AND c.claimant = split_part(s.slug, '/', 1) AND c.status IN ('pending', 'locked')
        ORDER BY c.submitted_at DESC, c.id DESC LIMIT 1
     ) c ON la.action <> 'withdraw'
+   WHERE la.action = 'withdraw' OR (c.id IS NOT NULL AND md5(c.body) IS DISTINCT FROM s.canon_md5)
    ORDER BY s.slug`;
 
 /**
@@ -214,45 +200,16 @@ export function patchServed(answer, edits, focusId = null) {
   return walk(answer, 0);
 }
 
-/**
- * THE TELLING, WITHOUT A MARK ITS AUTHOR HAS WITHDRAWN. The engine's telling (orient, eyes, the presence read) names a resident's mark and never
- * quotes it (POS-393): a band line is `  · 4 m SSE — a mark by wright  [wright/the-ledger-shelf, ✦0]`, the place you stand is `You are within a
- * mark by wright [a] · a mark by wright [b].`. No body is in it, so nothing stale is served, but a withdrawn mark is still NAMED as present
- * there until the crossing while every record the same answer carries omits it. This drops the existence: the band lines that name a removed
- * id, and the removed id's own segment of the within chain. Geometry and consent are not touched (the sight stays canon's; only what is NAMED
- * moves); the "+N more" counts the engine printed are the engine's and are left as it printed them. Returns the text itself when nothing is
- * removed or named. PURE.
- */
-export function servedTelling(text, edits) {
-  if (typeof text !== "string" || !edits?.removed?.size) return text;
-  const tagged = (line) => { for (const id of edits.removed) if (line.includes(`[${id}]`) || line.includes(`[${id},`)) return true; return false; };
-  if (![...text.split("\n")].some(tagged)) return text;
-  const out = [];
-  for (const line of text.split("\n")) {
-    if (!tagged(line)) { out.push(line); continue; }
-    if (/^\s*·/.test(line)) continue; // a band line naming it: the mark is not there
-    // the place you stand: "You are within a mark by x [a] · a mark by x [b]." (a chain; the removed ids' segments go)
-    const trail = /\.\s*$/.test(line) ? "." : "";
-    const parts = line.replace(/\.\s*$/, "").split(" · ");
-    const prefix = parts[0].slice(0, Math.max(parts[0].indexOf("a mark"), 0));
-    const kept = parts.filter((p) => !tagged(p));
-    if (!kept.length) continue;
-    if (tagged(parts[0]) && prefix && !kept[0].startsWith(prefix.trim())) kept[0] = prefix + kept[0];
-    out.push(kept.join(" · ") + trail);
-  }
-  return out.join("\n");
-}
-
 /** The ids an edit set touches (for a reader serving one house: whether anything of its own moved). */
 export const editedIds = (edits) => new Set([...(edits?.bodies?.keys() ?? []), ...(edits?.removed ?? [])]);
 
 // ── the store read ─────────────────────────────────────────────────────────
 
-/** Counters the instrument and the tests read: reads of the watch, rescans of the owed set, empty and owed answers, failures. */
-export const liveParcelStats = { watches: 0, scans: 0, empty: 0, owed: 0, failures: 0 };
+/** Counters the instrument and the tests read: reads of the store made, empty and owed answers, failures. */
+export const liveParcelStats = { reads: 0, empty: 0, owed: 0, failures: 0 };
 
-// ONE WATCH PER REQUEST. A read can ask for the world's edits many times (GET /world/present asks 44 times); a request is a snapshot:
-// it reads the store's facts once and every ask inside it shares that answer, so a request never sees two different worlds and
+// ONE READ PER REQUEST. A request can ask for the world's edits many times (GET /world/present asks 44 times); a request is a snapshot:
+// it reads the owed set once and every ask inside it shares that answer, so a request never sees two different worlds and
 // never pays twice. A request that WRITES an edit (leave-mark, withdraw) reads afresh (`liveBypass`), so what it composes after its
 // own write has the write in it. Outside a request scope (a script, a suite) every ask reads the store.
 const scope = new AsyncLocalStorage();
@@ -261,10 +218,7 @@ export const liveScope = (fn) => scope.run({ memo: new Map(), bypass: false }, f
 /** This request writes edits: stop sharing what it read before its write. */
 export const liveBypass = () => { const st = scope.getStore(); if (st) { st.bypass = true; st.memo.clear(); } };
 
-// What this thread knows of the owed set, per reader of the store (the default store read, or a suite's): the watch it was found
-// under, the canon marks it was found for, and the rows. One rescan per change of the watch or of canon, shared by whoever asks while it runs.
-const known = new WeakMap(); // ask function -> { watch, canon, rows, pending }
-const ownCache = new WeakMap(); // canon marks array -> Map(containment function -> Promise<Set of own-ground ids>)
+const ownCache = new WeakMap(); // canon marks array -> Map(containment function -> Promise<{ own: Set, ids, md5 }>): canonical data, derived once per canon
 
 /** Canon's own-ground ids, once per (canon marks, containment): the engine's `marksContain` unless a suite hands one in. An engine that cannot answer gives none. */
 async function ownIdsOf(canonMarks, contains) {
@@ -274,29 +228,17 @@ async function ownIdsOf(canonMarks, contains) {
   if (!per.has(fn)) {
     per.set(fn, (async () => {
       const c = contains ?? (await fn());
-      return typeof c === "function" ? ownGroundIds(canonMarks, c) : new Set();
+      const own = typeof c === "function" ? ownGroundIds(canonMarks, c) : new Set();
+      const byId = new Map(canonMarks.map((m) => [m.id, m]));
+      const ids = [...own];
+      return { own, ids, md5: ids.map((id) => createHash("md5").update(String(byId.get(id)?.body ?? "")).digest("hex")) };
     })());
   }
   return per.get(fn);
 }
 
-async function owedRows(ask, canonMarks, own) {
-  const w = (await ask(watchSql, []))?.[0];
-  if (!w) return null;
-  const watch = `${w.mark_acts}|${w.mark_act}|${w.window_top}|${w.window_closed}|${w.clearing}`;
-  let k = known.get(ask);
-  if (!k) { k = { watch: null, canon: null, rows: null, pending: null }; known.set(ask, k); }
-  if (k.canon === canonMarks && k.watch === watch && k.rows) return k.rows;
-  if (k.pending && k.pending.canon === canonMarks && k.pending.watch === watch) return k.pending.promise;
-  liveParcelStats.scans += 1;
-  const { segSpan } = await import("./read-timing.mjs");
-  const promise = segSpan("live_parcel_scan", () => ask(owedSql, [[...own]])).then((rows) => {
-    if (k.pending?.promise === promise) { k.pending = null; k.watch = watch; k.canon = canonMarks; k.rows = rows ?? []; }
-    return rows ?? [];
-  }, (e) => { if (k.pending?.promise === promise) k.pending = null; throw e; });
-  k.pending = { canon: canonMarks, watch, promise };
-  return promise;
-}
+// the owed rows for one request: the bounded candidate probe, nothing kept from an earlier request
+const owedRows = async (ask, c) => (await ask(owedSql, [c.ids, c.md5])) ?? [];
 
 const builtFrom = new WeakMap(); // one snapshot's rows array -> Map(owners key -> { canon marks, the edit set built from them })
 
@@ -319,14 +261,14 @@ export async function liveEdits(canonMarks, { query = null, owners = null, conta
       if (!world2Enabled()) return NONE;
     }
     if (!Array.isArray(canonMarks) || !canonMarks.length) return NONE;
-    // the one watch a request makes, timed under it as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
+    // the one read a request makes, timed under it as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
     const { segSpan } = await import("./read-timing.mjs");
     const st = scope.getStore();
     const memoKey = st && !st.bypass ? canonMarks : null; // one snapshot per canon marks array
     let pending = memoKey ? st.memo.get(memoKey) : null;
     if (!pending) {
-      liveParcelStats.watches += 1;
-      pending = segSpan("live_parcel", async () => owedRows(ask, canonMarks, await ownIdsOf(canonMarks, contains)));
+      liveParcelStats.reads += 1;
+      pending = segSpan("live_parcel", async () => owedRows(ask, await ownIdsOf(canonMarks, contains)));
       if (memoKey) st.memo.set(memoKey, pending);
     }
     const all = await pending;
@@ -338,7 +280,7 @@ export async function liveEdits(canonMarks, { query = null, owners = null, conta
     let hit = per.get(ownerKey);
     if (!hit || hit.canon !== canonMarks) {
       const rows = owners ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
-      hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks, await ownIdsOf(canonMarks, contains)) };
+      hit = { canon: canonMarks, edits: editsFrom(rows, canonMarks, (await ownIdsOf(canonMarks, contains)).own) };
       per.set(ownerKey, hit);
     }
     const edits = hit.edits;

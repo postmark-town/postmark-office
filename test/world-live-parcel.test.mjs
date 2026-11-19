@@ -13,9 +13,11 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import {
-  editsFrom, overlayMarks, patchServed, servedTelling, editedIds, liveEdits, liveMarks, liveParcelStats, liveScope, liveBypass, ownGroundIds, watchSql, owedSql,
+  editsFrom, overlayMarks, patchServed, editedIds, liveEdits, liveMarks, liveParcelStats, liveScope, liveBypass, ownGroundIds, owedSql,
 } from "../src/world-live-parcel.mjs";
 import { marksContain, groundVerdict } from "../world2/tools/standing.mjs";
+import { createHash } from "node:crypto";
+const require_md5 = (t) => createHash("md5").update(String(t ?? "")).digest("hex");
 
 const box = (x, y, w = 2, h = 2) => ({ at: { x, y }, extent: { w, h } });
 const mk = (id, by, house, pos, over = {}) => ({ id, kind: "sited", by, declared_household: house, tier: "home", body: `${id} body`, ...pos, ...over });
@@ -144,31 +146,6 @@ test("8 · patchServed: the edited body wherever an answer carries it, a withdra
   assert.strictEqual(patchServed(same, e, "ada/a-lamp"), same);
 });
 
-test("8b · servedTelling: a withdrawn mark is not NAMED as here (band lines, the within chain), the names-never-quotes shape is kept, everything else is the engine's text", () => {
-  const e = edits([withdraw("wright/the-keystone"), withdraw("wright/the-drafting-table")]);
-  const telling = [
-    "— You stand at (619.5, -2653.5), 37.5 m above the sea.",
-    "You are within a mark by wright [wright/the-yard] · a mark by wright [wright/the-drafting-table].",
-    "",
-    "Underfoot:",
-    "  · 4 m SSE — a mark by wright  [wright/the-ledger-shelf, ✦0]",
-    "  · 5 m S — a mark by wright  [wright/the-keystone, ✦0]",
-    "  · 7 m SSW — a mark by wright  [wright/the-guest-book, ✦7]",
-    "A fair way off:",
-    "  · 2000 m W — a mark by sol-of-garrison (+5 more of sol-of-garrison's — investigate)  [sol-of-garrison/the-protected-grove, ✦135]",
-  ].join("\n");
-  const out = servedTelling(telling, e);
-  assert.doesNotMatch(out, /the-keystone|the-drafting-table/);
-  assert.match(out, /You are within a mark by wright \[wright\/the-yard\]\./, "the chain keeps what is left and its full stop");
-  assert.match(out, /the-ledger-shelf/); assert.match(out, /the-guest-book/); assert.match(out, /sol-of-garrison\/the-protected-grove/);
-  assert.equal(out.split("\n").length, telling.split("\n").length - 1, "exactly the one band line goes");
-  const first = servedTelling("You are within a mark by wright [wright/the-keystone] · a mark by wright [wright/the-note].", edits([withdraw("wright/the-keystone")]));
-  assert.equal(first, "You are within a mark by wright [wright/the-note].", "the leading segment goes and the prefix moves on");
-  assert.equal(servedTelling("You are within a mark by wright [wright/the-keystone].", edits([withdraw("wright/the-keystone")])), "");
-  assert.strictEqual(servedTelling(telling, edits([])), telling, "nothing removed: the same string");
-  assert.strictEqual(servedTelling("Underfoot:\n  · 1 m N — a mark by ada  [ada/a-lamp, ✦0]", e), "Underfoot:\n  · 1 m N — a mark by ada  [ada/a-lamp, ✦0]", "nothing named that is removed: the same string");
-});
-
 test("9 · editedIds names what moved", () => {
   const e = edits([amend("wright/the-drafting-table", "n"), withdraw("wright/the-keystone")]);
   assert.deepEqual([...editedIds(e)].sort(), ["wright/the-drafting-table", "wright/the-keystone"]);
@@ -176,52 +153,48 @@ test("9 · editedIds names what moved", () => {
 
 // ── the snapshot, the watch and the rescan (the store's read, counted) ─────────────────────────────────────────────
 
-/** A store answering the two statements the layer makes, counting them. */
-function fakeStore({ watch = { mark_acts: 5, mark_act: 5, window_top: 321, window_closed: 320, clearing: 0 }, rows = () => [] } = {}) {
-  const s = { watches: 0, scans: 0, watch: { ...watch }, rows };
+/** A store answering the one statement the layer makes, counting it. */
+function fakeStore({ rows = () => [] } = {}) {
+  const s = { reads: 0, rows };
   s.query = async (sql, params) => {
-    if (sql === watchSql) { s.watches += 1; return [s.watch]; }
-    if (sql === owedSql) { s.scans += 1; s.lastIds = params[0]; return s.rows(); }
+    if (sql === owedSql) { s.reads += 1; s.lastIds = params[0]; s.lastMd5 = params[1]; return s.rows(); }
     throw new Error("unexpected statement");
   };
   return s;
 }
 const opts = (st, extra = {}) => ({ query: st.query, contains: marksContain, ...extra });
 
-test("10 · a request reads the watch once however many times the world is asked for; the owed set is rescanned only when the store's facts moved", async () => {
+test("10 · a request reads the store once however many times the world is asked for, and NOTHING is kept between requests: the next request reads again", async () => {
   const marks = canon();
   const st = fakeStore({ rows: () => [withdraw("wright/the-keystone")] });
   await liveScope(async () => { for (let i = 0; i < 44; i++) await liveEdits(marks, opts(st)); });
-  assert.deepEqual([st.watches, st.scans], [1, 1], "44 asks: one watch, one scan");
+  assert.equal(st.reads, 1, "44 asks in one request: one read");
   await liveScope(async () => { await liveEdits(marks, opts(st)); await liveEdits(marks, opts(st)); });
-  assert.deepEqual([st.watches, st.scans], [2, 1], "another request: its own watch, the same owed set (the facts did not move)");
-  st.watch.mark_acts = 6; // a mark act committed, in whatever id order
-  await liveScope(() => liveEdits(marks, opts(st)));
-  assert.deepEqual([st.watches, st.scans], [3, 2], "a committed mark act: one rescan");
-  st.watch.window_closed = 321; st.watch.window_top = 322;
-  await liveScope(() => liveEdits(marks, opts(st)));
-  assert.equal(st.scans, 3, "a clearing (a window closed): one rescan");
-  await liveScope(() => liveEdits(canon(), opts(st)));
-  assert.equal(st.scans, 4, "another canon: one rescan");
+  assert.equal(st.reads, 2, "another request: its own read, no owed state carried over");
+  await liveEdits(marks, opts(st));
+  assert.equal(st.reads, 3, "outside a request, every ask reads");
+  st.rows = () => [];
+  assert.equal((await liveScope(() => liveEdits(marks, opts(st)))).key, "", "a store that no longer owes it is believed at once");
 });
 
 test("11 · the candidates are canon's own-ground marks only: common ground and a welcomed mark are never asked about", async () => {
   const st = fakeStore();
   await liveEdits(canon(), opts(st));
-  assert.deepEqual(st.lastIds.sort(), ["ada/a-lamp", "ada/the-plot", "bea/the-yard", "wright/the-drafting-table", "wright/the-keystone", "wright/the-note", "wright/the-yard"]);
+  assert.deepEqual([...st.lastIds].sort(), ["ada/a-lamp", "ada/the-plot", "bea/the-yard", "wright/the-drafting-table", "wright/the-keystone", "wright/the-note", "wright/the-yard"]);
+  assert.equal(st.lastMd5.length, st.lastIds.length, "canon's own md5 beside each candidate, so only an owed body comes back");
 });
 
 test("12 · a request that writes an edit reads the watch afresh; no scope reads every time; two requests never share a snapshot", async () => {
   const marks = canon();
   const st = fakeStore();
   await liveScope(async () => { await liveEdits(marks, opts(st)); await liveEdits(marks, opts(st)); liveBypass(); await liveEdits(marks, opts(st)); await liveEdits(marks, opts(st)); });
-  assert.equal(st.watches, 3);
-  st.watches = 0;
+  assert.equal(st.reads, 3);
+  st.reads = 0;
   await liveEdits(marks, opts(st)); await liveEdits(marks, opts(st));
-  assert.equal(st.watches, 2);
-  st.watches = 0;
+  assert.equal(st.reads, 2);
+  st.reads = 0;
   await Promise.all([liveScope(() => liveEdits(marks, opts(st))), liveScope(() => liveEdits(marks, opts(st)))]);
-  assert.equal(st.watches, 2);
+  assert.equal(st.reads, 2);
 });
 
 test("13 · each house keeps its own authors' rows out of the one read; the edit set of a snapshot is built once per (owners, canon)", async () => {
@@ -230,7 +203,7 @@ test("13 · each house keeps its own authors' rows out of the one read; the edit
   const [all, w, a, n, w2] = await liveScope(async () => [
     await liveEdits(marks, opts(st)), await liveEdits(marks, opts(st, { owners: ["wright"] })), await liveEdits(marks, opts(st, { owners: ["ada"] })),
     await liveEdits(marks, opts(st, { owners: ["little-bird"] })), await liveEdits(marks, opts(st, { owners: ["wright"] }))]);
-  assert.equal(st.scans, 1);
+  assert.equal(st.reads, 1);
   assert.deepEqual([...all.removed], ["wright/the-keystone"]); assert.equal(all.bodies.get("ada/a-lamp"), "B");
   assert.deepEqual([...w.removed], ["wright/the-keystone"]); assert.equal(w.bodies.size, 0);
   assert.equal(a.bodies.get("ada/a-lamp"), "B"); assert.equal(a.removed.size, 0);
@@ -250,14 +223,15 @@ test("14 · a store that cannot answer is no overlay, counted, never a failed re
   assert.equal((await liveEdits(canon(), { query: st.query, contains: () => false })).key, "", "nothing is own ground without a containment that says so");
 });
 
-test("15 · no age policy and no history scan are written into the SQL; the watch carries a commit-ordered count", () => {
-  for (const sql of [watchSql, owedSql]) assert.doesNotMatch(sql, /interval|now\(\)|settlements|window_id\s*-|crossing\s*>=/i, "no clock, no settlement row, no window bound");
-  assert.match(owedSql, /unnest\(\$1::text\[\]\)/, "bounded by the candidates, not by history");
-  assert.match(owedSql, /ORDER BY a\.id DESC LIMIT 1/);
-  assert.match(watchSql, /count\(\*\) FROM acts a WHERE a\.class = 'mark'/, "the number of committed mark acts, not only the newest id");
+test("15 · the read is BOUNDED by the candidates, not by history: no watch, no count, no age, no settlement term in the SQL", () => {
+  assert.doesNotMatch(owedSql, /count\(|interval|now\(\)|settlements|window_id\s*-|crossing\s*>=|max\(/i, "no aggregate over history, no clock, no settlement row, no window bound");
+  assert.match(owedSql, /unnest\(\$1::text\[\], \$2::text\[\]\)/, "bounded by the candidates");
+  assert.equal((owedSql.match(/ORDER BY [a-z.]+ DESC[^\n]*LIMIT 1/g) ?? []).length + (owedSql.match(/LIMIT 1/g) ?? []).length >= 2, true, "each probe takes the newest row of one object and one slug");
+  assert.match(owedSql, /acts a\s+WHERE a\.object = s\.slug/, "probed by object (acts_object_idx)");
+  assert.match(owedSql, /c\.slug = s\.slug/, "and by slug (claims_slug_idx)");
 });
 
-// ── the SQL and the watch, on a real store ──────────────────────────────────────────────────────────────────────────
+// ── the SQL, on a real store ──────────────────────────────────────────────────────────────────────────
 import { startStore } from "./helpers/embedded-store.mjs";
 
 let store = null;
@@ -281,7 +255,7 @@ async function seed({ acts = [], claims = [], windows = [[319, "closed"], [320, 
   });
 }
 const query = async (sql, params) => owner(async (c) => (await c.query(sql, params)).rows);
-const ask = (marks, owners = null) => liveEdits(marks, { query: (s, p) => query(s, p), contains: marksContain, owners });
+const ask = (marks, owners = null) => liveScope(() => liveEdits(marks, { query: (s, p) => query(s, p), contains: marksContain, owners }));
 
 test("16 · the store: the owner's newest act decides; an amend carries the claim's body", async () => {
   await seed({
@@ -327,45 +301,34 @@ test("20 · NO EXPIRY: an owed edit filed many crossings ago, with no settlement
   assert.equal((await ask(canon())).key, "");
 });
 
-test("21 · an act that is not a mark act is not read; the watch moves with a mark act and with a clearing, and with nothing else", async () => {
-  await seed({ acts: [{ actor: "wright", action: "withdraw", object: "wright/the-keystone", class: "voice" }] });
-  assert.equal((await ask(canon())).key, "");
-  const w = async () => JSON.stringify((await query(watchSql, []))[0]);
-  const w0 = await w();
-  await owner((c) => c.query("INSERT INTO acts (at, crossing, actor, action, object, class) VALUES (now(), 321, 'ada', 'say', null, 'voice')"));
-  assert.equal(await w(), w0, "a voice act is not a mark fact");
-  await owner((c) => c.query("INSERT INTO acts (at, crossing, actor, action, object, class) VALUES (now(), 321, 'wright', 'withdraw', 'wright/the-keystone', 'mark')"));
-  const w1 = await w();
-  assert.notEqual(w1, w0, "a mark act moves it");
-  await owner((c) => c.query("UPDATE windows SET status = 'closed' WHERE id = 321"));
-  await owner((c) => c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (322, '2026-11-01T00:00:00Z'::timestamptz + (322 - 319) * interval '12 hours', '2026-11-01T00:00:00Z'::timestamptz + (322 - 318) * interval '12 hours', 'open')"));
-  assert.notEqual(await w(), w1, "a clearing moves it");
+test("21 · only what is OWED comes back: a locked claim carrying canon's own body is not returned; an act that is not a mark act is not read", async () => {
+  await seed({ acts: [{ actor: "wright", action: "leave-mark", object: "wright/the-drafting-table" }, { actor: "wright", action: "withdraw", object: "wright/the-keystone", class: "voice" }], claims: [{ slug: "wright/the-drafting-table", body: "A tilted sheet of working drawings.", status: "locked" }] });
+  assert.equal((await ask(canon())).key, "", "the carried body is no edit, and a voice act is not a withdrawal");
+  const marks = canon(), own = ownGroundIds(marks, marksContain), ids = [...own];
+  const md5 = ids.map((id) => require_md5(marks.find((m) => m.id === id).body));
+  const rows = await query(owedSql, [ids, md5]);
+  assert.equal(rows.length, 0, "no row at all moves for a world that is carried");
+  await seed({ acts: [{ actor: "wright", action: "amend", object: "wright/the-drafting-table" }], claims: [{ slug: "wright/the-drafting-table", body: "An owed body.", status: "pending" }] });
+  assert.deepEqual((await query(owedSql, [ids, md5])).map((r) => r.object), ["wright/the-drafting-table"], "one owed row, not one per candidate");
 });
 
-test("22 · COMMIT VISIBILITY: a lower act id that commits AFTER a higher one was seen is seen on the next request, with no later act and no window tick (and the old max-id watch is shown to miss it)", async () => {
+test("22 · COMMIT VISIBILITY: a lower act id that commits AFTER a higher one was read is read by the next request, with no later act and no window tick", async () => {
   await seed({});
   const marks = canon();
   const real = (s, p) => query(s, p);
-  // the previous watch, for the contrast: the newest mark act id and the windows, nothing commit-ordered
-  const legacyWatch = `SELECT COALESCE((SELECT max(a.id) FROM acts a WHERE a.class = 'mark'), 0) AS mark_act, COALESCE((SELECT max(w.id) FROM windows w), 0) AS window_top, COALESCE((SELECT max(w.id) FROM windows w WHERE w.status = 'closed'), 0) AS window_closed, (SELECT count(*) FROM windows w WHERE w.status = 'clearing')::int AS clearing`;
-  const legacy = (s, p) => real(s === watchSql ? legacyWatch : s, p);
   const first = await store.connect("world2_owner"), second = await store.connect("world2_owner");
   try {
     await first.query("BEGIN");
     await first.query("INSERT INTO acts (at, crossing, actor, action, object, class) VALUES (now(), 321, 'wright', 'withdraw', 'wright/the-keystone', 'mark')"); // id n, not yet committed
     await second.query("INSERT INTO acts (at, crossing, actor, action, object, class) VALUES (now(), 321, 'ada', 'amend', 'ada/a-lamp', 'mark')");              // id n+1, committed
     await second.query("INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug) VALUES (321, 'sited', 'ada', 'hh:ada', 'pending', 'Ada, brighter.', '{}', 0, '{}', 'ada/a-lamp')");
-    const opts = { contains: marksContain };
-    const seenHigh = await liveScope(() => liveEdits(marks, { ...opts, query: real }));
-    const seenHighLegacy = await liveScope(() => liveEdits(marks, { ...opts, query: legacy }));
-    assert.equal(seenHigh.bodies.get("ada/a-lamp"), "Ada, brighter.", "the higher id is visible");
+    const o = { contains: marksContain, query: real };
+    const seenHigh = await liveScope(() => liveEdits(marks, o));
+    assert.equal(seenHigh.bodies.get("ada/a-lamp"), "Ada, brighter.", "the higher id is read");
     assert.equal(seenHigh.removed.size, 0, "the lower id has not committed");
     await first.query("COMMIT");                                  // the lower id commits now; no new act, no window tick
-    const next = await liveScope(() => liveEdits(marks, { ...opts, query: real }));
-    assert.deepEqual([...next.removed], ["wright/the-keystone"], "the next request sees the lower id");
+    const next = await liveScope(() => liveEdits(marks, o));
+    assert.deepEqual([...next.removed], ["wright/the-keystone"], "the next request reads the lower id: nothing was kept from the request that did not");
     assert.equal(next.bodies.get("ada/a-lamp"), "Ada, brighter.");
-    const nextLegacy = await liveScope(() => liveEdits(marks, { ...opts, query: legacy }));
-    assert.equal(seenHighLegacy.removed.size, 0);
-    assert.equal(nextLegacy.removed.size, 0, "THE DEFECT: the max-id watch had not moved, so the cached view still missed the committed lower id");
   } finally { await first.query("ROLLBACK").catch(() => {}); await first.end(); await second.end(); }
 });
