@@ -161,9 +161,25 @@ export function settlementEvent({ n, changes }) {
 
 // ── the wire ─────────────────────────────────────────────────────────────────
 
+// WHAT A REFUSAL MAY SAY (the review of #1148 at 8327313b). Nothing the server
+// writes as free text is ever kept: a PDS (or anything in its place) could echo
+// the identifier, the password or the token back in its `message`, and whatever
+// this file keeps reaches the state file and the receipt. So a refusal is
+// composed only of the method, the HTTP status, the server's error NAME when it
+// is a plain identifier that carries none of this run's secrets, and a fixed
+// phrase of this file's own. A name that is anything else is "(unnamed)".
+const PLAIN_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+/** `name` when it is a plain identifier holding none of `secrets`, else null. PURE. */
+export function plainName(name, secrets = []) {
+  const s = typeof name === "string" ? name : "";
+  if (!PLAIN_NAME.test(s)) return null;
+  const low = s.toLowerCase();
+  return secrets.some((x) => x && (low.includes(String(x).toLowerCase()) || String(x).toLowerCase().includes(low))) ? null : s;
+}
+
 class XrpcError extends Error {
-  constructor(method, { status = null, error = null, message = null, ambiguous }) {
-    super(`${method}: ${status ? `HTTP ${status}` : "no answer"}${error ? ` ${error}` : ""}${message ? ` — ${String(message).slice(0, 200)}` : ""}`);
+  constructor(method, { status = null, error = null, why = null, ambiguous }) {
+    super(`${method}: ${status ? `HTTP ${status}` : "no answer"}${error ? ` ${error}` : ""}${why ? ` (${why})` : ""}`);
     Object.assign(this, { method, status, error, ambiguous });
   }
 }
@@ -171,10 +187,10 @@ class XrpcError extends Error {
 /**
  * One XRPC call. A thrown fetch (timeout, refused, reset) and a 5xx are
  * AMBIGUOUS: the request may have been acted on. A 4xx is a definite answer.
- * The error text names the method, status and the server's own error name, and
- * never a header or a body we sent.
+ * A refusal carries the method, the status and the server's plain error name
+ * (plainName, against `wire.secrets`), never its message, a header or a body.
  */
-async function xrpc({ fetch, service, timeoutMs }, method, { query = null, body = null, token = null } = {}) {
+async function xrpc({ fetch, service, timeoutMs, secrets = [] }, method, { query = null, body = null, token = null } = {}) {
   const url = new URL(`/xrpc/${method}`, service);
   if (query) for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
   const init = { method: body ? "POST" : "GET", headers: {}, signal: AbortSignal.timeout(timeoutMs) };
@@ -182,17 +198,20 @@ async function xrpc({ fetch, service, timeoutMs }, method, { query = null, body 
   if (token) init.headers.authorization = `Bearer ${token}`;
   let res;
   try { res = await fetch(url, init); }
-  catch (e) { throw new XrpcError(method, { message: e?.name === "TimeoutError" ? "timed out" : (e?.cause?.code ?? e?.name ?? "fetch failed"), ambiguous: true }); }
+  catch (e) {
+    const why = e?.name === "TimeoutError" ? "timed out" : (plainName(e?.cause?.code, secrets) ?? plainName(e?.name, secrets) ?? "the connection failed");
+    throw new XrpcError(method, { why, ambiguous: true });
+  }
   let json = null;
   try { json = await res.json(); } catch { /* an empty or broken body */ }
   if (res.ok) return json ?? {};
-  throw new XrpcError(method, { status: res.status, error: json?.error ?? null, message: json?.message ?? null, ambiguous: res.status >= 500 });
+  throw new XrpcError(method, { status: res.status, error: plainName(json?.error, secrets) ?? (json?.error == null ? null : "(unnamed)"), ambiguous: res.status >= 500 });
 }
 
 /** A session: the account's did and its access token, held in memory only. */
 export async function createSession(wire, { identifier, password }) {
   const s = await xrpc(wire, "com.atproto.server.createSession", { body: { identifier, password } });
-  if (!s?.did || !s?.accessJwt) throw new XrpcError("com.atproto.server.createSession", { message: "the answer named no did or token", ambiguous: false });
+  if (!s?.did || !s?.accessJwt) throw new XrpcError("com.atproto.server.createSession", { why: "the answer named no did or token", ambiguous: false });
   return { did: s.did, accessJwt: s.accessJwt };
 }
 
@@ -281,10 +300,11 @@ export async function publishEvent(event, { stateDir, env = process.env, fetch =
     state.payload.digest ??= createHash("sha256").update(`${state.payload.text}\n${state.payload.link}`).digest("hex");
     if (state.status === "posted") return receipt("already", state);
     const note = (step, outcome, detail = null) => { state.attempts.push({ at: at(), step, outcome, ...(detail ? { detail } : {}) }); writeState(stateDir, state); };
-    const wire = { fetch, service, timeoutMs };
+    // every secret this run holds, so no refusal's name can carry one (the token joins once it exists)
+    const wire = { fetch, service, timeoutMs, secrets: [creds.identifier, creds.password] };
 
     let session;
-    try { session = await createSession(wire, creds); }
+    try { session = await createSession(wire, creds); wire.secrets.push(session.accessJwt); }
     catch (e) {
       // said once while it repeats: a credential that stays wrong is one line, not one per tick
       const last = state.attempts.at(-1);

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from "node:path";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import {
-  BSKY_ENV, MAX_SENDS, crossingEvent, lockEvent, plainLine, postRecord, publishEvent, readState, rkeyFor, settlementChanges, settlementEvent,
+  BSKY_ENV, MAX_SENDS, crossingEvent, lockEvent, plainLine, plainName, postRecord, publishEvent, readState, rkeyFor, settlementChanges, settlementEvent,
 } from "../src/bluesky-publisher.mjs";
 import { crossingFromTown, main, settlementFromWorld } from "../tools/bluesky-publish.mjs";
 
@@ -41,6 +41,13 @@ async function fakePds() {
       const send = (status, obj) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
       if (fault === "drop-before") return req.socket.destroy();
       if (fault === "500") return send(500, { error: "InternalServerError", message: "the fake is down" });
+      // A HOSTILE OR CARELESS PDS: it echoes whatever secret it was given, in its error name and its message
+      if (fault?.startsWith("echo")) {
+        const sent = (() => { try { return JSON.parse(body || "{}"); } catch { return {}; } })();
+        const secret = sent.password ?? (req.headers.authorization ?? "").replace(/^Bearer /, "") ?? "";
+        return send(fault === "echo-500" ? 500 : method.endsWith("createSession") ? 401 : 400,
+          { error: secret || TOKEN, message: `refused: identifier=${sent.identifier ?? IDENT} password=${secret} token=${TOKEN} authorization=Bearer ${TOKEN}` });
+      }
       if (method === "com.atproto.server.createSession") {
         const b = JSON.parse(body);
         if (fault === "400" || b.identifier !== IDENT || b.password !== PASSWORD) return send(401, { error: "AuthenticationRequired", message: "Invalid identifier or password" });
@@ -254,6 +261,45 @@ test("NO SESSION: a refused login spends no send, is recorded once however often
     assert.equal(st.attempts.filter((a) => a.step === "session").length, 1, "one line, not one per tick");
     assert.ok(!filesIn(dir).includes("synthetic-wrong-pw"));
   } finally { await pds.close(); }
+});
+
+test("SECRET ECHO: a PDS that answers with the password and the token, in its error name and its message, leaves no byte of either in state or receipt", async () => {
+  // review of #1148 at 8327313b: the server's raw error and message were composed into the refusal, then the state and receipt
+  const pds = await fakePds(); const dir = tempDir("bsky-echo-");
+  try {
+    const receipts = [];
+    pds.faults.createSession.push("echo");                              // the login refused, echoing the password
+    receipts.push(await run(pds, dir));
+    pds.faults.createRecord.push("echo-500");                           // an ambiguous send echoing the token
+    pds.faults.getRecord.push("echo");                                  // and a getRecord that echoes it too
+    receipts.push(await run(pds, dir));
+    pds.faults.createRecord.push("echo");                               // the second send refused outright, echoing the token
+    receipts.push(await run(pds, dir));
+    assert.deepEqual(receipts.map((r) => r.outcome), ["waiting", "waiting", "failed"], JSON.stringify(receipts));
+    const written = filesIn(dir) + JSON.stringify(receipts);
+    assertNoSecret(written, "state and receipts");
+    assert.match(written, /createSession: HTTP 401 \(unnamed\)/, "a refusal still names its method and status, and that its name was withheld");
+    assert.equal(pds.creates(), 0);
+  } finally { await pds.close(); }
+});
+
+test("SECRET ECHO, a secret shaped like a plain name: an alphanumeric password echoed as the error name is still withheld", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-echo2-");
+  try {
+    const plainPw = "SyntheticPlainPw7f3a";                             // passes the name pattern: only the secret check can stop it
+    const env = { BSKY_IDENTIFIER: IDENT, BSKY_APP_PASSWORD: plainPw };
+    pds.faults.createSession.push("echo");
+    const r = await run(pds, dir, { env });
+    assert.equal(r.outcome, "waiting");
+    assert.ok(!(filesIn(dir) + JSON.stringify(r)).includes(plainPw), "the echoed password is not kept as the error's name");
+  } finally { await pds.close(); }
+});
+
+test("plainName keeps a plain error name and withholds anything else", () => {
+  assert.equal(plainName("RecordNotFound", [IDENT, PASSWORD]), "RecordNotFound");
+  assert.equal(plainName("synthetic-app-pw-7f3a", []), null, "not a plain identifier");
+  assert.equal(plainName("SyntheticPlainPw7f3a", ["SyntheticPlainPw7f3a"]), null, "a plain name that is a secret");
+  assert.equal(plainName(undefined), null);
 });
 
 test("UNCONFIGURED: without both env names nothing is read or sent", async () => {
