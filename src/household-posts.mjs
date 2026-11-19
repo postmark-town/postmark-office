@@ -13,8 +13,9 @@
 //
 // Each row carries ONLY the general fields (design-notes/posts-fields.md § 4):
 // class, id, title, author, household, state, latest {act, at}, responses,
-// role, stake, ours. Nothing reads a class's own `fields`, so a reader draws
-// every class with one row and branches on `class` for nothing but a colour.
+// role, stake, ours. (`latest` carries a `by` only for an act that is not a
+// resident's: the town's return of a removed mark's stamps, `act: "town-return"`.)
+// Nothing reads a class's own `fields`, so a reader draws every class with one row and branches on `class` for nothing but a colour.
 //
 // ── THE CLASSES TODAY ───────────────────────────────────────────────────────
 //
@@ -332,6 +333,8 @@ async function tableRowsAll(classes, members, now, { env, what, townClone = TOWN
 // other file-backed caches keep (docs/read-workers.md), so a crossing that
 // appends to the ledger is read on the next call and never before.
 let backingCache = null;
+/** Who a town return's `latest.by` names: the town, not the staker it went back to (POS-1142). */
+const TOWN_ACTOR = "the-town";
 
 async function backingOf(townClone) {
   const ledger = join(townClone, "WHITE_PAGES", "stamp-ledger.md");
@@ -353,12 +356,20 @@ async function backingOf(townClone) {
     holders.set(mark, [...(holders.get(mark) ?? []), { handle: k.slice(cut + 1), n }]);
   }
   const moved = new Map();
+  // POS-1142: the town hands a removed mark's stamps back as ITS act (`for: town-return:S<n>`, town #4796), never an unstake in
+  // the staker's name. It is its own movement here, with the town as its actor (`by`), and the stakers it went back to are kept
+  // so a position the town closed to zero is still told to the house that held it. The classifier is the town's own; no grammar here.
+  const returned = new Map();
   for (const e of state.entries) {
     const c = classifyEntry(e.canonical);
     if (c.kind === "world-stake" || c.kind === "world-unstake")
       moved.set(c.mark, { act: c.kind === "world-stake" ? "stake" : "unstake", at: c.date });
+    else if (c.kind === "world-town-return") {
+      moved.set(c.mark, { act: "town-return", by: TOWN_ACTOR, at: c.date });
+      returned.set(c.mark, new Set([...(returned.get(c.mark) ?? []), c.handle]));
+    }
   }
-  const value = { escrow: state.escrow, holders, moved };
+  const value = { escrow: state.escrow, holders, moved, returned };
   backingCache = { key, value };
   return value;
 }
@@ -379,7 +390,10 @@ async function ideaRows(members, whose, { townClone }) {
     const held = backing.holders.get(idea.id) ?? [];
     const ours = held.filter((x) => house.has(x.handle)).reduce((a, x) => a + x.n, 0);
     const author = String(idea.by ?? idea.id.split("/")[0]);
-    const role = house.has(author) ? "author" : ours > 0 ? "participant" : null;
+    // a position the town handed back is zero now, and the house that held it is still told what became of it (POS-1142): it is
+    // listed while the idea stands in the Think Tank, not from any history; an ordinary unstake to zero is not.
+    const wasReturned = [...(backing.returned.get(idea.id) ?? [])].some((h) => house.has(h));
+    const role = house.has(author) ? "author" : ours > 0 || wasReturned ? "participant" : null;
     if (!role) continue;
     const posted = idea.date ? { act: "post", at: String(idea.date) } : null;
     const last = backing.moved.get(idea.id);

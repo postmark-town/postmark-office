@@ -232,6 +232,9 @@ const flow = {
   minted: { cur: 0, prev: 0 }, gifted: { cur: 0, prev: 0 }, staked: { cur: 0, prev: 0 },
   unstaked: { cur: 0, prev: 0 }, moved: { cur: 0, prev: 0 }, lines: { cur: 0, prev: 0 },
   townMinted: { cur: 0, prev: 0 },
+  // POS-1142: the town handing a removed mark's stamps back (`for: town-return:S<n>`, town #4796) is the TOWN's act, out of the
+  // same escrow as an unstake and never counted as one: its own flow, the classifier's raw principal.
+  townReturned: { cur: 0, prev: 0 },
 };
 const mintedByHandleWin = {};  // handle -> stamps minted inside the window
 const stakedByMarkWin = {};    // mark   -> stamps staked inside the window
@@ -255,6 +258,7 @@ for (const e of entries) {
     if (isCur) { stakersWin.add(c.handle); stakedByMarkWin[c.mark] = (stakedByMarkWin[c.mark] || 0) + c.n; }
   }
   if (c.kind === "world-unstake") flow.unstaked[side] += c.n;
+  if (c.kind === "world-town-return") flow.townReturned[side] += c.n;
   if (c.kind === "transfer") flow.moved[side] += c.n;
 }
 // A household, not a handle, is this page's unit — the same rule the equity
@@ -318,7 +322,8 @@ const SOURCE_COLORS = Object.fromEntries(sourceOrder.map((s, i) => [s, V.SERIES[
 
 // ── the week, as the page's first reading ────────────────────────────────────
 const issuedByDay = days30.map((d) => sourceOrder.reduce((s, k) => s + (issuanceByDay[d]?.[k] || 0), 0));
-const netStake = flow.staked.cur - flow.unstaked.cur;
+// What left escrow, by whoever's hand: the residents' own unstakes and the town's returns, each counted once.
+const netStake = flow.staked.cur - flow.unstaked.cur - flow.townReturned.cur;
 const kpiRow = V.kpis([
   { label: `minted · last ${W7}d`, value: comma(flow.minted.cur),
     sub: V.deltaLine(flow.minted.cur, flow.minted.prev, { size: W7 }),
@@ -328,7 +333,9 @@ const kpiRow = V.kpis([
   { label: `changed hands · last ${W7}d`, value: comma(flow.moved.cur),
     sub: V.deltaLine(flow.moved.cur, flow.moved.prev, { size: W7 }) },
   { label: `staked on marks · ${W7}d`, value: comma(flow.staked.cur),
-    sub: flow.unstaked.cur ? `${comma(flow.unstaked.cur)} unstaked · net ${netStake >= 0 ? "+" : ""}${comma(netStake)}`
+    sub: flow.unstaked.cur || flow.townReturned.cur
+      ? [flow.unstaked.cur ? `${comma(flow.unstaked.cur)} unstaked` : null, flow.townReturned.cur ? `${comma(flow.townReturned.cur)} returned by the town` : null,
+          `net ${netStake >= 0 ? "+" : ""}${comma(netStake)}`].filter(Boolean).join(" · ")
       : V.deltaLine(flow.staked.cur, flow.staked.prev, { size: W7 }) },
   { label: `ledger lines · last ${W7}d`, value: comma(flow.lines.cur),
     sub: V.deltaLine(flow.lines.cur, flow.lines.prev, { size: W7 }) },
@@ -452,7 +459,7 @@ ${V.figure({
 
 ${V.figure({
   title: `what was backed this week — stamps staked on marks in the last ${W7} days`,
-  note: `Escrow is an existence anchor, so a stake is a resident spending money to say a mark should keep existing. ${flow.unstaked.cur ? `${comma(flow.unstaked.cur)}✦ came back out of escrow in the same window.` : "Nothing was unstaked in the same window."} ${stakersWin.size ? `${stakersWin.size} household(s) staked.` : ""}`,
+  note: `Escrow is an existence anchor, so a stake is a resident spending money to say a mark should keep existing. ${flow.unstaked.cur || flow.townReturned.cur ? [flow.unstaked.cur ? `${comma(flow.unstaked.cur)}✦ came back out of escrow by residents' own unstakes` : null, flow.townReturned.cur ? `${comma(flow.townReturned.cur)}✦ were returned by the town, its own act when a mark it removed was backed, never an unstake in the staker's name` : null].filter(Boolean).join("; ") + " in the same window." : "Nothing was unstaked or returned in the same window."} ${stakersWin.size ? `${stakersWin.size} household(s) staked.` : ""}`,
   chart: stakeChart,
 })}
 
@@ -548,7 +555,7 @@ writeFileSync(join(OUT_DIR, "data.json"), JSON.stringify({
   recent: {
     window_days: W7, from: WIN.curFrom, to: WIN.curTo, prior_from: WIN.prevFrom, prior_to: WIN.prevTo,
     minted: flow.minted, gifted: flow.gifted, moved: flow.moved, staked: flow.staked,
-    unstaked: flow.unstaked, town_minted: flow.townMinted, ledger_lines: flow.lines,
+    unstaked: flow.unstaked, town_returned: flow.townReturned, town_minted: flow.townMinted, ledger_lines: flow.lines,
     earning_households: earningHouseholds.size,
     minted_by_household: Object.fromEntries(Object.values(mintedByHouseholdWin).map((r) => [r.key, { handles: r.handles, minted: r.n }])),
     staked_by_mark: stakedByMarkWin,
