@@ -404,7 +404,7 @@ test("card-by-its-own-name — household { read: \"declare-stance-on\" } answers
   // reads as THIS ACT TAKES NO ARGUMENTS.
   // `as` and `law` are the town's word (POS-361): as: "town", and the law an
   // opposition cites.
-  assert.deepEqual(Object.keys(read.card.fields).sort(), ["as", "handle", "law", "on", "stance"]);
+  assert.deepEqual(Object.keys(read.card.fields).sort(), ["as", "handle", "law", "on", "preview", "stance"]); // preview (POS-1136): the town's word on one mark, written nowhere
   assert.equal(read.card.fields.on.required, true);
   assert.equal(read.card.fields.stance.required, true);
   assert.deepEqual(read.card.fields.stance.enum, ["welcomed", "neutral", "opposed"]);
@@ -418,7 +418,30 @@ test("an unknown field bounces BY NAME against the act's own schema", async () =
   const bounced = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed", stanse: "typo" } });
   assert.equal(bounced.code, 422);
   assert.deepEqual(bounced.unknown_fields, ["stanse"]);
-  assert.deepEqual(bounced.allowed, ["on", "stance", "as", "law", "handle"]);
+  assert.deepEqual(bounced.allowed, ["on", "stance", "preview", "as", "law", "handle"]);
+});
+
+test("POS-1136 · preview is a field of the act at the household door (not an unknown one) and is judged, not dropped: a resident's preview refuses and writes nothing", async () => {
+  freshLog();
+  const before = stanceRows().length;
+  const refused = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "opposed", preview: true } });
+  assert.equal(refused.code, 422, JSON.stringify(refused).slice(0, 300));
+  assert.ok(!refused.unknown_fields, "preview is a field the act's own schema declares");
+  assert.match(String(refused.defect ?? refused.result?.defect ?? JSON.stringify(refused)), /a preview is the town's word on one mark/);
+  assert.equal(stanceRows().length, before, "and nothing was written");
+  // THE HOUSEHOLD DOOR CHECKS FIELD NAMES, NOT TYPES: a non-boolean preview, null included, reaches the act and must be refused there, never written
+  for (const bad of [null, "true", 1, {}]) {
+    const r = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "opposed", preview: bad } });
+    assert.equal(r.code, 422, `preview ${JSON.stringify(bad)}: ${JSON.stringify(r).slice(0, 200)}`);
+    assert.match(String(r.defect ?? r.result?.defect ?? JSON.stringify(r)), /preview is true or false/, `preview ${JSON.stringify(bad)}`);
+    assert.equal(stanceRows().length, before, `preview ${JSON.stringify(bad)}: no stance row was written`);
+  }
+  const listed = await door({ do: ACTION_STANCE, args: { on: ["beta/on-wrights-edge"], stance: "opposed", preview: true } });
+  assert.equal(listed.code, 422);
+  assert.equal(stanceRows().length, before, "a list under a preview writes nothing either");
+  const written = await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed", preview: false } });
+  assert.ok(!written.error, "preview: false is an ordinary write");
+  assert.equal(stanceRows().length, before + 1);
 });
 
 test("the two halves are one door: read: \"stances\" names what do: \"declare-stance-on\" answers", async () => {
