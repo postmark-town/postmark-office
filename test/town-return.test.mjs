@@ -37,7 +37,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { settlementRig, MARKS, git } from "./helpers/settlement-seed.mjs";
 import { PIN_ROOT } from "../src/town-tool.mjs";
 import {
-  townReturnTargets, heldTownReturns, openFromStakes, lateTownReturns, settleTownReturns,
+  townReturnTargets, heldTownReturns, openFromStakes, lateTownReturns, lateUnpaid, settleTownReturns,
   runTownReturn, removalOf, TOWN_AUTHORITY,
 } from "../src/town-return.mjs";
 import { settlementTakesAway, servedSettlement, resetSettlementCaches } from "../src/world-settlement.mjs";
@@ -70,13 +70,16 @@ test("the gate holds a return while any mark it takes carries open stamps, and n
   assert.deepEqual(heldTownReturns(targets, new Map()), []);
 });
 
-test("a late stake: a mark the town returned, that the settlement no longer holds and that carries stamps again, is returned under its own removal", () => {
+test("a late stake is paid only under a removal the record establishes; one only the ledger shows is named, never paid", () => {
   const open = new Map([["a/one", 2], ["b/two", 1], ["c/three", 5], ["d/four", 3]]);
-  const returnedBy = new Map([["a/one", "S11"], ["b/two", "S9"], ["c/three", "S11"], ["e/five", "S11"], ["d/four", "S10"]]);
-  assert.deepEqual(lateTownReturns({ open, returnedBy }, new Set(["d/four"])), [
-    { removal: "S9", marks: ["b/two"] },
-    { removal: "S11", marks: ["a/one", "c/three"] },
-  ], "held marks and marks with nothing open are not returned; S9 sorts before S11");
+  const sealed = [{ removal: "S11", date: "2026-10-02", marks: ["a/one", "c/three", "d/four", "e/five"] }];
+  assert.deepEqual(lateTownReturns(sealed, { open }, new Set(["d/four"])), [
+    { removal: "S11", date: "2026-10-02", marks: ["a/one", "c/three"] },
+  ], "a mark still held is not late; a mark with nothing open is not paid");
+  const returnedBy = new Map([["a/one", "S11"], ["b/two", "S9"], ["c/three", "S11"], ["d/four", "S10"]]);
+  assert.deepEqual(lateUnpaid({ open, returnedBy }, new Set(["d/four"]), new Set(["a/one", "c/three"])), [
+    { mark: "b/two", open: 1, last_returned_by: "S9" },
+  ], "b/two's removal is only a ledger line here: named, not paid");
 });
 
 test("a removal is named S<n> by its settlement, and nothing else names one", () => {
@@ -88,17 +91,20 @@ test("a removal is named S<n> by its settlement, and nothing else names one", ()
 test("settleTownReturns: written first, then read; a failed write leaves the return waiting; no writer writes nothing", async () => {
   const targets = [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"] }];
   let ledger = new Map([["bo/shed", 4], ["bo/shed-name", 1], ["x/late", 2]]);
-  const read = async () => ({ open: new Map(ledger), returnedBy: new Map([["x/late", "S9"]]) });
+  ledger.set("y/ledger-only", 1);
+  const read = async () => ({ open: new Map(ledger), returnedBy: new Map([["x/late", "S10"], ["y/ledger-only", "S7"]]) });
   const calls = [];
   const write = async (a) => { calls.push(a); for (const m of a.marks) ledger.delete(m); return { appended: true, returned: a.marks.map((mark) => ({ mark })) }; };
-  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", holds: new Set(["bo/shed", "bo/shed-name"]), read, write });
+  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", holds: new Set(["bo/shed", "bo/shed-name"]),
+    late: [{ removal: "S10", date: "2026-10-04", marks: ["x/late"] }], read, write });
   assert.deepEqual(calls, [
     { marks: ["bo/shed", "bo/shed-name"], removal: "S11", date: "2026-10-05" },
-    { marks: ["x/late"], removal: "S9", date: "2026-10-05" },
-  ], "this settlement's return, then the late one under its own removal");
+    { marks: ["x/late"], removal: "S10", date: "2026-10-04" },
+  ], "this settlement's return, then the late one under the previous settlement's sealed removal and day");
   assert.deepEqual(ok.held, []);
   assert.equal(ok.receipts.length, 2);
   assert.equal(ok.receipts[1].late, true);
+  assert.deepEqual(ok.late_unpaid, [{ mark: "y/ledger-only", open: 1, last_returned_by: "S7" }], "named, not paid");
 
   ledger = new Map([["bo/shed", 4]]);
   const failed = await settleTownReturns({ targets, removal: "S11", date: "2026-10-05", read, write: async () => ({ error: { code: 503, defect: "the office pen is busy" } }) });
@@ -231,6 +237,8 @@ test("THE FALSIFIER: the writer returns the owner and every other staker exactly
   for (const h of ["bo", "ann", "cy"]) assert.equal(bal.get(h), FUNDED[h], `${h} is whole`);
   assert.equal(bal.get("dot"), FUNDED.dot - 4, "a stake on a mark nobody opposed is untouched");
   assert.equal((ledger().match(/ · for: town-return:S11 · sig: /g) ?? []).length, 4, "recorded as the town's act");
+  // S11 was sealed at 2026-10-03T00:00Z, the 2nd in town time: the removal and its day are the seal's (B2/B3)
+  assert.match(ledger(), /\n- 2026-10-02 · stake:world-mark\/bo\/shed → ann · 3 · for: town-return:S11 · sig: /);
   assert.equal((ledger().match(/ · for: unstake · sig: /g) ?? []).length, 1, "the owner's own unstake is the only unstake");
   const v = await verify();
   assert.equal(v.ok, true, (v.problems ?? []).join("; "));
@@ -280,11 +288,26 @@ test("LATE, AFTER IT LEFT: a stake landing after the World dropped the shed goes
   });
   const next = await takesAway({ id: 3, opts: { townReturns: { write, date: "2026-10-09" } } });
   const late = next.town_returns.receipts.find((x) => x.late);
-  assert.equal(late.removal, "S11", "returned under the removal that took the shed");
+  assert.equal(late.removal, "S11", "returned under the removal S11's own sealed World established");
+  assert.equal(late.date, "2026-10-02", "and on S11's seal day");
   assert.deepEqual(late.returned, [{ mark: SHED, handle: "dot", n: 2 }]);
   assert.equal(openOn(SHED), 0);
   const v = await verify();
   assert.equal(v.ok, true, (v.problems ?? []).join("; "));
+
+  // A stake no sealed removal covers (S12 removed nothing): named on the receipt, never paid.
+  STAKE.worldStakeApply(TOWN, { handle: "dot", mark: SHED, n: 1, via: "api", date: "2026-10-09" }, PEM);
+  commitTown("dot stakes once more");
+  await owner(async (c) => {
+    await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (503, '2026-10-02T18:00:00Z', '2026-10-03T06:00:00Z', 'closed', '2026-10-02T18:00:00Z')");
+    await seal(c, { id: 4, window: 503, number: 13, marks: [MARKS.plot, MARKS.bench, MARKS.yard], lawSha: LAW,
+      stances: { counted: true, cutover: "S10", settlement_inferred: 13, how: "row" } });
+  });
+  const before = ledger();
+  const s13 = await takesAway({ id: 4, opts: { townReturns: { write } } });
+  assert.deepEqual(s13.town_returns.receipts, []);
+  assert.deepEqual(s13.town_returns.late_unpaid, [{ mark: SHED, open: 1, last_returned_by: "S11" }]);
+  assert.equal(ledger(), before, "a ledger line is not a removal: nothing is paid on it");
 });
 
 test("WRITER FAILURE: a pen with no key returns nothing, so the staked return waits and nothing leaves", { skip }, async () => {

@@ -35,11 +35,13 @@
 // ── A STAKE THAT ARRIVES LATE ────────────────────────────────────────────────
 //
 // The stake door asks published canon, so a stake can still land on a mark
-// between its return and the World that drops it. Such a mark is no longer in
-// the settlement's sources, so no town return names it again; the ledger does.
-// Every mark the ledger shows the town has returned, that the settlement no
-// longer holds and that has stamps open, is returned again under its own
-// removal (§ lateTownReturns): the late stake goes home at the next crossing.
+// between its return and the World that drops it, and never after. Such a mark
+// is no longer in the next settlement's sources, so that settlement's crossing
+// returns it under the removal the record establishes: the previous
+// settlement's own sealed World (world-settlement.mjs § sealedTownReturns),
+// never a removal read off a ledger line (review of Town #4796, B2). Stamps
+// open on a mark the ledger shows town-returned that no such removal covers
+// are named on the receipt (`late_unpaid`), never paid and never silent.
 
 import { execUnderTownLock, lockTimedOut, withTownLockHeld, LOCK_BUSY } from "./town-lock.mjs";
 import { importTownTool, isPinStop } from "./town-tool.mjs";
@@ -161,18 +163,30 @@ export async function townReturnOpen({ townClone, stakes, read = liveLedgerOpen 
 }
 
 /**
- * Marks the town returned before, that the settlement no longer holds and that
- * carry open stamps again: `[{ removal, marks }]` by removal. PURE.
+ * THE LATE RETURNS TO PAY: of the removals the record establishes (`sealed`,
+ * `[{ removal, date, marks }]`, a sealed settlement's own town returns), the
+ * marks the settlement no longer holds that carry open stamps again. PURE.
  */
-export function lateTownReturns({ open, returnedBy }, holds) {
-  const byRemoval = new Map();
-  for (const [mark, removal] of returnedBy) {
-    if (holds.has(mark) || !((open.get(mark) ?? 0) > 0)) continue;
-    if (!byRemoval.has(removal)) byRemoval.set(removal, []);
-    byRemoval.get(removal).push(mark);
+export function lateTownReturns(sealed, { open }, holds) {
+  const out = [];
+  for (const s of sealed ?? []) {
+    const marks = (s.marks ?? []).filter((m) => !holds.has(m) && (open.get(m) ?? 0) > 0).sort();
+    if (marks.length) out.push({ removal: s.removal, date: s.date, marks });
   }
-  return [...byRemoval].map(([removal, marks]) => ({ removal, marks: marks.sort() }))
-    .sort((a, b) => a.removal.localeCompare(b.removal, undefined, { numeric: true }));
+  return out;
+}
+
+/**
+ * Stamps open on a mark the ledger shows the town returned, that the
+ * settlement no longer holds, and that no established removal here pays:
+ * NAMED, never paid (a ledger line is not a removal, review of Town #4796 B2),
+ * so no stake is silently orphaned. `[{ mark, open, last_returned_by }]`. PURE.
+ */
+export function lateUnpaid({ open, returnedBy }, holds, paying) {
+  return [...returnedBy]
+    .filter(([m]) => !holds.has(m) && !paying.has(m) && (open.get(m) ?? 0) > 0)
+    .map(([mark, removal]) => ({ mark, open: open.get(mark), last_returned_by: removal }))
+    .sort((a, b) => a.mark.localeCompare(b.mark));
 }
 
 /**
@@ -195,22 +209,29 @@ export async function runTownReturn({ marks, removal, date }, { townClone, exec 
 
 /**
  * THE SETTLEMENT'S RETURNS AND ITS GATE, in that order. `targets` are the
- * settlement's town returns, `removal` its `S<n>`, `holds` every mark its
- * sources hold. With `write` (the crossing that removes them) each removal is
- * returned first: this settlement's, then any late one. Then the ledger is read
- * and every target still carrying stamps is held. `write: null` returns
- * nothing and only reads (a rehearsal, a reader). → `{ removal, receipts, held,
- * source, unread? }`; `receipts` are the exec's answers, one per removal.
+ * settlement's town returns, `removal` and `date` its seal's (the caller's to
+ * establish, never a receipt's), `holds` every mark its sources hold, `late`
+ * the previous settlement's own sealed town returns. With `write` (the crossing
+ * that removes them) each removal is returned first: this settlement's, then
+ * any late one the live ledger shows open. Then the ledger is read and every
+ * target still carrying stamps is held. `write: null` returns nothing and only
+ * reads (a rehearsal, a reader). → `{ removal, receipts, held, source,
+ * late_unpaid?, unread? }`; `receipts` are the exec's answers, one per removal.
  */
-export async function settleTownReturns({ targets, removal, date, holds = new Set(), townClone, stakes = [], write = null, read = liveLedgerOpen }) {
+export async function settleTownReturns({ targets, removal, date, holds = new Set(), late = [], townClone, stakes = [], write = null, read = liveLedgerOpen }) {
   const receipts = [];
+  let unpaid = [];
   if (write) {
     const before = await townReturnOpen({ townClone, stakes, read });
     const runs = [];
-    if (targets.length) runs.push({ removal, marks: [...new Set(targets.flatMap((t) => t.leaving))].sort() });
-    if (before.source === "live") for (const late of lateTownReturns(before, holds)) runs.push({ ...late, late: true });
+    if (targets.length) runs.push({ removal, date, marks: [...new Set(targets.flatMap((t) => t.leaving))].sort() });
+    if (before.source === "live") {
+      const paying = lateTownReturns(late, before, holds);
+      for (const l of paying) runs.push({ ...l, late: true });
+      unpaid = lateUnpaid(before, holds, new Set([...runs.flatMap((r) => r.marks)]));
+    }
     for (const r of runs) {
-      const answer = await write({ marks: r.marks, removal: r.removal, date });
+      const answer = await write({ marks: r.marks, removal: r.removal, date: r.date });
       receipts.push({ removal: r.removal, ...(r.late ? { late: true } : {}), marks: r.marks, ...answer });
     }
   }
@@ -219,6 +240,7 @@ export async function settleTownReturns({ targets, removal, date, holds = new Se
     removal, receipts,
     held: heldTownReturns(targets, after.open),
     source: after.source,
+    ...(unpaid.length ? { late_unpaid: unpaid } : {}),
     ...(after.unread ? { unread: after.unread } : {}),
   };
 }
