@@ -224,6 +224,22 @@ for (const id of CAPTURE) {
   say(`- ${id}: baseline noise paths ${noise.size}; changed by the AMEND ${d1.length}${d1.length ? ": " + d1.slice(0, 8).join(" | ") : ""}; changed by the WITHDRAWAL ${d2.length}${d2.length ? ": " + d2.slice(0, 8).join(" | ") : ""}`);
 }
 
+// ── 3c. THE PUBLIC MARKET-MARK PROBE (scope): another author's MARKET mark has an amend and a withdraw owed in the store (rows written here, in this throwaway store, as the act road would) ─────────
+say(""); say("## 3c. Scope probe: a common-ground (market) mark, edited and withdrawn in the store, must be served as canon");
+{
+  const ALDER = "alden/the-alder-at-the-green-lamp";
+  const ALDER_NEW = "POS686MARKETPROBE";
+  const canonAlder = JSON.parse((await GET("/world/state", { auth: false })).text).marks.find((m) => m.id === ALDER);
+  say(`- canon: ${ALDER} tier ${canonAlder?.tier}, kind ${canonAlder?.kind}`);
+  await office.query("world2_owner", "INSERT INTO acts (at, crossing, actor, action, object, class) VALUES (now(), 321, 'alden', 'amend', $1, 'mark'), (now(), 321, 'alden', 'withdraw', $1, 'mark')", [ALDER]);
+  await office.query("world2_owner", "INSERT INTO windows (id, opens_at, closes_at, status) SELECT 321, now(), now() + interval '12 hours', 'open' WHERE NOT EXISTS (SELECT 1 FROM windows WHERE id = 321)");
+  const inv = await GET(`/world/investigate?mark=${ALDER}`, { auth: false });
+  const fnd = await GET(`/world/find?q=alder`, { auth: false });
+  const st = JSON.parse((await GET("/world/state", { auth: false })).text).marks.find((m) => m.id === ALDER);
+  say(`- investigate (anon): ${inv.status}, serves the canon body ${inv.text.includes(String(canonAlder?.body ?? "").slice(0, 30)) ? "YES" : "NO"}, new body ${inv.text.includes(ALDER_NEW) ? "SEEN (leak)" : "not seen"}`);
+  say(`- find (anon): ${fnd.text.includes(ALDER) ? "still found (canon's)" : "NOT FOUND (leak)"}; /world/state: ${st ? "mark present with canon body " + (st.body === canonAlder?.body ? "YES" : "NO") : "mark MISSING (leak)"}`);
+}
+
 // ── 4. WHAT THE STORE HOLDS NOW (the carrier rows) and the act ledger ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 say(""); say("## 4. What the acts left in the store");
 const claims = await office.query("world2_owner", "SELECT id, status, window_id, claimant, household, left(body, 60) AS body, supersedes IS NOT NULL AS supersedes_a_claim FROM claims ORDER BY submitted_at DESC LIMIT 5");
@@ -255,16 +271,16 @@ say(`(${timed.length} timed lines of ${accessLines.length}; cov: pen pool only; 
 
 // ── 5b. PER READER BLOCK (so the editing house and the unrelated house are never mixed): the office's own bundle segments, leases, totals ─────────────────────────────
 say(""); say("## 5b. Composition by reader block (access-log lines inside each block's own wall-clock window; the REST /doorstep/<h> rows are never pooled across houses)");
-say("| phase | reader block | n lines | total_ms p50 | bundle sum_ms p50 | core n / ms | stances n / ms | stakes n / ms | live_parcel n / ms | worker leases n / held ms p50 | main leases n / held ms |");
-say("|---|---|---|---|---|---|---|---|---|---|---|");
+say("| phase | reader block | n lines | total_ms p50 | bundle sum_ms p50 | core n / ms | stances n / ms | stakes n / ms | live_parcel watch n / ms | live_parcel_scan n / ms | worker leases n / held ms p50 | main leases n / held ms |");
+say("|---|---|---|---|---|---|---|---|---|---|---|---|");
 const DOORFAM = [...READERS.filter((r) => /doorstep|BULK|town marks/.test(r.id)).map((r) => r.id)];
 const compo = {};
 for (const [pn, p] of Object.entries(phases)) for (const rid of DOORFAM) {
   const b = p.rows[rid]; if (!b?.w0) continue;
   const lns = timed.filter((l) => { const t = Date.parse(l.ts); return t >= b.w0 - 40 && t <= b.w1 + 40 && (rid.includes("town marks") ? l.path === "/mcp" && l.call?.tool === "town" : rid.includes("MCP") ? l.path === "/mcp" && l.call?.tool === "household" : rid.includes("BULK") ? l.path === "/doorsteps" : l.path.startsWith("/doorstep/")); });
   const seg = (n, k) => med(lns.map((l) => l.timing.bundle?.seg?.[n]?.[k]));
-  compo[`${pn} | ${rid}`] = { n: lns.length, total: med(lns.map((l) => l.timing.total_ms)), bundle: med(lns.map((l) => l.timing.bundle?.sum_ms)), core: [seg("core", "n"), seg("core", "sum_ms")], stances: [seg("stances", "n"), seg("stances", "sum_ms")], stakes: [seg("stakes", "n"), seg("stakes", "sum_ms")], live: [seg("live_parcel", "n"), seg("live_parcel", "sum_ms")] };
-  say(`| ${pn} | ${rid} | ${lns.length} | ${med(lns.map((l) => l.timing.total_ms))} | ${med(lns.map((l) => l.timing.bundle?.sum_ms))} | ${seg("core", "n")} / ${seg("core", "sum_ms")} | ${seg("stances", "n")} / ${seg("stances", "sum_ms")} | ${seg("stakes", "n")} / ${seg("stakes", "sum_ms")} | ${seg("live_parcel", "n")} / ${seg("live_parcel", "sum_ms")} | ${med(lns.map((l) => l.timing.leases?.worker?.n))} / ${med(lns.map((l) => l.timing.leases?.worker?.held_ms?.sum))} | ${med(lns.map((l) => l.timing.leases?.main?.n))} / ${med(lns.map((l) => l.timing.leases?.main?.held_ms?.sum))} |`);
+  compo[`${pn} | ${rid}`] = { n: lns.length, total: med(lns.map((l) => l.timing.total_ms)), bundle: med(lns.map((l) => l.timing.bundle?.sum_ms)), core: [seg("core", "n"), seg("core", "sum_ms")], stances: [seg("stances", "n"), seg("stances", "sum_ms")], stakes: [seg("stakes", "n"), seg("stakes", "sum_ms")], live: [seg("live_parcel", "n"), seg("live_parcel", "sum_ms")], scan: [seg("live_parcel_scan", "n"), seg("live_parcel_scan", "sum_ms")] };
+  say(`| ${pn} | ${rid} | ${lns.length} | ${med(lns.map((l) => l.timing.total_ms))} | ${med(lns.map((l) => l.timing.bundle?.sum_ms))} | ${seg("core", "n")} / ${seg("core", "sum_ms")} | ${seg("stances", "n")} / ${seg("stances", "sum_ms")} | ${seg("stakes", "n")} / ${seg("stakes", "sum_ms")} | ${seg("live_parcel", "n")} / ${seg("live_parcel", "sum_ms")} | ${seg("live_parcel_scan", "n")} / ${seg("live_parcel_scan", "sum_ms")} | ${med(lns.map((l) => l.timing.leases?.worker?.n))} / ${med(lns.map((l) => l.timing.leases?.worker?.held_ms?.sum))} | ${med(lns.map((l) => l.timing.leases?.main?.n))} / ${med(lns.map((l) => l.timing.leases?.main?.held_ms?.sum))} |`);
 }
 say(""); say("## 5c. Where each act's time went (the office's act segments, access log)");
 for (const l of timed.filter((x) => x.timing.act)) {
