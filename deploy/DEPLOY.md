@@ -1681,21 +1681,43 @@ https://postmark.town/daily/
 Settlement S175 is blessed. New marks published: 10 · household records added: 1.
 https://postmark.town/replay/#S175
 ```
-- **The crossing post:** the Daily committed at the town clone's HEAD, which Ferry
-  curates hours after the boat. It is posted only when it names the current
-  crossing or the one before, so a Daily left standing never posts its crossing
-  late. The headline is its lead `##` (`tools/site-sentinel.mjs § dailyFingerprint`),
-  as plain words.
-- **The settlement post:** the newest `settlement/S<n>` tag (the keeper's
-  blessing; a mechanical publish is not one), blessed within the last day, or
-  exactly `--settlement <n>`.
+- **The crossing post:** a crossing whose Daily Ferry curated (hours after the
+  boat) and committed. It is read from the town clone's committed history of
+  `TOWN_BULLETIN/ferrys-daily.md`, never the working tree, using that crossing's
+  newest committed Daily with a lead `##` (`tools/site-sentinel.mjs § dailyFingerprint`),
+  as plain words. A crossing with no curated Daily has no post.
+- **The settlement post:** a `settlement/S<n>` tag (the keeper's blessing; a
+  mechanical publish is not one).
   - **"New marks published"** is the number of `published` keys in
     `WORLD/settlement-publications.json` at S<n> and not at the previous blessed tag.
   - **"Household records added"** is the number of `households` keys in
     `WORLD/households.json` at S<n> and not at the previous tag. A rename can add
     one, so it is never called "joined".
   - Retirements are not counted (Wright, 2026-11-19, option C). A record that
-    can't be read is no post, never a guessed zero.
+    can't be read is no post, never a guessed zero: the event is `held`, still owed.
+
+**After each, with no age and no gap** (the lead's review at `054812e7`; Rivet's
+technical settlement, 2026-11-19 05:33Z). Each call, for its one kind:
+1. **Carry.** Every event whose state is not yet posted or failed (pending,
+   sending or waiting) is published again from its own state file, with the words
+   first composed, before any source is read. However old it is, and however far
+   the Daily or the World has moved on, it is never stranded.
+2. **The floor** is the highest event of the kind recorded in `--state`.
+   - **With no state for the kind,** nothing is chosen for the operator. The call
+     answers `unstarted` (exit 3) until the operator names the first event once:
+     `--crossing <n>` or `--settlement <n>`. That posts that event alone. There is
+     no age window and no backfill of history.
+   - **Thereafter,** every eligible event above the floor is posted, oldest first.
+     Two blessings, or two crossings, between ticks are two posts.
+3. **No gap below the floor.** Discovery stops at the first eligible event it
+   cannot record: a record that can't be read (`held`), a lock another run holds
+   (`busy`), or no credential (`unconfigured`). Nothing above it is posted, so the
+   floor never passes an owed event, and the next tick starts there again. An S<n>
+   whose record stays unreadable holds the later ones behind it, loudly (exit 3),
+   until it is mended.
+- **A named event at or below the floor** posts exactly that one, or answers from
+  its state, and moves no floor. **Above the floor,** it posts every eligible event
+  up to and including n, oldest first, and never steps past an owed one.
 
 **The runtime contract (Jetto 2026-11-19 03:55Z; Wright 03:56Z):**
 - **The credential:** exactly `BSKY_IDENTIFIER` and `BSKY_APP_PASSWORD`. Proposed
@@ -1714,24 +1736,33 @@ https://postmark.town/replay/#S175
 
 **The interface for the hook:**
 ```sh
-node tools/bluesky-publish.mjs crossing   --town  <town clone>  --state <dir>
+node tools/bluesky-publish.mjs crossing   --town  <town clone>  --state <dir> [--crossing <n>]
 node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [--settlement <n>]
 ```
+- **The first run of each kind is the operator's,** once, by hand, with the event
+  to start from: for example `--crossing 321` and `--settlement 176`. The tick's
+  calls carry no number.
 - **`--state <dir>` (required):** one directory both calls share, outside any
   checkout, writable by the posting unit. It holds one file per event
   (`<rkey>.json`: the event, the payload as first composed, every attempt and its
-  outcome, the posted uri), plus a lock per event while a run holds it. It is
-  the event's whole history: keep it.
+  outcome, the posted uri) and one lock file per event (`<rkey>.lock.<k>` while a
+  run holds it, `<rkey>.free.<k>` after). It is each event's whole history, and the
+  floor: keep it, and don't remove a lock file by hand.
 - **Safe to repeat:** every call is safe on every tick and from a repeated or
   concurrent hook. A posted event is answered from its file with no network, and
-  an event another run holds is left to it.
-- **Stdout:** one JSON line, `{event, rkey, outcome, sends, uri?, detail?}`, or
-  `{outcome: "skipped", detail}` when there is nothing to post.
-- **Exit codes:**
+  an event another run holds is left to it. A run whose holder died is taken over
+  under a new lock number. The dead run's file is never moved or removed while
+  another could hold it, so a stale takeover can't let a second sender in.
+- **Stdout:** one JSON line per event the call acted on, oldest first:
+  - `{event, rkey, outcome, sends, uri?, detail?}`;
+  - `{event, rkey, outcome: "held", detail}` for an owed event whose record can't be read;
+  - `{event, outcome: "skipped", detail}` for a named event with nothing to post.
+  When the call acted on none, it prints one line, `{kind, outcome: "skipped" | "unstarted", detail}`.
+- **Exit codes** come from the most urgent line:
+  - `1`: failed (both sends spent; logged; never sent again);
+  - `3`: waiting, held, unconfigured or unstarted (nothing more sent; the next run asks again);
   - `0`: posted, reconciled, already, busy or skipped;
-  - `1`: failed (both sends spent; logged);
-  - `3`: waiting or unconfigured (nothing sent; the next run asks again);
-  - `2`: cannot run.
+  - `2`: cannot run (usage).
   The hook treats every exit as non-fatal.
 - **Where it fits (proposed; the hook is Jetto's):** both calls in the keep tick
   (`postmark-office-keep.service`, every 15 minutes), after the world fetch that
@@ -1741,7 +1772,7 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
     `office-keep.sh` unsets those names before its other children, so give the
     two Bluesky names to the publisher's call alone, in the same manner.
   - **A late Daily:** a Daily curated at any hour is posted by the next tick
-    after it lands.
+    after it is committed, however late.
 - **Reading it back, with no key:**
   `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/crossing-<n>`.
   Confirm the account's handle and did first: `tools/ops-awareness.mjs` reads

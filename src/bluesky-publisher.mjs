@@ -34,13 +34,13 @@
 // One JSON file per event (<state>/<rkey>.json), written whole to a temporary
 // name and renamed, so a reader never sees half of it. It carries the event, the
 // payload as first composed (a retry sends the same words), every attempt with
-// its outcome, and the posted record's uri. One lock per event (<rkey>.lock,
-// created exclusively, naming its pid): a second invocation for the same event,
-// a repeated hook or a concurrent one, finds it held and leaves; a lock whose
-// pid is gone is stale and taken over.
+// its outcome, and the posted record's uri. One lock per event (lockEvent): a
+// second invocation for the same event, a repeated hook or a concurrent one,
+// finds it held and leaves; a lock whose pid is gone is stale, and a later
+// number is taken over it without ever moving or removing the old one.
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 export const BSKY_ENV = Object.freeze(["BSKY_IDENTIFIER", "BSKY_APP_PASSWORD"]);
@@ -110,21 +110,20 @@ export const DAILY_LINK = "https://postmark.town/daily/";
 export const replayLink = (n) => `https://postmark.town/replay/#S${n}`;
 
 /**
- * THE CROSSING'S POST, from Ferry's Daily. The Daily is curated by Ferry after
- * the boat (hours after, not at the ferry's completion) and names its crossing
- * in its first line ("*Crossing **320** · …"); its headline is the lead `##`
- * (tools/site-sentinel.mjs § dailyFingerprint, the producer the sentinel holds
- * the served page to). A Daily is the town's completion record for a crossing:
- * a crossing that failed, or whose Daily is not yet curated, has none, so there
- * is no post. Only the current crossing or the one before it is posted, so a
- * Daily left standing (a missed curation) never posts its old crossing late.
- * Returns `{ event }` or `{ skip }`, the reason. PURE.
+ * THE CROSSING'S POST, from one committed version of Ferry's Daily. The Daily is
+ * curated by Ferry after the boat (hours after, not at the ferry's completion)
+ * and names its crossing in its first line ("*Crossing **320** · …"); its
+ * headline is the lead `##` (tools/site-sentinel.mjs § dailyFingerprint, the
+ * producer the sentinel holds the served page to). A Daily is the town's
+ * completion record for a crossing: a crossing that failed, or whose Daily is
+ * not yet curated, has none, so there is no post. No age is judged here: which
+ * crossings are owed is the caller's (tools/bluesky-publish.mjs).
+ * Returns `{ event }` or `{ skip, n? }`, the reason. PURE.
  */
-export function crossingEvent({ markdown, headline, current }) {
+export function crossingEvent({ markdown, headline }) {
   const n = Number(/Crossing\s+\**\s*(\d+)/.exec(String(markdown ?? ""))?.[1]);
   if (!Number.isInteger(n)) return { skip: "the Daily names no crossing" };
-  if (!headline) return { skip: `the Daily for crossing ${n} has no lead headline yet` };
-  if (n > current || n < current - 1) return { skip: `the Daily names crossing ${n}, not the current crossing (${current}) or the one before: a Daily not yet curated for this boat, posted never late` };
+  if (!headline) return { n, skip: `the Daily for crossing ${n} has no lead headline yet` };
   return { event: { kind: "crossing", n, text: `Crossing ${n} · Ferry's Daily: ${plainLine(headline)}`, link: DAILY_LINK } };
 }
 
@@ -149,12 +148,12 @@ export function settlementChanges({ before, after }) {
 /**
  * THE SETTLEMENT'S POST: its number, the two counts under their own words, and
  * its replay link (the site's /replay/ gives every blessed settlement its own
- * anchor, `#S<n>`). A count that cannot be read is a skip, never a guessed zero.
- * PURE.
+ * anchor, `#S<n>`). A count that cannot be read holds the event (`{ held }`):
+ * no post, never a guessed zero, and it is still owed. PURE.
  */
 export function settlementEvent({ n, changes }) {
   if (changes?.marks == null || changes?.households == null)
-    return { skip: `settlement S${n}'s counts cannot be read whole from its blessed record: no post, never a guessed count` };
+    return { n, held: `settlement S${n}'s counts cannot be read whole from its blessed record: no post, never a guessed count` };
   return { event: { kind: "settlement", n,
     text: `Settlement S${n} is blessed. New marks published: ${changes.marks} · household records added: ${changes.households}.`, link: replayLink(n) } };
 }
@@ -166,15 +165,25 @@ export function settlementEvent({ n, changes }) {
 // the identifier, the password or the token back in its `message`, and whatever
 // this file keeps reaches the state file and the receipt. So a refusal is
 // composed only of the method, the HTTP status, the server's error NAME when it
-// is a plain identifier that carries none of this run's secrets, and a fixed
-// phrase of this file's own. A name that is anything else is "(unnamed)".
-const PLAIN_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
-/** `name` when it is a plain identifier holding none of `secrets`, else null. PURE. */
-export function plainName(name, secrets = []) {
-  const s = typeof name === "string" ? name : "";
-  if (!PLAIN_NAME.test(s)) return null;
-  const low = s.toLowerCase();
-  return secrets.some((x) => x && (low.includes(String(x).toLowerCase()) || String(x).toLowerCase().includes(low))) ? null : s;
+// is one of the few names below, and a fixed phrase of this file's own. A name
+// that is anything else is "(unnamed)": a shape test is not enough (the review
+// at 054812e7: an app password `abcd-efgh-ijkl-mnop` echoed back as
+// `abcdefghijklmnop` is a plain identifier, and holds no secret verbatim).
+export const XRPC_ERROR_NAMES = Object.freeze(new Set([
+  "AuthenticationRequired", "ExpiredToken", "InvalidToken", "AccountTakedown", "RateLimitExceeded",
+  "InvalidRequest", "InvalidSwap", "RecordNotFound", "MethodNotImplemented",
+  "InternalServerError", "UpstreamFailure", "UpstreamTimeout", "NotEnoughResources",
+]));
+// what a failed fetch may say of its cause: the network's own codes
+export const CAUSE_NAMES = Object.freeze(new Set([
+  "ECONNREFUSED", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EPIPE",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "AbortError",
+]));
+/** `name` when it is in `known` and holds, or is held in, none of `secrets`; else null. PURE. */
+export function knownName(name, known, secrets = []) {
+  if (typeof name !== "string" || !known.has(name)) return null;
+  const low = name.toLowerCase();
+  return secrets.some((x) => x && (low.includes(String(x).toLowerCase()) || String(x).toLowerCase().includes(low))) ? null : name;
 }
 
 class XrpcError extends Error {
@@ -187,8 +196,9 @@ class XrpcError extends Error {
 /**
  * One XRPC call. A thrown fetch (timeout, refused, reset) and a 5xx are
  * AMBIGUOUS: the request may have been acted on. A 4xx is a definite answer.
- * A refusal carries the method, the status and the server's plain error name
- * (plainName, against `wire.secrets`), never its message, a header or a body.
+ * A refusal carries the method, the status and the server's error name when it
+ * is a known one (knownName, against `wire.secrets`), never its message, a
+ * header or a body.
  */
 async function xrpc({ fetch, service, timeoutMs, secrets = [] }, method, { query = null, body = null, token = null } = {}) {
   const url = new URL(`/xrpc/${method}`, service);
@@ -199,13 +209,13 @@ async function xrpc({ fetch, service, timeoutMs, secrets = [] }, method, { query
   let res;
   try { res = await fetch(url, init); }
   catch (e) {
-    const why = e?.name === "TimeoutError" ? "timed out" : (plainName(e?.cause?.code, secrets) ?? plainName(e?.name, secrets) ?? "the connection failed");
+    const why = e?.name === "TimeoutError" ? "timed out" : (knownName(e?.cause?.code, CAUSE_NAMES, secrets) ?? knownName(e?.name, CAUSE_NAMES, secrets) ?? "the connection failed");
     throw new XrpcError(method, { why, ambiguous: true });
   }
   let json = null;
   try { json = await res.json(); } catch { /* an empty or broken body */ }
   if (res.ok) return json ?? {};
-  throw new XrpcError(method, { status: res.status, error: plainName(json?.error, secrets) ?? (json?.error == null ? null : "(unnamed)"), ambiguous: res.status >= 500 });
+  throw new XrpcError(method, { status: res.status, error: knownName(json?.error, XRPC_ERROR_NAMES, secrets) ?? (json?.error == null ? null : "(unnamed)"), ambiguous: res.status >= 500 });
 }
 
 /** A session: the account's did and its access token, held in memory only. */
@@ -232,6 +242,15 @@ const statePath = (dir, rkey) => join(dir, `${rkey}.json`);
 export function readState(dir, rkey) {
   try { return JSON.parse(readFileSync(statePath(dir, rkey), "utf8")); } catch { return null; }
 }
+/** Every event of `kind` with a state file in `dir`, oldest first: `{ n, state }`, state null when the file cannot be read. */
+export function recordedEvents(dir, kind) {
+  let names;
+  try { names = readdirSync(dir); } catch { return []; }
+  return names.flatMap((f) => {
+    const m = /^(crossing|settlement)-(\d+)\.json$/.exec(f);
+    return m && m[1] === kind ? [{ n: Number(m[2]), state: readState(dir, `${kind}-${m[2]}`) }] : [];
+  }).sort((a, b) => a.n - b.n);
+}
 function writeState(dir, state) {
   mkdirSync(dir, { recursive: true });
   const tmp = `${statePath(dir, state.rkey)}.${process.pid}.tmp`;
@@ -240,23 +259,54 @@ function writeState(dir, state) {
 }
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 
-/** The event's lock, or null when a live process holds it. A lock whose pid is gone is taken over. */
-export function lockEvent(dir, rkey, { pid = process.pid } = {}) {
+/**
+ * THE EVENT'S LOCK, or null when a live process holds it.
+ *
+ * The review at 054812e7: a contender that saw a dead holder removed the lock
+ * file by name, and so could remove a FRESH holder's lock that replaced it,
+ * after which both sent. So no contender ever moves or removes a lock it does not
+ * hold. Locks are numbered, `<rkey>.lock.<k>`, and the highest number present is
+ * the lock. A holder releases by renaming its own `lock.<k>` to `free.<k>`.
+ *   · To take the event, a contender reads the highest number k. A live holder
+ *     there means busy. A `free.<k>`, a dead pid, or no number at all means it
+ *     tries to CREATE `lock.<k+1>`: written whole under a private name and
+ *     hard-linked into place, which the filesystem lets exactly one contender do
+ *     and never shows half-written.
+ *   · A contender that created `lock.<k+1>` then looks again. If a higher number
+ *     stands, the number it took was already superseded (cleared below a later
+ *     holder), and it removes its own file and leaves.
+ *   · The holder then clears the numbers below its own. They are never the live
+ *     lock: the highest number present is always kept.
+ * A stale observation can only fail to create a number that exists, so it can
+ * never displace a holder, even for a moment. `pause(point)` is a test seam
+ * ("takeover", "locked") where the falsifier holds a process to force the
+ * interleaving.
+ */
+export function lockEvent(dir, rkey, { pid = process.pid, pause = () => {} } = {}) {
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${rkey}.lock`);
-  for (let i = 0; i < 2; i++) {
-    try {
-      const fd = openSync(path, "wx");
-      writeSync(fd, String(pid));
-      closeSync(fd);
-      return { release: () => { try { if (readFileSync(path, "utf8").trim() === String(pid)) rmSync(path); } catch { /* gone */ } } };
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
+  const numbered = () => readdirSync(dir).flatMap((f) => {
+    const m = f.startsWith(`${rkey}.`) && /^(lock|free)\.(\d+)$/.exec(f.slice(rkey.length + 1));
+    return m ? [{ k: Number(m[2]), free: m[1] === "free", name: f }] : [];
+  }).sort((a, b) => b.k - a.k);
+  for (let i = 0; i < 3; i++) {
+    const [top] = numbered();
+    if (top && !top.free) {
       let holder = NaN;
-      try { holder = Number(readFileSync(path, "utf8").trim()); } catch { /* raced away */ }
-      if (Number.isInteger(holder) && holder > 0 && alive(holder)) return null;
-      try { rmSync(path); } catch { /* another took it */ }
+      try { holder = Number(readFileSync(join(dir, top.name), "utf8").trim()); } catch { continue; /* released or cleared: look again */ }
+      if (alive(holder)) return null;
     }
+    const k = (top?.k ?? 0) + 1;
+    const mine = join(dir, `${rkey}.lock.${k}`);
+    pause("takeover");
+    const making = join(dir, `${rkey}.${pid}.${randomUUID()}.making`);
+    writeFileSync(making, String(pid));
+    try { linkSync(making, mine); }
+    catch (e) { if (e.code !== "EEXIST") throw e; continue; }   // another took k: look again
+    finally { rmSync(making, { force: true }); }
+    if (numbered()[0]?.k !== k) { rmSync(mine, { force: true }); continue; }
+    for (const g of numbered()) if (g.k < k) rmSync(join(dir, g.name), { force: true });
+    pause("locked");
+    return { release: () => { try { renameSync(mine, join(dir, `${rkey}.free.${k}`)); } catch { /* gone */ } } };
   }
   return null;
 }
@@ -275,30 +325,38 @@ export function lockEvent(dir, rkey, { pid = process.pid } = {}) {
  *   failed      both sends are spent and the key is empty: logged, never sent again
  * (A first send refused outright, its key confirmed empty, is retried once in the same run.)
  *   unconfigured  no BSKY_IDENTIFIER / BSKY_APP_PASSWORD: nothing read, nothing sent
+ *   held        the event's state file is there but cannot be read: nothing sent, so a lost
+ *               history never becomes a fresh event with two new sends
  * Nothing in the receipt or the state names the credential or the token.
  */
-export async function publishEvent(event, { stateDir, env = process.env, fetch = globalThis.fetch, service = DEFAULT_SERVICE, now = () => new Date(), timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+export async function publishEvent(event, { stateDir, env = process.env, fetch = globalThis.fetch, service = DEFAULT_SERVICE, now = () => new Date(), timeoutMs = REQUEST_TIMEOUT_MS, pause } = {}) {
   const rkey = rkeyFor(event.kind, event.n);
   const receipt = (outcome, state, detail) => ({ event: `${event.kind} ${event.n}`, rkey, outcome, sends: state?.sends ?? 0,
     ...(state?.uri ? { uri: state.uri } : {}), ...(detail ? { detail } : {}) });
+  const unreadable = () => receipt("held", null, `${rkey}.json is there but cannot be read: nothing sent until it is mended`);
 
   const held = readState(stateDir, rkey);
+  if (!held && existsSync(statePath(stateDir, rkey))) return unreadable();
   if (held?.status === "posted") return receipt("already", held);
   if (held?.status === "failed") return receipt("failed", held, "both sends were spent earlier; never sent again");
   const creds = credentialsFrom(env);
   if (!creds) return receipt("unconfigured", held, `${BSKY_ENV.join(" and ")} are not both set: nothing was read or sent`);
 
-  const lock = lockEvent(stateDir, rkey);
+  const lock = lockEvent(stateDir, rkey, { pause });
   if (!lock) return receipt("busy", held, "another invocation holds this event");
   try {
     const at = () => now().toISOString();
+    // read again under the lock: the history is whatever the last holder left
+    const kept = readState(stateDir, rkey);
+    if (!kept && existsSync(statePath(stateDir, rkey))) return unreadable();
     // the payload is bound the first time the event is seen: a retry sends the same words
-    const state = readState(stateDir, rkey) ?? {
+    const state = kept ?? {
       v: 1, event: { kind: event.kind, n: event.n }, rkey, status: "pending", sends: 0, attempts: [],
       payload: { text: event.text, link: event.link, created_at: at() },
     };
     state.payload.digest ??= createHash("sha256").update(`${state.payload.text}\n${state.payload.link}`).digest("hex");
     if (state.status === "posted") return receipt("already", state);
+    if (state.status === "failed") return receipt("failed", state, "both sends were spent earlier; never sent again");
     const note = (step, outcome, detail = null) => { state.attempts.push({ at: at(), step, outcome, ...(detail ? { detail } : {}) }); writeState(stateDir, state); };
     // every secret this run holds, so no refusal's name can carry one (the token joins once it exists)
     const wire = { fetch, service, timeoutMs, secrets: [creds.identifier, creds.password] };
