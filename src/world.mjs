@@ -3189,8 +3189,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // an entered mark is shelter (§ roadShelter): nothing inside it is cut from this reader's eyes
   // (`given`: the stack orient already read for this same read, handed on by the apex)
   const entered = choice.coords ? null : given !== undefined ? given : await enteredNow(choice.handle, { verbs, w, crossing });
-  const eyesOpts = { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) };
-  let r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, eyesOpts);
+  let r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
   // POS-686: a mark its author has withdrawn (an own-ground one, not yet carried) is not told as present, and a cluster it headed keeps its live
   // members and its true count. The telling, its clusters, its counts and its compact objects are the ENGINE'S OWN RENDERING, over the marks as
   // served (the canonical world and every cache keyed on it are not touched; the served set is a copy for this answer, built once per edit set).
@@ -3199,7 +3198,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   if (eyesLive.removed.size) {
     const reach = (r.fov?.sightReachM ?? 5000) + 1000;
     const near = (await worldMarksAll()).some((m) => eyesLive.removed.has(m.id) && m.at && Math.hypot(m.at.x - at.x, m.at.y - at.y) <= reach);
-    if (near) r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, servedWorldOf(w, eyesLive), eyesOpts);
+    if (near) r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, servedWorldOf(w, eyesLive), { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
   }
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
