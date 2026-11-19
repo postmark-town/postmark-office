@@ -63,6 +63,8 @@ const trail = (n) => {
   appendFileSync(process.env.STUB_CALLS, n + "\\n");
   // review-593 a: no child of the tick but the world step may hold a store password
   for (const k of Object.keys(process.env)) if (/^PG_[A-Z0-9_]*_PASSWORD$/.test(k)) appendFileSync(process.env.STUB_CALLS, "LEAK:" + n + ":" + k + "\\n");
+  // POS-904: the Bluesky credential is scoped to the publisher's own call; no other child may hold it
+  for (const k of Object.keys(process.env)) if (/^BSKY_/.test(k) && n !== "bluesky") appendFileSync(process.env.STUB_CALLS, "LEAK:" + n + ":" + k + "\\n");
 };
 const outcome = async (n) => {
   if (process.env.STUB_HANG === n) { appendFileSync(process.env.STUB_HANG_MARK, "x"); await new Promise((r) => setTimeout(r, 20000)); }
@@ -108,6 +110,8 @@ if (!(process.env.STUB_FAIL || "").split(",").includes("hhkeys")) console.log(JS
 
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-904: the Bluesky publisher, run twice a tick (crossing, settlement); STUB_FAIL=bluesky refuses it
+  "tools/bluesky-publish.mjs": plain("bluesky"),
   // POS-341: the arrival check is the office's owed-tolerant verify, the REAL
   // tool, over the town's stub verify above (which records "verify" in the trail)
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
@@ -249,6 +253,8 @@ function fixture(ledger = ["row 1", "row 2"], { realFlock = false } = {}) {
   write(fx.origin, { "hooks/pre-receive": `#!/bin/sh\n[ -z "$STUB_REJECT_PUSH" ]\n` }, 0o755);
   write(fx.town, { ".git/hooks/pre-commit": `#!/bin/sh\n[ -z "$STUB_REJECT_COMMIT" ]\n` }, 0o755);
   write(fx.office, OFFICE_FILES);
+  // POS-904: the projected script's credential file (the seam moves /etc/postmark-bsky.env here): fixture values only
+  writeFileSync(join(root, "postmark-bsky.env"), "BSKY_IDENTIFIER=fixture.test\nBSKY_APP_PASSWORD=not-a-password\n");
   write(fx.office, { "deploy/keep-history.mjs": readFileSync(join(OFFICE, "deploy", "keep-history.mjs"), "utf8") });
   // POS-994: the tick runs the town's mint, verifier and household keys through the
   // office's loader, as the office's pinned copies; the fixture office carries the
@@ -342,7 +348,7 @@ const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", invite: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
   sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
-  hhkeys: "ok", hhkeys_log: "ok", world: "ok", publish: "ok",
+  hhkeys: "ok", hhkeys_log: "ok", world: "ok", bluesky: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
 
@@ -408,6 +414,10 @@ const SOFT = [
   ["endings (non-fatal: settlements stays ok)", { STUB_ENDINGS_FAIL: "1" }, { endings: "refused:write-failed" }],
   ["positions", { STUB_FAIL: "positions" }, { positions: "refused:exit:7" }],
   ["hhkeys (the predicate left no JSON: the append succeeds, the step is refused)", { STUB_FAIL: "hhkeys" }, { hhkeys: "refused:unchecked" }],
+  // POS-904: the Bluesky publisher refused (a crash's exit, here 7) is its own refused step, and the tick goes on
+  ["bluesky", { STUB_FAIL: "bluesky" }, { bluesky: "refused:exit:7" }],
+  // POS-904: not installed (no credential file) is one skip, and nothing runs
+  ["bluesky (no credential file: switch-off)", { BSKY_ENV_FILE: "/nonexistent/postmark-bsky.env" }, { bluesky: "skip:switch-off" }],
 ];
 for (const [name, env, expect] of SOFT) {
   test(`soft · ${name}: refused in the receipt, later work runs, one receipt, exit 0`, { skip }, () => {

@@ -644,11 +644,12 @@ if [ -r "$BSKY_ENV_FILE" ]; then
     bsky_r=0
     ( set -a; . "$BSKY_ENV_FILE"; set +a
       exec node tools/bluesky-publish.mjs "$bsky_kind" $bsky_src --state "$BSKY_STATE" ) || bsky_r=$?
-    # the most urgent of the two calls: 1 failed, then 2 usage, then 3 waiting, then 0
+    # the most urgent of the two calls: 1 failed, then any other refusal (2 usage, or a crash), then 3 waiting, then 0
     case "$bsky_r" in
+      0) ;;
       1) bsky_rc=1 ;;
-      2) if [ "$bsky_rc" -ne 1 ]; then bsky_rc=2; fi ;;
       3) if [ "$bsky_rc" -eq 0 ]; then bsky_rc=3; fi ;;
+      *) if [ "$bsky_rc" -ne 1 ]; then bsky_rc=$bsky_r; fi ;;
     esac
   done
   case "$bsky_rc" in
