@@ -151,6 +151,8 @@ const ROSTER = {
   "tools/media-takedown.mjs": { args: [], code: 2, needle: "media-takedown: which file? --url" },
   // POS-722: with no telemetry dir it refuses by name before reading anything
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
+  // POS-904: bare, with no credential in reach, it refuses for want of --state before it reads a clone or sends anything
+  "tools/bluesky-publish.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "--state <dir> is required" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },

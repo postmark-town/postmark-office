@@ -48,6 +48,7 @@ const OPERATOR = "an operator's tool, pass or panel, never a resident's read";
 const OWN_URL = "what a household's own url answered (Wright's G4: like media.mjs, it stays)";
 const ALLOWED = {
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
+  "bluesky-publisher.mjs": [4, `${OPERATOR} (POS-904: the PDS's own refusal, its method, status, error name and message, relayed into the publisher's receipt and state for the hook's log; never a credential, never a resident's read)`],
   "ballots-store.mjs": [7, `${OWN}: LateCrossingError's ruled message (x3: the write, the stake, a hand's ballot act), an UNREACHABLE refusal's \`cause\` field (x4, never sent)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
   "clone-fresh.mjs": [1, `${OWN}: a classifier (POS-382): it reads git's own refusal of a pull to tell dirt (the named 503) from any other pull failure, and never says the text`],
