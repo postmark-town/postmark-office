@@ -3070,14 +3070,15 @@ takes away. The script must pass `--town-returns` (`deploy/settlement-auto.sh`
 does so only when `SETTLEMENT_DRY` is absent), and `SETTLEMENT_DRY` must be
 unset. The return goes through the office pen (`src/town-return-exec.mjs`,
 under the town lock, with the Town's `worldTownReturnApply`), named by the
-seal's `S<n>` and the seal's day. A town-opposed mark leaves git only when every mark it takes is
-known to have no open stamps after that write: the live ledger, or, when that
-cannot be read, the successful write's own reading under its locks. A failed,
-refused or unnamed write, read against an unreadable ledger, takes nothing
-away. A zero at the snapshot is no evidence, because stamps may have been
-staked since. The crossing's receipt says what happened
-(`selection.settlement.town_returns`). The shadow and every rehearsal never
-write.
+seal's `S<n>` and the seal's day. On every run, writing or not, a
+town-opposed mark leaves git only when every mark it takes is known to have no
+open stamps. The live ledger is the evidence, or, when that cannot be read,
+this run's own successful write, read under its locks. Without either, nothing
+is taken away. That covers a failed, refused or unnamed write, and a run that
+writes no return but still publishes (`SETTLEMENT_DRY=0` or empty). A zero at
+the snapshot is no evidence, because stamps may have been staked since. The
+crossing's receipt says what happened (`selection.settlement.town_returns`).
+The shadow and every rehearsal never write.
 
 **The recovery window** (Wright, 2026-11-19, keeping Darko's 10-04 rule that
 "the office accepts every physically legal act"): the stake door reads the

@@ -36,12 +36,12 @@
 // takes has no open position in the LIVE ledger, read after the return. A
 // return that was not written, failed, was refused by the pin, or could not
 // land leaves its stakes open, so this crossing does not take the mark away and
-// says why on its receipt. When the live ledger cannot be read at all, the real
-// crossing's path takes a target away only if its own successful write read
-// every mark closed under its locks; otherwise nothing leaves (a zero at the
-// snapshot is not evidence: stamps may have been staked since). Only a run that
-// asked for no write lets the fold's own stakes decide, as the crossing did
-// before this.
+// says why on its receipt. When the live ledger cannot be read at all, a target
+// leaves only if this crossing's own successful write read every mark closed
+// under its locks; otherwise nothing leaves, whether or not a write was asked
+// for (reviews of #1143, F1 and F2). A zero at the snapshot is no evidence:
+// stamps may have been staked since, and a run that writes no return may still
+// publish (SETTLEMENT_DRY=0 or empty).
 
 import { execUnderTownLock, lockTimedOut, withTownLockHeld, LOCK_BUSY } from "./town-lock.mjs";
 import { importTownTool, isPinStop } from "./town-tool.mjs";
@@ -94,16 +94,6 @@ export function townReturnTargets(state) {
   return out.sort((a, b) => a.mark.localeCompare(b.mark));
 }
 
-/** Stamps open per mark from stake rows (`{ mark, n }`), the fold's own input. PURE. */
-export function openFromStakes(stakes) {
-  const open = new Map();
-  for (const s of stakes ?? []) {
-    const n = Number(s?.n ?? 0);
-    if (n > 0) open.set(String(s.mark), (open.get(String(s.mark)) ?? 0) + n);
-  }
-  return open;
-}
-
 /**
  * The returns that wait: each target with a mark it takes still carrying open
  * stamps, `[{ mark, leaving, open: { <mark>: n } }]`. PURE.
@@ -122,7 +112,7 @@ export function heldTownReturns(targets, open) {
  * town clone's HEAD through the office's pinned engine, under town.lock
  * SHARED, so every writer (they hold it exclusively for their append and its
  * landing) has finished. Throws when the clone, the pin or the lock does not
- * answer; the caller then falls back to the fold's own stakes.
+ * answer; the caller then knows nothing of what is open.
  */
 export async function liveLedgerOpen(townClone, { held = withTownLockHeld, waitSec = 10 } = {}) {
   if (!townClone) throw new Error("no town clone to read the ledger in");
@@ -151,15 +141,15 @@ export function unreadSaid(e) {
 }
 
 /**
- * The gate's reading: the live ledger when it answers, the fold's own stakes
- * when it does not (`unread` says why). `{ open, source, unread? }`.
+ * The gate's reading: the live ledger when it answers; when it does not,
+ * nothing (`open: null`, `unread` says why). `{ open, source, unread? }`.
  */
-export async function townReturnOpen({ townClone, stakes, read = liveLedgerOpen }) {
+export async function townReturnOpen({ townClone, read = liveLedgerOpen }) {
   try {
     const live = await read(townClone);
     return { ...live, source: "live" };
   } catch (e) {
-    return { open: openFromStakes(stakes), source: "snapshot", unread: unreadSaid(e) };
+    return { open: null, source: "unread", unread: unreadSaid(e) };
   }
 }
 
@@ -207,21 +197,20 @@ export function closedByReceipt(receipt, targets) {
  * and only reads. → `{ removal, date, receipt?, held, source, unread? }`;
  * `receipt` is the exec's answer as it gave it.
  *
- * ON THE REAL CROSSING'S PATH (`asked`: a write was asked for, whether or not it
- * could be made) THE SNAPSHOT NEVER RELEASES A TARGET (review of #1143, F1): a
- * zero at the snapshot's ledger position says nothing of stamps staked since.
- * When the live ledger cannot be read, a target leaves only if the write's own
- * answer establishes it closed (§ closedByReceipt); otherwise every target is
- * held, `open: null`, as unknown. Only a run that asked for no write keeps the
- * snapshot's answer, as the crossing did before POS-1138.
+ * THE SNAPSHOT NEVER RELEASES A TARGET (reviews of #1143, F1 and F2): a zero
+ * at the snapshot's ledger position says nothing of stamps staked since, and a
+ * run that writes no return may still publish. When the live ledger cannot be
+ * read, a target leaves only if this run's own successful write establishes it
+ * closed (§ closedByReceipt); otherwise every target is held, `open: null`, as
+ * unknown, whether or not a write was asked for.
  */
-export async function settleTownReturns({ targets, removal, date, townClone, stakes = [], asked = false, write = null, read = liveLedgerOpen }) {
+export async function settleTownReturns({ targets, removal, date, townClone, write = null, read = liveLedgerOpen }) {
   let receipt = null;
   if (write && targets.length)
     receipt = await write({ marks: [...new Set(targets.flatMap((t) => t.leaving))].sort(), removal, date });
-  const after = await townReturnOpen({ townClone, stakes, read });
+  const after = await townReturnOpen({ townClone, read });
   let held, source = after.source;
-  if (after.source === "live" || !asked) held = heldTownReturns(targets, after.open);
+  if (after.source === "live") held = heldTownReturns(targets, after.open);
   else {
     const closed = closedByReceipt(receipt, targets);
     if (closed) { held = heldTownReturns(targets, closed); source = "receipt"; }
@@ -235,6 +224,6 @@ export async function settleTownReturns({ targets, removal, date, townClone, sta
     ...(receipt ? { receipt } : {}),
     held, source,
     ...(after.unread ? { unread: after.unread } : {}),
-    ...(source === "unknown" ? { unknown: "the live ledger could not be read and the write established nothing, so no town return is known to be closed and none is taken away" } : {}),
+    ...(source === "unknown" ? { unknown: "the live ledger could not be read and no write of this run read the marks closed, so no town return is known to be closed and none is taken away" } : {}),
   };
 }

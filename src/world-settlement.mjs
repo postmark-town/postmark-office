@@ -507,7 +507,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
-  const town = await townReturnsAt(header, gate, state, inputs, { townRepo, townReturns });
+  const town = await townReturnsAt(header, gate, state, { townRepo, townReturns });
   const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
@@ -554,7 +554,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
  * date is the seal's day in town time. A snapshot that names neither writes
  * nothing (`unnamed` says so); the gate still reads.
  */
-async function townReturnsAt(header, gate, state, inputs, { townRepo, townReturns }) {
+async function townReturnsAt(header, gate, state, { townRepo, townReturns }) {
   const { townReturnTargets, settleTownReturns, removalOf, townDate } = await import("./town-return.mjs");
   const targets = townReturnTargets(state);
   if (!targets.length) return null;
@@ -563,12 +563,10 @@ async function townReturnsAt(header, gate, state, inputs, { townRepo, townReturn
   const removal = number == null ? null : removalOf(number);
   const date = header?.taken_at ? townDate(new Date(header.taken_at)) : null;
   const named = removal && date;
-  // `asked` is the real crossing's request, whether or not this snapshot names
-  // a removal it could be made under: on that path a stale snapshot never
-  // releases a mark (review of #1143, F1).
+  // The snapshot's stakes never decide what leaves (reviews of #1143, F1/F2):
+  // the live ledger, or this run's own successful write, or nothing leaves.
   const settled = await settleTownReturns({
-    targets, removal, date, townClone: townRepo,
-    stakes: inputs.args.stakes, asked: !!write, write: named ? write : null,
+    targets, removal, date, townClone: townRepo, write: named ? write : null,
   });
   return {
     ...settled,

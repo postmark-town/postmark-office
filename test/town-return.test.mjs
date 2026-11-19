@@ -41,7 +41,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { settlementRig, MARKS, git } from "./helpers/settlement-seed.mjs";
 import { PIN_ROOT } from "../src/town-tool.mjs";
 import {
-  townReturnTargets, heldTownReturns, openFromStakes, settleTownReturns, townReturnWrite, removalOf, TOWN_AUTHORITY,
+  townReturnTargets, heldTownReturns, settleTownReturns, townReturnWrite, removalOf, TOWN_AUTHORITY,
 } from "../src/town-return.mjs";
 import { settlementTakesAway } from "../src/world-settlement.mjs";
 import { settlementWithhold, townReturnsOf } from "../world2/tools/fold-input-cli.mjs";
@@ -70,8 +70,7 @@ test("a town return is the town's stance return only: not a limit, not a holder'
 
 test("the gate holds a return while any mark it takes carries open stamps, and names them", () => {
   const targets = [{ mark: "al/arch", leaving: ["al/arch"] }, { mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"] }];
-  const open = openFromStakes([{ mark: "bo/shed-name", n: 2 }, { mark: "bo/shed-name", n: 1 }, { mark: "zz/x", n: 4 }, { mark: "al/arch", n: 0 }]);
-  assert.deepEqual([...open], [["bo/shed-name", 3], ["zz/x", 4]]);
+  const open = new Map([["bo/shed-name", 3], ["zz/x", 4]]);
   assert.deepEqual(heldTownReturns(targets, open), [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"], open: { "bo/shed-name": 3 } }]);
   assert.deepEqual(heldTownReturns(targets, new Map()), []);
 });
@@ -133,35 +132,35 @@ test("settleTownReturns: written first, then read; a failed write leaves the ret
   assert.deepEqual(none.held.map((h) => h.mark), ["bo/shed"]);
 });
 
-test("settleTownReturns, NO WRITE ASKED: a ledger that cannot be read falls back to the fold's own stakes, as before, in the office's own words", async () => {
+test("F2 · NO WRITE, AND A LEDGER THAT CANNOT BE READ: nothing is known closed, so every target is held as unknown, in the office's own words", async () => {
   const targets = [{ mark: "bo/shed", leaving: ["bo/shed"] }, { mark: "al/arch", leaving: ["al/arch"] }];
   const r = await settleTownReturns({
-    targets, removal: "S11", date: "2026-10-02", stakes: [{ mark: "bo/shed", n: 2 }],
+    targets, removal: "S11", date: "2026-10-02",
     read: async () => { throw new Error("the town lock was not free"); },
   });
-  assert.equal(r.source, "snapshot");
+  assert.equal(r.source, "unknown");
   assert.equal(r.unread, "the live ledger could not be read (the office's log says why)", "a fault's own text goes to the log, never into the answer");
-  assert.deepEqual(r.held.map((h) => h.mark), ["bo/shed"], "staked at the snapshot: waits; unstaked: leaves, as before");
+  assert.deepEqual(r.held, targets.map((t) => ({ ...t, open: null })), "a run that writes no return may still publish: the snapshot releases nothing");
+  assert.equal(r.receipt, undefined);
 });
 
-test("F1 · ON THE REAL WRITE PATH THE SNAPSHOT NEVER RELEASES: unreadable ledger + failed, absent or incomplete write holds every target", async () => {
+test("F1 · THE SNAPSHOT NEVER RELEASES: unreadable ledger + failed, absent or incomplete write holds every target", async () => {
   const targets = [{ mark: "al/arch", leaving: ["al/arch"] }, { mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"] }];
   const unreadable = async () => { throw new Error("the pin stopped the read"); };
-  const zero = [];                                       // nothing staked at the snapshot's ledger position
   for (const [why, o] of [
     ["the write failed", { write: async () => ({ error: { code: 503, defect: "town-pin-mismatch" } }) }],
-    ["the write could not be named (asked, none made)", { write: null }],
+    ["no write was made", { write: null }],
     ["the write answered without open_after", { write: async () => ({ appended: true }) }],
     ["open_after misses a mark", { write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0 } }) }],
     ["open_after is not a count", { write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0, "bo/shed-name": "0" } }) }],
   ]) {
-    const r = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", stakes: zero, asked: true, read: unreadable, ...o });
+    const r = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", read: unreadable, ...o });
     assert.equal(r.source, "unknown", why);
     assert.deepEqual(r.held, targets.map((t) => ({ ...t, open: null })), `${why}: every target is held`);
     assert.match(r.unknown, /none is taken away/, why);
   }
   // the successful write's own reading, complete, decides
-  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", stakes: zero, asked: true, read: unreadable,
+  const ok = await settleTownReturns({ targets, removal: "S11", date: "2026-10-02", read: unreadable,
     write: async () => ({ appended: true, open_after: { "al/arch": 0, "bo/shed": 0, "bo/shed-name": 1 } }) });
   assert.equal(ok.source, "receipt");
   assert.deepEqual(ok.held, [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"], open: { "bo/shed-name": 1 } }], "closed leaves; still open waits");
@@ -348,6 +347,31 @@ test("F1 · ZERO AT THE SNAPSHOT, PRINCIPAL SINCE, AND BOTH THE WRITE AND THE LI
   } finally { process.env.TOWN_PINS_DIR = was; }
 });
 
+test("F2 · A PUBLISHING RUN THAT WRITES NO RETURN (SETTLEMENT_DRY=0 or empty), ZERO AT THE SNAPSHOT, PRINCIPAL SINCE, LIVE READ UNAVAILABLE: no payment, no removal, unknown said", { skip }, async () => {
+  await seedWord();                                             // the snapshot's ledger position holds nothing on the shed
+  const open = (await import("../src/town-return.mjs")).liveLedgerOpen;
+  assert.ok((await open(TOWN)).open.get(SHED) > 0, "principal stands on the shed now (dot's, staked after the snapshot)");
+  const before = ledger();
+  const stale = tempDir("town-return-unread-");
+  writeFileSync(join(stale, "PINS.json"), JSON.stringify({ town_commit: "0".repeat(40), files: {} }));
+  const was = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = stale;                            // the crossing's own live read cannot load the engine
+  try {
+    for (const dry of ["0", ""]) {
+      const r = await cross({ env: { ...NOT_DRY, SETTLEMENT_DRY: dry } });
+      const t = r.selection.settlement.town_returns;
+      assert.match(t.not_written, /SETTLEMENT_DRY is set/, `SETTLEMENT_DRY=${JSON.stringify(dry)}: no payment asked`);
+      assert.equal(t.receipt, undefined, "no write, so no success claimed");
+      assert.equal(t.source, "unknown");
+      assert.match(t.unknown, /none is taken away/);
+      assert.deepEqual(t.held, [{ mark: SHED, leaving: [SHED, NAME], open: null }]);
+      assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "no removal: the shed and its name stay in the write-down");
+      assert.ok(!r.selection.settlement.taken_away.includes(SHED));
+      assert.equal(ledger(), before, "nothing was written");
+    }
+  } finally { process.env.TOWN_PINS_DIR = was; }
+});
+
 test("PIN MISMATCH: a town clone the office did not pin returns nothing and says so; the return waits", { skip }, async () => {
   await seedWord();
   const before = ledger();
@@ -361,13 +385,12 @@ test("PIN MISMATCH: a town clone the office did not pin returns nothing and says
   assert.equal(ledger(), before);
 });
 
-test("NO LIVE LEDGER: the stakes at the settlement's own ledger position decide, as before POS-1138", { skip }, async () => {
-  await seed({ lawSha: LAW, cutover: "S10", sealWords: [await TOWN_WORD()],
-    before: (c) => c.query("INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'cy', 'cy', 'cy', 3, 1)", ["a".repeat(40), NAME]) });
+test("NO LIVE LEDGER (no town clone at all): nothing is known closed, so the town return stays, whatever the snapshot held", { skip }, async () => {
+  await seedWord();                                             // nothing on the shed at the snapshot's ledger position
   const away = await asOffice(async (p) => settlementTakesAway(p, await header(), { worldRepo: ENGINE, townRepo: null }));
-  assert.equal(away.town_returns.source, "snapshot");
-  assert.deepEqual(away.town_returns.held.map((h) => h.mark), [SHED], "staked at the snapshot: it waits");
-  assert.ok(!away.slugs.has(SHED));
+  assert.equal(away.town_returns.source, "unknown");
+  assert.deepEqual(away.town_returns.held, [{ mark: SHED, leaving: [SHED, NAME], open: null }]);
+  assert.ok(!away.slugs.has(SHED) && !away.slugs.has(NAME));
 });
 
 test("SILENCE AND NEUTRAL: no town opposition is no town return, and nothing is written", { skip }, async () => {
