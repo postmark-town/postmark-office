@@ -3060,3 +3060,29 @@ built. If an operator changes a promised carried-item outcome after a finish
 (a later ruling, a different winner, the item withheld), the operator sends the
 affected household a follow-up through the existing letter channel, saying what
 changed and why. No new sender, detection job, mail API or schema.
+
+## A town-removed mark's stamps: the crossing's return and the recovery window (POS-1138)
+
+Darko, 2026-11-18: stamps staked on a town-opposed mark go "Back to each
+staker", owner included, as a "Town-authored return". At a real crossing,
+`fold-input-cli.mjs` writes that return before it decides what the settlement
+takes away. The script must pass `--town-returns` (`deploy/settlement-auto.sh`
+does so only when `SETTLEMENT_DRY` is absent), and `SETTLEMENT_DRY` must be
+unset. The return goes through the office pen (`src/town-return-exec.mjs`,
+under the town lock, with the Town's `worldTownReturnApply`), named by the
+seal's `S<n>` and the seal's day. A town-opposed mark leaves git only when every
+mark it takes has no open stamps after that write. A failed, refused or absent
+write takes nothing away, and the crossing's receipt says why
+(`selection.settlement.town_returns`). The shadow and every rehearsal never
+write.
+
+**The recovery window** (Wright, 2026-11-19, keeping Darko's 10-04 rule that
+"the office accepts every physically legal act"): the stake door reads the
+newest *blessed* settlement, so from this crossing's return until the keeper
+blesses it, a stake on the removed mark is still accepted. **The town removed
+this mark at crossing N; stamps staked now come back only by your own unstake.**
+The unstake door needs no mark to stand, so the resident's ordinary unstake is
+the recovery. There is no second town return and no catch-up. The stake door
+does not say this in its answer: nothing it reads reliably shows that a crossing
+removed a mark before that crossing is blessed. Neither a town-return line in
+the ledger nor the town's standing word proves a removal.
