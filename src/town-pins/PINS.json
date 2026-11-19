@@ -1,7 +1,7 @@
 {
   "town_repo": "postmark-town/postmark",
   "town_commit": "fd79c4e3490a8ace2146ea83a0613f0d29a5d0fd",
-  "read_at": "2026-11-19T03:36:37.182Z",
+  "read_at": "2026-11-19T02:03:08.830Z",
   "files": {
     "PROJECTS/the-town-seal/seal.mjs": {
       "blob": "0e2c054bd21d256a2856cfddbc8ed9d3235632b8",

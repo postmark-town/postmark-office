@@ -4,6 +4,15 @@
 //   node world2/tools/fold-input-cli.mjs --world-sha <sha> --town-clone <path>
 //                                        --town-sha <sha> --window <closed-window>
 //                                        [--world-repo <world checkout>]
+//                                        [--town-returns]
+//
+// `--town-returns` is THE REAL CROSSING'S WRITE (POS-1138; Wright, 2026-11-19
+// 00:35Z, A): with it, and with SETTLEMENT_DRY unset (absent, whatever value it
+// would carry), the settlement block writes the town's return of each staker's
+// stamps on the marks this settlement's town words take away, with the office
+// pen, before deciding what leaves (src/town-return.mjs). Only
+// deploy/settlement-auto.sh's real path passes it; the shadow never does, and
+// without it nothing is written.
 //
 // `--world-repo` is THE CARRY'S ONE ARGUMENT (2026-09-12). Given a world
 // checkout, this builds the canon register at it and the fold carries every
@@ -134,6 +143,20 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
 }
 
 /**
+ * THIS RUN'S TOWN-RETURN WRITER (POS-1138): `{ write, why }`, the office pen's
+ * writer (src/town-return.mjs § runTownReturn) only when `argv` carries
+ * --town-returns and `env` carries no SETTLEMENT_DRY at all; otherwise
+ * `write: null` and `why` says which half was missing. The office module is
+ * loaded here, as the settlement's is below, so the tools folder still loads alone.
+ */
+export async function townReturnsOf({ argv = process.argv, env = process.env, townClone = null, run = null } = {}) {
+  const { townReturnWrite, runTownReturn } = await import("../../src/town-return.mjs");
+  const asked = townReturnWrite({ flag: argv.includes("--town-returns"), env });
+  const writer = run ?? runTownReturn;
+  return asked.write ? { write: (a) => writer(a, { townClone, env }), why: null } : { write: null, why: asked.why };
+}
+
+/**
  * THE CROSSING'S SETTLEMENT BLOCK (POS-364): the fold input less what the
  * settlement of `window` takes away (src/world-settlement.mjs §
  * settlementTakesAway), with `selection.settlement` naming it. Never refuses.
@@ -149,7 +172,7 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
  * never lets an over-limit parcel, or a shed without it, quarantine its
  * household's sketchbook (Wright's review of #441). `{ out, selection }`.
  */
-export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection }) {
+export async function settlementWithhold(client, { window, worldRepo = null, townClone = null, out, selection, townReturns = { write: null, why: null } }) {
   let settlement;
   try {
     if (!worldRepo) throw new Error("no --world-repo: the settlement could not be folded here");
@@ -157,7 +180,11 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
     const { settlementTakesAway } = await import("../../src/world-settlement.mjs");
     const header = await snapshotHeader(client, { window });
     if (!header) throw new Error(`no snapshot was sealed for window ${window}`);
-    const { slugs, vetoes, stances_not_counted, stance_returns_whole, stances } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone });
+    // THE TOWN'S RETURNS (POS-1138): `townReturns.write` is the writer
+    // (src/town-return.mjs § runTownReturn), handed in only by a real,
+    // non-dry crossing (§ main, --town-returns); without it nothing is written,
+    // `why` says so, and the gate alone decides what this crossing takes away.
+    const { slugs, vetoes, stances_not_counted, stance_returns_whole, stances, town_returns } = await settlementTakesAway(client, header, { worldRepo, townRepo: townClone, townReturns });
     const w = withholdTakenAway({ marks: out.marks, selection }, slugs);
     return {
       out: { ...out, marks: w.marks },
@@ -172,6 +199,7 @@ export async function settlementWithhold(client, { window, worldRepo = null, tow
           ...(stances_not_counted ? { stances_not_counted } : {}),
           ...(stance_returns_whole ? { stance_returns_whole } : {}),
           ...(vetoes?.town_unread ? { unread: `the engine at law ${String(header.law_sha).slice(0, 12)} predates world#146, so ${vetoes.town_unread.length} opposition(s) could not be carried` } : {}),
+          ...(town_returns ? { town_returns } : {}),
         },
       },
     };
@@ -405,7 +433,12 @@ if (isMain) {
     // (no world checkout, an engine older than world#146, a store without 069)
     // leaves the docket as it was, and `settlement.unread` says why: the old
     // behaviour, named, rather than a stopped town.
-    ({ out, selection } = await settlementWithhold(client, { window, worldRepo, townClone, out, selection }));
+    // THE TOWN'S RETURN IS WRITTEN ONLY BY A REAL, NON-DRY CROSSING (POS-1138;
+    // Wright, 2026-11-19 00:35Z, A): this run passed --town-returns (only
+    // deploy/settlement-auto.sh's real path does) AND SETTLEMENT_DRY is unset.
+    // The shadow and every rehearsal call this same tool without the flag.
+    const townReturns = await townReturnsOf({ argv: process.argv, env: process.env, townClone });
+    ({ out, selection } = await settlementWithhold(client, { window, worldRepo, townClone, out, selection, townReturns }));
   } catch (e) {
     // Lane 2's refusals are thrown Errors whose messages carry the sha or window
     // they wanted and the sentence for why. They are passed through WHOLE rather
