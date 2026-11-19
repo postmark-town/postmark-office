@@ -39,9 +39,9 @@ export const liveParcelOn = (env = process.env) => !/^(0|off|false|no)$/i.test(S
 export const WINDOWS_BACK = 2;
 
 /**
- * The newest owner act per mark, with the newest pending-or-locked claim on it. `$2` = the owners asked about (a reader that serves
- * one house asks for its own handles only, so an unrelated house's read finds nothing and does no overlay work), or null for all.
- * `$1` = the blessed settlement's number (the
+ * The newest owner act per mark, with the newest pending-or-locked claim on it, for every author: the owed set is small (what the
+ * last crossings have not carried yet), so ONE read serves every house a request composes and the reader keeps only its own
+ * owners' rows (a bulk of 25 doorsteps reads the store once). `$1` = the blessed settlement's number (the
  * lower bound is the window it closed, minus `WINDOWS_BACK`); when the store holds no such row (or no window for it) the bound is open (every
  * act is considered: correct first, bounded where the store knows the settlement).
  */
@@ -54,7 +54,6 @@ export const markEditsSql = `
          AND a.action IN ('leave-mark', 'amend', 'withdraw')
          AND a.object IS NOT NULL
          AND a.actor = split_part(a.object, '/', 1)
-         AND ($2::text[] IS NULL OR a.actor = ANY($2::text[]))
          AND a.crossing >= COALESCE((SELECT s.window_id FROM settlements s WHERE s.number = $1), 0) - ${WINDOWS_BACK}
        ORDER BY a.object, a.id DESC
     ) l
@@ -151,7 +150,7 @@ export async function liveEdits(canonMarks, settlement, { query = null, owners =
     }
     // the one store read this layer adds to a read, timed under the request as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
     const { segSpan } = await import("./read-timing.mjs");
-    const params = [Number.isFinite(Number(settlement)) ? Number(settlement) : -1, owners ? [...owners].sort() : null];
+    const params = [Number.isFinite(Number(settlement)) ? Number(settlement) : -1];
     const st = scope.getStore();
     const memoKey = st && !st.bypass ? JSON.stringify(params) : null;
     let pending = memoKey ? st.memo.get(memoKey) : null;
@@ -160,7 +159,9 @@ export async function liveEdits(canonMarks, settlement, { query = null, owners =
       pending = segSpan("live_parcel", () => ask(markEditsSql, params));
       if (memoKey) st.memo.set(memoKey, pending);
     }
-    const rows = await pending;
+    const all = await pending;
+    // a house-scoped reader keeps its own authors' rows (the object is `<author>/<slug>`); every other house's are not its to overlay
+    const rows = owners && all?.length ? all.filter((r) => owners.includes(String(r.object).split("/")[0])) : all;
     if (!rows?.length) { liveParcelStats.empty += 1; return { bodies: new Map(), removed: new Set(), key: "" }; }
     const edits = editsFrom(rows, canonMarks);
     if (edits.key) liveParcelStats.owed += 1; else liveParcelStats.empty += 1;

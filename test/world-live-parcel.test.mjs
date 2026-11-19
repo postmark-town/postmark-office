@@ -107,8 +107,8 @@ async function seed({ acts = [], claims = [], settlement = null }) {
   });
 }
 const ask = async (marks, settlement = 1, owners = null) => {
-  const rows = await owner(async (c) => (await c.query(markEditsSql, [settlement, owners])).rows);
-  return editsFrom(rows, marks);
+  const query = async (sql, params) => owner(async (c) => (await c.query(sql, params)).rows);
+  return liveEdits(marks, settlement, { query, owners });
 };
 
 test("8 · the store: the owner's newest act decides; an amend carries the claim's body", async () => {
@@ -170,7 +170,7 @@ test("13 · an act that is not a mark act is not read", async () => {
   assert.equal((await ask(marks)).key, "");
 });
 
-test("14 · asked for one house's owners, another house's edits are not read (an unrelated read finds nothing owed)", async () => {
+test("14 · asked for one house's owners, only its own authors' edits come back (an unrelated read finds nothing owed)", async () => {
   const marks = canon();
   await seed({ settlement: { number: 1, window: 320 }, acts: [{ actor: "wright", action: "withdraw", object: "wright/the-keystone" }, { actor: "ada", action: "amend", object: "ada/a-lamp" }], claims: [{ slug: "ada/a-lamp", claimant: "ada", body: "A brighter lamp." }] });
   assert.deepEqual([...(await ask(marks, 1, ["wright"])).removed], ["wright/the-keystone"]);
@@ -212,12 +212,15 @@ test("16 · a request is one snapshot: the store is read once however many times
   assert.equal(reads, 2, "two requests never share one snapshot");
 });
 
-test("17 · the owners asked about are part of the snapshot's key", async () => {
+test("17 · each house keeps its own authors' rows out of the one read a request makes", async () => {
   const marks = canon();
   const seen = [];
-  const query = async (_sql, params) => { seen.push(params[1]); return []; };
-  await liveScope(async () => { await liveEdits(marks, 1, { query, owners: ["wright"] }); await liveEdits(marks, 1, { query, owners: ["ada"] }); await liveEdits(marks, 1, { query, owners: ["wright"] }); });
-  assert.deepEqual(seen, [["wright"], ["ada"]]);
+  const query = async () => { seen.push(1); return [withdraw("wright/the-keystone"), amend("ada/a-lamp", "B")]; };
+  const [w, a, n] = await liveScope(async () => [await liveEdits(marks, 1, { query, owners: ["wright"] }), await liveEdits(marks, 1, { query, owners: ["ada"] }), await liveEdits(marks, 1, { query, owners: ["little-bird"] })]);
+  assert.equal(seen.length, 1, "one read serves every house in the request");
+  assert.deepEqual([...w.removed], ["wright/the-keystone"]); assert.equal(w.bodies.size, 0);
+  assert.equal(a.bodies.get("ada/a-lamp"), "B"); assert.equal(a.removed.size, 0);
+  assert.equal(n.key, "");
 });
 
 test("18 · the switch: WORLD_LIVE_PARCEL=0 is canon as before, with no store read at all; on by default", async () => {
