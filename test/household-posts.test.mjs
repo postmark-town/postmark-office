@@ -30,17 +30,23 @@
 //   · private fields — widen the responses SELECT to `post, handle, state, fields`
 //     and 5 goes red on the query leg.
 
+// The office's own pins, not the suite clone's (town-pins-env.mjs): "" names them. POS-1142: the backing is read with the
+// Town's accepted classifier (town #4796, `world-town-return`), which the suite's clone predates; the fixture town below
+// is the office's pinned engine, byte for byte (test/helpers/pinned-town.mjs), so the readers run the code they ship with.
+process.env.TOWN_PINS_DIR = "";
+
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
-import { copyTownTools } from "./helpers/town-tools.mjs";
+import { pinnedTown } from "./helpers/pinned-town.mjs";
+import { PIN_ROOT } from "../src/town-tool.mjs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
-const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
+const REAL_TOWN = PIN_ROOT;
 const haveEngine = existsSync(join(REAL_TOWN, "tools", "world-stake.mjs")) && existsSync(join(REAL_TOWN, "tools", "stamp-mint.mjs"));
 
 const DIR = tempDir("pm-household-posts-");
@@ -55,13 +61,23 @@ const iso = (t) => new Date(t).toISOString();
 const TOWN = join(DIR, "town");
 mkdirSync(join(TOWN, "tools"), { recursive: true });
 mkdirSync(join(TOWN, "WHITE_PAGES"), { recursive: true });
-if (haveEngine) copyTownTools(REAL_TOWN, TOWN);
+if (haveEngine) pinnedTown(TOWN);
 writeFileSync(join(TOWN, "WHITE_PAGES", "stamp-ledger.md"), [
   "# the stamp ledger", "",
   "- 2026-09-20 · mari → stake:world-mark/kai/observation-state · 5 · via: api",
   "- 2026-09-21 · zed → stake:world-mark/kai/observation-state · 3 · via: api",
   "- 2026-09-22 · limen → stake:world-mark/rei/events-as-objects · 2 · via: api",
   "- 2026-09-23 · rei → stake:world-mark/rei/events-as-objects · 1 · via: api",
+  // POS-1142, invented: ola's lantern-walk, backed by ola (2) and by pip, an external staker (6, then 2 taken back by pip's own
+  // unstake); the town then returns what remains to both, as ITS act (`for: town-return:S<n>`). ola's quiet-room: pip stakes 3 and
+  // unstakes all 3 himself, an ordinary unstake with no town act anywhere near it.
+  "- 2026-09-10 · pip → stake:world-mark/ola/lantern-walk · 6 · via: api",
+  "- 2026-09-11 · ola → stake:world-mark/ola/lantern-walk · 2 · via: api",
+  "- 2026-09-15 · stake:world-mark/ola/lantern-walk → pip · 2 · for: unstake",
+  "- 2026-09-27 · stake:world-mark/ola/lantern-walk → ola · 2 · for: town-return:S12",
+  "- 2026-09-27 · stake:world-mark/ola/lantern-walk → pip · 4 · for: town-return:S12",
+  "- 2026-09-16 · pip → stake:world-mark/ola/quiet-room · 3 · via: api",
+  "- 2026-09-18 · stake:world-mark/ola/quiet-room → pip · 3 · for: unstake",
   "",
 ].join("\n"));
 
@@ -83,6 +99,8 @@ const WORLD_DB = join(DIR, "world.db");
     ["rei/events-as-objects", "rei", "Events should be town objects.", "2026-09-05"],
     ["kai/observation-state", "kai", "Make observation state first-class.", "2026-09-02"],
     ["neth/held-letters", "neth", "Let a resident hold the letters it is answering.", "2026-09-14"],
+    ["ola/lantern-walk", "ola", "A lantern walk at dusk, once a month.", "2026-09-09"],
+    ["ola/quiet-room", "ola", "A quiet room in the library.", "2026-09-12"],
   ]) {
     idea.run(id, by, JSON.stringify({ class: "idea", body, date }));
     edge.run(id, "the-town/idea", "instance-of");
@@ -226,6 +244,35 @@ test("3 · an idea our resident backs is taken part in, with ours equal to the s
   const limen = await read("limen");
   assert.deepEqual(limen.residents, ["limen"]);
   assert.equal(row(limen.taking_part, "rei/events-as-objects").ours, 2);
+});
+
+// ── POS-1142 · THE TOWN'S RETURN IS THE TOWN'S ACT, NAMED ON THE HOUSEHOLD'S READ ────────────────────────
+// Wright 2026-11-19 03:24Z: "Both readers show the town's return as the town's act, never a resident unstake."
+const ideaOf = (list, id) => row(list, id);
+
+test("POS-1142 · a town return is the town's own act, dated, on the owner's idea and on the external staker's, whose backing is now zero", { skip: !haveEngine && "needs the pinned town engine" }, async () => {
+  const want = { act: "town-return", by: "the-town", at: "2026-09-27" };
+  const owner = await read("ola");
+  const mine = ideaOf(owner.put_up, "ola/lantern-walk");
+  assert.ok(mine, "the owner's idea is put up");
+  assert.deepEqual(mine.latest, want, "the owner reads the town's return, not pip's earlier unstake (2026-09-15)");
+  assert.deepEqual([mine.role, mine.stake, mine.ours], ["author", 0, 0], "nothing is left in escrow on it");
+  const staker = await read("pip");
+  const theirs = ideaOf(staker.taking_part, "ola/lantern-walk");
+  assert.ok(theirs, "a staker whose whole position the town handed back still sees the idea, and what happened to it");
+  assert.deepEqual(theirs.latest, want, "the staker's read names the town as the actor, never pip");
+  assert.deepEqual([theirs.role, theirs.stake, theirs.ours, theirs.author], ["participant", 0, 0, "ola"]);
+  assert.equal(ideaOf(staker.put_up, "ola/lantern-walk"), null, "a staker did not put the idea up");
+});
+
+test("POS-1142 · controls: an ordinary unstake still says unstake and lists no one at zero; another house sees no return that was not its own", { skip: !haveEngine && "needs the pinned town engine" }, async () => {
+  const owner = await read("ola");
+  assert.deepEqual(ideaOf(owner.put_up, "ola/quiet-room").latest, { act: "unstake", at: "2026-09-18" }, "the staker's own act keeps its word, and no actor is added");
+  const staker = await read("pip");
+  assert.equal(ideaOf(staker.taking_part, "ola/quiet-room"), null, "a position closed by the staker's own unstake is not listed at zero, as before");
+  const other = await read("limen");
+  assert.equal(ideaOf(other.taking_part, "ola/lantern-walk"), null, "a house that held nothing there is not shown a return it never had");
+  assert.deepEqual((await read("wright")).taking_part.rows.filter((r) => r.latest?.act === "town-return"), [], "no return leaks onto other houses' ideas");
 });
 
 test("4 · an event that ended eight days ago is gone; one that ended within the week stays", async () => {
