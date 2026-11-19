@@ -51,6 +51,24 @@ test("0 · THE GROUND FACT is the author's own household holding the parcel the 
   assert.equal(ownGroundIds(marks, () => false).has("wright/the-drafting-table"), false, "no containment, no sited mark is own");
 });
 
+test("0b · the shortcuts never change the answer: the nesting chain and the bounding box agree with the engine's containment, brute force, on the fixture", () => {
+  const marks = canon();
+  const brute = new Set();
+  for (const m of marks) {
+    if (!m.declared_household) continue;
+    if (m.kind === "parcel") { brute.add(m.id); continue; }
+    if (m.at && m.extent && marks.some((g) => g.kind === "parcel" && g.declared_household === m.declared_household && g.id !== m.id && marksContain(g, { at: m.at, extent: m.extent }))) brute.add(m.id);
+  }
+  brute.add("wright/the-note"); // the de-sited note follows its parent, which is own
+  assert.deepEqual([...OWN(marks)].sort(), [...brute].sort());
+  // a mark the fold nests in a parcel of its own household is own with no geometry call at all; one nested in another household's parcel is not
+  let calls = 0;
+  const chained = marks.map((m) => (m.id === "wright/the-keystone" ? { ...m, placementParent: "wright/the-yard" } : m.id === "ada/ada-stall" ? { ...m, placementParent: "bea/the-yard" } : m));
+  const own = ownGroundIds(chained, (...a) => { calls += 1; return marksContain(...a); });
+  assert.equal(own.has("wright/the-keystone"), true); assert.equal(own.has("ada/ada-stall"), false);
+  assert.ok(calls <= 4, `geometry is asked only where the chain and the boxes leave a question (${calls} calls)`);
+});
+
 test("1 · an own-ground amendment replaces the body of the one mark and nothing else", () => {
   const marks = canon();
   const e = edits([amend("wright/the-drafting-table", "A new sheet.")], marks);

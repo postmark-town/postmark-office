@@ -1472,7 +1472,17 @@ export async function placeWords({ x, y, aboard = false, moving = false, handle 
   const gone = await liveServing();
   const asServed = (marks) => (gone.removed.size ? overlayMarks(marks, gone) : marks);
   if (gone.removed.size) {
-    try { const w0 = await world(); const { verbs } = await mods(); both = bothWords({ ...w0, marks: asServed(w0.marks ?? []) }, { x, y }, verbs); } catch { /* the cached words stand */ }
+    try {
+      const w0 = await world();
+      // only a point a removed mark could NAME (one it stands in, or the nearest-mark radius of it) is derived again; every other point keeps the cached words
+      const gm = removedMarksOf(w0.marks ?? [], gone);
+      if (gm.some((m) => namesPoint(m, x, y))) {
+        const { verbs } = await mods();
+        const marks = asServed(w0.marks ?? []);
+        const interior = await interiorIdsNow(); // canon's (cached once per fold): what the outside sight leaves out
+        both = { inside: placeWordsFrom(marks, { x, y }, verbs), outside: placeWordsFrom(interior?.size ? marks.filter((m) => !interior.has(m.id)) : marks, { x, y }, verbs) };
+      }
+    } catch { /* the cached words stand */ }
   }
   if (!handle || both.outside === both.inside) return both.outside;
   const stack = await (await import("./creature-sight.mjs")).stackOf(handle);
@@ -1484,6 +1494,19 @@ export async function placeWords({ x, y, aboard = false, moving = false, handle 
   } catch { return both.outside; }
 }
 
+const _removedMarks = new WeakMap(); // an edit set -> the canon marks it removes
+function removedMarksOf(marks, edits) {
+  let hit = _removedMarks.get(edits);
+  if (!hit) { hit = marks.filter((m) => edits.removed.has(m.id)); _removedMarks.set(edits, hit); }
+  return hit;
+}
+/** Could this mark be what a point is named by: does it stand in the point, or lie within the nearest-mark radius of it? */
+function namesPoint(m, x, y) {
+  if (!m.at) return false;
+  const hw = (m.extent?.w ?? 0) / 2 + 1, hh = (m.extent?.h ?? 0) / 2 + 1;
+  if (Math.abs(x - m.at.x) <= hw && Math.abs(y - m.at.y) <= hh) return true;
+  return Math.hypot(m.at.x - x, m.at.y - y) <= PLACE_NEAR_M + 1;
+}
 async function placeWordsBoth({ x, y } = {}) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const cacheKey = `${Math.round(x / 10)},${Math.round(y / 10)}`;

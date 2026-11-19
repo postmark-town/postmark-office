@@ -44,6 +44,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * A parcel is its own ground. A sited mark is own when a parcel of ITS household contains it. A de-sited mark is own when its
  * parent (`placementParent`) is, and is held by the same household. A mark with no declared household is never own.
  */
+// A conservative bounding box (centre and extent, or the outline's own points): a parcel that cannot touch a mark's box cannot contain it, and the
+// containment call (a rasterised coverage, about 0.65 ms) is skipped, so the whole world's first answer costs milliseconds and not seconds.
+const boxOf = (m) => {
+  const pts = Array.isArray(m.points) && m.points.length >= 3 ? m.points.map((p) => (Array.isArray(p) ? { x: p[0], y: p[1] } : { x: p.x, y: p.y })) : null;
+  if (pts) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) }; }
+  const { x, y } = m.at ?? {}, { w, h } = m.extent ?? {};
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(w) && Number.isFinite(h) ? { x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2 } : null;
+};
+// containment implies the mark's box lies inside the parcel's box (a metre of slack for the engine's own tolerance)
+const touches = (parcelBox, markBox) => !parcelBox || !markBox || (markBox.x0 >= parcelBox.x0 - 1 && markBox.x1 <= parcelBox.x1 + 1 && markBox.y0 >= parcelBox.y0 - 1 && markBox.y1 <= parcelBox.y1 + 1);
+
 export function ownGroundIds(marks, contains) {
   const byId = new Map(), parcels = new Map();
   for (const m of marks ?? []) {
@@ -54,6 +65,13 @@ export function ownGroundIds(marks, contains) {
       parcels.get(m.declared_household).push(m);
     }
   }
+  // The fold's own containment already says what stands inside what: `placementParent` is the mark that nests it (the engine's nestingParent, the very
+  // containment groundMinimumStake asks). A parcel anywhere up that chain that its author's household holds contains the mark, so the answer needs no geometry.
+  const nestsInOwnParcel = (m, house) => {
+    let up = byId.get(m.placementParent);
+    for (let depth = 0; up && depth < 16; depth++, up = byId.get(up.placementParent)) if (up.kind === "parcel" && up.declared_household === house) return true;
+    return false;
+  };
   const memo = new Map();
   const own = (m, depth = 0) => {
     if (memo.has(m.id)) return memo.get(m.id);
@@ -62,7 +80,8 @@ export function ownGroundIds(marks, contains) {
     let ok = false;
     if (house) {
       if (m.kind === "parcel") ok = true;
-      else if (m.at && m.extent) ok = (parcels.get(house) ?? []).some((g) => g.id !== m.id && contains(g, { at: m.at, extent: m.extent, ...(m.points ? { points: m.points } : {}) }));
+      else if (nestsInOwnParcel(m, house)) ok = true;
+      else if (m.at && m.extent) { const mb = boxOf(m); ok = (parcels.get(house) ?? []).some((g) => g.id !== m.id && touches(boxOf(g), mb) && contains(g, { at: m.at, extent: m.extent, ...(m.points ? { points: m.points } : {}) })); }
       else {
         const parent = byId.get(m.placementParent);
         ok = Boolean(parent) && depth < 8 && parent.declared_household === house && own(parent, depth + 1);
