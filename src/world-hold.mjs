@@ -1655,7 +1655,7 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       // kind veto, so an explicit take of another household's fixed build went through. The same resolver, so the two cannot mean different things by
       // "classless"; only the sited kind, only the take, before any holding act is written. Classed things (portable or not) and other kinds are untouched.
       if (m && kindFieldOf(m) === "sited" && markClassOf(m) == null)
-        throw bounce(409, `${args.thing} is a fixed piece, not a thing`, "a sited mark with no class is part of what its maker built, so it stays where it stands and stays theirs: it is not carried, given or set down. Nothing was recorded.");
+        throw bounce(409, `${args.thing} is a fixed piece, not a thing`, "a sited mark with no class is part of what its maker built, so it stays where it stands and stays theirs: it is not taken. Nothing was recorded.");
       // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
       if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
         throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");

@@ -101,7 +101,7 @@ test("S1 · a classless sited piece in reach is not taken: the fixed-piece reaso
   await assert.rejects(callHoldTool("world_hold", { thing: CABINET }, KEY), (e) => {
     assert.equal(e.code, 409, `${e.defect} — ${e.hint}`);
     assert.equal(e.defect, `${CABINET} is a fixed piece, not a thing`, "the plain reason, naming the piece");
-    assert.equal(e.hint, "a sited mark with no class is part of what its maker built, so it stays where it stands and stays theirs: it is not carried, given or set down. Nothing was recorded.");
+    assert.equal(e.hint, "a sited mark with no class is part of what its maker built, so it stays where it stands and stays theirs: it is not taken. Nothing was recorded.");
     return true;
   });
   assert.deepEqual(await holdActs(CABINET), [], "no take, and no act of any kind, was recorded");
