@@ -266,33 +266,48 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { 
  * file by name, and so could remove a FRESH holder's lock that replaced it,
  * after which both sent. So no contender ever moves or removes a lock it does not
  * hold. Locks are numbered, `<rkey>.lock.<k>`, and the highest number present is
- * the lock. A holder releases by renaming its own `lock.<k>` to `free.<k>`.
+ * the lock.
+ *   · A holder releases by ADDING `free.<k>` beside its `lock.<k>`. The claim
+ *     name `lock.<k>` is never renamed or removed while it is the highest (the
+ *     review at 27a96fd4: a release that vacated it let a contender that had
+ *     read an older top link into it afterwards, and the next holder then cleared
+ *     that live lock as "below").
  *   · To take the event, a contender reads the highest number k. A live holder
  *     there means busy. A `free.<k>`, a dead pid, or no number at all means it
  *     tries to CREATE `lock.<k+1>`: written whole under a private name and
  *     hard-linked into place, which the filesystem lets exactly one contender do
  *     and never shows half-written.
- *   · A contender that created `lock.<k+1>` then looks again. If a higher number
- *     stands, the number it took was already superseded (cleared below a later
- *     holder), and it removes its own file and leaves.
- *   · The holder then clears the numbers below its own. They are never the live
- *     lock: the highest number present is always kept.
- * A stale observation can only fail to create a number that exists, so it can
- * never displace a holder, even for a moment. `pause(point)` is a test seam
- * ("takeover", "locked") where the falsifier holds a process to force the
- * interleaving.
+ *   · A contender that created `lock.<k+1>` then looks again. Unless its number
+ *     is the highest and not freed, the number it took was already superseded
+ *     (cleared below a later holder), and it removes its own file and leaves.
+ *   · The holder then clears the numbers below its own (their `lock` and `free`
+ *     both). They are never the live lock: the highest number is always kept, so
+ *     a stale link into a cleared lower number always finds it and backs out.
+ * A stale observation can only fail to create a number that exists, or create
+ * one already superseded, so it can never displace a holder, even for a moment.
+ * `pause(point)` is a test seam ("takeover", "locked") where the falsifier holds
+ * a process to force the interleaving.
  */
 export function lockEvent(dir, rkey, { pid = process.pid, pause = () => {} } = {}) {
   mkdirSync(dir, { recursive: true });
-  const numbered = () => readdirSync(dir).flatMap((f) => {
-    const m = f.startsWith(`${rkey}.`) && /^(lock|free)\.(\d+)$/.exec(f.slice(rkey.length + 1));
-    return m ? [{ k: Number(m[2]), free: m[1] === "free", name: f }] : [];
-  }).sort((a, b) => b.k - a.k);
+  // every number present, highest first: { k, free (its free.<k> is there), names }
+  const numbered = () => {
+    const by = new Map();
+    for (const f of readdirSync(dir)) {
+      const m = f.startsWith(`${rkey}.`) && /^(lock|free)\.(\d+)$/.exec(f.slice(rkey.length + 1));
+      if (!m) continue;
+      const g = by.get(Number(m[2])) ?? { k: Number(m[2]), free: false, names: [] };
+      if (m[1] === "free") g.free = true;
+      g.names.push(f);
+      by.set(g.k, g);
+    }
+    return [...by.values()].sort((a, b) => b.k - a.k);
+  };
   for (let i = 0; i < 3; i++) {
     const [top] = numbered();
     if (top && !top.free) {
       let holder = NaN;
-      try { holder = Number(readFileSync(join(dir, top.name), "utf8").trim()); } catch { continue; /* released or cleared: look again */ }
+      try { holder = Number(readFileSync(join(dir, `${rkey}.lock.${top.k}`), "utf8").trim()); } catch { continue; /* cleared under a later holder: look again */ }
       if (alive(holder)) return null;
     }
     const k = (top?.k ?? 0) + 1;
@@ -303,10 +318,12 @@ export function lockEvent(dir, rkey, { pid = process.pid, pause = () => {} } = {
     try { linkSync(making, mine); }
     catch (e) { if (e.code !== "EEXIST") throw e; continue; }   // another took k: look again
     finally { rmSync(making, { force: true }); }
-    if (numbered()[0]?.k !== k) { rmSync(mine, { force: true }); continue; }
-    for (const g of numbered()) if (g.k < k) rmSync(join(dir, g.name), { force: true });
+    const [now] = numbered();
+    if (now?.k !== k || now.free) { rmSync(mine, { force: true }); continue; }
+    for (const g of numbered()) if (g.k < k) for (const f of g.names) rmSync(join(dir, f), { force: true });
     pause("locked");
-    return { release: () => { try { renameSync(mine, join(dir, `${rkey}.free.${k}`)); } catch { /* gone */ } } };
+    // the claim name stays; release only marks it free, so no stale link can ever enter lock.<k> again
+    return { release: () => { try { writeFileSync(join(dir, `${rkey}.free.${k}`), String(pid)); } catch { /* the state directory is gone */ } } };
   }
   return null;
 }

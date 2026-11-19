@@ -272,15 +272,33 @@ test("a lock whose holder is gone is taken over by the next number; a live holde
   assert.deepEqual(locksIn(dir), ["crossing-1.lock.2"], "taken by the next number; the stale one cleared beneath it");
   assert.equal(lockEvent(dir, "crossing-1"), null, "this live process holds it now");
   taken.release();
-  assert.deepEqual(locksIn(dir), ["crossing-1.free.2"]);
+  assert.deepEqual(locksIn(dir), ["crossing-1.free.2", "crossing-1.lock.2"], "release marks the number free beside its claim name, which stays");
   const next = lockEvent(dir, "crossing-1");
-  assert.deepEqual(locksIn(dir), ["crossing-1.lock.3"], "a freed lock is taken by the next number, never reused");
+  assert.deepEqual(locksIn(dir), ["crossing-1.lock.3"], "a freed lock is taken by the next number, never reused; the freed one cleared beneath it");
   next.release();
   writeFileSync(join(dir, "crossing-12.lock.9"), String(process.pid));
   const again = lockEvent(dir, "crossing-1");
   assert.ok(again, "crossing-12's live lock is not crossing-1's");
   assert.deepEqual(locksIn(dir), ["crossing-1.lock.4", "crossing-12.lock.9"]);
   again.release();
+});
+
+test("A RELEASE NEVER REOPENS ITS NAME: A reads the dead holder; C takes the lock and releases it; A's stale link into C's number fails, and A, a later holder, is the only one", () => {
+  // the review at 27a96fd4: a release that renamed lock.<k> away let A link into it afterwards; the next holder then cleared A's live lock
+  const dir = tempDir("bsky-lock-release-");
+  writeFileSync(join(dir, "crossing-1.lock.1"), "999999999");
+  let seen = null;
+  const a = lockEvent(dir, "crossing-1", { pid: process.pid, pause: (point) => {
+    if (point !== "takeover" || seen) return;
+    const c = lockEvent(dir, "crossing-1");                              // C arrives, takes lock.2, finishes and releases
+    c.release();
+    seen = locksIn(dir);
+  } });
+  assert.deepEqual(seen, ["crossing-1.free.2", "crossing-1.lock.2"], "C's release left its claim name standing");
+  assert.ok(a, "A, looking again, takes the next number");
+  assert.deepEqual(locksIn(dir), ["crossing-1.lock.3"], "A holds lock.3, not C's old lock.2");
+  assert.equal(lockEvent(dir, "crossing-1"), null, "a next contender (E) finds A holding it");
+  a.release();
 });
 
 test("A STALE OBSERVER NEVER DISPLACES A FRESH HOLDER, EVEN FOR A MOMENT: B sees the dead holder, A takes the lock, B carries on: B leaves, A's lock is never touched, and no third contender gets in", async () => {
@@ -333,8 +351,8 @@ const r = await publishEvent({ kind: "crossing", n: 320, text: "Crossing 320 · 
   { stateDir: dir, env: process.env, service, timeoutMs: 5000, pause: hold });
 process.stdout.write(JSON.stringify(r));
 `;
-const node = (code, args) => {
-  const child = spawn(process.execPath, ["--input-type=module", "-e", code, ...args], { env: { ...process.env, ...ENV }, stdio: ["ignore", "pipe", "pipe"] });
+const node = (code, args, env = ENV) => {
+  const child = spawn(process.execPath, ["--input-type=module", "-e", code, ...args], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
   let out = ""; let err = "";
   child.stdout.on("data", (d) => { out += d; });
   child.stderr.on("data", (d) => { err += d; });
@@ -373,6 +391,47 @@ test("STALE TAKEOVER ACROSS PROCESSES, with refusing sends: one holder, and the 
     assert.ok(sent <= MAX_SENDS, `never past ${MAX_SENDS} sends (saw ${sent})`);
     assert.equal(bHeld, false, "B never held the lock while A did");
     assert.equal(rb.outcome, "busy", JSON.stringify(rb) + b.err);
+    assert.deepEqual([ra.outcome, ra.sends], ["failed", MAX_SENDS], JSON.stringify(ra) + a.err);
+  } finally { await pds.close(); }
+});
+
+// The review at 27a96fd4 (Truey's forced sequence): A reads the dead holder and
+// stalls; C takes the lock, runs and RELEASES it; E reads the top (C's freed
+// number) and stalls; A acts on its stale read, then E acts on its own. When a
+// release vacated the claim name, A's link into it succeeded and E, taking the
+// next number, cleared A's live lock: both held, both sent.
+test("RELEASE, THEN A STALE LINK, THEN THE NEXT CONTENDER, ACROSS PROCESSES, with refusing sends: one holder, and the createRecord requests are the journal's, never past two", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-xproc2-"); const sync = tempDir("bsky-xproc2-sync-");
+  try {
+    pds.faults.createRecord.push("400", "400", "400", "400");
+    const d = node(DEAD_HOLDER, [SRC, dir, sync]);
+    await until(() => existsSync(join(sync, "D.locked")), "the first holder");
+    d.child.kill("SIGKILL"); await d.done;
+    const go = (f) => writeFileSync(join(sync, `${f}.go`), "");
+    const A = node(CONTENDER, [SRC, dir, pds.service, sync, "A"]);
+    await until(() => existsSync(join(sync, "A.takeover")), "A to read the dead holder");
+    go("C.takeover"); go("C.locked");                                   // C is never held: a whole run that sends nothing
+    const C = node(CONTENDER, [SRC, dir, pds.service, sync, "C"], { BSKY_IDENTIFIER: IDENT, BSKY_APP_PASSWORD: "synthetic-wrong-pw" });
+    const c = await C.done;
+    const E = node(CONTENDER, [SRC, dir, pds.service, sync, "E"]);
+    await until(() => existsSync(join(sync, "E.takeover")), "E to read the top, C's freed number");
+    go("A.takeover");                                                    // A acts on its stale read now
+    await until(() => existsSync(join(sync, "A.locked")) || A.exited(), "A to hold the lock or leave");
+    go("E.takeover");                                                    // then E acts on its own
+    await until(() => E.exited() || existsSync(join(sync, "E.locked")), "E to leave or take the lock");
+    const eHeld = existsSync(join(sync, "E.locked"));
+    go("A.locked"); go("E.locked");                                      // let whoever holds go, together
+    const [a, e] = await Promise.all([A.done, E.done]);
+    const rc = JSON.parse(c.out || "{}"); const ra = JSON.parse(a.out || "{}"); const re = JSON.parse(e.out || "{}");
+    const sent = methods(pds).filter((m) => m === "createRecord").length;
+    const st = readState(dir, "crossing-320");
+    const journal = st.attempts.filter((x) => x.step === "createRecord" && x.outcome === "sending").length;
+    assert.deepEqual([rc.outcome, rc.sends], ["waiting", 0], "C held the lock, sent nothing, and released it" + c.err);
+    assert.equal(sent, st.sends, `the PDS saw ${sent} createRecord requests; the journal says ${st.sends}`);
+    assert.equal(journal, sent, "every send the PDS saw is one 'sending' line in the journal");
+    assert.ok(sent <= MAX_SENDS, `never past ${MAX_SENDS} sends (saw ${sent})`);
+    assert.equal(eHeld, false, "E never held the lock while A did");
+    assert.equal(re.outcome, "busy", JSON.stringify(re) + e.err);
     assert.deepEqual([ra.outcome, ra.sends], ["failed", MAX_SENDS], JSON.stringify(ra) + a.err);
   } finally { await pds.close(); }
 });

@@ -1740,19 +1740,21 @@ node tools/bluesky-publish.mjs crossing   --town  <town clone>  --state <dir> [-
 node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [--settlement <n>]
 ```
 - **The first run of each kind is the operator's,** once, by hand, with the event
-  to start from: for example `--crossing 321` and `--settlement 176`. The tick's
-  calls carry no number.
+  to start from, in the form `--crossing <n>` and `--settlement <n>`. Which numbers
+  is the owner's choice; this document and the code choose none. The tick's calls
+  carry no number.
 - **`--state <dir>` (required):** one directory both calls share, outside any
   checkout, writable by the posting unit. It holds one file per event
   (`<rkey>.json`: the event, the payload as first composed, every attempt and its
-  outcome, the posted uri) and one lock file per event (`<rkey>.lock.<k>` while a
-  run holds it, `<rkey>.free.<k>` after). It is each event's whole history, and the
-  floor: keep it, and don't remove a lock file by hand.
+  outcome, the posted uri) and the event's numbered lock (`<rkey>.lock.<k>`, with
+  `<rkey>.free.<k>` added beside it on release). It is each event's whole history,
+  and the floor: keep it, and don't remove a lock file by hand.
 - **Safe to repeat:** every call is safe on every tick and from a repeated or
   concurrent hook. A posted event is answered from its file with no network, and
-  an event another run holds is left to it. A run whose holder died is taken over
-  under a new lock number. The dead run's file is never moved or removed while
-  another could hold it, so a stale takeover can't let a second sender in.
+  an event another run holds is left to it. A lock whose holder died, or was
+  released, is taken over under the next number. No lock name is moved, removed or
+  reopened while it is the highest, so neither a stale takeover nor a release can
+  let a second sender in.
 - **Stdout:** one JSON line per event the call acted on, oldest first:
   - `{event, rkey, outcome, sends, uri?, detail?}`;
   - `{event, rkey, outcome: "held", detail}` for an owed event whose record can't be read;
