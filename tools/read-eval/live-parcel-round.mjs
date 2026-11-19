@@ -190,6 +190,9 @@ summarise("after the re-amend");
 // ── 3. THE WITHDRAWAL of a published leaf with nothing on it ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 say(""); say("## 3. One dependency-free withdrawal (a published own-parcel leaf), reads during and after");
 actDone = false; duringReads.length = 0;
+const keyAt = stateOnce.marks.find((m) => m.id === WITHDRAW)?.at ?? { x: 0, y: 0 };
+const tellAt = async () => { const t = JSON.parse((await GET(`/world/eyes?x=${keyAt.x}&y=${keyAt.y}`, { auth: false })).text); return { names: String(t.telling ?? "").includes(`[${WITHDRAW}`), objects: (t.objects ?? []).some((o) => o.id === WITHDRAW) }; };
+const tellBefore = await tellAt();
 const wStart = performance.now();
 const during2 = (async () => {
   while (!actDone) {
@@ -207,6 +210,11 @@ say(`- act answer: ${JSON.stringify(withdraw.body ?? withdraw.text).slice(0, 700
 say(`- reads made DURING the withdrawal (${duringReads.length}): ${[...new Set(duringReads.map((d) => d.id))].map((id) => { const xs = duringReads.filter((d) => d.id === id); return `${id}: n=${xs.length}, still show the leaf in ${xs.filter((d) => d.keystone).length}, ${stat(xs.map((d) => d.ms))}`; }).join("; ")}`);
 await phase("after the withdrawal");
 summarise("after the withdrawal");
+{
+  const tellAfter = await tellAt();
+  say(""); say("### The telling (anonymous `GET /world/eyes` at the withdrawn leaf's own spot)");
+  say(`- before the withdrawal: the telling names ${WITHDRAW} ${tellBefore.names ? "YES" : "no"}, the compact objects list it ${tellBefore.objects ? "YES" : "no"}; after: names ${tellAfter.names ? "YES (still named)" : "no (not named)"}, objects ${tellAfter.objects ? "YES" : "no"}`);
+}
 say(""); say("### Where the marks appear in the served answers (JSON paths holding the id or the new body)");
 for (const id of ["doorstep REST (wright, key)", "doorstep REST (anonymous)", "my marks (wright, key)"]) {
   const t = phases["after the withdrawal"].text[id][1];
