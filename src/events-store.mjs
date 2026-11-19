@@ -58,7 +58,7 @@ import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
-  refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
+  refuse, mintEventId, judgeInterval, judgePlaceShape, refuseBareOrigin, placeFromMarkRow, anchorForPlace,
   judgeText, judgeRsvp, challengeWebhook, harnessPlan, applyPostAct, eventView, calendarFrom, slugFromTitle,
   judgeAnnouncement, announceMax, ANNOUNCE_MAX_ENV,
 } from "./events.mjs";
@@ -221,7 +221,7 @@ const namesFor = (door, list) => (door === "household" ? list.map((k) => LEGACY_
 async function postEvent(handle, input, { now, env, door }) {
   const text = judgeText({ title: input.title, body: input.body }, { bodyField: door === "household" ? "invitation" : "body" });
   const interval = judgeInterval(input, now);
-  const shape = judgePlaceShape(input.place);
+  const shape = refuseBareOrigin(judgePlaceShape(input.place)); // POS-1133: a NEW event at no mark and (0, 0) is refused before any write; amendments are not
   return write(async (client) => {
     const place = await placeFor(client, shape);
     const { rows: held } = await client.query(
