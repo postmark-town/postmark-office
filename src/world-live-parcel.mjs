@@ -32,7 +32,9 @@ import { createHash } from "node:crypto";
 export const WINDOWS_BACK = 2;
 
 /**
- * The newest owner act per mark, with the newest pending-or-locked claim on it. `$1` = the blessed settlement's number (the
+ * The newest owner act per mark, with the newest pending-or-locked claim on it. `$2` = the owners asked about (a reader that serves
+ * one house asks for its own handles only, so an unrelated house's read finds nothing and does no overlay work), or null for all.
+ * `$1` = the blessed settlement's number (the
  * lower bound is the window it closed, minus `WINDOWS_BACK`); when the store holds no such row (or no window for it) the bound is open (every
  * act is considered: correct first, bounded where the store knows the settlement).
  */
@@ -45,6 +47,7 @@ export const markEditsSql = `
          AND a.action IN ('leave-mark', 'amend', 'withdraw')
          AND a.object IS NOT NULL
          AND a.actor = split_part(a.object, '/', 1)
+         AND ($2::text[] IS NULL OR a.actor = ANY($2::text[]))
          AND a.crossing >= COALESCE((SELECT s.window_id FROM settlements s WHERE s.number = $1), 0) - ${WINDOWS_BACK}
        ORDER BY a.object, a.id DESC
     ) l
@@ -118,8 +121,9 @@ export const liveParcelStats = { reads: 0, empty: 0, owed: 0, failures: 0 };
  * @param {object[]} canonMarks   the blessed marks
  * @param {number|null} settlement the blessed settlement's number (`blessed.n`)
  * @param {Function} [query] (sql, params) => Promise<rows>; defaults to the office's store read (`actsQuery`)
+ * @param {string[]|null} [owners] only these authors' edits (null = every author's)
  */
-export async function liveEdits(canonMarks, settlement, { query = null } = {}) {
+export async function liveEdits(canonMarks, settlement, { query = null, owners = null } = {}) {
   try {
     const ask = query ?? (await import("./world2-acts.mjs")).actsQuery;
     if (!query) {
@@ -127,7 +131,9 @@ export async function liveEdits(canonMarks, settlement, { query = null } = {}) {
       if (!world2Enabled()) return { bodies: new Map(), removed: new Set(), key: "" };
     }
     liveParcelStats.reads += 1;
-    const rows = await ask(markEditsSql, [Number.isFinite(Number(settlement)) ? Number(settlement) : -1]);
+    // the one store read this layer adds to a read, timed under the request as the segment `live_parcel` (read-timing.mjs § segSpan): the cost is said, never inferred
+    const { segSpan } = await import("./read-timing.mjs");
+    const rows = await segSpan("live_parcel", () => ask(markEditsSql, [Number.isFinite(Number(settlement)) ? Number(settlement) : -1, owners ? [...owners] : null]));
     const edits = editsFrom(rows ?? [], canonMarks);
     if (edits.key) liveParcelStats.owed += 1; else liveParcelStats.empty += 1;
     return edits;
@@ -141,4 +147,13 @@ export async function liveEdits(canonMarks, settlement, { query = null } = {}) {
 export async function liveMarks(canonMarks, settlement, opts = {}) {
   const edits = await liveEdits(canonMarks, settlement, opts);
   return { marks: overlayMarks(canonMarks, edits), edits };
+}
+
+/** The edits owed to the published world of `repo` (the readers that take canon from `publishedState` directly: the town's marks, the doorstep's stakes). */
+export async function editsForRepo(repo, opts = {}) {
+  try {
+    const { publishedState } = await import("./world-branches.mjs");
+    const ps = publishedState(repo);
+    return await liveEdits(ps.state?.marks ?? [], ps.blessed?.n ?? null, opts);
+  } catch { return { bodies: new Map(), removed: new Set(), key: "" }; }
 }

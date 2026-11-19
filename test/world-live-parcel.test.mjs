@@ -11,6 +11,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { editsFrom, overlayMarks, editedIds, liveEdits, liveMarks, liveParcelStats, markEditsSql } from "../src/world-live-parcel.mjs";
+import { stakesFor } from "../src/doorstep-stakes.mjs";
 
 const canon = () => [
   { id: "wright/the-drafting-table", kind: "sited", by: "wright", body: "A tilted sheet of working drawings.", at: { x: 1, y: 1 } },
@@ -105,8 +106,8 @@ async function seed({ acts = [], claims = [], settlement = null }) {
     }
   });
 }
-const ask = async (marks, settlement = 1) => {
-  const rows = await owner(async (c) => (await c.query(markEditsSql, [settlement])).rows);
+const ask = async (marks, settlement = 1, owners = null) => {
+  const rows = await owner(async (c) => (await c.query(markEditsSql, [settlement, owners])).rows);
   return editsFrom(rows, marks);
 };
 
@@ -167,4 +168,28 @@ test("13 · an act that is not a mark act is not read", async () => {
   const marks = canon();
   await seed({ settlement: { number: 1, window: 320 }, acts: [{ actor: "wright", action: "withdraw", object: "wright/the-keystone", class: "voice" }] });
   assert.equal((await ask(marks)).key, "");
+});
+
+test("14 · asked for one house's owners, another house's edits are not read (an unrelated read finds nothing owed)", async () => {
+  const marks = canon();
+  await seed({ settlement: { number: 1, window: 320 }, acts: [{ actor: "wright", action: "withdraw", object: "wright/the-keystone" }, { actor: "ada", action: "amend", object: "ada/a-lamp" }], claims: [{ slug: "ada/a-lamp", claimant: "ada", body: "A brighter lamp." }] });
+  assert.deepEqual([...(await ask(marks, 1, ["wright"])).removed], ["wright/the-keystone"]);
+  assert.equal((await ask(marks, 1, ["wright"])).bodies.size, 0);
+  assert.equal((await ask(marks, 1, ["little-bird"])).key, "", "nothing of an unrelated house's is owed");
+  assert.equal((await ask(marks, 1, null)).bodies.get("ada/a-lamp"), "A brighter lamp.");
+});
+
+test("15 · the doorstep's stakes rows carry the house's own body now and drop a withdrawn mark; an unrelated house's rows are canon's", async () => {
+  const marks = canon();
+  const state = { marks };
+  const readers = { world: async () => ({ state, ref: "refs/tags/settlement/S1" }), registry: async () => ({}), escrow: async () => ({ townSha: "x", byMark: new Map(), ingestedAt: null }), rule: async () => () => ({ unpublish: false }), pathAt: async () => () => null, allocationPage: false };
+  const edits = editsFrom([amend("wright/the-drafting-table", "A new sheet."), withdraw("wright/the-keystone")], marks);
+  const seen = [];
+  const live = async (_s, _r, handles) => { seen.push([...handles]); return handles.includes("wright") ? edits : editsFrom([], marks); };
+  const mine = await stakesFor(["wright"], { ...readers, liveEditsFor: live });
+  assert.deepEqual(mine.rows.map((r) => [r.mark, r.body]), [["wright/the-drafting-table", "A new sheet."]]);
+  const other = await stakesFor(["ada"], { ...readers, liveEditsFor: live });
+  assert.deepEqual(other.rows.map((r) => [r.mark, r.body]), [["ada/a-lamp", "A lamp."]]);
+  assert.deepEqual(seen, [["wright"], ["ada"]], "each read asks for its own handles only");
+  assert.equal(marks[1].id, "wright/the-keystone", "canon's array is untouched");
 });

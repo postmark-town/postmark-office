@@ -64,6 +64,7 @@ import { wholeNumber } from "./whole-number.mjs";
 import { publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { overlayMarks, editsForRepo } from "./world-live-parcel.mjs"; // POS-686: own-parcel edits canon has not carried yet, for every viewer
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -96,13 +97,18 @@ const publicRow = (m) => ({
  * the count beside a page cannot be the page's own length wearing a total's
  * name (`read: "leave-mark"`'s own THE COUNTS TRAP, closed 2026-08-25).
  */
-export function publishedMarksOf(handle, { repo = WORLD_CLONE } = {}) {
+export function publishedMarksOf(handle, { repo = WORLD_CLONE, edits = null } = {}) {
   const state = publishedState(repo).state ?? {};
-  return (state.marks ?? [])
+  // POS-686: `edits` is what the async caller read from the store (editsForRepo, this author only): an amendment or a
+  // withdrawal canon has not carried yet. Absent, canon as it always was.
+  return overlayMarks(state.marks ?? [], edits)
     .filter((m) => m?.id && m.by === handle)
     .map(publicRow)
     .sort((a, b) => a.id.localeCompare(b.id));
 }
+
+/** What the store owes one author's published marks (POS-686): the `edits` a caller hands `publishedMarksOf`. Never throws; no edit is canon as it stands. */
+export const editsForOwner = (handle, { repo = WORLD_CLONE } = {}) => editsForRepo(repo, { owners: [handle] });
 
 /** The two ranks the fold gives every published mark: `stamps` is the DIRECT stake on it,
  *  `weight` its EFFECTIVE weight (marks-fold.mjs writes both beside the mark). */
@@ -123,9 +129,9 @@ export function rankMarks(rows, sort) {
  * author to name), in id order, each row saying whose it is. Published only: the
  * docket and the drafts are other tenses and are not read here.
  */
-export function publishedMarksTownwide({ repo = WORLD_CLONE } = {}) {
+export function publishedMarksTownwide({ repo = WORLD_CLONE, edits = null } = {}) {
   const state = publishedState(repo).state ?? {};
-  return (state.marks ?? [])
+  return overlayMarks(state.marks ?? [], edits)
     .filter((m) => m?.id && m.by)
     .map((m) => ({ ...publicRow(m), by: m.by }))
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -148,7 +154,7 @@ export async function marksCountsFor(handle, {
 
   // `publishedOf` is a seam like the two below: the household glance hands its
   // own wrapper so the rows these counts were taken from are its newest marks too
-  try { out.published = publishedOf(handle, { repo }).length; }
+  try { out.published = publishedOf(handle, { repo, edits: await editsForRepo(repo, { owners: [handle] }) }).length; }
   catch (e) { notes.published_unreadable = `the world checkout could not be read (${plainReason(e, "files", "the town's published marks")})`; }
 
   const docket = await docketFor(handle, { repo });
@@ -197,7 +203,7 @@ export async function marksRead(handle, {
   if (!who) {
     let everything = [];
     let bad = null;
-    try { everything = rankMarks(publishedMarksTownwide({ repo }), ranked); }
+    try { everything = rankMarks(publishedMarksTownwide({ repo, edits: await editsForRepo(repo) }), ranked); }
     catch (e) { bad = `the world checkout could not be read (${plainReason(e, "files", "the town's ranked marks")})`; }
     const rows = everything.slice(start, start + n);
     const upto = start + rows.length;
@@ -220,7 +226,7 @@ export async function marksRead(handle, {
 
   let all = [];
   let unreadable = null;
-  try { all = publishedMarksOf(who, { repo }); if (ranked) all = rankMarks(all, ranked); }
+  try { all = publishedMarksOf(who, { repo, edits: await editsForRepo(repo, { owners: [who] }) }); if (ranked) all = rankMarks(all, ranked); }
   catch (e) { unreadable = `the world checkout could not be read (${plainReason(e, "files", "a resident's published marks")})`; }
 
   const page = all.slice(start, start + n);
