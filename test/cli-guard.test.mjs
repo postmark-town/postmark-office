@@ -165,6 +165,7 @@ const ROSTER = {
   "tools/crossing-replay-check.mjs": { args: ["--db", NOWHERE_DB, "--world", NOWHERE], code: 2, needle: "GATE REFUSED" },
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
+  "tools/month-close.mjs": { args: [], code: 2, needle: "usage: month-close.mjs plan --month YYYY-MM" }, // POS-851: the manual monthly close; no verb is a usage refusal before it reads anything
   "tools/harbor-watch.mjs": { args: [], code: 2, needle: "usage: harbor-watch.mjs" },
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
