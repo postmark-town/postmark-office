@@ -166,7 +166,8 @@
             "positions",
             "hhkeys",
             "hhkeys_log",
-            "world"
+            "world",
+            "bluesky"
           ],
           "step_refused_runs": 3,
           "stale_after_minutes": 45,
