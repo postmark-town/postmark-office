@@ -975,6 +975,32 @@ async function handleOauthRoute(req, res, ctx) {
     return res.end();
   }
 
+  // ── the household's human's own profile: town name, short line, pronouns (POS-721) ──
+  // RULED (Darko, 2026-11-17 00:31Z, POS-721/c): "Human only, like likeness". The likeness question's
+  // road, step for step: keyed on the public slug, nothing granted to whoever holds the link, the
+  // GitHub sign-in in this browser is the proof, and the callback refuses any account the household's
+  // row does not bind. No key sets it (human-profile.mjs § setHumanProfile refuses any other caller).
+  if (req.method === "GET" && path === "/oauth/human") {
+    const slug = (url.searchParams.get("household") ?? "").trim().toLowerCase();
+    const { likenessRegistry } = await import("./likeness.mjs");
+    const reg = await likenessRegistry().catch(() => null);
+    if (!reg) return html(res, 503, page("The record is closed", "<p>The office can't read the town's household record just now. Nothing was changed; try again shortly.</p>"));
+    if (!slug || !reg.houses[slug])
+      return html(res, 404, page("No such household", "<p>This link doesn't name a household the town keeps.</p>"));
+    if (!process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID)
+      return html(res, 503, page("Door not wired", "<p>GitHub sign-in isn't configured on this office yet.</p>"));
+    const pendingId = rand(24);
+    await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
+      kind: "human-profile", slug, stage: "to-github",
+    }), now() + PENDING_TTL_S);
+    const gh = new URL(GH_AUTH);
+    gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
+    gh.searchParams.set("redirect_uri", `${PUBLIC_BASE}/oauth/github/callback`);
+    gh.searchParams.set("state", pendingId);
+    res.writeHead(302, { location: gh.toString(), "cache-control": "no-store" });
+    return res.end();
+  }
+
   // authorize: validate -> park the request -> send the human to GitHub
   if (req.method === "GET" && path === "/oauth/authorize") {
     const q = url.searchParams;
@@ -1157,6 +1183,29 @@ async function handleOauthRoute(req, res, ctx) {
       }));
     }
 
+    // The human's own profile form (POS-721/c). THE ANCHOR CHECK RUNS FIRST, as the likeness
+    // screen's does: an account the household's row does not bind is refused by name and never
+    // shown the form. The writer repeats the binding at the button, and the store in its statement.
+    if (pending.kind === "human-profile") {
+      const { likenessRegistry, accountBinds } = await import("./likeness.mjs");
+      const reg = await likenessRegistry().catch(() => null);
+      const rec = reg?.houses?.[pending.slug];
+      if (!rec) return html(res, 409, page("The record is closed", "<p>The office can't read this household's record just now. Nothing was changed; try the link again shortly.</p>"));
+      const { plainPage } = await import("./likeness-pages.mjs");
+      if (!accountBinds(rec, ghUser.id))
+        return html(res, 403, plainPage("Not this household's account", `
+          <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not bind
+          the household <strong>${esc(rec.name ?? pending.slug)}</strong> to that account.</p>
+          <p>Only the household's own GitHub account can set its human's name. Nothing was changed.</p>`));
+      const nonceH = rand(16);
+      await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
+        ...pending, stage: "consent", nonce: nonceH, gh_id: ghUser.id, gh_login: ghUser.login,
+      }), pendingId);
+      const { formPage } = await import("./human-profile-pages.mjs");
+      return html(res, 200, formPage({ login: ghUser.login, houseName: rec.name ?? pending.slug, profile: rec.human_profile ?? null,
+        action: `${PUBLIC_BASE}/oauth/consent`, pendingId, nonce: nonceH }));
+    }
+
     const hh = await householdFor(db, ghUser.id, ghUser.login);
 
     const nonce = rand(16);
@@ -1256,6 +1305,27 @@ async function handleOauthRoute(req, res, ctx) {
         if (e?.code && e.code < 500)
           return html(res, e.code, page("Not answered", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
         return html(res, 502, page("Not answered", `<p>The office couldn't keep your answer. ${faultLogged("the likeness answer could not be kept", e)}</p><p>Nothing was changed.</p>`));
+      }
+    }
+
+    // ── the human's own profile: saved onto the household's record (POS-721/c) ──
+    // The ONE caller that says `browserSignIn`: the account this pending row carries was proved by a
+    // GitHub sign-in in this browser. The writer re-reads the row and judges the fields and the binding.
+    if (pending.kind === "human-profile") {
+      if (body.decision !== "save")
+        return html(res, 200, page("Not saved", "<p>Nothing was changed.</p>"));
+      const fields = {};
+      for (const f of ["town_name", "short_line", "pronouns"]) if (typeof body[f] === "string") fields[f] = body[f];
+      try {
+        const { setHumanProfile } = await import("./human-profile.mjs");
+        const done = await setHumanProfile({ slug: pending.slug, body: fields, ghId: pending.gh_id }, { clone: ctx.clone, browserSignIn: true });
+        const { savedPage } = await import("./human-profile-pages.mjs");
+        return html(res, 200, savedPage({ profile: done.human_profile, rendered: done.registry.rendered, login: pending.gh_login }));
+      } catch (e) {
+        // a named refusal (an HTTP code of the writer's own); a store error's code is a string like "23514" and is a fault, not a status
+        if (Number.isInteger(e?.code) && e.code >= 400 && e.code < 600 && e.code !== 500)
+          return html(res, e.code, page("Not saved", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
+        return html(res, 502, page("Not saved", `<p>The office couldn't keep that. ${faultLogged("the human's profile could not be kept", e)}</p><p>Nothing was changed.</p>`));
       }
     }
 

@@ -471,6 +471,7 @@ async function enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresh
  * they are — the walk ledger's derivation, which this verb READS and never
  * writes), `ledger()` (the threshold ledger's text), `record(payload)` (the pen).
  */
+const TOWN_ROOT = "the-town/let-there-be-light"; // POS-1147: the canonical root id (world.mjs § WORLD_FRAME, world-journal.mjs § WORLD_ANCHOR; not imported, to keep this module's imports as they are)
 export async function enterViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => enterAct(worldClone, payload, key, deps).finally(forgetOccupancy)); }
 // POS-637 PR-B: the export above is this act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
@@ -478,6 +479,9 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   const who = actorFrom(payload, key);
   const markId = String(payload.mark ?? payload.mark_id ?? "").trim();
   if (!markId) throw bounce(422, "enter what?", "name a mark — mark: \"<by>/<slug>\", as ids appear in the telling");
+  // POS-1147: the town root is the world frame, not a room. Anyone in the town is already in it, so nothing is
+  // entered and no act is written. Before every read and the portal branch; the id is exact, never title words.
+  if (markId === TOWN_ROOT) throw bounce(409, "you are already in the town", "the town root is not a place to enter; nothing was recorded");
 
   deps = timedDeps(deps); // POS-1110
   const { thresholds, verbs } = await actSpan("crossing_law", () => crossingLaw(worldClone));

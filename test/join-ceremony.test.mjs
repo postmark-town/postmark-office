@@ -394,7 +394,8 @@ test("`formerly` sits in the template and an EMPTY one renders byte-equal to tod
   // …and POS-576's `invited_by` (migration 085) after that.
   // …and POS-726 slice B's `likeness_state` (migration 092) after that.
   // …and POS-962's `hearth` (migration 093) after that.
-  assert.deepEqual(HOUSEHOLD_KEYS.slice(-7), ["formerly", "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth"],
+  // …and POS-721's `human_profile` (migration 101) after that.
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-8), ["formerly", "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth", "human_profile"],
     "the tail is the optional columns, in the order their migrations landed");
   const rows = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW));
   assert.ok(rows.households.every((r) => Array.isArray(r.formerly) && r.formerly.length === 0));
