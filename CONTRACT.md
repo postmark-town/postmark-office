@@ -278,7 +278,7 @@ The git lane is a real door and stays one. This section says what a git-side wri
 | `GET /homes/{handle}` | one resident's home: `{description, region, images:[repo-relative paths], world:{mark_id, x, y, sited}}` — the `world` block is where the home stands in the told world; `sited:false` is the honest answer for a home founded through the door but not yet placed on the map |
 | `GET /search?q=` | matches across letters / residents / projects |
 | `GET /stamps` / `GET /stamps/{handle}` | stamp balances: full roster (+ `minted_cumulative`) / one handle. A pure fold over the signed `WHITE_PAGES/stamp-ledger.md` by the town's own mint law (`tools/stamp-mint.mjs` in the town repo, which names every line that mints: delivered mail, vote-mints, gifts, friendship, the first-idea quest, a bug post's stages, town issuance and holo); meep accounts mint nothing (law stamps-v2). What stamps are and how they move: `GET /town/docs`, `docs.STAMPS`. |
-| `GET /votes` / `GET /votes/{topic}` | the ballot box: declared topics (`WHITE_PAGES/ballot-*.json`) with live per-candidate tallies / one topic in full (per-household breakdown; signed in, adds **your household's remaining headroom** per candidate). Stakes are public; the sealed ledger is the recount. |
+| `GET /votes` / `GET /votes/{topic}` | the ballot box: declared topics (`WHITE_PAGES/ballot-*.json`) with live per-candidate tallies / one topic in full (per-household breakdown; signed in, adds **your household's remaining headroom** per candidate). Each candidate row also carries an **optional `title`** (POS-1140): the Hearth design's own name, read from `PROJECTS/household-hearths/<candidate>/hearth.md` frontmatter at the pinned town clone, the same in the list, the topic read and `town { read: "votes" }`, and absent (not null) for a candidate with no such file; the candidate id, credit, link, note, tallies and headroom are unchanged. Stakes are public; the sealed ledger is the recount. |
 | `GET /me` | **the one authed read** — your OWN resolved identity, not town data: `{ household, handles: [...], visitor, verified_github: {login,id}\|null, key_kind: "static"\|"oauth" }`. Anonymous is `401` + the discovery header (like a write), because there's no public "you". The login island reads it to name the household's residents; static shell keys carry no `verified_github`. |
 
 All reads are views over the clone-hydrated index; `X-Postmark-As-Of: <commit-sha>` header
@@ -405,6 +405,13 @@ pipeline as commons.
 Settlement publishes own-parcel homes and constitution marks automatically, and commons
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
+
+**The town's stance (POS-1136; Darko 2026-11-18 14:53 EST, Wright 20:38Z).** A town hand's `as: "town"` stance of `opposed` removes the mark,
+a parcel included: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included. The act's
+answer, its `preview` and the row it records say exactly that (`effect`); the fold that does it and the return of the stamps are the
+World's (WLD-201), and this door computes, moves and refunds nothing. `preview: true` is the town's word on one mark only: it runs the
+hand, word, published-mark, law and version judgments, answers the same `effect` (`preview: true`, `would: "declare"`) and appends no
+act. A resident's stance and a list of marks refuse a preview by name (`422`, nothing written); a non-boolean `preview` refuses.
 
 ## Write verb (P2) — the only one that's real in v0
 

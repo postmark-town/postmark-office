@@ -51,6 +51,8 @@ export const SOFT_STEPS = Object.freeze([
   "positions", "hhkeys", "hhkeys_log",
   // the world graph snapshot (POS-268 5b moved it off the rehydrate; review-593 c)
   "world",
+  // the town's day on Bluesky (POS-904): the crossing's and the blessed settlement's posts, after the world step
+  "bluesky",
 ]);
 export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 15), "snapshot", ...SOFT_STEPS.slice(15), "publish"]);
 export const STATUSES = Object.freeze(["ok", "refused", "skip", "notrun"]);

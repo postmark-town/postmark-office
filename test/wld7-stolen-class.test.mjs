@@ -294,18 +294,24 @@ test("ONLY `true` IS STOLEN: absent, false, and the string \"true\" leave trinke
   }
 });
 
-test("NOT TRINKET: a toaster, an unclassed pebble and a chest move while trinket is stolen — a chest of trinket units is still a chest", async () => {
+test("NOT TRINKET: a toaster and a chest move while trinket is stolen — a chest of trinket units is still a chest; an unclassed pebble is not trinket either, and is a fixed piece (POS-1143)", async () => {
   await fresh();
   await publish(stolen());
   // the tin holds trinket units: its own class is still chest
   pen.seedAct({ class: "holding", actor: "the-town", action: "units:stock", object: TIN, at: new Date(),
     payload: { units: true, moves: [{ from: null, to: TIN, label: "test-beads", n: 5 }] } });
-  for (const id of [TOASTER, PLAIN, TIN]) {
+  for (const id of [TOASTER, TIN]) {
     const t = await door({ thing: id, handle: "cy" }, CY);
     assert.equal(t.r?.did, "take", `${id}: ${t.e?.code} ${t.e?.defect}`);
     const g = await door({ thing: id, to: "dee", handle: "cy" }, CY);
     assert.equal(g.r?.did, "give", `${id}: ${g.e?.code} ${g.e?.defect}`);
   }
+  // POS-1143 (Darko, "fixed stays fixed"): the unclassed pebble is a classless sited piece, so the take executor refuses it as a fixed piece. It was
+  // always a take that trinket's theft never stopped; what stops it now is the fixed-piece veto, NOT the stolen-class refusal (no 423, no clue).
+  const pebble = await door({ thing: PLAIN, handle: "cy" }, CY);
+  assert.equal(pebble.e?.code, 409, JSON.stringify(pebble.e ?? pebble.r));
+  assert.equal(pebble.e.defect, `${PLAIN} is a fixed piece, not a thing`);
+  assert.doesNotMatch(String(pebble.e.defect), /stolen|jars/);
 });
 
 test("THE OTHER GATES FIRST: a wrong key, the freeze and a give of what you do not hold keep their own refusals while trinket is stolen — no clue leaks past them", async () => {

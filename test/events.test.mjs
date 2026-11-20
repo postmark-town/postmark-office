@@ -971,3 +971,125 @@ test("amend · a housemate may change a post written under the house's account s
   assert.deepEqual(r.amended, ["title"]);
   await refusedWith(hostAtOffice({ event: event.id, title: "mine now" }, ERRANT), 403, /not yours to change/);
 });
+
+// ── POS-1133 (postmark#4577, Moose's bug post): a NEW event at no mark and (0, 0) is refused ──────────────────────────────
+//
+// Wright (CORE-105, 2026-11-18, authenticated on POS-1133): "an event's place is a mark, or real coordinates ... The hosting door
+// refuses an event with no mark and (0, 0), with a plain message: 'an event needs a place: name a mark, or give its x and y'. It's
+// the same answer under `preview: true`. Existing events stay as they are." The Origin is the town's null bucket, not a place.
+// Scope is ONLY that: no named-place containment, no amendment policy, no general hosting preview, no repair of an old event.
+// Credit: Moose (moose/event-place-0-0-sends-guests-to-the-origin-the-town-s-null-b).
+const ORIGIN_SENTENCE = "an event needs a place: name a mark, or give its x and y";
+// the hint is neutral about the Origin: it says what the Origin is and what a place is, and makes no claim about attendance (#4577 retracted that one)
+const ORIGIN_HINT = /the null bucket of the town, where what has no place is kept, not a place of its own/;
+const nothingWritten = (pen, events, n = 0) => { assert.equal(pen.rows().length, n, "an act was written"); assert.equal(events.size, n, "a post row was written"); };
+
+test("POS-1133 · a new event at no mark and (0, 0) is refused in the ruling's plain words, and no act or post is written", async () => {
+  const { pen, events } = setup();
+  for (const [what, place] of [["at 0,0", { at: { x: 0, y: 0 } }], ["numeric strings", { at: { x: "0", y: "0" } }], ["negative zero", { at: { x: -0, y: 0 } }]]) {
+    await assert.rejects(hostAtOffice(HOST(Date.now(), place), WRIGHT), (e) => {
+      assert.deepEqual([e.code, e.defect, e.field], [422, ORIGIN_SENTENCE, "place"], what);
+      assert.match(e.hint, ORIGIN_HINT);
+      return true;
+    });
+  }
+  nothingWritten(pen, events);
+  // CONTROL: the same request one unit off the Origin hosts, so the refusal above is the rule and not the harness
+  const ok = await hostAtOffice(HOST(Date.now(), { at: { x: 1, y: 0 } }), WRIGHT);
+  assert.deepEqual([ok.event.place.mark, ok.event.place.x, ok.event.place.y], [null, 1, 0]);
+});
+
+test("POS-1133 · the town's post machine creates through the same pen, so it refuses the Origin the same way", async () => {
+  const { pen, events } = setup();
+  await assert.rejects(postAtTown(TOWN_EVENT(Date.now(), { place: { at: { x: 0, y: 0 } } }), WRIGHT, { now: Date.now() }), (e) => {
+    assert.deepEqual([e.code, e.defect], [422, ORIGIN_SENTENCE]);
+    return true;
+  });
+  nothingWritten(pen, events);
+});
+
+test("POS-1133 · what stays valid: a mark centred at the Origin, a point with ONE axis at zero, and any other point", async () => {
+  const marks = [...MARKS, { slug: "wright/the-centre-stone", status: "standing", kind: "sited", geometry: { at: { x: 0, y: 0 }, extent: { w: 6, h: 6 } } }];
+  const { pen, events } = setup({ marks });
+  const centre = await hostAtOffice({ ...HOST(Date.now(), { mark: "wright/the-centre-stone" }), title: "At the stone" }, WRIGHT);
+  assert.deepEqual([centre.event.place.mark, centre.event.place.x, centre.event.place.y], ["wright/the-centre-stone", 0, 0], "a NAMED place whose centre is (0, 0) is a mark, not the null bucket");
+  let n = 1;
+  for (const p of [{ x: 0, y: 7 }, { x: 7, y: 0 }, { x: -120, y: 64 }, { x: 0.5, y: 0 }]) {
+    const r = await hostAtOffice({ ...HOST(Date.now(), { at: p }), title: `Point ${p.x},${p.y}` }, WRIGHT);
+    assert.deepEqual([r.event.place.x, r.event.place.y], [p.x, p.y]);
+    n++;
+  }
+  nothingWritten(pen, events, n);
+});
+
+test("POS-1133 · an event already on the calendar at (0, 0) stays as it is, and its ordinary amendments still work; amendments are not this door", async () => {
+  const { pen, events, posts } = setup();
+  const now = Date.now();
+  const kept = await hostAtOffice(HOST(now, { at: { x: 1, y: 1 } }), WRIGHT);
+  // an old row written before the rule: no mark, (0, 0)
+  const row = posts.get(kept.event.id); row.place_mark = null; row.place_x = 0; row.place_y = 0;
+  const amended = await hostAtOffice({ event: kept.event.id, title: "Still on the calendar" }, WRIGHT);
+  assert.deepEqual(amended.amended, ["title"]);
+  assert.deepEqual([posts.get(kept.event.id).place_mark, posts.get(kept.event.id).place_x, posts.get(kept.event.id).place_y], [null, 0, 0], "the old row's place is untouched");
+  const before = pen.rows().length;
+  // amending that old row's place to the real point (2, 2) works as it always did: the amendment route (the shared judgePlaceShape) is
+  // deliberately not touched by this fix, and no amendment rule is added here
+  const movedToPoint = await hostAtOffice({ event: kept.event.id, place: { at: { x: 2, y: 2 } } }, WRIGHT);
+  assert.deepEqual(movedToPoint.amended, ["place"]);
+  assert.equal(pen.rows().length, before + 1);
+  assert.equal(events.size, 1);
+});
+
+// THE PUBLIC REQUEST, not a helper: household { do: "host" } through the apex, as HTTP /household reaches it.
+test("POS-1133 · the real door: bare Origin is refused the same plain way with and without preview, from args or the top level, and writes nothing", async () => {
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const { pen, events } = setup();
+  const now = Date.now();
+  const base = { title: "The second sitting", invitation: "At the workshop.", ...at(now) };
+  const asked = [
+    ["no preview", { do: "host", args: { ...base, place: { at: { x: 0, y: 0 } } } }],
+    ["preview: true in args", { do: "host", args: { ...base, place: { at: { x: 0, y: 0 } }, preview: true } }],
+    ["preview: false in args", { do: "host", args: { ...base, place: { at: { x: 0, y: 0 } }, preview: false } }],
+    ["preview: true at the top level", { do: "host", ...base, place: { at: { x: 0, y: 0 } }, preview: true }],
+    ["preview in args, numeric-string zeros", { do: "host", args: { ...base, place: { at: { x: "0", y: "0" } }, preview: true } }],
+  ];
+  const seen = [];
+  for (const [what, call] of asked) {
+    const r = await householdApex(call, WRIGHT, {});
+    assert.equal(r.error, "bounce", `${what}: ${JSON.stringify(r).slice(0, 200)}`);
+    seen.push([r.code, r.defect, r.hint, r.field]);
+    assert.deepEqual(seen.at(-1), seen[0], `${what}: the same refusal as the plain request, word for word`);
+  }
+  assert.deepEqual(seen[0].slice(0, 2), [422, ORIGIN_SENTENCE]);
+  assert.match(seen[0][2], ORIGIN_HINT);
+  nothingWritten(pen, events);
+});
+
+test("POS-1133 · every other preview keeps what it did: refused by name when it rides args, and a preview NEVER turns a refused request into a write", async () => {
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const { pen, events } = setup();
+  const now = Date.now();
+  const base = { title: "Office Hours", invitation: "Come by.", ...at(now) };
+  // a valid place with preview in args: still the unknown-field refusal, as before this fix
+  for (const place of [{ at: { x: 120, y: 64 } }, { mark: "current-the-reader/the-snug-harbour" }, { at: { x: 0, y: 3 } }]) {
+    const r = await householdApex({ do: "host", args: { ...base, place, preview: true } }, WRIGHT, {});
+    assert.deepEqual([r.error, r.code, r.defect, r.unknown_fields], ["bounce", 422, "host does not take: preview", ["preview"]]);
+  }
+  // an amendment asked as a preview is not the creation rule's: it keeps its unknown-field refusal too
+  const amend = await householdApex({ do: "host", args: { event: "wright/some-event", place: { at: { x: 0, y: 0 } }, preview: true } }, WRIGHT, {});
+  assert.deepEqual([amend.code, amend.defect], [422, "host does not take: preview"]);
+  // a malformed place with preview is not the Origin's refusal either
+  const bent = await householdApex({ do: "host", args: { ...base, place: { at: { x: 0 } }, preview: true } }, WRIGHT, {});
+  assert.deepEqual([bent.code, bent.defect], [422, "host does not take: preview"]);
+  nothingWritten(pen, events);
+});
+
+test("POS-1133 · the refusal lives in the creation rule alone: judgePlaceShape still answers a bare Origin as a well-formed point (the amendment route shares it)", async () => {
+  const { judgePlaceShape, isBareOrigin, refuseBareOrigin } = await import("../src/events.mjs");
+  assert.deepEqual(judgePlaceShape({ at: { x: 0, y: 0 } }), { at: { x: 0, y: 0 } });
+  assert.equal(isBareOrigin({ at: { x: 0, y: 0 } }), true);
+  for (const p of [{ at: { x: 0, y: 1 } }, { at: { x: 1, y: 0 } }, { mark: "wright/a-mark" }, { at: { x: 0 } }, null, undefined, "0,0", { at: { x: 0, y: 0 }, mark: "wright/a-mark" }])
+    assert.equal(isBareOrigin(p), false, JSON.stringify(p));
+  assert.equal(refuseBareOrigin({ at: { x: 4, y: 0 } }).at.x, 4, "a real point passes through");
+  assert.throws(() => refuseBareOrigin({ at: { x: 0, y: 0 } }), (e) => e.defect === ORIGIN_SENTENCE);
+});

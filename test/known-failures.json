@@ -1,4 +1,32 @@
 {
   "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner (the Linear issue that owns the fix: a child of POS-419 per cause), date (listed on) and until (review by): a row past its until is printed as overdue, which does not fail the run. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` is a flake: when it reds, its file runs once more, and green on that retry is allowed while red twice fails the run. Fixing the reds is POS-419.",
-  "failures": []
+  "failures": [
+    {
+      "file": "test/wld164-flee-read.test.mjs",
+      "name": "the act whose press takes a HOUSEMATE to 0 says their nerve is gone and what the office does, beside who paid; the actor and the others carry no such line",
+      "reason": "intermittent: red in attempt 1 and green in whole attempt 2 of suite run 44364665198 at the same Office head e32c67cd (all eight shards and the verdict passed on attempt 2); cause not established (a clock boundary is only a hypothesis); repair is WLD-199, which removes the row",
+      "owner": "WLD-199",
+      "date": "2026-11-18",
+      "until": "2026-11-25",
+      "flaky": true
+    },
+    {
+      "file": "test/wld164-flee-read.test.mjs",
+      "name": "controls: nobody at 0, and the ACTOR taken to 0 by their own act (nerve_said's, not said twice), carry no pressed.nerve_gone",
+      "reason": "intermittent: red in attempt 1 and green in whole attempt 2 of suite run 44364665198 at the same Office head e32c67cd (all eight shards and the verdict passed on attempt 2); cause not established (a clock boundary is only a hypothesis); repair is WLD-199, which removes the row",
+      "owner": "WLD-199",
+      "date": "2026-11-18",
+      "until": "2026-11-25",
+      "flaky": true
+    },
+    {
+      "file": "test/wld164-flee-read.test.mjs",
+      "name": "a flee that does not happen (outside a dungeon, or the exit fails) is never claimed: the answer promises only what is true, and nothing is recorded for their happened",
+      "reason": "intermittent: red in attempt 1 and green in whole attempt 2 of suite run 44364665198 at the same Office head e32c67cd (all eight shards and the verdict passed on attempt 2); cause not established (a clock boundary is only a hypothesis); repair is WLD-199, which removes the row",
+      "owner": "WLD-199",
+      "date": "2026-11-18",
+      "until": "2026-11-25",
+      "flaky": true
+    }
+  ]
 }
