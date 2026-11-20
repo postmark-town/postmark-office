@@ -2377,6 +2377,11 @@ async function sayAct(args = {}, key = null) {
 // answer (POS-265 lifted it out of worldSayHuman so the page's stream stands
 // the human exactly where their say would). Returns `{ speaker, standAs }`,
 // or a bounce.
+// POS-1132: the human's stand asks where a housemate stands through ONE function, so a test can say who is placed instead of
+// depending on whether this environment has a World clone. Unset (always, outside a test) it is residentStandpoint, unchanged.
+let _humanStandpointSeam = null;
+const humanStandpointOf = (handle) => (_humanStandpointSeam ?? residentStandpoint)(handle);
+export const __setHumanStandpointForTest = (fn) => { _humanStandpointSeam = fn ?? null; };
 async function humanStand(args = {}, key = null) {
   if (args.handle)
     return { error: "bounce", defect: "one voice at a time",
@@ -2419,14 +2424,14 @@ async function humanStand(args = {}, key = null) {
     if (!handles.includes(w))
       return { error: "bounce", defect: `"${w}" is not one of your residents`,
         hint: `with: names the housemate you stand beside — one of ${handles.join(", ")}` };
-    const here = await residentStandpoint(w).catch(() => null);
+    const here = await humanStandpointOf(w).catch(() => null);
     if (!here?.placed) {
       // POS-1132 (Wright, CORE-122 03:06Z): "The office accepts an explicit `with` for the unplaced resident it would pick itself
       // (speaking from the Origin)." Omitting `with` when NOBODY is placed picks the first handle, whom the voice's standpoint stands at
       // the Origin; the always-with box sends that disclosed resident back, so it is accepted, and ONLY it: any other unplaced
       // housemate, or this one while another is placed (the office would pick the placed one), is still refused.
       const first = handles[0];
-      const nobodyPlaced = w === first && (await Promise.all(handles.map((h) => residentStandpoint(h).catch(() => null)))).every((p) => !p?.placed);
+      const nobodyPlaced = w === first && (await Promise.all(handles.map((h) => humanStandpointOf(h).catch(() => null)))).every((p) => !p?.placed);
       if (!nobodyPlaced)
         return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
           hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
@@ -2436,7 +2441,7 @@ async function humanStand(args = {}, key = null) {
     let firstPlaced = null;
     const placed = [];
     for (const h of handles) {
-      const here = await residentStandpoint(h).catch(() => null);
+      const here = await humanStandpointOf(h).catch(() => null);
       if (!here?.placed) continue;
       placed.push(h);
       if (here.aboard) { standAs = h; break; }

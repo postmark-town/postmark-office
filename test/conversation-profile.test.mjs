@@ -269,30 +269,58 @@ test("the book is one read, kept a moment: a burst of lines is not a burst of re
 });
 
 // ── the existing unplaced default, round-tripped through an explicit `with` ──────────────────────────────
+//
+// DETERMINISTIC: who is placed is SAID by the test through the one standpoint seam humanStand reads (world.mjs §
+// __setHumanStandpointForTest), never left to whether this environment happens to hold a World clone.
 
-test("the unplaced default round-trips: with nobody placed, the resident the office would pick is accepted explicitly; no other is", async () => {
-  const { __humanStandForTest: stand } = await import("../src/world.mjs");
-  const key = { household: "h", handles: new Set(["vex", "alaric"]) };
-  // this environment has no world clone, so no resident of the key can be placed: the office would pick the FIRST handle itself
-  const picked = await stand({ human: true }, key);
-  assert.equal(picked.standAs, "vex", "the preview discloses the resident the office picked");
-  const sent = await stand({ human: true, with: "vex" }, key);
-  assert.ok(!sent.error, JSON.stringify(sent));
-  assert.deepEqual(sent, picked, "the explicit with for that resident stands the human exactly as the omitted one did (the voice standpoint then supplies the Origin)");
-  // not every unplaced resident has an Origin fallback: the second one is refused, as it always was
-  const other = await stand({ human: true, with: "alaric" }, key);
-  assert.equal(other.error, "bounce");
-  assert.match(other.defect, /doesn't know where alaric stands/);
-  // a foreign choice is still refused first, and the one-voice and agent-key refusals are as they were
-  assert.match((await stand({ with: "stranger" }, key)).defect, /not one of your residents/);
-  assert.equal((await stand({ handle: "vex", with: "vex" }, key)).defect, "one voice at a time");
-  assert.equal((await stand({ with: "vex" }, { ...key, keyKind: "berth-upgraded" })).code, 403);
+const { __humanStandForTest: stand, __setHumanStandpointForTest: placing } = await import("../src/world.mjs");
+const KEY = () => ({ household: "h", handles: new Set(["vex", "alaric", "moss"]) });
+/** Place exactly the handles named (the rest stand nowhere); every call restores the real standpoint after. */
+const withPlaced = async (placed, fn) => {
+  placing(async (h) => (placed.includes(h) ? { handle: h, placed: true, x: 100, y: 100, aboard: false } : { handle: h, placed: false }));
+  try { return await fn(); } finally { placing(null); }
+};
+
+test("all unplaced: the resident the office would pick (the first handle) round-trips through an explicit with; no other does", async () => {
+  await withPlaced([], async () => {
+    const picked = await stand({ human: true }, KEY());
+    assert.equal(picked.standAs, "vex", "the preview discloses the resident the office picked");
+    const sent = await stand({ human: true, with: "vex" }, KEY());
+    assert.ok(!sent.error, JSON.stringify(sent));
+    assert.deepEqual(sent, picked, "the explicit with stands the human exactly as the omitted one did (the voice standpoint then supplies the Origin)");
+    for (const other of ["alaric", "moss"]) {
+      const r = await stand({ human: true, with: other }, KEY());
+      assert.equal(r.error, "bounce", `${other} is not the one the office would pick`);
+      assert.match(r.defect, new RegExp(`doesn't know where ${other} stands`));
+    }
+  });
 });
 
-test("the Origin round-trip is only for the first handle, and only while nobody is placed", async () => {
-  const world = await import("../src/world.mjs");
-  const key = { household: "h", handles: new Set(["vex", "alaric", "moss"]) };
-  assert.equal((await world.__humanStandForTest({ with: "moss" }, key)).error, "bounce", "a third unplaced resident is not the one the office would pick");
-  // the placed rung is untouched: this environment cannot place anyone, so what it can say is that an unplaced first handle is the
-  // ONLY unplaced acceptance; the placed-resident and aboard rungs live in the world's own say suites
+test("CONTROL, first unplaced and second placed: the office picks the SECOND, so an explicit first is refused and the second is accepted", async () => {
+  await withPlaced(["alaric"], async () => {
+    const picked = await stand({ human: true }, KEY());
+    assert.equal(picked.standAs, "alaric", "omitted with picks the placed second, not the unplaced first");
+    const first = await stand({ human: true, with: "vex" }, KEY());
+    assert.equal(first.error, "bounce", "the unplaced first is NOT what the office would pick here: the Origin acceptance does not apply");
+    assert.match(first.defect, /doesn't know where vex stands/);
+    assert.deepEqual(await stand({ human: true, with: "alaric" }, KEY()), picked);
+    const third = await stand({ human: true, with: "moss" }, KEY());
+    assert.equal(third.error, "bounce");
+  });
+});
+
+test("the placed rungs are as they were: a placed first is picked and accepted; an unplaced second is refused", async () => {
+  await withPlaced(["vex"], async () => {
+    assert.equal((await stand({ human: true }, KEY())).standAs, "vex");
+    assert.equal((await stand({ human: true, with: "vex" }, KEY())).standAs, "vex");
+    assert.equal((await stand({ human: true, with: "alaric" }, KEY())).error, "bounce");
+  });
+});
+
+test("the refusals around it are unchanged: a foreign handle, handle + with, an agent's key", async () => {
+  await withPlaced([], async () => {
+    assert.match((await stand({ with: "stranger" }, KEY())).defect, /not one of your residents/);
+    assert.equal((await stand({ handle: "vex", with: "vex" }, KEY())).defect, "one voice at a time");
+    assert.equal((await stand({ with: "vex" }, { ...KEY(), keyKind: "berth-upgraded" })).code, 403);
+  });
 });
