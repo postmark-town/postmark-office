@@ -57,6 +57,7 @@ import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { speakerBook, adoptSpeakerBook, bookToPlain, lineSpeaker, pickSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
 import { sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
 
 // The class the dials hang on. Named once, beside the reader, for the same
@@ -550,7 +551,8 @@ export function createVoices({
         const id = sayIdOf(v.id), replyTo = sayIdOf(v.reply_to); // POS-1035: the act number and the stored parent, when the line carries them
         voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}),
           ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}),
-          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) });
+          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+          ...(typeof v.stood_with === "string" && v.stood_with ? { stood_with: v.stood_with } : {}) }); // POS-1132: the shoulder this say was spoken on, when the line kept it
         if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
@@ -589,6 +591,7 @@ export function createVoices({
       // POS-1035, additive: the say's act number (when the pen returned one) and the say it answers. Old lines have neither and stay a timeline.
       ...(voice.id != null ? { id: voice.id } : {}),
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
+      ...(voice.stood_with ? { stood_with: voice.stood_with } : {}), // POS-1132: whom a human stood with when they spoke (an old line has none)
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -793,6 +796,7 @@ export function createVoices({
   // for a read answered off the main thread, where the voices window is not:
   // the main thread takes it at the call's admission and hands it over.
   async function heardAt(at, { aboard = false, since = null, cap = hearMax, exclude = null, snapshot: carried = null, room: earRoom = null } = {}) {
+    if (carried) adoptSpeakerBook(carried.speakers ?? null); else await speakerBook(); // POS-1132: a worker takes the main thread's book; the main thread reads its own
     const t = carried?.t ?? now();
     const snap = carried ?? await snapshot(t);
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since) && v.handle !== exclude;
@@ -801,6 +805,7 @@ export function createVoices({
       handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
       ...(v.id != null ? { id: v.id } : {}), // POS-1035: the say's id, optional and additive (call 24)
+      ...lineSpeaker(v), // POS-1132: the human's chosen presentation and recorded shoulder (nothing on a resident's line)
     }));
   }
 
@@ -815,7 +820,7 @@ export function createVoices({
   function earshotSnapshot() {
     const t = now();
     if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
-    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}) }, x, y, structural })) }));
+    const p = snapshot(t, { clusters: false }).then(async (snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}), ...(v.stood_with ? { stood_with: v.stood_with } : {}) }, x, y, structural })), speakers: bookToPlain(await speakerBook()) }));
     const mine = { t, p };
     memo = mine;
     p.catch(() => { if (memo === mine) memo = null; });
@@ -933,6 +938,7 @@ export function createVoices({
   // the final text; `trailing` are fields this module adds after the reply (a nonce receipt's), placed last as they always were.
   async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true, circleAsk = null, spokenSay = null, doorExtra = null, trailing = {} } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
+    await speakerBook(); // POS-1132: the book the sync line shapers below read
     snap ??= await snapshot(t);
     const everHeard = heardBy(here, snap);
     const heard = everHeard.filter(fresh);
@@ -985,6 +991,7 @@ export function createVoices({
         // the instant it was spoken, on the record's own clock (#3350, Kogane):
         // the same `at_ms` a `conversation.record` line carries
         at_ms: v.at,
+        ...lineSpeaker(v), // POS-1132
       })),
     };
     // ALWAYS present, both ways. `spoke` used to appear only when true, so a
@@ -1032,10 +1039,10 @@ export function createVoices({
         const fresh = sinceRead(roomVoices, since, { decorate });
         // The since-reply's `record` keeps ITS line, field for field (`handle, standing, said, ago, at_ms`, then `heard`), and gains
         // only the additive `id`, `reply_to`, `circle` and — on an earlier parent carried along — `context: true` (call 24).
-        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard }) => ({
+        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard, ...line }) => ({
           handle: h, standing: s, said, ago: agoWords(t - atMs), at_ms: atMs,
           ...(heard ? { heard } : {}), ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
-          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}) });
+          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}), ...pickSpeaker(line) });
         out.conversation = { ...shape, record: fresh.lines.map(recordLine), ...(fresh.context_says ? { context_says: fresh.context_says } : {}), ...(fresh.broken ? { broken: fresh.broken } : {}),
           note: fresh.lines.length ? "`record` is every say since your last call, plus — marked context: true — the earlier say each new reply answers" : "nothing new since your last call — the room's shape rides above; say something, or check back in a minute" };
       } else {
@@ -1302,7 +1309,8 @@ export function createVoices({
     }
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
-    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}) };
+    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}),
+      ...(standAs && standAs !== handle ? { stood_with: standAs } : {}) }; // POS-1132: the same fact voiceEntry records as payload.stood_with
     // THE PARENT, RESOLVED BEFORE THE PEN WRITES (POS-1035, calls 3, 21, 25). An explicit `reply_to` (an id, or a handle plus a
     // time) or — with none — a name in the words resolves against the ROOM the speaker is speaking into, and nowhere else: a
     // say outside it is refused, never linked (call 21's earshot rule; the room is POS-779's, carried over a settlement by

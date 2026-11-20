@@ -2420,9 +2420,17 @@ async function humanStand(args = {}, key = null) {
       return { error: "bounce", defect: `"${w}" is not one of your residents`,
         hint: `with: names the housemate you stand beside — one of ${handles.join(", ")}` };
     const here = await residentStandpoint(w).catch(() => null);
-    if (!here?.placed)
-      return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
-        hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    if (!here?.placed) {
+      // POS-1132 (Wright, CORE-122 03:06Z): "The office accepts an explicit `with` for the unplaced resident it would pick itself
+      // (speaking from the Origin)." Omitting `with` when NOBODY is placed picks the first handle, whom the voice's standpoint stands at
+      // the Origin; the always-with box sends that disclosed resident back, so it is accepted, and ONLY it: any other unplaced
+      // housemate, or this one while another is placed (the office would pick the placed one), is still refused.
+      const first = handles[0];
+      const nobodyPlaced = w === first && (await Promise.all(handles.map((h) => residentStandpoint(h).catch(() => null)))).every((p) => !p?.placed);
+      if (!nobodyPlaced)
+        return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
+          hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    }
     standAs = w;
   } else {
     let firstPlaced = null;
@@ -2441,6 +2449,8 @@ async function humanStand(args = {}, key = null) {
   }
   return { speaker, standAs };
 }
+/** The one answer, as a test asks it (POS-1132): who the human is and whose body they borrow, with no voice read after it. */
+export const __humanStandForTest = humanStand;
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function worldSayHuman(args = {}, key = null) { return perceived(() => sayHumanAct(args, key)); }

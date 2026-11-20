@@ -345,7 +345,9 @@ export function voiceOf(row, centreOf = null) {
     return { era: "live", voice: {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,
       place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
-      ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) } };
+      ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+      // POS-1132: the shoulder this say was spoken on, as the act recorded it (payload.stood_with); an old say has none, and none is made up
+      ...(typeof p?.stood_with === "string" && p.stood_with ? { stood_with: p.stood_with } : {}) } };
   }
 
   return { refused: true, reason: `act ${row?.id} (${action}) matches no known voice era` };
