@@ -66,6 +66,7 @@ import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } fro
 import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
 import { createSayPush, waitMsOf, serveSayStream } from "./say-push.mjs"; // POS-265: the waiters — a listen that waits, and the page's stream
+import { placementRelations } from "./placement-relations.mjs"; // POS-1156: what a placement overlaps and contains, beside its parent
 import { householdLookup, humanHandFor, pinnedLoginOf } from "./households.mjs"; // the human speaker's label wears the town's name, never the login
 import { householdLockPath, poolEnabled, pushDraftBranch, withDraftLease } from "./world-pool.mjs";
 import { NOTE_KEPT, noteOf, writeNote } from "./note-store.mjs"; // POS-392: the note's one home is the store
@@ -4910,6 +4911,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // carries, so wildcat's previewed parcel answered "the Gloaming" and the same
     // geometry written answered null, with an overhang note riding on the null.
     const parent = await nestingParent({ ...declaration, id }, [...canon.marks, ...live]);
+    const relations = await placementRelationsOf({ ...declaration, id }, [...canon.marks, ...live]); // POS-1156: overlaps + contains, the same snapshot
     // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): SAY IT, WRITE NOTHING.
     // Every guard above has run and the verdict is computed; what a real leave
     // would do from here is stamp the witness line, append the row and hand the
@@ -4921,7 +4923,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     if (clean.preview === true) {
       const landing = pathFor({ ...declaration, id }, { publishedPathOf: filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))) });
       return {
-        preview: true, id, kind: clean.kind, parent, would: amending ? "amend" : "leave",
+        preview: true, id, kind: clean.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
         at: clean.at ?? null, extent: clean.extent ?? null,
         dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
         branch: draftBranch(household), put_forward: putForward,
@@ -5007,7 +5009,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
       },
     });
     return {
-      id, kind: clean.kind, parent,
+      id, kind: clean.kind, parent, ...(relations ?? {}),
       at: clean.at ?? null, extent: clean.extent ?? null,
       dir: String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, ""),
       branch: draftBranch(household),
@@ -6357,6 +6359,26 @@ async function nestingParent(candidate, marks) {
   return null;
 }
 
+// WHAT THE PLACEMENT OVERLAPS AND CONTAINS (POS-1156): the two lists beside `parent`,
+// computed ONCE over the same marks nestingParent judged (canon plus this household's
+// drafts), for the preview and the write alike, with the engine's own predicates
+// (src/placement-relations.mjs). Null — and the answer carries neither list — when the
+// engine cannot be read: not read is never printed as empty, and no failure here can
+// refuse or fail a placement.
+async function placementRelationsOf(candidate, marks) {
+  try {
+    if (!isSited(candidate, classExtendsOf())) return null;
+    const [engine, geom, w, houses] = await Promise.all([foldConstants(), geomMod(), world(), householdLookup().catch(() => null)]);
+    const allMarks = w?.marks ?? [];
+    const determined = determinedOf(w);
+    return placementRelations(candidate, marks, {
+      marksOverlapArea: geom?.marksOverlapArea, containmentParentOf: engine.containmentParentOf, worldRootOf: engine.worldRootOf,
+      name: (m) => markName(m, allMarks, determined),
+      household: (m) => m.declared_household ?? houses?.(String(m.by ?? String(m.id).split("/")[0]))?.slug ?? null,
+    });
+  } catch { return null; }
+}
+
 async function discloseOverhang(result, by, key = null) {
   try {
     if (!isSited({ kind: result.kind }, classExtendsOf())) return; // cheap exit before any read (sited in either form)
@@ -7577,7 +7599,7 @@ export const WORLD_TOOLS = [
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
   { name: "world_leave_mark",
-    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
+    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. A sited mark's answer, preview or written, also names what it lands among, beside `parent` (the smallest strictly-larger mark that holds it): `overlaps` lists every other placed mark that shares ground with it, by the engine's own overlap test, so your own marks and the mark that holds it appear too (touching an edge is not overlapping), and `contains` lists the marks that would become its children (the same containment rule that names the parent). Each row is `{ id, name, household }`; a list longer than 40 is cut and `overlaps_more`/`contains_more` carries how many more. When the town cannot read the ground, the lists are absent, never empty. It is one call: nothing to confirm. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
@@ -7615,7 +7637,7 @@ export const WORLD_TOOLS = [
       status: { type: "string", enum: ["open", "done"], description: "bounty only: open (default) or done — a done notice stays on the board, struck" },
       image: { type: "string", description: "optional: one image URL on the town's media host (https://media.postmark.town/…) — upload the file first with upload_media (or POST /media) and pass the url it returns; other hosts bounce" },
       stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a DRAFT — not the town's canon: it lives only in your own reading of the world, on no docket, and is not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays a draft. Whole stamps; they stay yours — world_unstake returns them." },
-      preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
+      preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule) and, for a sited mark, what it overlaps and contains (`overlaps`, `contains`: rows of `{ id, name, household }`), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
       amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
       // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
       holder: { type: "boolean", description: "a thing only: whether it holds other things (sovereign on thing, default false) — a bag, a bowl, a crate" },
