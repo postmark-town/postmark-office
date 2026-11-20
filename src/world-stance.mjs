@@ -565,6 +565,12 @@ export function standingStances(rows, { by = null, versions = null } = {}) {
 // the row's `geometry` jsonb, `kind` and `date` keys of its `data` spill, which
 // is why 023 grants SELECT on one table and names no other.
 //
+// A RETURNED DRAFT IS NOT A CANDIDATE (postmark#4459, POS-1148). The clearing's return path (world2/tools/materialize.mjs) hands a mark back to its
+// author as a `draft` whose `data` carries `_returned`: the world door says that mark never was, so no other household is asked for its word on it.
+// The predicate is Kogane's cause and foundoutanyway's line; the COALESCE is Noe's: a draft whose `data` is NULL (claims.data has no NOT NULL) makes
+// `data ? '_returned'` NULL, and `NOT (true AND NULL)` would drop it from the read. A returned mark put forward again is `pending` and stays. The
+// columns are unchanged: the carve is not widened.
+//
 // `stake` is NOT read. "Weight" in the ruling is the mark's EXTENT — the ground
 // it covers, which is what `groundFor` weighs — and no stance arm has ever
 // carried a stake. An unread column would be a widening bought for nothing.
@@ -579,6 +585,7 @@ const STANCE_CLAIM_SELECT = `
          data ->> 'by'         AS declared_by
     FROM claims
    WHERE status = ANY($1)
+     AND NOT (status = 'draft' AND COALESCE(data ? '_returned', false))
    ORDER BY slug`;
 
 // The same two statuses `guard-reads.mjs § LIVE_STATUSES` reads, spelled here
