@@ -137,6 +137,59 @@ test("the root's start survives its founding say leaving memory (the joiners car
   assert.equal(thread.place_mark, A, "its start did not leave with it");
 });
 
+// A BRIDGE: a say heard by two rooms joins them under the older root. Older room: pica at x 0 (founder), dan at x 8 joins.
+// Younger room: seth at x 110 founds it at mark X, claran at x 118 joins (her line carries X as her room's start). The bridge is a say from x 55.
+const X = "quill/the-barn";
+async function bridged({ olderKnown }) {
+  const mark = ({ x }) => (x < 30 ? (olderKnown ? A : null) : x >= 100 ? X : null);
+  const where = { pica: { x: 0, y: 0 }, dan: { x: 8, y: 0 }, seth: { x: 110, y: 0 }, claran: { x: 118, y: 0 }, mara: { x: 55, y: 0 } };
+  const d = door(where, { placeMark: async (at) => mark(at), memoryMax: 4 });   // the older founder leaves memory as the bridge is spoken
+  for (const [h, t] of [["pica", "old room opens"], ["seth", "young room opens"], ["claran", "joins the young room"], ["dan", "joins the old room"]]) { await d.store.say(h, t); d.tick(); }
+  const before = d.store.conversations().live.map((c) => c.place_mark ?? null).sort();
+  await d.store.say("mara", "heard by both"); d.tick();
+  return { d, before };
+}
+
+test("a bridge between an older room with NO recorded start and a younger room with one: the merged room has none, live, in the bridge line and after a rebuild", async () => {
+  const { d, before } = await bridged({ olderKnown: false });
+  assert.deepEqual(before, [null, X], "two rooms before the bridge: the young one's start, and none");
+  for (const store of [d.store, d.remake()]) {
+    const live = store.conversations().live;
+    assert.equal(live.length, 1, "one room after the bridge");
+    assert.equal(live[0].place_mark, undefined, "the younger room's start is not the older room's");
+  }
+  const bridge = logOf(d.path).at(-1);
+  assert.equal(bridge.handle, "mara");
+  assert.ok(bridge.merged?.length, "the bridge line records the merge");
+  assert.equal(bridge.root_place_mark, undefined, "and carries no start it was never given");
+});
+
+test("a bridge into an older room with a recorded start keeps that room's own marker after its founder left memory: live, in the bridge line and after a rebuild", async () => {
+  const { d } = await bridged({ olderKnown: true });
+  assert.ok(!d.store.conversations().live[0].voices.some((v) => v.said === "old room opens"), "the older founder has left memory");
+  for (const store of [d.store, d.remake()]) {
+    const live = store.conversations().live;
+    assert.equal(live.length, 1);
+    assert.equal(live[0].place_mark, A, "the older room's own start, not the younger room's");
+  }
+  assert.equal(logOf(d.path).at(-1).root_place_mark, A);
+});
+
+test("a known mark id keeps its whole value through the new field: a long, valid id is carried by the room, the circle stub and the page, and a non-id is still dropped", async () => {
+  const LONG = `quill/${"the-very-long-name-".repeat(14)}end`;
+  assert.ok(LONG.length > 200);
+  const d = door({ ...whereAll }, { placeMark: async () => LONG });
+  await d.store.say("pica", "Welcome!"); d.tick();
+  const [thread] = d.store.conversations().live;
+  assert.equal(thread.place_mark, LONG);
+  assert.equal(thread.voices[0].place_mark, LONG);
+  assert.equal(C.markIdOf("not a mark id"), null);
+  assert.equal(C.markIdOf("no-slash"), null);
+  assert.equal(C.markIdOf(`${LONG}/child`), `${LONG}/child`);
+  const page = (await d.store.hear("claran", { circleAsk: { circle: 70001 } })).circle;
+  assert.equal(page.place_mark, LONG);
+});
+
 test("a caller cannot supply the mark, and a say inside a dungeon room records none and never asks", async () => {
   const d = door({ ...whereAll }, { rooms: { claran: "quill/the-keep#cellar" } });
   await d.store.say("pica", "Welcome!", { place_mark: "evil/invented", placeMark: "evil/invented" }); d.tick();

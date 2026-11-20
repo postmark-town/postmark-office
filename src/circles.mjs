@@ -63,7 +63,7 @@ export function sayIdOf(raw) {
  * start-place of a conversation is this and nothing else: never an image URL, a name, a coordinate or a room identity.
  */
 export function markIdOf(raw) {
-  return typeof raw === "string" && raw.length <= 200 && /^[^\s/]+(\/[^\s/]+)+$/.test(raw) ? raw : null;
+  return typeof raw === "string" && /^[^\s/]+(\/[^\s/]+)+$/.test(raw) ? raw : null;
 }
 
 /**

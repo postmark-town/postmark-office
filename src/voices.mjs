@@ -593,7 +593,7 @@ export function createVoices({
       // founding say leaves memory. Read only from the founder (the say that named the root) or an earlier joiner's copy; never from this say.
       if (lead !== ownId(voice)) {
         const founder = mine.voices.find((v) => v !== voice && ownId(v) === lead && v.reply_to == null && markIdOf(v.place_mark));
-        const copy = founder ? null : mine.voices.find((v) => v !== voice && markIdOf(v.root_place_mark) && rootOfVoice(v) === lead);
+        const copy = founder ? null : mine.voices.find((v) => v !== voice && markIdOf(v.root_place_mark) && v.root === lead); // the RAW recorded root, as the read's `rootPlaceOf` compares it: a younger room bridged into this one lends this room nothing
         const rp = founder?.place_mark ?? copy?.root_place_mark ?? null;
         if (rp) voice.root_place_mark = rp;
       }
