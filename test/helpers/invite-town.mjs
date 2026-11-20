@@ -7,10 +7,11 @@
 // `repo` when done. Shared by test/invite-pass.test.mjs and test/invite-hold.test.mjs.
 
 import { generateKeyPairSync } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { copyTownTools } from "./town-tools.mjs";
 
 export const INVITE_TOWN = process.env.INVITE_TOWN_CLONE || null;
 export const INVITE_TOWN_SKIP = INVITE_TOWN ? false : "needs postmark#4424's --invite-mint (unshipped): set INVITE_TOWN_CLONE to a town checkout carrying it";
@@ -33,8 +34,9 @@ export const REGISTRY = Object.freeze({ households: HOUSEHOLDS, pins: PINS });
  */
 export function invitedTown(src = INVITE_TOWN, { households = HOUSEHOLDS, pins = PINS, welcomes = [["dora", "gh:4"]], meeps = [] } = {}) {
   const repo = mkdtempSync(join(tmpdir(), "invite-town-"));
-  mkdirSync(join(repo, "tools"), { recursive: true });
-  for (const f of ["stamp-mint.mjs", "stamp-verify.mjs", "registry-source.mjs"]) copyFileSync(join(src, "tools", f), join(repo, "tools", f));
+  // the town's code whole, not three files by name: a town tool that gains an import (stamp-mint's census-fold.mjs, town
+  // 3b73a557) would otherwise break this fixture at the next pin (POS-1088; helpers/town-tools.mjs says why)
+  copyTownTools(src, repo);
   writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));
   writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ households }));
   for (const h of Object.keys(pins)) {
