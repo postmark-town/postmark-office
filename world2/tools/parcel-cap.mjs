@@ -171,7 +171,7 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
       const r = { id: bySlugCandidate.get(l.mark).id, slug: l.mark, law: l.law, error: l.error };
       return { ...r, check: opposedCheck(r) };
     });
-  return { checked: true, opposed, freedByWithdrawal: [...freed.values()], judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource, ...(householdsFallback ? { householdsFallback } : {}) };
+  return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource, ...(householdsFallback ? { householdsFallback } : {}) };
 }
 
 /**

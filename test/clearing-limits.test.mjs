@@ -303,11 +303,10 @@ async function replacement({ acts }) {
 const claimAct = (at) => ({ actor: "r1", action: "leave-mark", object: "r1/new", at });
 const withdrawAct = (at, actor = "r1") => ({ actor, action: "withdraw", object: "r1/plot", at });
 
-test("CLAIM, THEN WITHDRAWAL (Jene's order): the replacement locks, the old parcel is the one the sweep lets go, and the receipt names the freed slot", async () => {
+test("CLAIM, THEN WITHDRAWAL (Jene's order): the replacement locks, the old parcel is the one the sweep lets go", async () => {
   const { claim } = await replacement({ acts: [claimAct(T0), withdrawAct(T1)] });
   assert.equal(claim.status, "locked", `the withdrawal frees the slot whichever came first: ${claim.refusal_check ?? ""}`);
   const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
-  assert.deepEqual(w.receipts.parcel_cap.freed_by_withdrawal, ["r1/plot"]);
   assert.deepEqual(w.receipts.parcel_cap.over_limit, []);
 });
 
@@ -320,8 +319,6 @@ test("NO WITHDRAWAL: the second parcel stays refused for one-per-resident, and i
   const { claim } = await replacement({ acts: [claimAct(T0)] });
   assert.equal(claim.status, "refused");
   assert.match(claim.refusal_check, /^opposed: the-town\/one-per-resident: r1\/new — this resident already holds a parcel/);
-  const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
-  assert.equal(w.receipts.parcel_cap.freed_by_withdrawal, undefined, "nothing was freed");
   const rows = await read("SELECT slug, status, window_id, refusal_check, submitted_at, decided_at, claimant FROM claims WHERE slug = 'r1/new'");
   const events = claimEffectsFrom({ rows, sinceCrossing: 0, nowCrossing: 1e9, mine: () => true });
   const refused = events.find((e) => e.kind === "claim-refused");
