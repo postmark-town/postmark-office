@@ -50,6 +50,8 @@ const PUBLISHED = [
   sited("beta/the-cart", 116, 105, 6, 6),     // sticks out of the shed
   sited("beta/far-hut", -300, -300, 4, 4),    // nowhere near
   sited("beta/edge-pot", 104, 105, 2, 2),     // its edge touches the shed's, no shared area
+  // a crowd far from everything else: 47 small marks the over-forty control places a yard over
+  ...Array.from({ length: 47 }, (_, i) => sited(`beta/spot-${String(i).padStart(2, "0")}`, 300 + (i % 10), 300 + Math.floor(i / 10), 0.5, 0.5)),
 ];
 
 // ── the bottle's engine: the REAL fold and geometry, the stand-ins the door needs beside them ────────
@@ -169,14 +171,27 @@ test("on ground that is not yours the answer still carries the lists; a placemen
   assert.deepEqual(lone.out.contains, []);
 });
 
-test("the flag-off (git) writer answers the same two lists on its preview", { skip }, async () => {
+test("the flag-off (git) writer ships the SAME full rows as the journal path: id, name and public household", { skip }, async () => {
+  const journal = await place({ ...SHED, preview: true });
   delete process.env.WORLD_SINGLE_LOG;
   const { leaveMarkViaOffice } = await import("../src/world.mjs");
-  const out = await leaveMarkViaOffice(repo, { ...SHED, preview: true }, houseA);
+  // the registry the door reads the public household from is the same hand-built store
+  const out = await withGuardsFlipped(guardStore(), () => leaveMarkViaOffice(repo, { ...SHED, preview: true }, houseA));
   assert.equal(out.preview, true);
   assert.equal(out.parent, "alpha/alpha-parcel");
   assert.deepEqual(ids(out.overlaps), OVERLAPS);
   assert.deepEqual(ids(out.contains), CONTAINS);
+  assert.deepEqual(out.overlaps, journal.out.overlaps, "whole rows, not ids alone: the same name and household as the journal writer");
+  assert.deepEqual(out.contains, journal.out.contains);
+  assert.deepEqual(out.contains.map((r) => r.household), ["alpha-house", "beta-house"]);
+  assert.deepEqual(out.overlaps.find((r) => r.id === "beta/the-cart"), { id: "beta/the-cart", name: "the Cart", household: "beta-house" });
+});
+
+test("an answer past forty rows is returned whole on the door: no cutoff, no _more fields", { skip }, async () => {
+  const { out } = await place({ slug: "the-yard", kind: "sited", at: { x: 305, y: 302 }, extent: { w: 20, h: 20 }, body: "a yard over the crowd", stamps: 1, preview: true });
+  assert.equal(out.overlaps.length, 47);
+  assert.equal(out.contains.length, 47);
+  assert.equal("overlaps_more" in out || "contains_more" in out, false);
 });
 
 // ── the hand-built store (world-journal.test.mjs's, verbatim) ───────────────

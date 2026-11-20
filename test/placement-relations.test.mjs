@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { placementRelations, RELATION_ROWS_MAX } from "../src/placement-relations.mjs";
+import { placementRelations } from "../src/placement-relations.mjs";
 
 const CLONE = join(dirname(fileURLToPath(import.meta.url)), "..", "world-clone");
 const have = existsSync(join(CLONE, "tools", "geometry.mjs")) && existsSync(join(CLONE, "tools", "marks-fold.mjs"));
@@ -114,11 +114,28 @@ test("not read is not empty: an engine without the predicates, or a candidate wi
   assert.equal(placementRelations({ id: "ada/the-note", by: "ada", kind: "predicate" }, WORLD, deps()), null);
 });
 
-test("nothing touching it is an honest empty read, and a long list is cut with its true count", { skip }, () => {
+test("nothing touching it is an honest empty read, and a long list is returned whole (no cutoff)", { skip }, () => {
   const lone = box("ada/the-lone", 5000, 5000, 4, 4);
   assert.deepEqual(placementRelations(lone, WORLD, deps()), { overlaps: [], contains: [] });
-  const crowd = Array.from({ length: RELATION_ROWS_MAX + 7 }, (_, i) => box(`bea/spot-${String(i).padStart(3, "0")}`, 110, 105, 3, 3));
+  const crowd = Array.from({ length: 47 }, (_, i) => box(`bea/spot-${String(i).padStart(3, "0")}`, 110, 105, 3, 3));
   const out = placementRelations(CAND, [...WORLD, ...crowd], deps());
-  assert.equal(out.overlaps.length, RELATION_ROWS_MAX);
-  assert.equal(out.overlaps_more, 6 + 7, "the cut says how many more: six neighbours plus the crowd of forty-seven, less the forty shown");
+  assert.equal(out.overlaps.length, 6 + 47, "every overlapping mark is listed, past forty");
+  assert.equal(out.contains.length, 2 + 47, "…and every child");
+  assert.deepEqual(Object.keys(out).sort(), ["contains", "overlaps"], "no _more fields, no cutoff protocol");
+  assert.ok(crowd.every((m) => ids(out.overlaps).includes(m.id) && ids(out.contains).includes(m.id)));
+});
+
+test("a ring child that sticks out of its holder by under 1% of its cells is still a child: the fold's own rule, not a box test", { skip }, () => {
+  // Reviewer's reproduction: a 600x600 holder, and a ring that is a 500x500 body (+-250) with a 5 m wide tail out to x = 330,
+  // so its bounding box is 580x500 at (40,0) and 6 of about 10,000 coverage cells stand outside the holder (x > 300).
+  const big = box("ada/big", 0, 0, 600, 600);
+  const tailed = { id: "bea/tailed", by: "bea", kind: "sited", at: { x: 40, y: 0 }, extent: { w: 580, h: 500 },
+    points: [[-250, -250], [250, -250], [250, -2.5], [330, -2.5], [330, 2.5], [250, 2.5], [250, 250], [-250, 250], [-250, -250]] };
+  const marks = [ROOT, tailed];
+  assert.equal(fold.containmentParentOf(tailed, [...marks, big]), "ada/big", "fixture: the fold makes the ring a child of the holder");
+  assert.equal(geom.marksContain(big, tailed), true, "fixture: the engine's containment says so (under 1% of its cells outside)");
+  assert.ok(tailed.extent.w * tailed.extent.h < big.extent.w * big.extent.h, "fixture: the ring's box is strictly smaller than the holder's");
+  const out = placementRelations(big, marks, deps());
+  assert.deepEqual(ids(out.contains), ["bea/tailed"], "listed: the answer is the fold's, so a box-fraction prefilter must not drop it");
+  assert.deepEqual(ids(out.overlaps), ["bea/tailed"]);
 });

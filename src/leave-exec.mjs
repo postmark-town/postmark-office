@@ -386,8 +386,7 @@ async function main() {
     try {
       return placementRelations(candidate, marks, {
         marksOverlapArea: geomMod.marksOverlapArea, containmentParentOf, worldRootOf,
-        name: (m) => String(m.id).split("/").slice(1).join("/"), household: (m) => m.household ?? null,
-      });
+      }); // rows are { id } here: the door (world.mjs § projectRelationRows) fills name and household, as on the journal path
     } catch { return null; }
   })();
   if (p.preview === true) {

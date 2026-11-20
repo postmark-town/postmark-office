@@ -5868,6 +5868,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       throw bounce(500, "the mark pass tripped", faultLogged("the mark pass tripped", e)); // its stderr goes to the log (POS-578)
     }
     if (result.error) throw bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
+    await projectRelationRows(result); // POS-1156: the same public name/household as the journal path
   }
   if (outline) result.outline = outline; // POS-322: one line, only when the door moved or derived the box
   if (mistsWarning) result.mists = mistsWarning; // WLD-38: the forecast, computed before the write
@@ -6368,15 +6369,40 @@ async function nestingParent(candidate, marks) {
 async function placementRelationsOf(candidate, marks) {
   try {
     if (!isSited(candidate, classExtendsOf())) return null;
-    const [engine, geom, w, houses] = await Promise.all([foldConstants(), geomMod(), world(), householdLookup().catch(() => null)]);
-    const allMarks = w?.marks ?? [];
-    const determined = determinedOf(w);
+    const [engine, geom, proj] = await Promise.all([foldConstants(), geomMod(), relationProjection()]);
     return placementRelations(candidate, marks, {
       marksOverlapArea: geom?.marksOverlapArea, containmentParentOf: engine.containmentParentOf, worldRootOf: engine.worldRootOf,
-      name: (m) => markName(m, allMarks, determined),
-      household: (m) => m.declared_household ?? houses?.(String(m.by ?? String(m.id).split("/")[0]))?.slug ?? null,
+      name: proj.name, household: proj.household,
     });
   } catch { return null; }
+}
+
+// THE ROW'S TWO PUBLIC FIELDS, one projection for both writers (POS-1156): `name` is the door's own
+// mark name (markName: the fold's determined name, else the slug in words) and `household` the public
+// house slug of the mark's author (a parcel's declared household first). Registry-less or unknown: null.
+async function relationProjection() {
+  const [w, houses] = await Promise.all([world(), householdLookup().catch(() => null)]);
+  const allMarks = w?.marks ?? [];
+  const determined = determinedOf(w);
+  const canonById = new Map(allMarks.map((m) => [m.id, m]));
+  return {
+    name: (m) => markName(m, allMarks, determined),
+    household: (m) => (m.declared_household ?? canonById.get(m.id)?.declared_household)
+      ?? houses?.(String(m.by ?? String(m.id).split("/")[0]))?.slug ?? null,
+  };
+}
+
+// The flag-off (git) writer computes the lists in its own process, which has no registry and no
+// determined names, so its rows arrive as `{ id }` with null fields. The door fills them with the
+// journal path's projection, so both writers ship the same rows.
+async function projectRelationRows(result) {
+  try {
+    if (!Array.isArray(result?.overlaps) && !Array.isArray(result?.contains)) return;
+    const proj = await relationProjection();
+    const fill = (rows) => rows.map((r) => ({ id: r.id, name: proj.name({ id: r.id }), household: proj.household({ id: r.id }) }));
+    if (Array.isArray(result.overlaps)) result.overlaps = fill(result.overlaps);
+    if (Array.isArray(result.contains)) result.contains = fill(result.contains);
+  } catch { /* the rows keep their ids; the lists were read */ }
 }
 
 async function discloseOverhang(result, by, key = null) {
@@ -7599,7 +7625,7 @@ export const WORLD_TOOLS = [
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
   { name: "world_leave_mark",
-    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. A sited mark's answer, preview or written, also names what it lands among, beside `parent` (the smallest strictly-larger mark that holds it): `overlaps` lists every other placed mark that shares ground with it, by the engine's own overlap test, so your own marks and the mark that holds it appear too (touching an edge is not overlapping), and `contains` lists the marks that would become its children (the same containment rule that names the parent). Each row is `{ id, name, household }`; a list longer than 40 is cut and `overlaps_more`/`contains_more` carries how many more. When the town cannot read the ground, the lists are absent, never empty. It is one call: nothing to confirm. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
+    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. A sited mark's answer, preview or written, also names what it lands among, beside `parent` (the smallest strictly-larger mark that holds it): `overlaps` lists every other placed mark that shares ground with it, by the engine's own overlap test, so your own marks and the mark that holds it appear too (touching an edge is not overlapping), and `contains` lists the marks that would become its children (the same containment rule that names the parent). Each row is `{ id, name, household }`. When the town cannot read the ground, the lists are absent, never empty. It is one call: nothing to confirm. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
