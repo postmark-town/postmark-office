@@ -2335,6 +2335,39 @@ ends `Deactivated successfully`. The next keep tick whose store holds the
 crossing logs `decided from the store`. If the ingest keeps failing, read
 `town-index.json`'s `detail` first: nothing can pay the mints until it runs.
 
+### The witness records every crossing (POS-907)
+
+The ferry's exit trap and the settlement both write a record into the town's
+witness chain (town `WITNESS.md`; § the ferry unit's "THE WITNESS RECORD RIDES
+THE EXIT TRAP"). It's off until two env lines exist, and unset it says so and
+owes nothing. To switch it on, once:
+
+1. **The key.** The witness's own Ed25519 key at
+   `/srv/postmark-office/witness-key.pem`, meepo 600, never `stamp-key.pem`.
+   Its public half goes on town main as `WITNESS/witness-pubkey.pem` first,
+   since a record verifies only under the published key.
+2. **The owed queue, under the office tree.**
+   `sudo install -d -o meepo -g meepo -m 700 /srv/postmark-office/witness-owed`.
+   It must be under `/srv/postmark-office`: the ferry runs with
+   `ProtectSystem=strict`, and that's the one tree its sandbox may write. A queue
+   anywhere else works from the settlement, which isn't sandboxed, and fails at
+   the first crossing with `[witness] EROFS: read-only file system`. Then even
+   the owed entry is lost, so that crossing has no record and none owed (it
+   happened at the 2026-11-20 00:00Z crossing, with the queue under `/var/lib`).
+3. **The env lines,** appended to `/etc/postmark-office.env` after a backup
+   (`cp -p` to a dated `.bak-witness-*`):
+   `WITNESS_KEY=/srv/postmark-office/witness-key.pem` and
+   `WITNESS_OWED=/srv/postmark-office/witness-owed`.
+
+**Check:** as meepo with the env,
+`node /srv/postmark-office/town-clone/tools/witness-chain.mjs status --owed "$WITNESS_OWED"`
+reads `{"owed":0,"open":0,…}`. After the next crossing, the ferry's journal
+shows `[witness]` lines and no `EROFS`, and the new record verifies under
+`WITNESS/witness-pubkey.pem` (the tool's own `readChain` and `checkRecord`).
+
+**Off switch:** remove the two env lines (or restore the backup). Records
+already published stay in the chain.
+
 ## The one-hand rule (2026-08-20, after the stranded-crossings incident)
 
 **meepo is the only hand that touches `/srv/postmark-office`. Root never
