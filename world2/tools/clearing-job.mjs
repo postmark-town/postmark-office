@@ -297,6 +297,7 @@ try {
           checked: true, cap: verdict.cap, law_date: verdict.lawDate, world_sha: verdict.lawSha, households: verdict.householdsSource,
           ...(verdict.householdsFallback ? { households_fallback: verdict.householdsFallback } : {}),
           over_limit: verdict.opposed.map((r) => ({ slug: r.slug, law: r.law })),
+          ...(verdict.freedByWithdrawal?.length ? { freed_by_withdrawal: verdict.freedByWithdrawal.map((f) => f.slug) } : {}), // POS-1154
           applied_by: "this clearing: opposed, never materialized (Darko, 2026-10-08)",
           judged: verdict.judged,
         };

@@ -278,4 +278,78 @@ test("THE RESIDENT'S OUTCOME NAMES THE LIMIT: the doorstep's sentence and my-mar
   assert.match(refusedRowsFrom(events)[0].says, /^refused at candle \d+: opposed: the-town\/claim-cap: /);
 });
 
+// ── POS-1154 (WLD-218/b): a resident's own withdrawals in the window apply before their claims, in either order ──
+// Jene's case (WLD-217): the claim, then the old parcel's withdrawal 31 s later, in one window; the claim was refused
+// for one-per-resident and its author heard nothing. Real clearing, real fold: r1 holds `r1/plot` (prior estate) and
+// files `r1/new`. The act rows are the door's (`class 'mark'`, the withdraw's actor the owner); only their ORDER varies.
+const act = (c, { actor, action, object, at }) => c.query(
+  "INSERT INTO acts (at, actor, action, object, class) VALUES ($1, $2, $3, $4, 'mark')", [at, actor, action, object]);
+const T0 = "2026-10-08T12:00:00Z", T1 = "2026-10-08T12:00:31Z";
+async function replacement({ acts }) {
+  await owner(async (c) => {
+    await base(c);
+    await c.query("TRUNCATE acts");
+    await reevesEstate(c);
+    // two parcels stand (r1's and r2's): with r1's withdrawn the household is under its cap, so what is judged is one-per-resident alone
+    await c.query("DELETE FROM marks WHERE slug IN ('r3/plot', 'r4/plot')");
+    await pending(c, { slug: "r1/new", by: "r1", house: "hh:reeves", x: 6000, date: "2026-10-08T12:00:00Z" });
+    for (const a of acts) await act(c, a);
+  });
+  const run = clear();
+  assert.equal(run.code, 0, run.out);
+  const [claim] = await read("SELECT status, refusal_check FROM claims WHERE window_id = $1 AND slug = 'r1/new'", [WIN]);
+  return { claim, run };
+}
+const claimAct = (at) => ({ actor: "r1", action: "leave-mark", object: "r1/new", at });
+const withdrawAct = (at, actor = "r1") => ({ actor, action: "withdraw", object: "r1/plot", at });
+
+test("CLAIM, THEN WITHDRAWAL (Jene's order): the replacement locks, the old parcel is the one the sweep lets go, and the receipt names the freed slot", async () => {
+  const { claim } = await replacement({ acts: [claimAct(T0), withdrawAct(T1)] });
+  assert.equal(claim.status, "locked", `the withdrawal frees the slot whichever came first: ${claim.refusal_check ?? ""}`);
+  const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
+  assert.deepEqual(w.receipts.parcel_cap.freed_by_withdrawal, ["r1/plot"]);
+  assert.deepEqual(w.receipts.parcel_cap.over_limit, []);
+});
+
+test("WITHDRAWAL, THEN CLAIM: the same window, the other order, locks the same way", async () => {
+  const { claim } = await replacement({ acts: [withdrawAct(T0), claimAct(T1)] });
+  assert.equal(claim.status, "locked", claim.refusal_check ?? "");
+});
+
+test("NO WITHDRAWAL: the second parcel stays refused for one-per-resident, and its author reads why through the existing claim-effects route", async () => {
+  const { claim } = await replacement({ acts: [claimAct(T0)] });
+  assert.equal(claim.status, "refused");
+  assert.match(claim.refusal_check, /^opposed: the-town\/one-per-resident: r1\/new — this resident already holds a parcel/);
+  const [w] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
+  assert.equal(w.receipts.parcel_cap.freed_by_withdrawal, undefined, "nothing was freed");
+  const rows = await read("SELECT slug, status, window_id, refusal_check, submitted_at, decided_at, claimant FROM claims WHERE slug = 'r1/new'");
+  const events = claimEffectsFrom({ rows, sinceCrossing: 0, nowCrossing: 1e9, mine: () => true });
+  const refused = events.find((e) => e.kind === "claim-refused");
+  assert.ok(refused, "the author's own read carries the refusal");
+  assert.match(refused.summary, /citing the-town\/one-per-resident/);
+  assert.equal(refused.cause, "opposed");
+});
+
+test("A WITHDRAWAL IS NOT PERMISSION TO TAKE SOMEONE ELSE'S SLOT: another resident's withdraw of r1/plot, or a re-leave after r1's own, frees nothing", async () => {
+  const other = await replacement({ acts: [claimAct(T0), withdrawAct(T1, "r2")] });
+  assert.equal(other.claim.status, "refused", "r2 is not the owner: not a valid withdrawal");
+  const reLeft = await replacement({ acts: [withdrawAct(T0), { actor: "r1", action: "leave-mark", object: "r1/plot", at: T1 }, claimAct(T1)] });
+  assert.equal(reLeft.claim.status, "refused", "the owner's latest act on the parcel is a leave, so it is not withdrawn");
+});
+
+test("AN UNRELATED CAP STANDS: a withdrawal by the Reeves frees nothing for the Sage household's fourth parcel", async () => {
+  await owner(async (c) => {
+    await base(c);
+    await c.query("TRUNCATE acts");
+    await reevesEstate(c);
+    for (let i = 0; i < 4; i++) await pending(c, { slug: `s${pad(i)}/plot`, by: `s${pad(i)}`, house: "hh:sage", x: i * 100, date: `2026-10-08T${pad(i)}:00:00Z` });
+    await act(c, withdrawAct(T0));
+  });
+  const run = clear();
+  assert.equal(run.code, 0, run.out);
+  const claims = await read("SELECT slug, status, refusal_check FROM claims WHERE window_id = $1 AND slug LIKE 's%' ORDER BY slug", [WIN]);
+  assert.deepEqual(claims.filter((c) => c.status === "locked").map((c) => c.slug), ["s00/plot", "s01/plot", "s02/plot"]);
+  assert.match(claims.find((c) => c.slug === "s03/plot").refusal_check, /^opposed: the-town\/claim-cap: s03\/plot/);
+});
+
 test.after(async () => { await store.stop(); });
