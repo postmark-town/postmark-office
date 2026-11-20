@@ -57,7 +57,7 @@ import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
-import { sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
+import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
 
 // The class the dials hang on. Named once, beside the reader, for the same
 // reason STRIDE_CLASS_NAME is: the slow-walk bug was a lookup asking for a
@@ -264,9 +264,19 @@ export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, bo
   return [...closed, ...open].sort((a, b) => a.latest - b.latest);
 }
 
+// POS-1152: the mark a room's ROOT started at, as recorded: the founding say's own (the say whose id names the room), else the copy a later
+// say of that room carried when the founder left memory. A later say's own mark, a reply, or a missing record lends nothing: unknown stays absent.
+function rootPlaceOf(cluster) {
+  const voices = cluster.voices;
+  const root = cluster.root ?? `t${voices[0].at}-${voices[0].handle}`;
+  const founder = voices.find((v) => `t${v.at}-${v.handle}` === root && v.reply_to == null && markIdOf(v.place_mark));
+  return founder?.place_mark ?? voices.find((v) => v.root === root && markIdOf(v.root_place_mark))?.root_place_mark ?? null;
+}
+
 function threadOf(cluster, { live, voiceCap }) {
   const voices = cluster.voices;
   const first = voices[0];
+  const placeMark = rootPlaceOf(cluster);
   const last = voices[voices.length - 1];
   const participants = [];
   for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
@@ -285,6 +295,7 @@ function threadOf(cluster, { live, voiceCap }) {
   }
   return {
     id: `t${first.at}-${first.handle}`,
+    ...(placeMark ? { place_mark: placeMark } : {}), // POS-1152: where the conversation STARTED (its root), never where it is now (`place`, `at` stay the latest voice's)
     live,
     // place words lead; the coordinates are the detail line. Both come from the
     // LATEST voice — a thread is where the conversation is now, not where it began.
@@ -371,6 +382,9 @@ export const EARSHOT_MEMO_MS = 1000;
 export function createVoices({
   standpoint,
   place = async () => null,
+  // `placeMark({ x, y })` (POS-1152): the canonical mark id a ROOT say starts at, or null. Asked only for a say that answers no one, never for a say
+  // inside a dungeon room; null is "unknown" and is never replaced by a guess. The office derives it at the write; no caller supplies it.
+  placeMark = async () => null,
   onSpoke = null,
   // `beforeSpoke(voice, { standAs, household })` — the PEN that must commit
   // BEFORE the log line lands (World 2.0's flipped say lane, W2_PEN=say). It
@@ -550,7 +564,9 @@ export function createVoices({
         const id = sayIdOf(v.id), replyTo = sayIdOf(v.reply_to); // POS-1035: the act number and the stored parent, when the line carries them
         voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}),
           ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}),
-          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) });
+          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+          // POS-1152: the recorded start-place marks, as the log line held them (a root say's own; a joiner's copy of its room's). Old lines have neither.
+          ...(replyTo == null && markIdOf(v.place_mark) ? { place_mark: v.place_mark } : {}), ...(markIdOf(v.root_place_mark) ? { root_place_mark: v.root_place_mark } : {}) });
         if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
@@ -573,6 +589,14 @@ export function createVoices({
       for (const r of roots) if (r !== lead) unionRoots(lead, r);
       merged = roots.filter((r) => r !== lead);
       voice.root = lead;
+      // POS-1152: a say that joins a room carries its room's recorded start-place beside the root's name, so the root keeps its place when its
+      // founding say leaves memory. Read only from the founder (the say that named the root) or an earlier joiner's copy; never from this say.
+      if (lead !== ownId(voice)) {
+        const founder = mine.voices.find((v) => v !== voice && ownId(v) === lead && v.reply_to == null && markIdOf(v.place_mark));
+        const copy = founder ? null : mine.voices.find((v) => v !== voice && markIdOf(v.root_place_mark) && rootOfVoice(v) === lead);
+        const rp = founder?.place_mark ?? copy?.root_place_mark ?? null;
+        if (rp) voice.root_place_mark = rp;
+      }
     }
     const file = pathOf();
     const line = `${JSON.stringify({
@@ -586,6 +610,8 @@ export function createVoices({
       ...(voice.room ? { room: voice.room } : {}),
       ...(voice.root ? { root: voice.root } : {}),
       ...(merged.length ? { merged } : {}),
+      ...(voice.place_mark ? { place_mark: voice.place_mark } : {}),            // POS-1152: this root say's own start-place mark
+      ...(voice.root_place_mark ? { root_place_mark: voice.root_place_mark } : {}), // POS-1152: the room's recorded start-place, carried by a joiner
       // POS-1035, additive: the say's act number (when the pen returned one) and the say it answers. Old lines have neither and stay a timeline.
       ...(voice.id != null ? { id: voice.id } : {}),
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
@@ -879,6 +905,7 @@ export function createVoices({
     return {
       ...(boundaries.length ? {} : { settlement_disclosed: "settlements not yet read: until this office has read the last settlement from the world repo, every conversation here reads as open" }),
       started: agoWords(t - voices[0].at).replace(/^just now$/, "moments ago") + " (" + new Date(voices[0].at).toISOString() + ")",
+      ...(rootPlaceOf(mine) ? { place_mark: rootPlaceOf(mine) } : {}), // POS-1152: where this room's conversation started, as recorded
       participants,
       voice_count: voices.length,
       latest_ms: voices.at(-1).at,
@@ -1032,10 +1059,10 @@ export function createVoices({
         const fresh = sinceRead(roomVoices, since, { decorate });
         // The since-reply's `record` keeps ITS line, field for field (`handle, standing, said, ago, at_ms`, then `heard`), and gains
         // only the additive `id`, `reply_to`, `circle` and — on an earlier parent carried along — `context: true` (call 24).
-        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard }) => ({
+        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard, place_mark: placeMark }) => ({
           handle: h, standing: s, said, ago: agoWords(t - atMs), at_ms: atMs,
           ...(heard ? { heard } : {}), ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
-          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}) });
+          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}), ...(placeMark ? { place_mark: placeMark } : {}) });
         out.conversation = { ...shape, record: fresh.lines.map(recordLine), ...(fresh.context_says ? { context_says: fresh.context_says } : {}), ...(fresh.broken ? { broken: fresh.broken } : {}),
           note: fresh.lines.length ? "`record` is every say since your last call, plus — marked context: true — the earlier say each new reply answers" : "nothing new since your last call — the room's shape rides above; say something, or check back in a minute" };
       } else {
@@ -1317,6 +1344,13 @@ export function createVoices({
       link = resolveReplyTo(room?.room_voices ?? [], { replyTo, speaker: handle, text: body });
       if (link?.refused) return refused(link.refused.defect, link.refused.hint);
       if (link) voice.reply_to = link.id;
+    }
+    // POS-1152: a say that answers no one starts a circle, and the mark it starts at is recorded on it, once. A reply never carries one (it
+    // would be a later place borrowing the root's name), and a say inside a dungeon room records none (its place stays with its room).
+    if (voice.reply_to == null && !voice.room) {
+      let mark = null;
+      try { mark = await placeMark({ x: here.at.x, y: here.at.y }); } catch { mark = null; }
+      if (markIdOf(mark)) voice.place_mark = mark;
     }
     if (beforeSpoke) {
       // The pen first, refusable: a refusal here is the answer, and the log

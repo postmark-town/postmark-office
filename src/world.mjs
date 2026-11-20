@@ -1991,6 +1991,9 @@ function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
       place: voice.place ?? null,
       ...(voice.aboard ? { aboard: true } : {}),
       ...(voice.room ? { room: voice.room } : {}), // WLD-74: spoken inside a dungeon room: its record is shown only to readers in that room
+      // POS-1152: the mark this conversation's ROOT started at, recorded once on that root say (no reply_to), derived by the office at the
+      // write (voices.mjs § speak), never supplied by a caller. Public game-place metadata like `place`; absent when unknown.
+      ...(voice.place_mark && voice.reply_to == null && !voice.room ? { place_mark: voice.place_mark } : {}),
       ...(standAs ? { stood_with: standAs } : {}),
       // POS-1035 (call 3): the say this one answers, by act number — the ONE stored edge circles are derived from. Public
       // like the words: it leaves the box in the notary's archive with the rest of the payload.
@@ -2157,6 +2160,7 @@ const voices = createVoices({
     return { handle, placed: true, x: ORIGIN.x, y: ORIGIN.y, aboard: false, moving: false };
   },
   place: (at) => placeWords(at),
+  placeMark: (at) => placeMarkAt(at), // POS-1152: the conversation's start-place mark, one derivation with the witnessed line
   // Stage 2's dual-write. The voices log is written first and is untouched —
   // it stays the ruled durable operator record it has been since the earshot
   // ruling. This adds a SECOND consumer of the same fact: an emission instance
@@ -4341,22 +4345,42 @@ export async function witnessStamp(handle) {
  * the-witnessed-line's serialization, so a `say` row and a `leave-mark` row
  * cannot come to mean different things by the same field.
  */
+// The ground a point stands on, in one world: the containment chain and the innermost-ground chain over it.
+// NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has no place for the act to compose
+// against, so the anchor is the innermost ground that is not a thing (the-town/the-not-ground: a thing is not
+// ground). Shared by the witnessed line and by the conversation's start-place mark (POS-1152): one derivation.
+async function groundFrameOf(w) {
+  const { verbs } = await mods();
+  const marks = w.marks ?? [];
+  const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
+  const chainAt = (p) => verbs.containmentChain(p, marks);
+  const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
+  const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+  const byId = new Map(marks.map((m) => [m.id, m]));
+  return { byId, centreOf, chainAt, groundAt: (p) => groundChain(chainAt(p), byId, thingOpts) };
+}
+
+/**
+ * THE MARK A CONVERSATION STARTED AT (POS-1152; Wright 2026-11-19 21:51Z: "the place where each conversation started, and only
+ * when that place is a recorded mark id"). The innermost non-thing ground at the write point, when it is a real mark of this
+ * world. The world frame is no mark to picture, and a point on no ground, an unplaced speaker or a world this office could not
+ * read answer null: unknown stays absent, and nothing is guessed from a name, a coordinate or a later place.
+ */
+export async function placeMarkAt(here, known = null) {
+  try {
+    const w = known ?? await world();
+    const { byId, centreOf, groundAt } = await groundFrameOf(w);
+    const at = anchorAt(here, { chain: groundAt(here), centreOf });
+    if (at.unplaced || !at.anchor || at.anchor === WORLD_FRAME || !byId.has(at.anchor)) return null;
+    return at.anchor;
+  } catch { return null; }
+}
+
 export async function witnessStampAt(handle, here, known = null) {
   const unread = (reason) => ({ at: { anchor: null, dx: null, dy: null, unplaced: true }, witnesses: { source: "unread", reason, list: [] } });
   try {
     const w = known ?? await world();
-    const { verbs } = await mods();
-    const marks = w.marks ?? [];
-    const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
-    const chainAt = (p) => verbs.containmentChain(p, marks);
-
-    // NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has
-    // no place for the act to compose against, so the anchor is the innermost
-    // ground that is not a thing (the-town/the-not-ground: a thing is not ground).
-    const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
-    const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
-    const byId = new Map(marks.map((m) => [m.id, m]));
-    const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
+    const { centreOf, chainAt, groundAt } = await groundFrameOf(w);
     const at = anchorAt(here, { chain: groundAt(here), centreOf });
 
     // `presentNear` is null when the presence layer is switched off at this
