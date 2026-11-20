@@ -10,11 +10,8 @@
 // ABSENT IS NOT EMPTY, and an ordinary night stays exactly as it was (settlement-receipt-refused.test.mjs freezes the key list):
 //   - a sweep that says nothing (a World that predates the check), or one that looked and found nothing taken in: no key at all;
 //   - a sweep whose look FAILED (`checked: false`): `{ checked: false, why }`, so a blind night is not read as a quiet one;
-//   - a sweep that found captures: `{ checked: true, parcels_checked, events_total, events }`, each event whitelisted below.
+//   - a sweep that found captures: `{ checked: true, parcels_checked, events_total, events }`, EVERY event, each whitelisted below.
 // Until the World carries the check, no receipt has the key: delivery of the flag awaits both releases (World main, Office train).
-
-/** The most events a receipt carries in full; the total is always said. */
-export const CAPTURES_SHOWN = 20;
 
 const text = (v) => (typeof v === "string" && v ? v : null);
 const num = (v) => (Number.isFinite(v) ? v : null);
@@ -37,6 +34,6 @@ export function parcelCapturesOf(sweep) {
     checked: true,
     parcels_checked: num(pc.parcels_checked),
     events_total: events.length,
-    events: events.slice(0, CAPTURES_SHOWN).map(eventOf),
+    events: events.map(eventOf),   // every one: the keeper coordinates on the marks and households named, and a total is not the identities past a cut
   };
 }

@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parcelCapturesOf, CAPTURES_SHOWN } from "../deploy/parcel-captures-reading.mjs";
+import { parcelCapturesOf } from "../deploy/parcel-captures-reading.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RECEIPT = join(ROOT, "deploy", "settlement-receipt.mjs");
@@ -92,11 +92,23 @@ test("absent is not empty: a look that failed is carried with its reason, so a b
   assert.equal(r.status, "published", "and it changes no status");
 });
 
-test("what the receipt copies is the whitelist, the cap says its total, and a malformed line is read as nothing rather than breaking the crossing", () => {
-  const many = Array.from({ length: CAPTURES_SHOWN + 5 }, (_, i) => event({ mark: `pip/stall-${String(i).padStart(2, "0")}`, secret: "never copied", overlap_m2: "7" }));
+test("EVERY event reaches the keeper: twenty-one captures in one crossing, each mark and household named on the real receipt (WLD-224 N1)", () => {
+  const events = Array.from({ length: 21 }, (_, i) => event({
+    parcel: `ola/parcel-${String(i).padStart(2, "0")}`, mark: `pip/stall-${String(i).padStart(2, "0")}`, mark_household: `hh:pip-${i}`,
+  }));
+  const r = compose({ sweep: sweepOf({ parcel_captures: captures(events, { parcels_checked: 21 }) }) });
+  assert.equal(r.parcel_captures.events_total, 21);
+  assert.equal(r.parcel_captures.events.length, 21, "no cut: a total is not the identities past it");
+  assert.deepEqual(r.parcel_captures.events.map((e) => e.mark), events.map((e) => e.mark), "event 21's mark is on the receipt, in the sweep's order");
+  assert.deepEqual(r.parcel_captures.events.map((e) => e.mark_household), events.map((e) => e.mark_household), "and every household");
+  assert.equal(r.parcel_captures.events.at(-1).parcel, "ola/parcel-20");
+});
+
+test("what the receipt copies is the whitelist, and a malformed line is read as nothing rather than breaking the crossing", () => {
+  const many = Array.from({ length: 25 }, (_, i) => event({ mark: `pip/stall-${String(i).padStart(2, "0")}`, secret: "never copied", overlap_m2: "7" }));
   const got = parcelCapturesOf(sweepOf({ parcel_captures: captures(many) }));
-  assert.equal(got.events.length, CAPTURES_SHOWN);
-  assert.equal(got.events_total, CAPTURES_SHOWN + 5, "the total is always said");
+  assert.equal(got.events.length, 25);
+  assert.equal(got.events_total, 25);
   assert.equal("secret" in got.events[0], false, "a field the composer does not name is not carried");
   assert.equal(got.events[0].overlap_m2, null, "a number that is not one is null, not guessed");
   for (const bad of [undefined, null, "x", 3, [], [event()], { events: "no" }]) assert.equal(parcelCapturesOf(sweepOf({ parcel_captures: bad })), null, `parcel_captures ${JSON.stringify(bad)} says nothing`);
