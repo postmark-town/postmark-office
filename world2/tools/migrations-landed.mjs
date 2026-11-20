@@ -160,6 +160,8 @@ export const LANDED = {
   "100_town_residents_github.sql": { probe: `${col("town_residents", "github_top")} AND ${col("town_residents", "github_address")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'resident_json_doc' AND provolatile = 'i')` },
   // 097 (POS-497; was 088 until the train took it for letter_notes): discovery's two derived tables, their walk indexes, and the registry rows written last.
   "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
+  // 101 (POS-721, small; carried by POS-1131; was 091, then 098, until 098–100 landed first): the household's human's town name, short line and pronouns, on its row.
+  "101_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
