@@ -4357,7 +4357,8 @@ async function groundFrameOf(w) {
   const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
   const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
   const byId = new Map(marks.map((m) => [m.id, m]));
-  return { byId, centreOf, chainAt, groundAt: (p) => groundChain(chainAt(p), byId, thingOpts) };
+  const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
+  return { byId, centreOf, chainAt, groundAt };
 }
 
 /**
