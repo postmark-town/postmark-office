@@ -88,7 +88,8 @@ test("§ 1 registered ids are the lowercase folders holding a regular hearth.htm
 });
 
 test("§ 1 the column carries the id's own spelling, and the record reads only an id", () => {
-  assert.equal(HOUSEHOLD_KEYS.at(-1), "hearth");
+  // the tail column when it landed; 101's human_profile (POS-721) came after it
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-2), ["hearth", "human_profile"]);
   for (const ok of ["ledger", "a", "x-1", "a".repeat(40)]) assert.equal(HEARTH_ID.test(ok), true, ok);
   for (const bad of ["", "Ledger", "-x", "a".repeat(41), "a b", "a/b", "../x", "<b>", "x\n"]) assert.equal(HEARTH_ID.test(bad), false, JSON.stringify(bad));
   assert.equal(hearthOf({ hearth: "ledger" }), "ledger");

@@ -2456,9 +2456,30 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   countAct(channel);
 
   // ── write tier: a valid credential required ───────────────────────────
+    // POS-721: a keyless PATCH at the human's profile path is pointed at the form, not told to bring a key it could never use
+    // (no key sets the profile; the door below refuses every one). Still 401: nothing was presented.
+    if (!key && req.method === "PATCH" && /^\/households\/[a-z0-9-]+\/human$/.test(path)) {
+      const { humanProfileLink } = await import("./human-profile.mjs");
+      const slug = /^\/households\/([a-z0-9-]+)\/human$/.exec(path)[1];
+      return bounce(res, 401, "the household's human sets their profile through a GitHub sign-in in a browser, not with a key",
+        `open ${humanProfileLink(slug)} in a browser and set it there; no key sets it. Nothing was kept`);
+    }
     if (!key) {
       setWwwAuth(res);
       return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
+    }
+
+    // PATCH /households/{slug}/human — NO BEARER SETS THE HUMAN'S PROFILE (POS-721/c, Darko
+    // 2026-11-17 00:31Z: "Human only, like likeness"). The town name, short line and pronouns are
+    // set only through the office's own browser sign-in, /oauth/human?household=<slug> (oauth.mjs),
+    // the likeness answer's road. So every key at this path, a household key, a resident's own key,
+    // a berth or an OAuth/MCP access token alike, is refused whole before its body is read, and
+    // pointed at that form. The path stays so the refusal names the road; it is not a write door.
+    const humanAt = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/human$/.exec(path) : null;
+    if (humanAt) {
+      const { notByKey } = await import("./human-profile.mjs");
+      const no = notByKey(humanAt[1]);
+      return bounce(res, no.code, no.defect, no.hint);
     }
 
     // PATCH /address|/home|/profile|/window /{handle} — a household edits its OWN

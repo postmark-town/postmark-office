@@ -53,13 +53,15 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 // registry read (sign-in among them) between a deploy and its migration.
 // `invited_by` (085, POS-576) is read the same way, for the same reason, and so is `likeness_state`
 // (092, POS-726 slice B): a store that has not taken 092 yet reads it as NULL. And so is `hearth` (093, POS-962): the id of the Hearth the
-// household chose, as text, NULL when it chose nothing or the store has not taken 093.
+// household chose, as text, NULL when it chose nothing or the store has not taken 093. And so is `human_profile` (101, POS-721): before
+// 101, every house reads "nothing set".
 const HOUSEHOLDS_SQL = `
   SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
          provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness,
          to_jsonb(households) -> 'invited_by' AS invited_by,
          to_jsonb(households) -> 'likeness_state' AS likeness_state,
-         to_jsonb(households) ->> 'hearth' AS hearth
+         to_jsonb(households) ->> 'hearth' AS hearth,
+         to_jsonb(households) -> 'human_profile' AS human_profile
     FROM households
    ORDER BY ord`;
 
@@ -228,8 +230,8 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
 // its one writer is `setHouseholdInvitedBy`, at the declaration. `likeness_state`
 // (092, POS-726 slice B) too: its one writer is `setLikenessRequest` (a request only), from the signed-in form. `hearth` (093, POS-962)
-// too: its one writer is `setHouseholdHearth`.
-const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state", "hearth"];
+// too: its one writer is `setHouseholdHearth`. And `human_profile` (101, POS-721): its one writer is `setHouseholdHumanProfile`.
+const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state", "hearth", "human_profile"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -249,7 +251,7 @@ const valuesOf = (row, cols) => cols.map((c) => {
   if (c === "accounts") return JSON.stringify(row[c] ?? []);
   if (c === "provisional") return row[c] === true;
   if (c === "home_images") return JSON.stringify(row[c] ?? {});
-  if (c === "likeness" || c === "invited_by" || c === "likeness_state") return row[c] == null ? null : JSON.stringify(row[c]);
+  if (c === "likeness" || c === "invited_by" || c === "likeness_state" || c === "human_profile") return row[c] == null ? null : JSON.stringify(row[c]);
   return row[c] ?? null;
 });
 
@@ -574,6 +576,44 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
     [slug, JSON.stringify(invitedBy)], env);
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
+}
+
+/**
+ * The household's human's town name, short line and pronouns (POS-721,
+ * migration 101), changed on its row.
+ *
+ * The ONE store writer of `human_profile`; `src/human-profile.mjs §
+ * setHumanProfile` is the one act that calls it. `set` holds the fields given a
+ * value and `clear` the fields given an empty string: ONE statement merges the
+ * one and drops the other, so a field nobody named keeps its value and two
+ * sign-ins changing different fields never undo each other. A profile left
+ * with nothing in it is stored NULL (101's shape refuses `{}`).
+ *
+ * THE ACCOUNT IS CHECKED IN THE SAME STATEMENT THAT WRITES, as the likeness
+ * answer's is: the row is found by its slug AND by the signed-in account being
+ * one of its `accounts`, so no other house's sign-in reaches it.
+ *
+ * Returns `{ slug, human_profile }` of the row written, `null` when the office
+ * is not pointed at the record, `{ slug: null }` when no row matched, or
+ * `{ missingColumn: true }` on a store that has not taken 101 (the Hearth's
+ * answer, `setHouseholdHearth`).
+ */
+export async function setHouseholdHumanProfile({ slug, set = {}, clear = [], ghId }, env = process.env) {
+  let r;
+  try {
+    r = await actsQuery(
+      `UPDATE households
+          SET human_profile = NULLIF((COALESCE(human_profile, '{}'::jsonb) || $2::jsonb) - $3::text[], '{}'::jsonb)
+        WHERE slug = $1
+          AND accounts @> jsonb_build_array(jsonb_build_object('id', ($4)::bigint))
+    RETURNING slug, human_profile`,
+      [slug, JSON.stringify(set), clear, ghId], env);
+  } catch (e) {
+    if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 101 is not on this store yet
+    throw e;
+  }
+  if (r === null) return null;
+  return r.length ? { slug: r[0].slug, human_profile: r[0].human_profile ?? null } : { slug: null };
 }
 
 /**
