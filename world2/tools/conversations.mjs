@@ -73,7 +73,7 @@ import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE roo
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "3e3fec2aafdd7d7d14a7b2a5dd8598b95b1737de", at: "968d780f186649a5154ba039d6f1655a2d330ce9" },
+            blob: "d42472a3c50fe8fafbb8706697160ba3e19abb97", at: "56377dd6d9761f647b599406e5e2daf3ccfb8d98" }, // POS-1132: voices.mjs carries stood_with and the speaker line; the vendored threadOf is unchanged (the equality tests hold)
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
