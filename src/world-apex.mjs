@@ -4345,7 +4345,7 @@ export async function spectatorLook(args = {}, ctx = {}) {
 // (an object whose own `toString` is not a function, an array, a number, a boolean) cannot be read as a name, and coercing it throws out of the
 // dispatcher with no answer. Each is refused here, by its type, BEFORE any coercion: the hostile value is never stringified to explain itself.
 // Omitted (null/undefined) and "" are as they were. `since`, `since_crossing` and the other cursors are numbers, not names, and are not judged here.
-const NAME_ARGS = ["do", "read", "mark", "find", "investigate", "as", "handle", "lens", "explain", "read_shape"];
+const NAME_ARGS = ["do", "read", "mark", "find", "investigate", "as", "handle", "beside", "lens", "explain", "read_shape"];
 const typeWord = (v) => (Array.isArray(v) ? "a list" : typeof v === "object" ? "an object" : typeof v === "boolean" ? "a boolean" : typeof v === "number" ? "a number" : `a ${typeof v}`);
 /** The refusal for a name sent as something other than text, or null. Exported and pure so the decision is falsifiable without a world. */
 export function nameTypeRefusal(args) {

@@ -1,7 +1,7 @@
 // world-apex-name-types.test.mjs — POS-1093: the world door answers a name that is not text with its normal 4xx.
 //
 // The POS-1003 review found `world { do: {"toString":1} }` leaving the call with no answer: the door reads `do` (and `read`, `mark`,
-// `find`, `investigate`, `as`, `handle`, `lens`, `explain`, `read_shape`) as text, and coercing such a value throws out of the dispatcher.
+// `find`, `investigate`, `as`, `handle`, `beside`, `lens`, `explain`, `read_shape`) as text, and coercing such a value throws out of the dispatcher.
 // What is under test is the REAL shared call path (src/mcp.mjs `callTool`, which the MCP door and the REST apex both reach) with the
 // hostile JSON, under a bounded timeout so the old defect cannot hang the run: a throw or a timeout FAILS the test, it is never read as
 // a refusal. The valid calls and the omitted selectors keep their answers.
@@ -16,7 +16,7 @@ const { callTool } = await import("../src/mcp.mjs");
 const { nameTypeRefusal } = await import("../src/world-apex.mjs");
 
 const HOSTILE = () => JSON.parse('{"toString":1}');   // an own `toString` that is not a function: String(x) throws
-const NAMES = ["do", "read", "mark", "find", "investigate", "as", "handle", "lens", "explain", "read_shape"];
+const NAMES = ["do", "read", "mark", "find", "investigate", "as", "handle", "beside", "lens", "explain", "read_shape"];
 const SHAPES = [HOSTILE, () => ({}), () => [], () => ["do"], () => 7, () => true, () => ({ valueOf: 1, toString: 1 })];
 
 /** The door call, bounded: a hang rejects after `ms`, a throw rejects with it. */
@@ -45,6 +45,21 @@ test("the hostile `do` beside a valid name is refused whole: nothing else on the
     assert.match(r.hint, /Nothing was done$/);
     assert.equal(r.done, undefined);
   }
+});
+
+test("the actor seam: a hostile `beside` on a real human act (which the door passes to resolveHumanActor, whose String(beside) threw) is refused 422 before the actor is resolved", async () => {
+  for (const make of SHAPES) {
+    const r = await call({ do: "say", as: "human", beside: make(), args: { text: "hi" } });
+    assert.equal(r.error, "bounce");
+    assert.equal(r.code, 422);
+    assert.match(r.defect, /^beside: is a name — text, not (an object|a list|a number|a boolean)$/);
+    assert.match(r.hint, /Nothing was done$/);
+    assert.doesNotMatch(JSON.stringify(r), /toString|valueOf|\[object/);
+  }
+  const text = await call({ do: "say", as: "human", beside: "pica", args: { text: "hi" } });
+  assert.doesNotMatch(text?.defect ?? "", /is a name — text/, "a text `beside` keeps its own answer (the actor seam's)");
+  const omitted = await call({ do: "say", as: "human", args: { text: "hi" } });
+  assert.doesNotMatch(omitted?.defect ?? "", /is a name — text/, "an omitted `beside` is as it was");
 });
 
 test("the pure judge answers the same refusal, and says nothing for text, omitted selectors or empty text", () => {
