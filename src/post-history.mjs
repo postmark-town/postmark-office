@@ -10,6 +10,7 @@
 //   idea   ideas.mjs § ideaHistoryOf   { stage, at, hand, credit, link, note }
 //                     § ideaAwardsOf   { label, to, stamps, hand, at, note, stamps_paid }
 //   event, quest    § plainHistoryOf   { stage, at, hand }: posted, and closed
+//   ballot, flare   § ballotHistoryOf  { stage, at, hand }: posted, and each advance (and a ballot's close)
 //
 // ── THE CHAIN IS READ AS A DELTA ────────────────────────────────────────────
 //
@@ -32,6 +33,7 @@ import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
 import { BALLOT_CLASS } from "./ballots.mjs";
+import { FLARE_CLASS } from "./flares.mjs";
 
 /** The text `unavailable` carries when the store holds no stamp chain to read. */
 export const NO_CHAIN = "the store holds no stamp chain yet (stamp_lines), so every history row's stamps_paid is null";
@@ -104,6 +106,7 @@ export const HISTORY_ACTIONS = Object.freeze({
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),
   [BALLOT_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_CLOSE]),   // POS-983: submissions → staking → closed
+  [FLARE_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE]),               // POS-1163: reported → accepted as text or video, or declined
 });
 
 /**
@@ -163,5 +166,7 @@ export async function postHistoryVia(client, cls, ids) {
   if (cls === BUG_CLASS) return { byPost: bugHistoryOf(acts, paid ?? new Map()), awardsByPost: null, unavailable };
   if (cls === IDEA_CLASS) return { byPost: ideaHistoryOf(acts), awardsByPost: ideaAwardsOf(acts, paid), unavailable };
   if (cls === BALLOT_CLASS) return { byPost: ballotHistoryOf(acts), awardsByPost: null, unavailable: null };
+  // a flare's rows are a ballot's shape: the state each post or advance left it in, and whose hand (POS-1163)
+  if (cls === FLARE_CLASS) return { byPost: ballotHistoryOf(acts), awardsByPost: null, unavailable: null };
   return { byPost: plainHistoryOf(cls, acts), awardsByPost: null, unavailable: null };
 }

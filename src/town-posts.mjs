@@ -31,8 +31,9 @@
 //
 // ── THE CLASSES ─────────────────────────────────────────────────────────────
 //
-// event, quest, bug, idea and ballot (POS-983: the town's vote, put up and
-// carried by its hands; each row carries its body, terms and choices). An idea is a post since POS-290 (behind
+// event, quest, bug, idea, ballot (POS-983: the town's vote, put up and
+// carried by its hands; each row carries its body, terms and choices) and
+// flare (POS-1163: a post about a public spark, with every place it was posted). An idea is a post since POS-290 (behind
 // IDEA_POSTS for the acts; the read reports what the store holds, which is
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
@@ -104,6 +105,7 @@ import { IDEA_STAGES } from "./ideas.mjs";
 import { ALIAS_NOTE } from "./post-words.mjs";
 
 import { REPORT_CLASS, REPORT_IS_PRIVATE } from "./reports.mjs";
+import { FLARE_CLASS, FLARE_FINISHED, FLARE_STATES } from "./flares.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -127,6 +129,9 @@ export const POST_CLASSES = Object.freeze({
 export const READ_CLASSES = Object.freeze({
   ...POST_CLASSES,
   [BALLOT_CLASS]: Object.freeze({ finished: Object.freeze([BALLOT_CLOSED]) }),
+  // POS-1163: the flare, public as its spark is. Like the ballot it is not in POST_CLASSES, so the household's own posts
+  // read and the morning page are as they were (the flare's doorstep line is POS-509's, not this record's).
+  [FLARE_CLASS]: Object.freeze({ finished: FLARE_FINISHED }),
 });
 
 /** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
@@ -136,6 +141,7 @@ export const CLASS_STATES = Object.freeze({
   [BUG_CLASS]: Object.freeze([...BUG_STATES]),
   [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
   [BALLOT_CLASS]: Object.freeze([...BALLOT_STATES]),
+  [FLARE_CLASS]: Object.freeze([...FLARE_STATES]),
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
@@ -335,6 +341,10 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       return { ...plain(r), body: r[BODY] ?? "", fields: { ...f }, choices: choicesOf(f), history: historyOf(r.id),
         votes: `town { read: "votes", args: { topic: "${f.topic}" } }` };
     });
+  } else if (cls === FLARE_CLASS) {
+    // A flare (POS-1163) carries its own fields whole: the spark it is about, every place it was posted (url, platform,
+    // form, screenshot) and its maker. Its spark lists it back (event-sparks.mjs § flaresOfSparks).
+    posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) }, history: historyOf(r.id) }));
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }

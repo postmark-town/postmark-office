@@ -43,6 +43,7 @@ import { BUG_CLASS } from "../../src/bugs.mjs";
 import { BALLOT_CLASS } from "../../src/ballots.mjs";
 import { RESPONSE_VOTE, RESPONSE_BUILD, RESPONSE_STAKE } from "../../src/events.mjs";
 import { IDEA_CLASS } from "../../src/ideas.mjs";
+import { FLARE_CLASS } from "../../src/flares.mjs";
 
 // THE CLASSES A REBUILD FOLDS (POS-294): the event, and the town's quests, whose
 // rows are the pen's `post` and `close` acts like any post's. A quest has no
@@ -53,7 +54,7 @@ import { IDEA_CLASS } from "../../src/ideas.mjs";
 // folds `post`, `amend` and `advance` into its post, its sign-ups into the
 // residents' `build` responses, and (once they are written) its stakes into
 // `stake` responses; an `award` changes no row.
-export const REBUILT_CLASSES = Object.freeze([EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS, IDEA_CLASS]);
+export const REBUILT_CLASSES = Object.freeze([EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS, IDEA_CLASS, FLARE_CLASS]);
 
 // The tables a rebuild restores, and the one it never touches.
 export const REBUILT_TABLES = Object.freeze(["posts", "responses"]);
@@ -128,17 +129,21 @@ export async function dryRun(client) {
     const { rows: signUps } = await client.query("SELECT * FROM responses WHERE kind = $1 ORDER BY post, handle", [RESPONSE_BUILD]);
     const { rows: stakes } = await client.query("SELECT * FROM responses WHERE kind = $1 ORDER BY post, handle", [RESPONSE_STAKE]);
     const ideaResponses = [...signUps, ...stakes];
+    const flareActs = await eventActs(client, FLARE_CLASS);   // POS-1163: a flare's post and advance; it takes no responses
+    const { rows: flares } = await client.query("SELECT * FROM posts WHERE class = $1 ORDER BY id", [FLARE_CLASS]);
     await client.query("COMMIT");
     const ev = compareRebuild({ posts, responses }, acts);
     const qu = compareRebuild({ posts: quests, responses: [] }, questActs);
     const bu = compareRebuild({ posts: bugs, responses: [] }, bugActs);
     const ba = compareRebuild({ posts: ballots, responses: votes }, ballotActs);
     const id = compareRebuild({ posts: ideas, responses: ideaResponses }, ideaActs);
-    return { equal: ev.equal && qu.equal && bu.equal && ba.equal && id.equal, drift: [...ev.drift, ...qu.drift, ...bu.drift, ...ba.drift, ...id.drift],
+    const fl = compareRebuild({ posts: flares, responses: [] }, flareActs);
+    return { equal: ev.equal && qu.equal && bu.equal && ba.equal && id.equal && fl.equal, drift: [...ev.drift, ...qu.drift, ...bu.drift, ...ba.drift, ...id.drift, ...fl.drift],
       counts: { acts: ev.counts.acts, posts: ev.counts.posts, responses: ev.counts.responses,
         quest_acts: qu.counts.acts, quests: qu.counts.posts, bug_acts: bu.counts.acts, bugs: bu.counts.posts,
         ballot_acts: ba.counts.acts, ballots: ba.counts.posts, votes: ba.counts.responses,
-        idea_acts: id.counts.acts, ideas: id.counts.posts, idea_responses: id.counts.responses },
+        idea_acts: id.counts.acts, ideas: id.counts.posts, idea_responses: id.counts.responses,
+        flare_acts: fl.counts.acts, flares: fl.counts.posts },
       never_touched: NEVER_TOUCHED };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
@@ -162,7 +167,7 @@ async function main() {
     const out = await dryRun(client);
     if (argv.includes("--json")) console.log(JSON.stringify(out, null, 2));
     else {
-      console.log(`${out.equal ? "equal" : "DRIFT"} · ${out.counts.acts} event acts → ${out.counts.posts} posts, ${out.counts.responses} responses · ${out.counts.quest_acts} quest acts → ${out.counts.quests} quest posts · ${out.counts.bug_acts} bug acts → ${out.counts.bugs} bug posts · ${out.counts.ballot_acts} ballot acts → ${out.counts.ballots} ballot posts, ${out.counts.votes} votes · ${out.counts.idea_acts} idea acts → ${out.counts.ideas} idea posts, ${out.counts.idea_responses} sign-ups and stakes · every column of both restored and compared · ${NEVER_TOUCHED_LINE}`);
+      console.log(`${out.equal ? "equal" : "DRIFT"} · ${out.counts.acts} event acts → ${out.counts.posts} posts, ${out.counts.responses} responses · ${out.counts.quest_acts} quest acts → ${out.counts.quests} quest posts · ${out.counts.bug_acts} bug acts → ${out.counts.bugs} bug posts · ${out.counts.ballot_acts} ballot acts → ${out.counts.ballots} ballot posts, ${out.counts.votes} votes · ${out.counts.idea_acts} idea acts → ${out.counts.ideas} idea posts, ${out.counts.idea_responses} sign-ups and stakes · ${out.counts.flare_acts} flare acts → ${out.counts.flares} flare posts · every column of both restored and compared · ${NEVER_TOUCHED_LINE}`);
       for (const d of out.drift) console.log(`  ${d}`);
     }
     process.exit(out.equal ? 0 : 1);

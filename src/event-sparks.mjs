@@ -21,6 +21,7 @@ import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
 import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { flareOnSpark } from "./flares.mjs"; // POS-1163: a spark lists the flares posted from it
 
 // ── THE HOSTING STAKE (call 22; Darko 11:00 EST and 17:37:45Z) ───────────────
 //
@@ -303,6 +304,41 @@ export function sparkView(m) {
   };
 }
 
+// ── A SPARK'S FLARES (POS-1163; WLD-185, World #397, LOGOS/classes.md:388–396) ──
+//
+// Darko, 2026-11-18: "whenever there is a flare that's posted from a Spark, there definitely needs to be a link from that Spark to
+// the flare wherever it's posted." A flare is a post (flares.mjs) whose `fields.about` names its spark, so a spark's flares are
+// DERIVED from the flare rows at read time: never a second list kept on the mark, and one batch query for every spark a read
+// answers, never one per spark. Every flare is listed with its state (a reported one is a record, not an acceptance) and every
+// place it was posted, whole. Only an ACCEPTED spark carries `flares`: a pending placeholder carries none, and no draft is ever
+// named, since a flare's spark must be public at its door (events-store.mjs § postFlare). A store that cannot read the flares
+// says so (`flares: null` and `flares_note`), never none.
+export const SPARK_FLARES_SQL = "SELECT id, title, author, household, state, fields FROM posts WHERE class = 'flare' AND fields->>'about' = ANY($1::text[]) ORDER BY id";
+const FLARES_UNREAD = "the flares posted from this spark could not be read just now — unknown, not none";
+
+/** Each spark id's flares, `Map(id → [flare…])` (flares.mjs § flareOnSpark), in one query; null when they cannot be read. */
+export async function flaresOfSparks(q, ids) {
+  const want = [...new Set((ids ?? []).map(String))];
+  const by = new Map(want.map((id) => [id, []]));
+  if (!want.length) return by;
+  let rows;
+  try { ({ rows } = await q.query(SPARK_FLARES_SQL, [want])); } catch { return null; }
+  for (const r of rows) {
+    const about = String((typeof r.fields === "string" ? JSON.parse(r.fields) : r.fields)?.about ?? "");
+    by.get(about)?.push(flareOnSpark(r));
+  }
+  return by;
+}
+
+/** The views with each ACCEPTED spark's flares; a pending placeholder (`accepted: false`) is left exactly as it was. */
+async function withFlares(q, views) {
+  const accepted = views.filter((v) => v.accepted !== false);
+  if (!accepted.length) return views;
+  const by = await flaresOfSparks(q, accepted.map((v) => v.id));
+  return views.map((v) => (v.accepted === false ? v
+    : by ? { ...v, flares: by.get(String(v.id)) ?? [] } : { ...v, flares: null, flares_note: FLARES_UNREAD }));
+}
+
 /** The accepted sparks under one circle, by the spine: `on` it (its path ends there) and `below` it (deeper on its path). */
 export function sparksOfCircle(standing, circleId) {
   const on = [], below = [];
@@ -317,7 +353,10 @@ export function sparksOfCircle(standing, circleId) {
 /** The accepted sparks under a circle, read from the store (`q` is a client or pool): standing marks whose path names it. */
 export async function acceptedSparksOfCircle(q, circleId) {
   const { rows } = await q.query(`${STANDING_SPARKS_SQL} AND data->'circle_path' @> $1::jsonb`, [JSON.stringify([Number(circleId)])]);
-  return sparksOfCircle(rows, circleId);
+  const { on, below } = sparksOfCircle(rows, circleId);
+  // one flares query for both lists (POS-1163)
+  const all = await withFlares(q, [...on, ...below]);
+  return { on: all.slice(0, on.length), below: all.slice(on.length) };
 }
 
 /** The public spark ids an event's completion recorded (`fields.completed.sparks`), in its order; none for a free event's drafts. */
@@ -341,7 +380,7 @@ export async function eventSparksOf(q, row) {
     `SELECT DISTINCT ON (slug) slug, status FROM claims WHERE slug = ANY($1::text[]) AND status <> 'draft' ORDER BY slug, submitted_at DESC`, [ids]);
   const accepted = new Map(standing.map((m) => [String(m.slug), m]));
   const waiting = new Map(claimed.map((c) => [String(c.slug), c.status]));
-  return ids.map((id) => accepted.has(id) ? sparkView(accepted.get(id)) : { id, accepted: false, status: waiting.get(id) ?? "unknown" });
+  return withFlares(q, ids.map((id) => accepted.has(id) ? sparkView(accepted.get(id)) : { id, accepted: false, status: waiting.get(id) ?? "unknown" }));
 }
 
 /**
@@ -362,7 +401,7 @@ export async function eventGalleryOf(q, evidence, { roots = [] } = {}) {
   const { rows } = await q.query(
     `${STANDING_SPARKS_SQL} AND ${SPARK_ROOM_IN_SQL} AND NOT (slug = ANY($2::text[])) ORDER BY locked_window, slug`,
     [rooms, [...(roots ?? [])].map(String)]);
-  return { gallery: { rooms, sparks: rows.map(sparkView) } };
+  return { gallery: { rooms, sparks: await withFlares(q, rows.map(sparkView)) } };
 }
 
 // ── THE EXECUTOR (POS-1035): the hosting stake and its whole return, under the town lock ──

@@ -54,6 +54,8 @@ import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import { BALLOT_CLASS, topicOfPost } from "./ballots.mjs"; // POS-983: a ballot is put up and carried by the town's hands (ballot-acts.mjs)
+import { FLARE_CLASS, STATE_REPORTED as FLARE_REPORTED, FLARE_HANDS, FLARE_FINISHED, TOWN_MAKER, judgeFlarePost, judgeFlareHand, judgeFlareAdvance,
+  FLARE_NO_AMEND, FLARE_NO_CLOSE, FLARE_NO_STAKE } from "./flares.mjs"; // POS-1163: the flare, a post about a public spark (its record; no pay)
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_COMPLETE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -541,7 +543,8 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // loaded when an idea act arrives (it imports this file's row helpers).
 const IDEA_CLASS = "idea";
 // POS-983: class "ballot" joins, the town's own, put up and carried by its hands (ballot-acts.mjs)
-const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS];
+// POS-1163: class "flare" joins, a post about a public spark, reported by anyone and advanced by the flare hands (flares.mjs)
+const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS, FLARE_CLASS];
 const ideaPen = () => import("./idea-store.mjs");
 const ballotPen = () => import("./ballot-acts.mjs");
 
@@ -551,8 +554,8 @@ function judgeClass(fields, { required, env = process.env }) {
   // act naming class "idea" is refused exactly as it was before the class existed.
   const ideas = ideaPostsOn(env);
   const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken; class: "ballot" is the town\'s vote, by its hands' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
-  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug", "ballot" or "idea", not "${c}"` : `this act answers class "event", "quest", "bug" or "ballot", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken; class: "ballot" is the town\'s vote, by its hands; class: "flare" records where a public spark was posted' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug", "ballot", "flare" or "idea", not "${c}"` : `this act answers class "event", "quest", "bug", "ballot" or "flare", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -583,7 +586,8 @@ async function classOf(fields, id, env) {
   if (topicOfPost(id)) return BALLOT_CLASS;
   const { ideaRow } = await ideaPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
-    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
+    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS
+      : (await flareRow(client, id)) ? FLARE_CLASS : EVENT_CLASS), env);
 }
 
 export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
@@ -592,6 +596,7 @@ export async function postAtTown(fields, key, { now = Date.now(), env = process.
   if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("post", fields, key, { now });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
   if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
+  if (cls === FLARE_CLASS) return postFlare(fields, key, { now, env });
   const handle = standpointHandle(fields, key);
   return hostOrStake(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -605,6 +610,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("amend", fields, key, { now });
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
+  if (cls === FLARE_CLASS) throw FLARE_NO_AMEND(id);
   const handle = standpointHandle(fields, key);
   return amendEvent(handle, id, { title: fields.title, body: bodyOf(fields), place: fields.place,
     doors_open: fields.doors_open, starts: fields.starts, ends: fields.ends }, { now, env, door: "town" });
@@ -619,6 +625,7 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
     "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
+  if (cls === FLARE_CLASS) throw FLARE_NO_CLOSE(id);
   const handle = standpointHandle(fields, key);
   return closeOrReturn(handle, id, { now, env, door: "town" });
 }
@@ -643,6 +650,7 @@ export async function advanceAtTown(fields, key, { now = Date.now(), env = proce
   for (const k of ["skip", "reason"])
     if (fields?.[k] !== undefined) throw refuse(422, `${k} is a bug's`, "only a bug's stage is skipped on the record; this post moves by its own class's law", { field: k });
   if (cls === IDEA_CLASS) return (await ideaPen()).advanceIdea(fields, key, id, { now, env, roll });
+  if (cls === FLARE_CLASS) return advanceFlare(fields, key, id, { now, env });
   standpointHandle(fields, key);
   throw refuse(422, "an event's phases follow its clock",
     "announced, doors-open, underway and ended are read from its times — amend them to move it; close it to cancel it", { field: "to" });
@@ -1026,6 +1034,89 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };
+  }, env);
+}
+
+// ── the flare class (POS-1163): a post about a public spark, its record only ──
+//
+// The law (flares.mjs; World #397, LOGOS/classes.md:369–404): anyone reports a
+// flare as themselves, naming the PUBLIC spark it was posted from and every
+// place it was posted; the flare hands report the town's own with maker
+// "town". It starts reported, and only the flare hands take it: accepted as
+// text, accepted as video, or declined. One `post` act and one `posts` row; one
+// `advance` act. Nothing pays, nothing is staked, and it is never amended or
+// closed. Its spark lists it back on every public spark read (event-sparks.mjs
+// § flaresOfSparks), derived from these rows, never a second list.
+
+async function flareRow(client, id) {
+  const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1 AND class = $2`, [id, FLARE_CLASS]);
+  return rowOf(rows[0]);
+}
+
+function flareActRow({ action, actor, object, payload, now }) {
+  return {
+    written_at: new Date(now).toISOString(), crossing: currentCrossing(now),
+    actor, action, object,
+    at_anchor: null, at_dx: null, at_dy: null, witnesses: null,
+    class: FLARE_CLASS, payload: JSON.stringify(payload),
+    effect: null, household: actor,   // insertAct resolves the actor's house
+  };
+}
+
+/** Is the spark a flare names ACCEPTED: a standing spark mark? A pending, refused, retracted or draft one is not (the law: a public spark). */
+async function isPublicSpark(client, id) {
+  const { rows } = await client.query("SELECT slug FROM marks WHERE slug = $1 AND kind = 'spark' AND status = 'standing'", [id]);
+  return rows.length > 0;
+}
+
+const flareAnswer = (row) => ({ id: row.id, class: FLARE_CLASS, title: row.title, author: row.author,
+  household: row.household ?? null, state: row.state, fields: row.fields });
+const flareReadHint = (id) => `town { read: "posts", args: { class: "flare", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}?class=flare`)}`;
+
+/** Report a flare: one `post` act, one `posts` row, reported. Its maker is the reporter's household, or the town's when a flare hand says so. */
+async function postFlare(fields, key, { now, env }) {
+  if (fields.stamps !== undefined) throw FLARE_NO_STAKE();
+  const f = judgeFlarePost(fields);
+  // the town's own flare is reported by a flare hand, the credential's own (flares.mjs § judgeFlareHand)
+  const reporter = f.town ? judgeFlareHand(fields, key, { act: "report a flare as the town's own" }) : standpointHandle(fields, key);
+  return write(async (client) => {
+    // a private or pending spark cannot be a flare's: refused alike, so the refusal tells no one a draft exists
+    if (!(await isPublicSpark(client, f.about)))
+      throw refuse(422, `no public spark "${f.about}"`, "a flare's spark is a public one: it is put forward and accepted first, as any spark is (a private spark names no flare)", { field: "about" });
+    const { rows } = await client.query("SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${reporter}/%`]);
+    const id = mintBugId(reporter, f.title, new Set(rows.map((r) => r.id)));
+    const household = await householdKeyFor(client, reporter);
+    const maker = f.town ? TOWN_MAKER : household;
+    const payload = { post: id, class: FLARE_CLASS, title: f.title, state: FLARE_REPORTED,
+      fields: { about: f.about, destinations: f.destinations, maker } };
+    const actId = await insertAct(client, flareActRow({ action: ACT_POST, actor: reporter, object: id, payload, now }));
+    const row = applyPostAct({ posts: new Map(), responses: new Map() },
+      { id: actId, action: ACT_POST, actor: reporter, object: id, payload, household });
+    await insertPost(client, row);
+    const n = f.destinations.length;
+    return { post: flareAnswer(row), act_id: actId,
+      receipt: `reported: ${id} (a flare) about the spark ${f.about}, posted at ${n} place${n === 1 ? "" : "s"} (${f.destinations.map((d) => d.platform).join(", ")}), made by ${maker === TOWN_MAKER ? "the town" : maker}, reported by ${reporter}. `
+        + `The spark lists it, with every place it was posted. It stands reported until ${FLARE_HANDS.join(" or ")} take${FLARE_HANDS.length === 1 ? "s" : ""} it: accepted as text, accepted as video, or declined. A flare's record pays nothing; what it pays is the posting quest's word.`,
+      read: flareReadHint(id) };
+  }, env);
+}
+
+/** Advance a flare: one `advance` act by a flare hand, from reported to its acceptance or its decline. */
+async function advanceFlare(fields, key, id, { now, env }) {
+  if (fields.stamps !== undefined) throw FLARE_NO_STAKE(id);
+  const hand = judgeFlareHand(fields, key, { act: "advance a flare" });
+  return write(async (client) => {
+    const prev = await flareRow(client, id);
+    if (!prev) throw refuse(404, `no flare "${id}"`, 'town { read: "posts", args: { class: "flare" } } lists them');
+    const { to } = judgeFlareAdvance(fields, prev);
+    const payload = { post: id, from: prev.state, to, hand };
+    const actId = await insertAct(client, flareActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
+    const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
+      { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
+    await updatePost(client, row);
+    return { post: flareAnswer(row), act_id: actId, hand, ...rungWords(to),
+      receipt: `advanced: ${id} ${prev.state} → ${to} by ${hand}'s hand. ${FLARE_FINISHED.includes(to) ? "It is finished, and moves no further. " : ""}It pays nothing by itself: what a flare pays is the posting quest's word.`,
+      read: flareReadHint(id) };
   }, env);
 }
 
