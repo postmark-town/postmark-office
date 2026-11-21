@@ -28,8 +28,9 @@
 //
 // It pays nothing: "What a flare pays is the posting quest's word, not this
 // class's" (classes.md:399), and the stamp pay, the cadence, the doorstep line
-// and the quest stay on POS-509. It takes no stake. It is never amended or
-// closed: the law rules neither, so no bug or idea privilege is carried over.
+// and the quest stay on POS-509. It takes no stake. This door does not support
+// amending or closing it: the law rules neither, so no bug or idea privilege is
+// carried over (the refusals keep a flare's id from falling through to an event's).
 //
 // ── WHO ADVANCES IT ─────────────────────────────────────────────────────────
 //
@@ -182,9 +183,9 @@ export function flareOnSpark(row) {
 }
 
 /** The refusals for the acts the law does not give a flare. */
-export const FLARE_NO_AMEND = (id) => refuse(422, `"${id}" is a flare, and a flare is not amended`,
-  "its record is what was reported; the law gives it no amendment. A place posted later is its own flare");
-export const FLARE_NO_CLOSE = (id) => refuse(422, `"${id}" is a flare, and a flare is not closed`,
+export const FLARE_NO_AMEND = (id) => refuse(422, `"${id}" is a flare, and this door does not support amending a flare`,
+  `a flare moves only by advance, by ${FLARE_HANDS_WORDS}: ${ADVANCE_HOW}`);
+export const FLARE_NO_CLOSE = (id) => refuse(422, `"${id}" is a flare, and this door does not support closing a flare`,
   `it finishes by advance, by ${FLARE_HANDS_WORDS}: ${ADVANCE_HOW}`);
 export const FLARE_NO_STAKE = (id) => refuse(422, `${id ? `"${id}" is a flare, and ` : ""}a flare takes no stake`,
   "what a flare pays is the posting quest's word, not this class's (LOGOS/classes.md, the flare)", { field: "stamps" });

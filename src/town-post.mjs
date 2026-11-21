@@ -40,8 +40,9 @@
 // anyone reports one as themselves, naming the PUBLIC spark it was posted from
 // (`about`) and every place it was posted (`destinations`); the flare hands
 // report the town's own (`maker: "town"`) and take it, once, to accepted-text,
-// accepted-video or declined (flares.mjs). It takes no stake, is never amended
-// or closed, and pays nothing: its pay is the posting quest's (POS-509).
+// accepted-video or declined (flares.mjs). It takes no stake, this door does not
+// support amending or closing it, and it pays nothing: its pay is the posting
+// quest's (POS-509).
 
 import { validateArgs } from "./validate-args.mjs";
 import { postAtTown, amendAtTown, closeAtTown, advanceAtTown, revealAtTown } from "./events-store.mjs";
@@ -231,7 +232,7 @@ const FLARE_CARD = `A FLARE (a post about a public spark, with every place it wa
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",
-    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)} ${BALLOT_CARD} Its amend takes title, body (what is being decided, how and when, with links), window and choices: a new choice joins at the end, in submissions or while staking runs; a choice named again has its words replaced; nothing is taken off once staking opens, and a closed ballot is not amended. A FLARE is not amended: its record is what was reported, and a place posted later is its own flare.`,
+    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)} ${BALLOT_CARD} Its amend takes title, body (what is being decided, how and when, with links), window and choices: a new choice joins at the end, in submissions or while staking runs; a choice named again has its words replaced; nothing is taken off once staking opens, and a closed ballot is not amended. This door does not support amending a FLARE.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF,
       body: { type: "string", description: `the post's text (an event's invitation), at most ${INVITATION_MAX} characters` },
@@ -240,7 +241,7 @@ export const TOWN_POST_TOOLS = [
       window: BALLOT_POST_PROPERTIES.window, choices: BALLOT_POST_PROPERTIES.choices,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_close",
-    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`) + ` ${BALLOT_CARD} Its close ends the staking; every stake returns whole at the town's close ceremony, as before. A FLARE is not closed: it finishes by advance (${FLARE_FINISHED.join(", ")}).`,
+    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`) + ` ${BALLOT_CARD} Its close ends the staking; every stake returns whole at the town's close ceremony, as before. This door does not support closing a FLARE: it finishes by advance (${FLARE_FINISHED.join(", ")}).`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },

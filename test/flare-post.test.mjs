@@ -216,9 +216,9 @@ test("THE DOOR'S SHAPE: every place needs its url, platform and form; no place t
   assert.match(stray.defect, /^a flare does not take: steps/);
   const onEvent = await townPostEvent({ class: "event", title: "x", about: SPARK }, FINN);
   assert.match(onEvent.defect, /^an event does not take: about/);
-  // recorded, then never amended or closed
+  // recorded; this door does not support amending or closing it, and the refusal writes nothing
   const r = await postAtTown(FLARE, FINN, opts);
-  await refusedNothing(pen, amendAtTown({ post: r.post.id, title: "renamed" }, FINN, opts), 422, /is a flare, and a flare is not amended/);
-  await refusedNothing(pen, closeAtTown({ post: r.post.id }, FINN, opts), 422, /is a flare, and a flare is not closed/);
+  await refusedNothing(pen, amendAtTown({ post: r.post.id, title: "renamed" }, FINN, opts), 422, /is a flare, and this door does not support amending a flare.*moves only by advance/);
+  await refusedNothing(pen, closeAtTown({ post: r.post.id }, FINN, opts), 422, /is a flare, and this door does not support closing a flare.*finishes by advance/);
   assert.equal(judgeFlarePost(FLARE).town, false);
 });
