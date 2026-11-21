@@ -362,6 +362,12 @@ const receipt = {
         // those two look the same.
         held_unbound: store.held_unbound ?? null,
         held_unbound_count: store.held_unbound_count ?? null,
+        // MARKS HELD BECAUSE THEIR PLANNED FILING IS ANOTHER ID'S PUBLISHED FILE (WLD-230). A non-sited mark whose path canon already
+        // keeps for a different id is not written (the overwrite that lost seth/signed-la-linterna and refused the 2026-11-21 18:00Z
+        // settlement); it is named in full here, with whose filing it met, and is in neither `written` nor any published count. Null
+        // when the write-down reported none, as the lists above are, so "no report" and "held none" (an empty list) stay different.
+        held_path_collision: store.held_path_collision ?? null,
+        held_path_collision_count: store.held_path_collision_count ?? null,
         // THE TOWN-SIGNED THINGS LET THROUGH BECAUSE ONLY THEIR HANDS CHANGED
         // (WLD-5), named beside the ones held out: together they say what the
         // write-down did with every town-signed mark in the docket.

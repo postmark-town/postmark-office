@@ -349,3 +349,21 @@ test("`carried_absent` reaches the receipt with its slugs, and a NOT-CHECKED car
   assert.equal(unchecked.store.selection.carried_absent.canon_sha, null,
     "a crossing that never read canon must not appear to have read it at some sha");
 });
+
+test("WLD-230: a mark held because its filing is another id's reaches the receipt, named in full and counted; absent stays null, held-none stays empty", () => {
+  // the already-public pair (WLD-230): Lyra's predicate met Seth's published filing under the guestbook
+  const held = [{ id: "lyra-of-the-east-tower/signed-la-linterna", by: "lyra-of-the-east-tower", slug: "signed-la-linterna", household: "gh:222", locked_window: 325,
+    path: "WORLD/marks/bramblewick/libro-de-visitas-de-la-linterna/signed-la-linterna/mark.md", held_by_filing_of: "seth/signed-la-linterna",
+    crossing_output: "path-held-by-another-id" }];
+  const r = compose({ source: "store", store: { ...STORE_REPORT, written: 10, held_path_collision: held, held_path_collision_count: 1 } });
+  assert.deepEqual(r.store.held_path_collision, held, "named in full: the id, the path and whose filing it met");
+  assert.equal(r.store.held_path_collision_count, 1);
+  assert.equal(r.store.written, 10, "and it is not folded into the written count the receipt carries");
+  assert.deepEqual(r.store.held_unbound, STORE_REPORT.held_unbound, "the unbound-household list is a different hold and is untouched");
+  const none = compose({ source: "store", store: { ...STORE_REPORT, held_path_collision: [], held_path_collision_count: 0 } });
+  assert.deepEqual(none.store.held_path_collision, [], "held none is an empty list, not null");
+  assert.equal(none.store.held_path_collision_count, 0);
+  const absent = compose({ source: "store", store: STORE_REPORT });
+  assert.equal(absent.store.held_path_collision, null, "a write-down that reported nothing is null, never an invented empty");
+  assert.equal(absent.store.held_path_collision_count, null);
+});
