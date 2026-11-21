@@ -60,7 +60,18 @@ test("G2 · a passing crossing pushes main once, and that push carries the photo
   for (const s of ["settlement: sweep 1 published", "registry: refreshed (fixture)"]) assert.ok(landed.includes(s), `${s}: ${landed.join(" | ")}`);
   assert.ok(landed.some((s) => s.startsWith("photograph: windows 213")), landed.join(" | "));
   assert.equal(g(b.origin, "rev-parse", "main"), g(run.sweep, "rev-parse", "main"), "origin holds exactly what the sweep clone built");
+  publishedNamesItsWindow(b, run);
 });
+
+// THE CROSSING NAMES ITS WINDOW, AS PUBLISHED (POS-940; the review's LOW). settlement-auto.sh § name_window
+// amends the commit the crossing pushes with its docket's `Window:` trailer (the bottle's await-clearing says
+// 213), and the receipt's world_to must be that amended commit, the one the keeper's tag will bless and
+// settlements-backfill reads. Dropping the call from publish_main, or its WORLD_TO re-read, reds here.
+function publishedNamesItsWindow(b, run) {
+  const top = g(b.origin, "rev-parse", "main");
+  assert.match(g(b.origin, "log", "-1", "--format=%B", "main"), /\n\nWindow: 213$/, "origin's main carries the docket's Window: trailer");
+  assert.equal(run.receipt.world_to, top, "the receipt names the amended commit that landed");
+}
 
 test("G2b · a registry-only quiet crossing pushes main once, photograph aboard", { skip }, () => {
   const b = bottle({ quiet: true, suiteRed: false });
@@ -71,6 +82,7 @@ test("G2b · a registry-only quiet crossing pushes main once, photograph aboard"
   const landed = subjects(b.origin);
   assert.ok(landed.includes("registry: refreshed (fixture)"), landed.join(" | "));
   assert.ok(landed.some((s) => s.startsWith("photograph: windows 213")), landed.join(" | "));
+  publishedNamesItsWindow(b, run);
 });
 
 test("G3 · refused, then passing: the photograph lands once, every act once", { skip }, () => {

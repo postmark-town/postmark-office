@@ -26,6 +26,11 @@ import { NO_TOWN, townClone } from "./fixture-paths.mjs";
 import { startPayerStore } from "./helpers/payer-store.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
+// This file's own town lock, inherited by every child below: the checkout's town.lock is shared with every
+// other test file running at once, and one that holds it for minutes made this file's writes wait out flock's
+// 30 s and come back LOCK_BUSY (POS-1141).
+process.env.TOWN_LOCK = join(tempDir("stripe-cli-lock-"), "town.lock");
+
 // execFileSync BLOCKS THE EVENT LOOP, so the in-process fake Stripe below could
 // never accept the child's connection and every run died on the fetch timeout.
 // The test's own apparatus needed its own falsifier: the first version of this

@@ -800,6 +800,8 @@ export const READING_LAW =
 // the town's hands' fields (as: "town", and the law an opposition cites), and
 // stay off this index for the same reason. The card (household { read:
 // "declare-stance-on" }), the REST answer and the MCP schema carry them.
+// POS-1136 (2026-11-18), the same again: the stance act's `preview` (the town's no-write word, as: "town" on one mark) is a town hand's field
+// too, and stays off this index; the card, the REST answer and the MCP schema carry it.
 //
 // POS-574 (2026-10-14), on the same rule: declare's and begin's optional
 // `from_town` (the town an agent says it came from, printed on its berth) put
@@ -822,7 +824,7 @@ export const READING_LAW =
 const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town", ...INVITE_FIELD_NAMES];
 // POS-666, on the same rule: amend-letter's and withdraw-letter's `seq` (only for
 // two pending letters that share an id) stays off this index; the cards carry it.
-const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
+const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law", "preview"]),
   profile: new Set(["pronouns", "sheet"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
 
 export const capabilityIndex = (ctx = {}) =>
@@ -1373,7 +1375,7 @@ async function householdGlance(args, key, ctx) {
   const lookback = new Date(nowMs - v2.LOOKBACK_MS).toISOString();
   const actors = [...ashore, `human-of-${house.slug}`];
   const acts = await soft(() => ix.houseActs(houseKey, { actors, ...(since?.hw ? { afterId: since.hw } : { sinceIso: since ? new Date(since.ms).toISOString() : lookback }) }));
-  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name })) : null;
+  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null, houseSlug: house.slug })) : null;
   const mine = new Set(ashore);
   const lines = await soft(() => ix.stampLinesSince(since ? new Date(since.ms).toISOString() : lookback));
   const went = lines ? v2.wentRows(lines.rows, mine, { house: house.members }) : null;
@@ -1462,7 +1464,7 @@ async function householdGlance(args, key, ctx) {
     isDefault: ctx.readShape === "v2", // POS-1094: the line on the default (HOUSEHOLD_READ_SHAPE=v2 at the MCP door)
     marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
-    house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
+    house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null, human: house.rec.human_profile ?? null },
     // THE NAMING (POS-947/c): offered in first_steps while the house's record (the store's registry, read above)
     // names no inviter, never for the town's own house, and not while the harbor gate would bounce the act; and
     // (Wright 19:56Z) only when some household could lawfully be named, by the act's own judge (anyLawfulInviter).
@@ -1556,7 +1558,7 @@ async function householdDeep(what, f, args, key, ctx) {
     const acts = await ix.houseActs(`hh:${house.slug}`, { actors, beforeId: f.before ?? null, ...(named ? { verbs: hp.PUBLIC_HOUSE_VERBS } : {}), ...(since?.hw ? { afterId: since.hw } : { sinceIso: after }) });
     // a public read keeps only the public verbs: asked of the store above, and held again here, so a store that ignored the ask still cannot leak a private act
     const visible = named ? acts.rows.filter((a) => hp.PUBLIC_VERB_SET.has(String(a.action)) && hp.isPublicAct(a)) : acts.rows;
-    const rows = hp.byHand(visible.map((a) => v2.happenedRow(a, { houseName: house.rec.name })), judgedHand.hand);
+    const rows = hp.byHand(visible.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null, houseSlug: house.slug })), judgedHand.hand);
     const next = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: acts.hw });
     const out = { read: "happened", household: house.slug, ...(named ? { public: true } : {}), ...(judgedHand.hand ? { hand: judgedHand.hand } : {}), ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor: next };
     out.complete = out.complete && !acts.cut;
@@ -2361,6 +2363,24 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   const envelope = parseEnvelope(args);
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope))) {
     return bounce(422, "`args` must be an object", `the act's own fields ride inside it — household { do: "${act}", args: { … } }`);
+  }
+  // ── POS-1133: THE BARE-ORIGIN PREVIEW ─────────────────────────────────────
+  // `host` declares no `preview` and takes no dry run: `preview: true` in args is refused below as an unknown field, and
+  // at the top level it is dropped by hostAtOffice's input translation. Neither is changed here, and no flag is ADMITTED (a
+  // preview must never become a write). What the ruling asks (Wright, CORE-105: refuse new hosting at no mark and (0, 0),
+  // "the same answer under `preview: true`") is that this ONE request, asked as a preview, hears the same refusal the real
+  // host gives. So when `preview` is sent with a NEW event (no `event:`) whose place is the bare Origin, the refusal is
+  // answered here, in the creation rule's own words, before the field check and before anything could be written. Every
+  // other preview keeps what it did: refused by name when it rides args, ignored when it rides the top level.
+  if (act === "host") {
+    const asked = { ...Object.fromEntries(Object.entries(args).filter(([k]) => k !== "do" && k !== "read" && k !== "args")),
+      ...(envelope && typeof envelope === "object" && !Array.isArray(envelope) ? envelope : {}) };
+    if (asked.preview !== undefined && String(asked.event ?? "").trim() === "") {
+      const { isBareOrigin, refuseBareOrigin } = await import("./events.mjs");
+      if (isBareOrigin(asked.place)) {
+        try { refuseBareOrigin({ at: { x: 0, y: 0 } }); } catch (e) { return householdActCaught(e, { did: act, dispatched_to: spec.tool }); }
+      }
+    }
   }
   // One validator, the target's: unknown fields bounce by name against the
   // flat tool's own schema (declare and begin both validate against

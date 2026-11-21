@@ -1,9 +1,22 @@
-# Deploying the office to the atelier box (EC2, nginx/Ubuntu)
+# Deploying the office to the box (EC2, nginx/Ubuntu)
 
 The same box that serves `starforge-atelier.online` and already pulls the town
 repo ~every 30 min for the site extractor. The office rides that rhythm.
 
-> **Live-truth note (2026-07-19):** the box's `/srv/postmark-office` is a plain
+> **How code reaches the box (current):** from a `release/2026-wNN[.k]` tag,
+> never from a branch tip. `release-train.yml` takes `git archive <tag>`, rsyncs
+> it onto the box, restarts `postmark-office`, and polls `GET /release` until it
+> names the tag (§ The auto-deploy below; `deploy/remote-deploy.sh` is the box
+> half). Which branch a PR targets, how a train or a hotfix hand tag is cut, and
+> who merges are `SHIPPING.md`'s (linked under § The weekly train); this file does
+> not restate them. A hand-run `scp` of single files is **break-glass only**, and
+> the dated note below is its record, not a competing recipe.
+
+> **Live-truth note (2026-07-19) — historical; superseded as the normal code
+> deploy by the tag route above (POS-60). Kept verbatim as the discovery
+> receipt and as the break-glass procedure.** What it said that day:
+>
+> the box's `/srv/postmark-office` is a plain
 > file copy, NOT the git clone step 1 below describes — a code deploy is
 > `scp src/<changed>.mjs meepo-ec2:/srv/postmark-office/src/` +
 > `sudo systemctl restart postmark-office`, then probe a route whose response
@@ -29,8 +42,8 @@ ENGINE changes reach prod through the site's world pin riding the site train.
 
 `.github/workflows/release-train.yml` no longer only cuts the tag — it deploys
 it, in the same run. **Nothing about the procedure changed; only the hand did.**
-The workflow does the three steps the live-truth note above prescribes, in that
-order, and goes red if any of them cannot be proven:
+The workflow does the three steps the (now historical) live-truth note above
+prescribed, in that order, and goes red if any of them cannot be proven:
 
 | the hand-carry | the workflow |
 |---|---|
@@ -46,7 +59,9 @@ no train name cuts no tag and deploys nothing.
 
 Until the repo variable `OFFICE_AUTODEPLOY` is `on`, an automatic trigger cuts
 the tag exactly as it always did **and stops**. Today's behaviour, unchanged;
-the hand-carry stays the way code reaches the box.
+the deploy of that tag is then a person's act: run the workflow from the
+Actions tab (`workflow_dispatch`, never gated), or, as break-glass only, the
+hand-carry in the live-truth note above.
 
 ```sh
 gh variable set OFFICE_AUTODEPLOY --body on  -R postmark-town/postmark-office   # adopt
@@ -260,8 +275,30 @@ cd /srv/postmark-office-dev && sudo bash -c '
 `world2-lib.sh § w2_db` falls back to `world2_dev` (PROD) when `WORLD2_DB` is
 unset, so the line sets it and asserts it before anything writes.
 
-**8. The switch.** Add `STAMP_LINES=store` to `/etc/postmark-office-dev.env`
-(sudoedit), then `sudo systemctl restart postmark-office-dev`.
+**8. The switch, behind the mint's gate.** First `stamp-mint-parity`, read-only,
+run as the dev office runs its jobs (POS-341's ruling, 10-04 Q3: before anything
+mints from the store, its key base, deliveries, ledger and replay equal the clone's;
+prod's switch has the same gate, § The store mint at the crossing, step 6). That is
+`dev-seed-advance.sh § as_dev_office`'s binding: meepo, the dev env file, and dev's
+OWN town pins. `TOWN_PINS_DIR` is not in the env file; the dev units take it from
+their drop-in (`deploy/postmark-office-dev.service-dropin-town-pins.conf`), and
+without it the tool checks dev's re-signed clone against the office's pins, which
+a dev clone never equals.
+```sh
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p Environment=TOWN_PINS_DIR=/srv/postmark-office-dev/town-pins-dev -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
+  node world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office-dev/town-clone
+#   expect: … PARITY (exit 0). A DIFFERENCE stops here: report it, reconcile nothing.
+```
+Read a red by what it names, not by its exit code alone. A `TownPinMismatch`
+("… is not the copy the office pinned") is the PINS, not the store: the clone and
+dev's pins disagree, and the remedy is the freshen
+(`sudo systemctl start postmark-dev-freshen.service`, which re-pins), never the
+registry. A key-base difference is a registry that lags the clone (on 10-10 dev's
+`household_pins` was a 09-25 copy, and the rehearsal's mint diverged): refresh it
+as § The dev seed advance, step 3 does, then run the gate again. Only on PARITY,
+add `STAMP_LINES=store` to `/etc/postmark-office-dev.env` (sudoedit), then
+`sudo systemctl restart postmark-office-dev`. The rehearsal's preflight runs the
+same gate on every rehearsal (step 10).
 
 **9. The pens file**, `/etc/postmark-dev-rehearsal.env` (root 0600, sudoedit),
 both URLs naming dev's database (the tool refuses any other):
@@ -280,7 +317,8 @@ cd /srv/postmark-office-dev && sudo node tools/dev-rehearsal.mjs --user meepo --
 The first line names the store it writes. The preflight names anything still
 missing: a migration, a flag, the key (dev's must not be prod's, and the clone's
 `tools/stamp-pubkey.pem` must be its public half), the town index off the
-clone's history, a stamp chain that disagrees with the clone.
+clone's history, a stamp chain that disagrees with the clone, and a red
+`stamp-mint-parity` (step 8's gate, run as the dev office's job).
 
 The last step is the stamp sandbox (POS-366). It cannot run on the box (the
 carry omits devDependencies, and it would share prod's CPU for 10–40 minutes),
@@ -379,6 +417,8 @@ dev's. Then, in order, stopping at the first failure and naming it:
    moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
    database but the sandbox and any count of open windows but one. A close still ahead
    is left alone. The step prints the close: rehearse before it, or run the advance again.
+   Since POS-940 the rehearsal's clearings pull a past close to now as well, so this
+   step is a second guard, kept.
 9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
@@ -1323,9 +1363,14 @@ A new box alarm is a probe in `tools/site-sentinel.mjs`, never a script with
 its own webhook call; `test/site-sentinel.test.mjs` § ONE ROUTE reds on a PR
 that adds one. The root disk is probe `disk_root` (DOWN at 85%, the line the
 retired disk watch used). The meeps are probe `meeps`: it reads
-`/srv/postmark-sentinel/meeps.json`, which Wright's watcher on Darko's desktop
-(`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
-DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
+`/srv/postmark-sentinel/meeps.json`, a record landed from outside the box. The
+desktop watcher that once wrote it (`G:/Wright-HQ/tools/meep-watch.mjs`, every 5
+minutes by scp) is **retired**; the producer is routed to the
+starforge-rig repo, source tree `windows/meepops` (MeepOps). Read its source there for
+how, and how often, the record is written: this file does not restate the
+producer, and nothing here was checked against the live box. The probe's own
+contract does not depend on the producer: it reads that path, `status` `OK` is
+healthy, and the record's DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
 older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
 barks only on DOWN or STALE. The meeps that moved to town-rig are probe
 `meeps_town_rig`: it reads `/srv/postmark-sentinel/meeps-town-rig.json`, landed
@@ -1617,6 +1662,123 @@ name:
 /etc/nginx/snippets/postmark-ops-gate.conf`), then `nginx -t` and reload. Do not
 remove the file or the `include` lines: without the file, `nginx -t` refuses the
 whole config.
+
+## The town's day on Bluesky (POS-904 Part 1, 2026-11-19)
+
+The office posts as @postmark.town: after each crossing, Ferry's Daily headline
+and its link; after each **blessed** settlement, its two literal record counts
+and its replay link. The code is `src/bluesky-publisher.mjs` and its one door,
+`tools/bluesky-publish.mjs`. **Nothing here is installed by the PR that adds it:**
+the env file, the unit lines and the hook are Jetto's box half, and they wait for
+Darko's look (and his answer that the login file holds an app password, not the
+account password). Nothing posts until then.
+
+**The posts, exactly as rendered from the real record on 2026-11-19:**
+```
+Crossing 320 · Ferry's Daily: A porch hello
+https://postmark.town/daily/
+
+Settlement S175 is blessed. New marks published: 10 · household records added: 1.
+https://postmark.town/replay/#S175
+```
+- **The crossing post:** a crossing whose Daily Ferry curated (hours after the
+  boat) and committed. It is read from the town clone's committed history of
+  `TOWN_BULLETIN/ferrys-daily.md`, never the working tree, using that crossing's
+  newest committed Daily with a lead `##` (`tools/site-sentinel.mjs § dailyFingerprint`),
+  as plain words. A crossing with no curated Daily has no post.
+- **The settlement post:** a `settlement/S<n>` tag (the keeper's blessing; a
+  mechanical publish is not one).
+  - **"New marks published"** is the number of `published` keys in
+    `WORLD/settlement-publications.json` at S<n> and not at the previous blessed tag.
+  - **"Household records added"** is the number of `households` keys in
+    `WORLD/households.json` at S<n> and not at the previous tag. A rename can add
+    one, so it is never called "joined".
+  - Retirements are not counted (Wright, 2026-11-19, option C). A record that
+    can't be read is no post, never a guessed zero: the event is `held`, still owed.
+
+**After each, with no age and no gap** (the lead's review at `054812e7`; Rivet's
+technical settlement, 2026-11-19 05:33Z). Each call, for its one kind:
+1. **Carry.** Every event whose state is not yet posted or failed (pending,
+   sending or waiting) is published again from its own state file, with the words
+   first composed, before any source is read. However old it is, and however far
+   the Daily or the World has moved on, it is never stranded.
+2. **The floor** is the highest event of the kind recorded in `--state`.
+   - **With no state for the kind,** nothing is chosen for the operator. The call
+     answers `unstarted` (exit 3) until the operator names the first event once:
+     `--crossing <n>` or `--settlement <n>`. That posts that event alone. There is
+     no age window and no backfill of history.
+   - **Thereafter,** every eligible event above the floor is posted, oldest first.
+     Two blessings, or two crossings, between ticks are two posts.
+3. **No gap below the floor.** Discovery stops at the first eligible event it
+   cannot record: a record that can't be read (`held`), a lock another run holds
+   (`busy`), or no credential (`unconfigured`). Nothing above it is posted, so the
+   floor never passes an owed event, and the next tick starts there again. An S<n>
+   whose record stays unreadable holds the later ones behind it, loudly (exit 3),
+   until it is mended.
+- **A named event at or below the floor** posts exactly that one, or answers from
+  its state, and moves no floor. **Above the floor,** it posts every eligible event
+  up to and including n, oldest first, and never steps past an owed one.
+
+**The runtime contract (Jetto 2026-11-19 03:55Z; Wright 03:56Z):**
+- **The credential:** exactly `BSKY_IDENTIFIER` and `BSKY_APP_PASSWORD`. Proposed
+  home: `/etc/postmark-bsky.env` (owner meepo, 0600), filled file to file from the
+  login file and never printed. Neither value, nor the session token, nor any
+  Authorization header is ever printed, written to state or put in a receipt.
+- **The calls:** `com.atproto.server.createSession`, then
+  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at the deterministic
+  rkey `crossing-<n>` or `settlement-<n>`.
+  - **After anything but success:** the key is asked with `com.atproto.repo.getRecord`
+    before anything else is sent. A record there means delivered, and it is kept,
+    never overwritten.
+  - **Sends:** at most two per event, then the event is `failed` and never sent again.
+  - **When the key can't be read:** a `getRecord` that cannot answer sends nothing
+    and spends nothing; the next run asks again.
+
+**The interface for the hook:**
+```sh
+node tools/bluesky-publish.mjs crossing   --town  <town clone>  --state <dir> [--crossing <n>]
+node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [--settlement <n>]
+```
+- **The first run of each kind is the operator's,** once, by hand, with the event
+  to start from, in the form `--crossing <n>` and `--settlement <n>`. Which numbers
+  is the owner's choice; this document and the code choose none. The tick's calls
+  carry no number.
+- **`--state <dir>` (required):** one directory both calls share, outside any
+  checkout, writable by the posting unit. It holds one file per event
+  (`<rkey>.json`: the event, the payload as first composed, every attempt and its
+  outcome, the posted uri) and the event's numbered lock (`<rkey>.lock.<k>`, with
+  `<rkey>.free.<k>` added beside it on release). It is each event's whole history,
+  and the floor: keep it, and don't remove a lock file by hand.
+- **Safe to repeat:** every call is safe on every tick and from a repeated or
+  concurrent hook. A posted event is answered from its file with no network, and
+  an event another run holds is left to it. A lock whose holder died, or was
+  released, is taken over under the next number. No lock name is moved, removed or
+  reopened while it is the highest, so neither a stale takeover nor a release can
+  let a second sender in.
+- **Stdout:** one JSON line per event the call acted on, oldest first:
+  - `{event, rkey, outcome, sends, uri?, detail?}`;
+  - `{event, rkey, outcome: "held", detail}` for an owed event whose record can't be read;
+  - `{event, outcome: "skipped", detail}` for a named event with nothing to post.
+  When the call acted on none, it prints one line, `{kind, outcome: "skipped" | "unstarted", detail}`.
+- **Exit codes** come from the most urgent line:
+  - `1`: failed (both sends spent; logged; never sent again);
+  - `3`: waiting, held, unconfigured or unstarted (nothing more sent; the next run asks again);
+  - `0`: posted, reconciled, already, busy or skipped;
+  - `2`: cannot run (usage).
+  The hook treats every exit as non-fatal.
+- **Where it fits (proposed; the hook is Jetto's):** both calls in the keep tick
+  (`postmark-office-keep.service`, every 15 minutes), after the world fetch that
+  brings the keeper's tags in, with `--town /srv/postmark-office/town-clone` and
+  `--world` the tick's world clone.
+  - **Scope the credential:** that unit already reads a secret file and
+    `office-keep.sh` unsets those names before its other children, so give the
+    two Bluesky names to the publisher's call alone, in the same manner.
+  - **A late Daily:** a Daily curated at any hour is posted by the next tick
+    after it is committed, however late.
+- **Reading it back, with no key:**
+  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/crossing-<n>`.
+  Confirm the account's handle and did first: `tools/ops-awareness.mjs` reads
+  `postmark-town.bsky.social`, while the issue names `@postmark.town`.
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
@@ -2172,6 +2334,39 @@ store mint is skipped this crossing, and the keep tick pays what is owed`, then
 ends `Deactivated successfully`. The next keep tick whose store holds the
 crossing logs `decided from the store`. If the ingest keeps failing, read
 `town-index.json`'s `detail` first: nothing can pay the mints until it runs.
+
+### The witness records every crossing (POS-907)
+
+The ferry's exit trap and the settlement both write a record into the town's
+witness chain (town `WITNESS.md`; § the ferry unit's "THE WITNESS RECORD RIDES
+THE EXIT TRAP"). It's off until two env lines exist, and unset it says so and
+owes nothing. To switch it on, once:
+
+1. **The key.** The witness's own Ed25519 key at
+   `/srv/postmark-office/witness-key.pem`, meepo 600, never `stamp-key.pem`.
+   Its public half goes on town main as `WITNESS/witness-pubkey.pem` first,
+   since a record verifies only under the published key.
+2. **The owed queue, under the office tree.**
+   `sudo install -d -o meepo -g meepo -m 700 /srv/postmark-office/witness-owed`.
+   It must be under `/srv/postmark-office`: the ferry runs with
+   `ProtectSystem=strict`, and that's the one tree its sandbox may write. A queue
+   anywhere else works from the settlement, which isn't sandboxed, and fails at
+   the first crossing with `[witness] EROFS: read-only file system`. Then even
+   the owed entry is lost, so that crossing has no record and none owed (it
+   happened at the 2026-11-20 00:00Z crossing, with the queue under `/var/lib`).
+3. **The env lines,** appended to `/etc/postmark-office.env` after a backup
+   (`cp -p` to a dated `.bak-witness-*`):
+   `WITNESS_KEY=/srv/postmark-office/witness-key.pem` and
+   `WITNESS_OWED=/srv/postmark-office/witness-owed`.
+
+**Check:** as meepo with the env,
+`node /srv/postmark-office/town-clone/tools/witness-chain.mjs status --owed "$WITNESS_OWED"`
+reads `{"owed":0,"open":0,…}`. After the next crossing, the ferry's journal
+shows `[witness]` lines and no `EROFS`, and the new record verifies under
+`WITNESS/witness-pubkey.pem` (the tool's own `readChain` and `checkRecord`).
+
+**Off switch:** remove the two env lines (or restore the backup). Records
+already published stay in the chain.
 
 ## The one-hand rule (2026-08-20, after the stranded-crossings incident)
 

@@ -117,7 +117,16 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
   const { limitOppositions, openTownAtSha } = await import("../../src/world-settlement.mjs");
   const { rows: standing } = await q.query(
     "SELECT id, slug, kind, owner, body, geometry, NULL::uuid AS parent, data FROM marks WHERE kind = 'parcel' AND status = 'standing'");
-  const bySlug = new Map(standing.map((r) => [r.slug, r]));
+  // POS-1154 (WLD-218/b; Wright: "Whole window, any order: a resident's own withdrawals in a window apply before
+  // their claims in that window, and one-per-resident is judged on where they'd stand after the window"). A standing
+  // parcel its OWNER has withdrawn is owed to this crossing's sweep, so it is not part of where the resident stands
+  // after the window: it leaves the fold's input, whichever of the claim and the withdrawal came first. The one
+  // predicate is the crossing's own (`fold-delta.mjs § WITHDRAWN_OWED_SELECT`: the owner's LATEST mark act on the
+  // slug is a withdraw), so another resident's withdraw, or a re-leave after it, frees nothing. A slug with a pending
+  // claim keeps standing: the docket wins its own crossing (fold-delta § THE THIRD TERM). The cap, its exceptions and
+  // the households are the engine's, untouched; only what stands is read after the window.
+  const freed = await withdrawnInWindow(q, standing, candidates);
+  const bySlug = new Map(standing.filter((r) => !freed.has(r.slug)).map((r) => [r.slug, r]));
   for (const c of candidates) bySlug.set(c.slug, { id: c.id, slug: c.slug, kind: c.kind, owner: c.owner, body: c.body, geometry: c.geometry, parent: null, data: c.data ?? {} });
   const records = marksFromRows([...bySlug.values()], []);
   await withClaimedAt(q, records, { pending: candidates });
@@ -163,6 +172,24 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
       return { ...r, check: opposedCheck(r) };
     });
   return { checked: true, opposed, judged: candidates.length, cap: engine.PARCEL_CLAIM_CAP, lawDate: engine.PARCEL_CAP_LAW_DATE, lawSha, householdsSource, ...(householdsFallback ? { householdsFallback } : {}) };
+}
+
+/**
+ * The standing parcels their own owners have withdrawn (POS-1154), as `Map slug → { slug, owner }`.
+ * Reads `fold-delta.mjs § WITHDRAWN_OWED_SELECT`, the crossing's own owed-withdrawal predicate, so the cap and the
+ * sweep agree on what counts as withdrawn; no second reading. Parcels with a pending claim stay (the docket wins).
+ */
+async function withdrawnInWindow(q, standing, candidates) {
+  const ownedSlugs = standing.map((r) => r.slug);
+  if (!ownedSlugs.length) return new Map();
+  const { WITHDRAWN_OWED_SELECT } = await import("./fold-delta.mjs");
+  const { rows: owed } = await q.query(WITHDRAWN_OWED_SELECT);
+  const standingSlugs = new Set(ownedSlugs);
+  const mine = owed.filter((r) => standingSlugs.has(r.slug));
+  if (!mine.length) return new Map();
+  const { rows: docketed } = await q.query("SELECT DISTINCT slug FROM claims WHERE status = 'pending' AND slug = ANY($1)", [mine.map((r) => r.slug)]);
+  const kept = new Set([...docketed.map((r) => r.slug), ...candidates.map((c) => c.slug)]);
+  return new Map(mine.filter((r) => !kept.has(r.slug)).map((r) => [r.slug, { slug: r.slug, owner: r.owner }]));
 }
 
 /**
