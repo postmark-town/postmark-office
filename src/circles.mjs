@@ -60,6 +60,14 @@ export function sayIdOf(raw) {
 }
 
 /**
+ * A canonical mark id (`<by>/<slug>`, as ids appear in the telling) from a stored or carried value, or null (POS-1152). The recorded
+ * start-place of a conversation is this and nothing else: never an image URL, a name, a coordinate or a room identity.
+ */
+export function markIdOf(raw) {
+  return typeof raw === "string" && /^[^\s/]+(\/[^\s/]+)+$/.test(raw) ? raw : null;
+}
+
+/**
  * THE FLAT SAY LINE, extended additively (call 24). The first seven fields are the line `threadOf` has always served, by name,
  * meaning and order. `id` rides when the say's act number is known, `reply_to` when it answers one, `circle` when its top circle
  * resolves from the edges this read holds (a reply whose parent is not held carries no `circle`, and the tree reads say why).
@@ -78,6 +86,8 @@ export function sayLine(v, circle = null) {
     ...(id != null ? { id } : {}),
     ...(replyTo != null ? { reply_to: replyTo } : {}),
     ...(id != null && isId(circle) ? { circle } : {}),
+    // POS-1152: only a circle's ROOT say carries the mark the conversation started at (a reply never does, so no later say can lend one)
+    ...(replyTo == null && markIdOf(v.place_mark) ? { place_mark: v.place_mark } : {}),
     ...lineSpeaker(v), // POS-1132: the human's chosen presentation and the shoulder they spoke on; nothing on a resident's line or an old one
   };
 }
@@ -196,6 +206,8 @@ export function circleStub(index, id) {
     people: peopleOf(all),
     started: iso(top.at),
     latest: iso(Math.max(...all.map((v) => v.at))),
+    // POS-1152: the mark this circle started at, only when its top is a root say that recorded one (a folded reply's stub has none)
+    ...(sayIdOf(top.reply_to) == null && markIdOf(top.place_mark) ? { place_mark: top.place_mark } : {}),
     read: { circle: id },
     ...lineSpeaker(top), // POS-1132: the opener's presentation, so a circle names who opened it as the lines do
   };
@@ -342,6 +354,8 @@ export function circleRead(voices, id, { after = null, budget = CIRCLE_BUDGET_BY
   const page = { circle: want, path, says: tree.length, people: peopleOf(tree.map((s) => s.v)),
     ...(from === 0 ? { context } : {}), lines: [] };
   if (path == null) page.broken = brokenNote(index.byId.get(want));
+  // POS-1152: the circle's start-place, from the root its ancestry reaches; a broken chain has no root and borrows nothing
+  else { const rootSay = index.byId.get(path[0]); if (sayIdOf(rootSay?.reply_to) == null && markIdOf(rootSay?.place_mark)) page.place_mark = rootSay.place_mark; }
   let i = from;
   for (; i < tree.length; i++) {
     page.lines.push(lineOf(tree[i].v, { depth: tree[i].depth }));
