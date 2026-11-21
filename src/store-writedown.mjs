@@ -494,6 +494,44 @@ export function normalizeFoldInput(input) {
   };
 }
 
+// ── A FILING IS ONE IDENTITY'S (WLD-230; Darko 2026-11-21 14:58 EST, "Yes") ────────────────────────────────────────
+//
+// The world loader's identity is `by` plus the filing's directory leaf (marks-fold.mjs § walkMarks). `pathFor` files a mark that is
+// neither sited nor a parcel (a predicate, a naming mark) at `<parent>/<slug>/mark.md`, WITHOUT its author, and takes neither of the
+// sited gates. So two authors' predicates with one slug under one parent plan the SAME path, and the second's upsert replaces the
+// first's file: window 325 overwrote Seth's `signed-la-linterna` (under Bramblewick's guestbook) with Lyra's, the fold lost
+// `seth/signed-la-linterna`, and the harm gate refused the 18:00Z settlement on 2026-11-21.
+//
+// THE HOLD. A non-sited mark whose planned path is canon's published filing of a DIFFERENT id is not written. It is HELD: named
+// separately (`held`, with who holds the filing), excluded from `written` and from the per-window counts, and never thrown. A
+// FoldInputRefusal aborts the WHOLE crossing, not one row (that is the failure being repaired). The store row is not touched: this
+// plan changes no claim's status, so the mark stays what the store says it is, undelivered, for fold-delta's later carry. Nothing is
+// renamed, relocated or demoted, and the occupant's bytes, identity, parent and filing are not read into the plan again.
+// The layout that lets both live (a filing that keeps both author/slug identities) is the joint class fix, not this guard.
+
+/** The id a published file stands for: its `by:` plus its directory leaf, as the loader derives it. Null when the file names no author. */
+export function filingOccupantId(path, bytes) {
+  const by = String(bytes ?? "").match(/^by:\s*(.+)$/m)?.[1]?.trim();
+  const leaf = String(path ?? "").replace(/\/mark\.md$/, "").split("/").at(-1);
+  return by && leaf ? `${by}/${leaf}` : null;
+}
+
+/**
+ * Why `m` may not be written at `path`, or null. Held when `m` is neither sited nor a parcel (the two kinds `pathFor` files at the
+ * author's own root, where a collision cannot arise), `path` is not `m`'s OWN published filing, and canon's file at `path` stands for
+ * another id. A file that names no author, or no file at all, is no occupant: the plan is as it was.
+ */
+export function pathCollision(m, path, { publishedPathOf = null, canonBytesAt = null } = {}) {
+  const kind = m.fileRec?.kind ?? m.kind ?? null;
+  if (kind === "sited" || kind === "parcel") return null;
+  if (typeof canonBytesAt !== "function" || !path) return null;
+  if (typeof publishedPathOf === "function" && publishedPathOf(m.id) === path) return null; // an amend of its own filing
+  const occupant = filingOccupantId(path, canonBytesAt(path));
+  if (occupant === null || occupant === m.id) return null;
+  return { id: m.id, by: m.by ?? null, slug: m.slug ?? null, household: m.household ?? null, locked_window: m.locked_window ?? null,
+    path, held_by_filing_of: occupant, crossing_output: "path-held-by-another-id" };
+}
+
 /**
  * THE PLAN, PURE. Marks in, per-household write-downs out. No git, no store, no
  * clock — the same property `planDrain` has and for the same reason: the sorting
@@ -557,6 +595,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
 
   const unchanged = [];
   const framed = [];
+  const held = [];
   for (const m of marks) {
     // `kind` RIDES SEPARATELY AND IT IS LOAD-BEARING. `pathFor` takes GATE A/B —
     // the freeze's "an existing filing never moves", then "a new mark files at
@@ -591,6 +630,11 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
         `${m.id} resolves to no path — neither canon's filing nor its id can place it`,
       );
     }
+
+    // WLD-230: the filing at this path is another id's. Held, reported, not written, not framed, never thrown (see § A FILING IS
+    // ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a file it will not write.
+    const collision = pathCollision(m, path, { publishedPathOf, canonBytesAt });
+    if (collision) { held.push(collision); continue; }
 
     // ── THE ONE FRAMER, at the one place a row becomes a file (2026-09-18) ────
     //
@@ -783,7 +827,8 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     b.removals.sort((a, c) => a.id.localeCompare(c.id));
   }
 
-  const written = marks.filter((m) => !unchanged.some((u) => u.id === m.id));
+  const heldIds = new Set(held.map((h) => h.id));
+  const written = marks.filter((m) => !unchanged.some((u) => u.id === m.id) && !heldIds.has(m.id));
   const byWindow = {};
   for (const m of written) {
     const w = m.locked_window === null ? "unknown" : String(m.locked_window);
@@ -793,6 +838,8 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   return {
     households: [...byHousehold.values()].sort((a, b) => a.household.localeCompare(b.household)),
     unchanged,
+    // WLD-230: THE MARKS WHOSE FILING IS ANOTHER ID'S, held out of the write-down and named in full (never counted as written)
+    held,
     // THE ROWS THE FRAMER TOUCHED, each with the number that arrived and the
     // number that was written. On the receipt because the failure this closes
     // was silent: a crossing that framed nothing while a nested amend was in
@@ -802,6 +849,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       marks: marks.length,
       written: written.length,
       unchanged: unchanged.length,
+      held: held.length,
       framed: framed.length,
       households: byHousehold.size,
       removed: withdrawals.length,
@@ -1493,6 +1541,10 @@ export function storeWriteDown({
     // can tell a law node from a household whose registry row is missing.
     held_unbound: held,
     held_unbound_count: held.length,
+    // WLD-230: marks held because their planned filing is another id's published file (named in full: id, path, whose filing).
+    // Not written, not published, store row untouched: the honest account of what this crossing did NOT deliver.
+    held_path_collision: plan.held,
+    held_path_collision_count: plan.held.length,
     // The town-signed things let through because ONLY their hands changed.
     town_hand_offs: handOffs,
     // the lines the store rendered for those marks that canon does not carry (tier, and what no one has thought of): named, never written
