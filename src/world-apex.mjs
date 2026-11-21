@@ -4341,8 +4341,25 @@ export async function spectatorLook(args = {}, ctx = {}) {
   };
 }
 
+// POS-1093: the names this door reads as text (`String(...)`, a template, a lookup key) before anything judges them. A value that is not text
+// (an object whose own `toString` is not a function, an array, a number, a boolean) cannot be read as a name, and coercing it throws out of the
+// dispatcher with no answer. Each is refused here, by its type, BEFORE any coercion: the hostile value is never stringified to explain itself.
+// Omitted (null/undefined) and "" are as they were. `since`, `since_crossing` and the other cursors are numbers, not names, and are not judged here.
+const NAME_ARGS = ["do", "read", "mark", "find", "investigate", "as", "handle", "lens", "explain", "read_shape"];
+const typeWord = (v) => (Array.isArray(v) ? "a list" : typeof v === "object" ? "an object" : typeof v === "boolean" ? "a boolean" : typeof v === "number" ? "a number" : `a ${typeof v}`);
+/** The refusal for a name sent as something other than text, or null. Exported and pure so the decision is falsifiable without a world. */
+export function nameTypeRefusal(args) {
+  for (const name of NAME_ARGS) {
+    const v = args?.[name];
+    if (v == null || typeof v === "string") continue;
+    return bounce(422, `${name}: is a name — text, not ${typeWord(v)}`, `send ${name} as a string, as in world { ${name}: "…" }. Nothing was done`);
+  }
+  return null;
+}
+
 async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
+  { const typed = nameTypeRefusal(args); if (typed) return typed; } // POS-1093: before any name is coerced
   // POS-632: explain: answers from the read grammar's one table, before anything
   // is read, and never with an act or a read beside it ("one call does one thing").
   {
