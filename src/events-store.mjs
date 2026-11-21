@@ -48,7 +48,7 @@ import {
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
   RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
-import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { githubAuthorOf, judgeEarnedCreditVia, ownWordsReceipt } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
@@ -884,20 +884,21 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
-    await judgeEarnedCreditVia(client, r, gh);
+    const own = await judgeEarnedCreditVia(client, r, gh);
+    const ownWords = own ? ownWordsReceipt(own) : "";
     const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
       ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
     if (skipped) {
       return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
         ...(grade !== undefined ? { grade } : {}),
-        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}${ownWords}. The skip and its reason stay on the bug's history, with this credit beside them. `
           + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
           + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
         read: bugReadHint(id) };
     }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
-      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}${ownWords}`
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
         + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + ". "
@@ -934,7 +935,8 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const j = judgeAdvance(fields, prev, roll);
-    if (j.earned) await judgeEarnedCreditVia(client, j, gh);
+    // the bug's own post (POS-1105) answers whose words it holds and when they were written
+    const own = j.earned ? await judgeEarnedCreditVia(client, j, gh) : null;
     if (j.of && !(await bugRow(client, j.of)))
       throw refuse(404, `no bug "${j.of}" to be a duplicate of`, 'of: a standing bug post — town { read: "posts", args: { class: "bug" } } lists them', { field: "of" });
     // The critter's namer is the fix's credit, kept beside the name so the post says who named it.
@@ -955,6 +957,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        + (own ? ownWordsReceipt(own) : "")
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
         + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),

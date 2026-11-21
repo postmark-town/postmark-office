@@ -157,7 +157,10 @@ export function heldMadeMarks(view, marks = []) {
   for (const [id, m] of view.made) {
     if (have.has(id)) continue;
     const row = view.last.get(id);
-    if (row?.policy === "cascade" && row.entity != null) out.push({ ...m, [HELD_BY]: String(row.entity) });
+    // POS-1155: a made thing's declared size stays in the MADE record (what a set-down reads); a held read carries no footprint at
+    // all, exactly as a published thing in hands drops its extent (placedMark above), so no reader sees a size with no place
+    const { extent: _declared, ...held } = m;
+    if (row?.policy === "cascade" && row.entity != null) out.push({ ...held, [HELD_BY]: String(row.entity) });
   }
   return out;
 }
