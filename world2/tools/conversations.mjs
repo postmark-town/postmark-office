@@ -73,7 +73,7 @@ import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE roo
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "1c842463493ca9433b3febb4599dc61dc7be33e9", at: "e8f8336811c8228cc03f4a3f27642d2cb1adbced" },
+            blob: "7abfd7077d06eaa39b1264199b7ab0bd0b8ffd6f", at: "56377dd6d9761f647b599406e5e2daf3ccfb8d98" }, // POS-1132: voices.mjs carries stood_with and the speaker line; the vendored threadOf is unchanged (the equality tests hold). POS-1152: the start-place mark rides the same functions
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -357,7 +357,9 @@ export function voiceOf(row, centreOf = null) {
       place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
       ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
       // POS-1152: the start-place mark recorded on a ROOT say's act (no reply_to, not spoken in a dungeon room); anything else on a reply or a room say is not read
-      ...(replyTo == null && !p?.room && markIdOf(p?.place_mark) ? { place_mark: p.place_mark } : {}) } };
+      ...(replyTo == null && !p?.room && markIdOf(p?.place_mark) ? { place_mark: p.place_mark } : {}),
+      // POS-1132: the shoulder this say was spoken on, as the act recorded it (payload.stood_with); an old say has none, and none is made up
+      ...(typeof p?.stood_with === "string" && p.stood_with ? { stood_with: p.stood_with } : {}) } };
   }
 
   return { refused: true, reason: `act ${row?.id} (${action}) matches no known voice era` };

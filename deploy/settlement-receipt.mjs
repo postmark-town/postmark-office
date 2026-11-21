@@ -48,6 +48,7 @@ import { surveyedReading } from "./surveyed-reading.mjs";
 // not her mark, her cap, or her number. Pure and separate because a line
 // composed in a script is watched by nothing — the lesson `escrowLines` paid for.
 import { refusedMarks } from "./refused-marks.mjs";
+import { parcelCapturesOf } from "./parcel-captures-reading.mjs"; // WLD-224
 
 const env = (name) => {
   const v = process.env[name];
@@ -127,6 +128,7 @@ const STATE_LOG_MODE = env("SETTLEMENT_STATE_LOG_MODE") || null;
 // Read once, from both places the fold's sentence reaches this side — the
 // quarantined rows' `detail` and a fold refusal's `cause`. See `refused` below.
 const refused = refusedMarks(sweep, refusal);
+const parcelCaptures = parcelCapturesOf(sweep);
 
 // ── WHY A MARK WENT: THE RECORDED STAKE WITHDRAWAL (POS-937/a) ───────────────
 //
@@ -208,7 +210,8 @@ if (sweep) {
   // reconcile, not an outcome channel — naming it here would put a permanent
   // "channels_unnamed" line on every receipt and teach the reader to skip the
   // field, which is the opposite of what it is for.
-  const NOT_A_CHANNEL = new Set(["findings", "eol_boundary"]);
+  // `parcel_captures` (WLD-224) is a note for the keeper, mapped below (parcel-captures-reading.mjs), not an outcome channel.
+  const NOT_A_CHANNEL = new Set(["findings", "eol_boundary", "parcel_captures"]);
   const extra = Object.keys(sweep).filter((k) => Array.isArray(sweep[k]) && !CHANNELS.includes(k) && !NOT_A_CHANNEL.has(k));
   if (extra.length) unnamed = Object.fromEntries(extra.map((k) => [k, sweep[k].length]));
 }
@@ -637,6 +640,9 @@ const receipt = {
   // no such answer on a crossing that refused nothing. `channels.quarantined`
   // already carries the empty count, so nothing goes unsaid.
   ...(refused ? { refused } : {}),
+  // WLD-224: a parcel this crossing published took in an older mark from another household. A coordination note for the keeper, absent
+  // on an ordinary night (parcel-captures-reading.mjs): it changes no status, class or refusal and is not a channel.
+  ...(parcelCaptures ? { parcel_captures: parcelCaptures } : {}),
   isolated: isolate
     ? {
         attributed: true,

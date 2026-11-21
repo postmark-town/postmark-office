@@ -21,6 +21,7 @@
 // proposal on CORE-82 (8,192 bytes of serialized JSON, Facet's confirmation pending); it is a target, never a truncation ceiling.
 
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { lineSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
 
 /** The default read's size target, in UTF-8 bytes of serialized JSON (POS-1035 → CORE-82 proposal; not a silent ceiling). */
 export const CIRCLE_BUDGET_BYTES = 8192;
@@ -87,6 +88,7 @@ export function sayLine(v, circle = null) {
     ...(id != null && isId(circle) ? { circle } : {}),
     // POS-1152: only a circle's ROOT say carries the mark the conversation started at (a reply never does, so no later say can lend one)
     ...(replyTo == null && markIdOf(v.place_mark) ? { place_mark: v.place_mark } : {}),
+    ...lineSpeaker(v), // POS-1132: the human's chosen presentation and the shoulder they spoke on; nothing on a resident's line or an old one
   };
 }
 
@@ -207,6 +209,7 @@ export function circleStub(index, id) {
     // POS-1152: the mark this circle started at, only when its top is a root say that recorded one (a folded reply's stub has none)
     ...(sayIdOf(top.reply_to) == null && markIdOf(top.place_mark) ? { place_mark: top.place_mark } : {}),
     read: { circle: id },
+    ...lineSpeaker(top), // POS-1132: the opener's presentation, so a circle names who opened it as the lines do
   };
 }
 

@@ -67,6 +67,7 @@ import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-s
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { speakerBook } from "./speaker-line.mjs"; // POS-1132
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
@@ -1857,6 +1858,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
         // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
         try {
+          await speakerBook(); // POS-1132: the book the sync line shapers read, so a human's line says what their profile says now
           // POS-1035: a named circle or room (?circle= / ?room=) is looked for in the record too, where the store is engaged — memory
           // only holds the last voices, and history past the first page must answer complete, folded or unavailable honestly
           if ((url.searchParams.get("before") || url.searchParams.get("circle") || url.searchParams.get("room")) && world2ServeEnabled()) {
