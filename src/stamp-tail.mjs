@@ -33,7 +33,7 @@
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 
 const CHUNK = 64 * 1024;
 
@@ -90,7 +90,7 @@ export async function heldFromIndex(q, clone, handle, { engine = null } = {}) {
   if (!r?.tip) return null;
   const tail = ledgerTailAfter(join(clone, "WHITE_PAGES", "stamp-ledger.md"), r.tip);
   if (tail == null) return null;
-  const mint = engine ?? await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+  const mint = engine ?? await importTownTool(clone, "stamp-mint.mjs"); // POS-994: the pinned copy
   const entries = mint.parseStampLedger(tail);
   return {
     liquid: Number(r.balance ?? 0) + (mint.foldBalances(entries).get(handle) ?? 0),

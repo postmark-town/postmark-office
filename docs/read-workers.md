@@ -26,6 +26,20 @@ stays true:
 - **MAIN ONLY.** The answer is main-thread RAM and no message keeps a copy. The
   read stays on the main thread (`MAIN_ONLY_READS`).
 
+## HANDED OVER WITH THE CALL (agents' MCP reads)
+
+An agent's `POST /mcp` read is admitted and charged on the main thread, then handed to a worker (`mcpWorkerTakes`). Two reads that name main-thread RAM
+carry it over with the call, read at admission and never held by the worker:
+
+| Read | RAM | Carried as |
+|---|---|---|
+| the bare `world` read at v2, and the `doorstep` apex (its `world` item) | `voices.mjs` earshot | `earshot` (`wantsEarshot`), snapshotted with no listen mark |
+| `household` bare / `read: "standing"` (the glance, the checklist, the standing) | `bouncer.mjs` `worldWriteBudget`: the standing's `world_writes` | `worldWrites` (`wantsWorldWrites`), the key's household and its budget; a worker's own bouncer is empty and would say 0 used. No number to hand over (the read threw) and the main thread answers |
+
+POS-1064 added `household` (`read:` doorstep, stamps, quests, stances, outcomes, stakes, waiting, marks, needs-you, happened, closer, correspondents, posts, standing, and the bare
+call) and the `doorstep` apex. Left on the main thread: every `do:`, `read: "letter"` (opening a letter clears it for the key's residents: a write), `explain:`, and the
+household reads not audited for this lane (mail, window, address, home, media, earpiece, fund, blocks, settings, house, day, hearth). A batch goes only if every call in it does.
+
 ## MESSAGE
 
 | Cache | Moved by | Kind |
@@ -94,3 +108,60 @@ fresh as the main thread:
 - **git.** Each worker's refresher asks its own questions when refs move.
 - **Memory.** Each worker holds its own folded world, its own projection and
   its own engine imports.
+
+## Where a doorstep or household read's time goes (POS-1064/b)
+
+Measurement only (`src/read-timing.mjs`; nothing about routing, pools, transactions or answers changes). The doorstep and household doors (REST
+`/doorstep/<h>`, `/doorsteps`, `/household`; MCP `household`, `doorstep`, flat `read_doorstep`) put a `timing` object on their ONE access line
+(`telemetry/access-YYYY-MM-DD.jsonl`, written by the main thread on finish; a worker writes no line, it reports back with its answer). Every other path's line is
+unchanged. Units are milliseconds to 0.1.
+
+Boundaries in time order: `t0` (handleRequest begins, before the credential is resolved) → `routed` (credential resolved, admitted, the door about to run here or
+be handed over) → `sent` (posted to the chosen worker) → `taken` (the worker's message handler) → `done` (the worker's answer posted) → `received` (the main thread's
+handler) → `finish` (the line's `ms` ends). Fields: `routed_ms` (t0→routed), `admit_ms` (t0→routed on the main route, t0→first send on a handover),
+`retry_ms` (first send→the send that was taken, only after a worker stopped before answering), `queue_ms` (sent→taken: the worker's queue and busy loop),
+`exec_ms` (taken→done on the worker; routed→finish on the main thread), `return_ms` (done→received: the way back to the main thread's loop), `total_ms`.
+`bundle` is `{ n, sum_ms, max_ms }` over the houseBundle / housePage / doorstepBundle / bare-doorstep / bare-glance calls on the executing thread (a bundle called from
+inside another is part of the outer one). `leases` is `{ main, worker }`: each pen lease (`store-pool.mjs § onPenClient`, every `officeRead`/`officeWrite`) as
+`{ n, failed, acquire_ms: { sum, max }, held_ms: { sum, max }, failed_wait_ms }`: `acquire_ms` is the wait for a connection, `held_ms` is acquired→released (SQL and
+the JavaScript between statements alike). `rid` joins the two threads' records for one request, across a retry, and is random, never derived from the request;
+`route`, `worker` (slot), `tries`, `door`, `read` (the household read's own fixed name), `status`/`ok` say what ran and how it ended.
+
+**Reads only, classified from the whole request.** A REST read is a GET (a GET `/household` that names `do`, `explain` or `read=letter` is not one; `POST /household` never is). An
+MCP request carries `timing` only when EVERY message in it is a `tools/call` to a household or doorstep read (no `do`, no `explain`, not `read: "letter"`, which clears a
+letter and is a write): a request holding an act, an explain, a letter opening, any other tool or any non-call message has no READ `timing` (a request holding an act has the
+act's, below; the others have none), whichever tool is last, so an act can never be made to look like a read by a read after it. A batch of reads is one request: its line has `batch` (the number of calls) and no single `read`, its
+`bundle`/`leases` cover the whole request. A line with no `timing` is a request this record does not cover (and, unless `timing_dropped` says otherwise, never one whose
+measurement was cut).
+
+**Acts (POS-1110).** The read doors above stay reads only. A world act (`world { do: "enter" }` and every other act) now carries the same `timing` object, with
+`door` `world-act` / `household-act` / `town-act` (a POST to `/world/apex`, `/household` or `/town/apex` whose body names a `do`) or `mcp-act` (an MCP request holding at
+least one world, household or town act; `batch` is its call count), `route: "main"`, and `act: { seg: { <name>: { n, sum_ms, max_ms } } }`. `admit_ms` / `routed_ms` is
+the act's admission, the credential's resolution included; `exec_ms` is routed → finish. The segments are sums of durations that overlap and nest (a `dispatch` holds the
+apex's own phases and `handler` holds the verb), so read a nested one against its parent: `body` (the body's arrival), `standing`, `law_moved`, `dispatch`, `orient`,
+`eyes`, `ledger_scan` (the enter/exit ledger scan, on the ACTS pool, which `leases` does not cover), `spine`, `gather`, `holdings`, `households`, `nonce_kept`, `handler`,
+`land`, `creatures`; and for enter and exit the crossing's own reads and write: `crossing_law`, `world_state`, `ledger`, `standpoint`, `acts_read`, `lends`,
+`dungeon_locks`, `door_holdings`, `vessel_service`, `walking`, `walk_stop`, `land_write` and `record` (the pen write: the town lock's wait, the child process and the commit
+as ONE segment). Argument validation is not timed. A name that is absent did not run on this act; a name with `n` 0 never appears.
+
+    # where a slow enter or exit spent it: the segments of the ten slowest world acts today
+    jq -s -c '[.[]|select(.timing.door=="world-act" and .call.do=="enter")]|sort_by(-.ms)|.[:10][]|{ms,admit:.timing.admit_ms,exec:.timing.exec_ms,seg:(.timing.act.seg|map_values(.sum_ms))}' access-$(date -u +%F).jsonl
+
+**Do not add these up as wall time.** `bundle` and `leases` are measured inside `exec_ms`, overlap it and each other, and are sums of durations. A bundle's
+time is not SQL time and is never lease time. **`null` is "not measured here"** (no worker ran it: `queue_ms`, `return_ms` and `leases.worker` are null; no bundle ran:
+`bundle` is null; an act's `act.seg` names only the phases that ran), **`0` is a measurement that found zero** (`leases.main.n: 0` on a handed-over read), and **`failed` counts acquisitions that did not produce a
+connection** (the acquire timeout), apart from `n`. **Coverage is the pen pool only** (`cov: "pen"`): the acts, claims and serve pools are not measured. A line that
+had to be shortened (telemetry.mjs, 4,000 bytes) gives up `call` first, named `call_dropped`; only the last resort drops `timing`, and then says `timing_dropped: true`:
+a line with neither is a request this record does not cover.
+
+Reading it back (the operator's recipes, on the box's `telemetry/`):
+
+    # the ten slowest doorstep/household reads today, and which phase the time was in
+    jq -s -c '[.[]|select(.timing)]|sort_by(-.ms)|.[:10][]|{ms,door:.timing.door,read:.timing.read,route:.timing.route,worker:.timing.worker,admit:.timing.admit_ms,queue:.timing.queue_ms,exec:.timing.exec_ms,ret:.timing.return_ms,bundle:.timing.bundle.sum_ms,w_acq:.timing.leases.worker.acquire_ms.sum,w_held:.timing.leases.worker.held_ms.sum,m_acq:.timing.leases.main.acquire_ms.sum,m_held:.timing.leases.main.held_ms.sum}' access-$(date -u +%F).jsonl
+    # the worker queue wait against the lease acquire wait (busy hour): is it the worker's loop, or the pool?
+    jq -s '[.[]|select(.timing.route=="worker")] | {n:length, queue_p95:(map(.timing.queue_ms)|sort|.[(length*0.95|floor)]), acquire_p95:(map(.timing.leases.worker.acquire_ms.max)|sort|.[(length*0.95|floor)]), held_p95:(map(.timing.leases.worker.held_ms.max)|sort|.[(length*0.95|floor)])}' access-$(date -u +%F).jsonl
+    # lines whose measurement was cut
+    jq -c 'select(.timing_dropped or .call_dropped)|{ts,path,timing_dropped,call_dropped}' access-$(date -u +%F).jsonl | head
+
+To join this to a busy-hour sampler's window, use `ts` (the request's t0, ISO) and `ms`. A timing deploy alone is not recovered performance: this is what the next
+busy-hour sample reads.

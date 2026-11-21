@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -652,6 +653,7 @@ test("PRE-FLIGHT: a clone with no envelope law simply has no pre-flight — the 
 
 test("PRE-FLIGHT RUNS THE CLONE'S OWN FILE — the verdict comes from the town, not from here", async () => {
   const clone = mailClone();
+  let pinsBefore;
   try {
     // A MARKER law, not a fork of the real one: it answers with a string no
     // office code could invent. If that string comes back out of the door, the
@@ -663,23 +665,32 @@ test("PRE-FLIGHT RUNS THE CLONE'S OWN FILE — the verdict comes from the town, 
       + "export const collectHandles = () => ({ handles: new Set(['limen']) });\n"
       + "export const parseLedgerText = () => ({ deliveredIds: new Set(), deliveredTo: new Map() });\n"
       + "export const remedyFor = () => 'MARKER-REMEDY';\n");
+    // POS-994: the office runs its PINNED copy of the clone's law, checked byte-equal
+    // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
+    pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinTown(clone);
     const plan = validateLetter(ok, fixtureKey, db);
     const bad = await preflightEnvelope(clone, plan);
     assert.equal(bad.defect, "MARKER-FROM-THE-CLONE",
       "the defect string is the clone's file speaking — the office never classifies an envelope itself");
     assert.equal(bad.hint, "MARKER-REMEDY", "and the remedy is the law's too, not a paraphrase");
     assert.equal(bad.code, 422);
-  } finally { rmSync(clone, { recursive: true, force: true }); }
+  } finally { rmSync(clone, { recursive: true, force: true }); if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
 });
 
 test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's own vocabulary", async () => {
   const clone = mailClone();
+  let pinsBefore;
   try {
     writeFileSync(join(clone, "tools", "envelope.mjs"),
       "export const classify = () => globalThis.__pmDefect;\n"
       + "export const collectHandles = () => ({ handles: new Set(['limen']) });\n"
       + "export const parseLedgerText = () => ({ deliveredIds: new Set(), deliveredTo: new Map() });\n"
       + "export const remedyFor = () => null;\n");
+    // POS-994: the office runs its PINNED copy of the clone's law, checked byte-equal
+    // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
+    pinsBefore = process.env.TOWN_PINS_DIR;
+    process.env.TOWN_PINS_DIR = pinTown(clone);
     const plan = validateLetter(ok, fixtureKey, db);
     globalThis.__pmDefect = "duplicate id";
     assert.equal((await preflightEnvelope(clone, plan)).code, 409);
@@ -688,7 +699,7 @@ test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's
     globalThis.__pmDefect = "missing required field: date";
     assert.equal((await preflightEnvelope(clone, plan)).code, 422);
     delete globalThis.__pmDefect;
-  } finally { rmSync(clone, { recursive: true, force: true }); }
+  } finally { rmSync(clone, { recursive: true, force: true }); if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
 });
 
 // The REAL law, from the office's own town checkout. The repo's idiom for a
@@ -826,8 +837,9 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // "block" | "unblock" }, born delisted behind the household apex. The counts
   // moved in the same commit.
   // 64 → 66: read_feed, read_pair (POS-1027, 2026-11-13) — town { read: "feed" | "pair" }, born
-  // delisted behind the town apex. The counts moved in the same commit.
-  assert.equal(names.length, 66, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // delisted behind the town apex. 66 → 67: discover_town (POS-497, 2026-11-03, merged onto the train) — town { read: "discover" }, born
+  // delisted behind the town apex. The counts moved in the same commits.
+  assert.equal(names.length, 67, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",

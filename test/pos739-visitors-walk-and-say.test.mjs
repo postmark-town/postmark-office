@@ -28,13 +28,13 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
-const repo = mkdtempSync(join(tmpdir(), "pos739-world-"));
-const pool = mkdtempSync(join(tmpdir(), "pos739-pool-"));
-const voicesDir = mkdtempSync(join(tmpdir(), "pos739-voices-"));
+const repo = tempDir("pos739-world-");
+const pool = tempDir("pos739-pool-");
+const voicesDir = tempDir("pos739-voices-");
 after(() => rmSync(repo, { recursive: true, force: true }));
 after(() => rmSync(pool, { recursive: true, force: true }));
 after(() => rmSync(voicesDir, { recursive: true, force: true }));
@@ -250,7 +250,7 @@ test("FALSIFIER: every heard say carries its speaker's standing, as a value", as
   assert.deepEqual(byHandle(reply.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the say's voices");
   const heard = await store.heardAt({ x: 0, y: 0 });
   assert.deepEqual(byHandle(heard), { "berth-newcomer": "visitor", rei: "resident" }, "heardAt");
-  assert.deepEqual(byHandle(reply.conversation.record), { "berth-newcomer": "visitor", rei: "resident" }, "the room's record");
+  assert.deepEqual(byHandle(reply.conversation.circles.timeline), { "berth-newcomer": "visitor", rei: "resident" }, "the room's circles (POS-1035; unthreaded here)");
   const [thread] = (await store.conversations()).live;
   assert.deepEqual(byHandle(thread.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the conversations page");
   assert.deepEqual(heardBlock(heard).map((h) => h.standing), ["visitor", "resident"], "the v2 glance's heard");

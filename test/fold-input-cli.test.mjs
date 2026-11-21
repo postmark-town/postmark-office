@@ -17,9 +17,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { ingestOrdering } from "../world2/tools/fold-input-cli.mjs";
@@ -78,7 +78,7 @@ test("TWO foldDeltas REFUSE rather than one winning silently", () => {
   //
   // Exercised by shadowing lane 2's module in a throwaway copy of the tools
   // directory, so the real files are untouched.
-  const dir = mkdtempSync(join(tmpdir(), "twodelta-"));
+  const dir = tempDir("twodelta-");
   try {
     const tools = join(dir, "world2", "tools");
     execFileSync("node", ["-e", `require("node:fs").mkdirSync(${JSON.stringify(tools)},{recursive:true})`]);
@@ -141,7 +141,7 @@ test("ingestOrdering: an ancestor is `behind`, with the distance NAMED", () => {
   // went red on the merged train and would have stayed red on main for good.
   // A test whose oracle is the repository it lives in measures that
   // repository's shape, not the function (the class: calendar-pinned controls).
-  const dir = mkdtempSync(join(tmpdir(), "foldcli-behind-"));
+  const dir = tempDir("foldcli-behind-");
   try {
     const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     g("init", "-q", "-b", "main");
@@ -159,7 +159,7 @@ test("ingestOrdering: an ancestor is `behind`, with the distance NAMED", () => {
 });
 
 test("ingestOrdering: a head that is NOT an ancestor refuses — a rewritten branch or the wrong clone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "foldcli-"));
+  const dir = tempDir("foldcli-");
   try {
     const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     g("init", "-q", "-b", "main");

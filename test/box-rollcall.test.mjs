@@ -1716,7 +1716,7 @@ const posix = (p) => p.replaceAll("\\", "/");
 const bashProbe = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
 const noBash = bashProbe.status === 0 ? false : "no bash on this host — the freshen is a bash script and cannot be run without one";
 
-function runFreshen(failVerb, { nodeFails = false } = {}) {
+function runFreshen(failVerb, { nodeFails = null } = {}) {
   const dir = tempDir("pos192-freshen-");
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -1741,7 +1741,7 @@ function runFreshen(failVerb, { nodeFails = false } = {}) {
   writeFileSync(join(bin, "node"), [
     "#!/usr/bin/env bash",
     'echo "$*" >> "$FRESHEN_NODE_LOG"',
-    'if [ -n "${FRESHEN_NODE_FAIL:-}" ]; then echo "dev-ledger-resign: REFUSED, the key is prod\'s" >&2; exit 1; fi',
+    'if [ -n "${FRESHEN_NODE_FAIL:-}" ] && [[ "$*" == *"$FRESHEN_NODE_FAIL"* ]]; then echo "$FRESHEN_NODE_FAIL: REFUSED (the stub)" >&2; exit 1; fi',
     "exit 0",
     "",
   ].join("\n"), { mode: 0o755 });
@@ -1758,7 +1758,7 @@ function runFreshen(failVerb, { nodeFails = false } = {}) {
     POSTMARK_DEV_FLOCK: posix(join(bin, "flock")),
   });
   if (failVerb) env.FRESHEN_FAIL = failVerb; else delete env.FRESHEN_FAIL;
-  if (nodeFails) env.FRESHEN_NODE_FAIL = "1"; else delete env.FRESHEN_NODE_FAIL;
+  if (nodeFails) env.FRESHEN_NODE_FAIL = nodeFails; else delete env.FRESHEN_NODE_FAIL;
   for (const k of ["POSTMARK_DEV_STAMP_KEY", "POSTMARK_PROD_PUBKEY"]) delete env[k]; // the box's defaults
   const r = spawnSync("bash", [posix(FRESHEN)], { encoding: "utf8", env });
   const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
@@ -1779,22 +1779,40 @@ test("the dev freshen, every step succeeding: exit 0, the stand-back line, all s
   ]);
   assert.ok(r.calls[2].startsWith("-C /srv/postmark-office-dev/world-clone reset"));
   assert.ok(r.calls[5].startsWith("-C /srv/postmark-office-dev/town-clone reset"));
-  // then the town clone moves onto dev's own key, refusing prod's by its PUBLIC half only (POS-354; #453 F2)
+  // then the town clone moves onto dev's own key, refusing prod's by its PUBLIC half only (POS-354; #453 F2),
+  // and dev pins its own town around it (POS-994; Wright 2026-11-16): the seed (the engine the re-sign
+  // loads), then the re-signed town, then the town's verifier, the pinned copy, over the re-signed ledger.
+  const PIN = "/srv/postmark-office-dev/tools/town-pins.mjs --write --town /srv/postmark-office-dev/town-clone --ref HEAD --out /srv/postmark-office-dev/town-pins-dev";
   assert.deepEqual(r.nodeCalls, [
+    PIN,
     "/srv/postmark-office-dev/tools/dev-ledger-resign.mjs --town /srv/postmark-office-dev/town-clone " +
-    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/town-clone/tools/stamp-pubkey.pem --verify",
+    "--key /srv/postmark-office-dev/stamp-key.pem --not-key /srv/postmark-office/town-clone/tools/stamp-pubkey.pem",
+    PIN,
+    "/srv/postmark-office-dev/src/town-tool.mjs run stamp-verify.mjs --clone /srv/postmark-office-dev/town-clone --",
   ]);
+  assert.match(r.stdout, /pinned at \/srv\/postmark-office-dev\/town-pins-dev/);
 });
 
-test("FALSIFIER (freshen): a refused re-sign (dev's key is prod's, or the verifier is red) exits nonzero with no stand-back line, after every reset ran", { skip: noBash }, () => {
+test("FALSIFIER (freshen): a refused re-sign (dev's key is prod's) exits nonzero with no stand-back line, after every reset ran", { skip: noBash }, () => {
   // THE CAN-FAIL FLIP: drop the `node .../dev-ledger-resign.mjs` line from the
   // freshen's bash -c body; this goes red (exit 0, the stand-back line printed).
-  const r = runFreshen(null, { nodeFails: true });
+  const r = runFreshen(null, { nodeFails: "dev-ledger-resign.mjs" });
   assert.equal(r.status, 1, "the re-sign's refusal must be the unit's exit code");
   assert.doesNotMatch(r.stdout, STOOD_BACK);
-  assert.match(r.stderr, /REFUSED, the key is prod's/);
+  assert.match(r.stderr, /dev-ledger-resign\.mjs: REFUSED/);
   assert.equal(r.calls.length, 7, "the clones were stood back before the re-sign refused");
-  assert.equal(r.nodeCalls.length, 1);
+  assert.equal(r.nodeCalls.length, 2, "the seed's pin, then the re-sign that refused; nothing after it");
+});
+
+test("FALSIFIER (freshen, POS-994): a red verifier over the re-signed ledger puts the town clone back on the seed, pins the seed again, and fails the unit", { skip: noBash }, () => {
+  // THE CAN-FAIL FLIP: drop the `if ! node .../town-tool.mjs run stamp-verify.mjs` block; this goes red.
+  const r = runFreshen(null, { nodeFails: "town-tool.mjs run stamp-verify.mjs" });
+  assert.equal(r.status, 1, "a red verifier is the unit's failure");
+  assert.doesNotMatch(r.stdout, STOOD_BACK);
+  assert.match(r.stderr, /the town verifier is red on the re-signed ledger/);
+  assert.ok(r.calls.at(-1).startsWith("-C /srv/postmark-office-dev/town-clone reset -q --hard refs/tags/sandbox/seed"), r.calls.join(" | "));
+  assert.equal(r.nodeCalls.length, 5, "pin, re-sign, pin, the red verify, and the seed pinned again");
+  assert.match(r.nodeCalls.at(-1), /town-pins\.mjs --write --town \/srv\/postmark-office-dev\/town-clone --ref HEAD --out \/srv\/postmark-office-dev\/town-pins-dev$/);
 });
 
 test("FALSIFIER (freshen): a refused `git reset` exits nonzero with git's code and prints NO stand-back line", { skip: noBash }, () => {
@@ -1811,7 +1829,7 @@ test("FALSIFIER (freshen): a refused draft-ref fetch, the last git step, still e
   assert.equal(r.status, 128);
   assert.doesNotMatch(r.stdout, STOOD_BACK);
   assert.equal(r.calls.length, 7, "every step before the last one must have run");
-  assert.deepEqual(r.nodeCalls, [], "and the re-sign after it never ran");
+  assert.deepEqual(r.nodeCalls, [], "and neither the pin nor the re-sign after it ran");
 });
 
 // ── the list that must be empty (postmark#2594, ruled 2026-09-08) ───────────

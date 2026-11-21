@@ -34,7 +34,8 @@ set -eu
 # The keep units read /etc/postmark-world2-dev.env for the law pen, and systemd
 # hands every key in it to this script: four PG_*_PASSWORD values, the store
 # owner's included. The tick runs town-repo code (tools/stamp-verify.mjs,
-# tools/stamp-mint.mjs, tools/household-keys.mjs) that has no business holding
+# tools/stamp-mint.mjs, tools/household-keys.mjs; since POS-994 the office's
+# pinned copies of them, through src/town-tool.mjs) that has no business holding
 # any of them. So the law pen's is kept in a shell variable, never exported, and
 # all four leave the environment here, before the first child; the world step
 # alone is handed the one it needs (§ the world hydration).
@@ -308,7 +309,20 @@ keep_settle_unlanded() {
     # this tick, and a plain verify here would refuse the catch-up that pays them.
     # Anything else the town verifier finds is still red, and every verify after
     # a write below stays the plain one (tools/stamp-verify-owed.mjs).
-    if ! node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE"; then
+    arrived_rc=0
+    node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE" || arrived_rc=$?
+    if [ "$arrived_rc" -eq 3 ]; then
+      # POS-994: the pin stopped the arrival check (the town's verifier is not the office's pinned copy). Not a red ledger.
+      echo "[office-keep] mint catch-up OFF — the town's code is not the office's pinned copy (the line above names the file), so this tick appended nothing; it resumes once the pin and the town agree" >&2
+      keep_step mint refused town-pin-mismatch
+      exit 0
+    elif [ "$arrived_rc" -eq 2 ]; then
+      # POS-994: the office could not prepare the check (no pins, or pins without
+      # the public key): its own defect, not a red ledger
+      echo "[office-keep] mint catch-up OFF — the office could not prepare the arrival check (the line above says why), so this tick appended nothing; it is the office's to tend, not the ledger's" >&2
+      keep_step mint refused prep-failed
+      exit 0
+    elif [ "$arrived_rc" -ne 0 ]; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       # exit 0 keeps the tick's flow as it was; the receipt says what it is: the mint REFUSED
       keep_step mint refused ledger-red
@@ -370,7 +384,10 @@ keep_settle_unlanded() {
       cp "$LEDGER" "$HOLD/ledger.arrived" || { keep_step mint refused prep-failed; exit 1; }
       git rev-parse HEAD > "$HOLD/head.arrived" || { keep_step mint refused prep-failed; exit 1; }
     else
-      node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem || { keep_step mint refused mint-failed; exit 1; }
+      # POS-994: the office's pinned copy of the town's mint, checked against the
+      # clone (exit 3 and its words on stderr when they differ: nothing runs).
+      # A pin stop (the door's exit 3) is named as one, never as a failed mint (Truey's review of #1065, finding 4).
+      node /srv/postmark-office/src/town-tool.mjs run stamp-mint.mjs --clone "$TOWN_CLONE" -- --append --key /srv/postmark-office/stamp-key.pem || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step mint refused town-pin-mismatch; else keep_step mint refused mint-failed; fi; exit 1; }
     fi
     keep_step mint ok
     if node /srv/postmark-office/deploy/welcome-pass.mjs \
@@ -413,7 +430,8 @@ keep_settle_unlanded() {
       echo "[office-keep] ballot ingest had refusals (non-fatal) — the lines above name each one; the post stands as it was and the next tick asks again" >&2
     fi
     if ! cmp -s "$LEDGER" "$HOLD/ledger.arrived"; then
-      node tools/stamp-verify.mjs --registry "$REGISTRY_FILE" || { keep_step verify refused verify-red; exit 1; }
+      # A pin stop is not a red ledger (the tamper word): it is named as itself.
+      node /srv/postmark-office/src/town-tool.mjs run stamp-verify.mjs --clone "$TOWN_CLONE" -- --registry "$REGISTRY_FILE" || { rc=$?; if [ "$rc" -eq 3 ]; then keep_step verify refused town-pin-mismatch; else keep_step verify refused verify-red; fi; exit 1; }
       keep_step verify ok
     else
       keep_step verify ok no-change
@@ -474,6 +492,29 @@ keep_settle_unlanded() {
     armed=0
     keep_step rollback ok not-needed
   ) || echo "[office-keep] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
+  # ── the staked events that ended become sparks (POS-1035; call 22) ──────────
+  # Still under the town lock, and AFTER the mint has committed, pushed and
+  # synced: each completion signs its own two lines, lands them in its own
+  # store transaction and commits them itself, and one that cannot land puts
+  # its lines back — true only on a clean ledger, so the pass refuses a dirty
+  # one (exit 3) and the next tick asks again. And no completion signs onto a
+  # ledger the mint would not: with an event due, the pass first runs the
+  # mint's own arrival check (owed mints are not red) and a red ledger is
+  # refused (exit 4) — a quiet tick runs no verify of its own. Non-fatal.
+  # A free event (posted before events were staked) makes its rooms' drafts only when it ends after EVENT_DRAFTS_FROM, one UTC
+  # instant in the unit's env file (/etc/postmark-office.env), set once at deploy (POS-1035/e; Wright 04:58:48Z). Unset: none.
+  sparks_rc=0
+  node /srv/postmark-office/deploy/event-sparks-pass.mjs \
+      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" --registry "$REGISTRY_FILE" \
+      ${EVENT_DRAFTS_FROM:+--drafts-from "$EVENT_DRAFTS_FROM"} || sparks_rc=$?
+  case "$sparks_rc" in
+    0) keep_step sparks ok ;;
+    3) keep_step sparks skip prereq:clean_ledger ;;
+    4) keep_step sparks refused ledger-red
+       echo "[office-keep] event sparks OFF — the ledger is red (stamp-verify above names the line), so no completion signs onto it; the next tick asks again" >&2 ;;
+    *) keep_step sparks refused "exit:$sparks_rc"
+       echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
+  esac
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town" || { keep_rc=$?; keep_step snapshot refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step snapshot ok
 ) 9>>"$LOCK"
@@ -540,7 +581,11 @@ fi
 # JSON (the tool absent or crashed) still writes a line, `checked: false`, so
 # "did not run" never reads like "found nothing".
 HK_LOG="${HOUSEHOLD_KEYS_LOG:-/srv/postmark-harbor/household-keys.jsonl}"
-hk_out="$(node "$SNAP/town/tools/household-keys.mjs" --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || true
+# The predicate is the office's pinned copy (POS-994), checked against the
+# snapshot's copy: a mismatch runs nothing, says so on stderr ([town-tool] …),
+# and leaves no JSON, so the line below is `checked: false` with those words.
+hk_rc=0
+hk_out="$(node /srv/postmark-office/src/town-tool.mjs run household-keys.mjs --clone "$SNAP/town" -- --json --repo "$SNAP/town" --registry "$REGISTRY_FILE" 2>&1)" || hk_rc=$?
 if node -e '
   const text = process.argv[1] ?? "";
   let j = null;
@@ -563,6 +608,7 @@ if node -e '
   try { j = JSON.parse(String(process.argv[1] ?? "").trim().split("\n").pop()); } catch {}
   process.exit(j && Array.isArray(j.split_households) ? 0 : 3);
 ' "$hk_out"; then keep_step hhkeys ok
+elif [ "$hk_rc" -eq 3 ]; then keep_step hhkeys refused town-pin-mismatch   # the door's exit 3 is a pin stop, and only that
 else keep_step hhkeys refused unchecked
 fi
 
@@ -577,6 +623,41 @@ fi
 # child handed the law pen's password (§ the store's passwords, above).
 if PG_LAW_INGESTER_PASSWORD="$KEEP_LAW_PW" sh deploy/office-world-hydrate.sh; then keep_step world ok
 else keep_step world refused "exit:$?"
+fi
+
+# ── the town's day on Bluesky (POS-904; Darko's go 2026-11-19 09:18 EST) ─────
+# Both kinds every tick, after the world fetch above brought the keeper's tags in
+# (DEPLOY.md § the town's day on Bluesky). THE CREDENTIAL IS SCOPED to the
+# publisher's own subshell: /etc/postmark-bsky.env (meepo, 0600; BSKY_IDENTIFIER
+# and BSKY_APP_PASSWORD) is read there and nowhere else, so no other child of this
+# tick ever holds it. The state (the floor and each event's file) is
+# /var/lib/postmark-bsky, outside every checkout. It never fails the tick: exit 0
+# (posted, already, busy, skipped) is ok; 3 (waiting, held, unconfigured, or
+# unstarted until the operator names the first event) is skip; 1 or 2 is refused.
+# No env file means it was never installed: one skip line, nothing run.
+BSKY_ENV_FILE="${BSKY_ENV_FILE:-/etc/postmark-bsky.env}"
+BSKY_STATE="${BSKY_STATE:-/var/lib/postmark-bsky}"
+if [ -r "$BSKY_ENV_FILE" ]; then
+  bsky_rc=0
+  for bsky_kind in crossing settlement; do
+    if [ "$bsky_kind" = crossing ]; then bsky_src="--town $TOWN_CLONE"; else bsky_src="--world $WORLD_CLONE"; fi
+    bsky_r=0
+    ( set -a; . "$BSKY_ENV_FILE"; set +a
+      exec node tools/bluesky-publish.mjs "$bsky_kind" $bsky_src --state "$BSKY_STATE" ) || bsky_r=$?
+    # the most urgent of the two calls: 1 failed, then any other refusal (2 usage, or a crash), then 3 waiting, then 0
+    case "$bsky_r" in
+      0) ;;
+      1) bsky_rc=1 ;;
+      3) if [ "$bsky_rc" -eq 0 ]; then bsky_rc=3; fi ;;
+      *) if [ "$bsky_rc" -ne 1 ]; then bsky_rc=$bsky_r; fi ;;
+    esac
+  done
+  case "$bsky_rc" in
+    0) keep_step bluesky ok ;;
+    3) keep_step bluesky skip "exit:3" ;;
+    *) keep_step bluesky refused "exit:$bsky_rc" ;;
+  esac
+else keep_step bluesky skip switch-off
 fi
 
 # ── outside the lock: the panes, from the frozen snapshot ────────────────────

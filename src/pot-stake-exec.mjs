@@ -26,11 +26,13 @@
 // Env: TOWN_CLONE, STAMP_KEY, TOWN_PUSH, BOT_NAME/BOT_EMAIL, TOWN_TZ.
 // argv[2]: JSON { handle, pot, n, via, date }.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -83,7 +85,7 @@ export function clipPotStake({ state, pots, handle, pot, n, date }) {
  * ask for it.
  */
 export async function potStakeInputs(clone) {
-  const { ballotState } = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")));
+  const { ballotState } = await importTownTool(clone, "ballot.mjs"); // POS-994: the pinned copy
   const { readPots } = await import(pathToFileURL(join(HERE, "funding.mjs")));
   return { state: ballotState(clone), pots: readPots(clone).pots };
 }
@@ -95,13 +97,19 @@ async function main() {
     return;
   }
   const keyPem = readFileSync(KEY_PATH, "utf8");
-  const { potStakeLine, appendSigned } = await import(pathToFileURL(join(CLONE, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copy of the mint, checked against the clone before anything is written.
+  let potStakeLine, appendSigned;
+  try { ({ potStakeLine, appendSigned } = await importTownTool(CLONE, "stamp-mint.mjs")); }
+  catch (e) {
+    if (!isPinStop(e)) throw e;
+    console.log(JSON.stringify(err(503, "town-pin-mismatch", pinStopHint(e))));
+    return;
+  }
 
   // WHOLE OR NOTHING (POS-296), stake-exec's shape: a keeping stake the pen
   // cannot land leaves no line and no commit behind.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
     const { state, pots } = await potStakeInputs(CLONE);
     const result = clipPotStake({ state, pots, ...payload });

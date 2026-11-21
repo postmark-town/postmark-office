@@ -88,6 +88,11 @@ const { reCheckGrant } = await import(pathToFileURL(join(OFFICE, "world2", "tool
 const PARCEL = { id: `${LYRA}/the-starling-house`, kind: "parcel", by: LYRA, household: LYRA,
   at: { x: 900, y: 1250 }, extent: { w: 25, h: 25 } };
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(town);
+
 test("householdOf groups housemates by the HOUSE, whichever ledger key each wears", async () => {
   const householdOf = await householdLookup();
   const lyra = householdOf(LYRA), kino = householdOf(KINO);
@@ -129,6 +134,51 @@ test("a store that cannot answer fails loud with a named error, never the printo
     await assert.rejects(worldHouseholds(), (e) => e instanceof HouseholdsUnreadable && e.code === "households-unreadable"
       && /never guessed from WORLD\/households\.json/.test(e.message) && /told to fail/.test(String(e.cause?.message)));
   } finally {
+    installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
+  }
+});
+
+// POS-1057: every world read asked the `identities` view for the household grain (about 200 ms a read on prod). The map is
+// kept on a print of the two tables the view reads, asked of the store on every call. The pen below answers that print the
+// way the store does: a write to either table moves it. `viewReads` counts the reads of the view, which the memo saves.
+// FLIPS, in world-apex.mjs § worldHouseholds: (a) drop `_identities.print === print` → the joined house is not seen (red at
+// "a registry write"); (b) keep the map when the print is null → the last test's "fails loud" would answer instead of refuse.
+test("POS-1057 · the household grain is kept while the registry stands, and a registry write is seen on the very next read", async () => {
+  const { resetHouseholdCache } = await import(pathToFileURL(join(OFFICE, "src", "world-apex.mjs")).href);
+  const { __setPoolForTest } = await import(pathToFileURL(join(OFFICE, "src", "world2-acts.mjs")).href);
+  resetHouseholdCache();
+  let writes = 100, viewReads = 0, printAnswers = true;
+  const wrap = (pen) => __setPoolForTest({
+    ...pen,
+    async query(text, params) {
+      if (/sum\(xmin::text::bigint\)/.test(String(text))) {
+        if (!printAnswers) throw new Error("this store cannot say");
+        return { rows: [{ print: `2:${writes}|2:${writes}` }] };
+      }
+      if (/FROM identities/i.test(String(text))) viewReads += 1;
+      return pen.query(text, params);
+    },
+  });
+  try {
+    wrap(installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] }));
+    const first = await worldHouseholds();
+    assert.equal(first(LYRA), `hh:${HOUSE}`);
+    assert.equal((await worldHouseholds())(KINO), `hh:${HOUSE}`);
+    assert.equal(viewReads, 1, "the second read reused the first's map");
+
+    // a registry write: the house loses Lyra, and the store's print moves with it
+    const without = STORE.households.map((h) => ({ ...h, residents: (h.residents ?? []).filter((r) => r !== LYRA) }));
+    wrap(installActsPen({ households: without, pins: (STORE.pins ?? []).filter((p) => p.handle !== LYRA), meta: [] }));
+    writes += 1;
+    assert.equal((await worldHouseholds())(LYRA), `solo:${LYRA}`, "a registry write is seen on the very next read");
+    assert.equal(viewReads, 2);
+
+    // a store that cannot say gets no memo: every read asks the view
+    printAnswers = false;
+    await worldHouseholds(); await worldHouseholds();
+    assert.equal(viewReads, 4, "nothing is kept when the print cannot be read");
+  } finally {
+    resetHouseholdCache();
     installActsPen({ households: STORE.households, pins: STORE.pins, meta: [] });
   }
 });

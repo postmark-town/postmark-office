@@ -57,7 +57,7 @@ import {
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the pinned copies of the town's modules
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
@@ -65,9 +65,12 @@ const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === 
 const UNREACHABLE = () => refuse(503, "the ballots live in the office's record, and the record cannot be reached",
   "nothing was written; ask again shortly");
 
+// A read's failure as the read answers it: a refusal is itself, anything else the record's 503 with the cause beside it (never sent). One spelling for
+// the read and for the shaping a read now does after its lease (§ ballotsWithVotes, POS-1129).
+const readRefusal = (e) => (isRefusal(e) ? e : Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) }));
 async function read(fn, env) {
   try { return await officeRead(fn, { env }); }
-  catch (e) { if (isRefusal(e)) throw e; throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) }); }
+  catch (e) { throw readRefusal(e); }
 }
 async function write(fn, env) {
   try { return await officeWrite(fn, { env }); }
@@ -78,11 +81,11 @@ async function write(fn, env) {
   }
 }
 
-/** The town's own engine and line builders, from the clone (the same live import votes.mjs has always made). */
+/** The town's own engine and line builders: the office's pinned copies, checked against the clone (POS-994; a mismatch throws TownPinMismatch, by name). */
 export async function townEngine(clone) {
   const [ballot, mint] = await Promise.all([
-    import(pathToFileURL(join(clone, "tools", "ballot.mjs")).href),
-    import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href),
+    importTownTool(clone, "ballot.mjs"),
+    importTownTool(clone, "stamp-mint.mjs"),
   ]);
   return { ballot, mint };
 }
@@ -522,11 +525,25 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
 
 /** Every ballot post with its votes: `[{ post, votes }]`, by id. */
 export async function ballotsWithVotes({ env = process.env, open = false } = {}) {
-  return read(async (client) => {
-    const posts = (await ballotRows(client)).filter((p) => !open || p.state !== STATE_CLOSED);
-    const votes = byPost(await voteRows(client, posts.map((p) => p.id)));
-    return posts.map((post) => ({ post, votes: votes.get(post.id) ?? [] }));
+  // THE ROWS UNDER THE LEASE, THE SHAPES AFTER IT (POS-1129): the posts and votes are read raw in the one READ ONLY transaction, and
+  // parsed (rowOf, responseOf) once the connection is back, so the pen is not held while their JSON is parsed. `open` filters on the
+  // stored state, which rowOf passes through unchanged. A row that does not shape is the same refusal it was when it was shaped inside.
+  const raw = await read(async (client) => {
+    const { rows: posts } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 ORDER BY id`, [BALLOT_CLASS]);
+    const ids = posts.filter((p) => !open || p.state !== STATE_CLOSED).map((p) => p.id);
+    const votes = ids.length ? (await client.query(
+      "SELECT post, handle, household, kind, state, fields, act FROM responses WHERE post = ANY($1) AND kind = $2 ORDER BY post, handle",
+      [ids, RESPONSE_VOTE])).rows : [];
+    return { posts, votes };
   }, env);
+  try {
+    // every post is shaped, as ballotRows shaped them all before the filter: a bent closed ballot refuses an open read as it did
+    const posts = raw.posts.map(rowOf).filter((p) => !open || p.state !== STATE_CLOSED);
+    const votes = byPost(raw.votes.map(responseOf));
+    return posts.map((post) => ({ post, votes: votes.get(post.id) ?? [] }));
+  } catch (e) {
+    throw readRefusal(e);
+  }
 }
 
 /** One ballot by topic, with its votes, or null. */

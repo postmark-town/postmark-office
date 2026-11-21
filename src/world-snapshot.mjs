@@ -28,7 +28,7 @@
 // parent exactly as the store's uuids do.
 
 import { createHash } from "node:crypto";
-import { firstClaimInstant } from "../world2/tools/mark-render.mjs";
+import { firstClaimInstant, footprintsThroughShape, FOOTPRINT_CHAIN_SQL } from "../world2/tools/mark-render.mjs";
 import { STANDING_ROWS_SQL, REGISTER_ROWS_SQL } from "../world2/tools/world-snapshot-seal.mjs";
 
 const sha256 = (s) => createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
@@ -273,7 +273,6 @@ export async function householdsAt(registerRows, townRepo) {
   const { mkdtempSync, readdirSync, cpSync, symlinkSync, writeFileSync, rmSync, unlinkSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { pathToFileURL } = await import("node:url");
   const { registry, pins } = await registerOfVersions(registerRows);
   const dir = mkdtempSync(join(tmpdir(), "snapshot-town-"));
   try {
@@ -284,7 +283,16 @@ export async function householdsAt(registerRows, townRepo) {
     }
     writeFileSync(join(dir, "tools", "households.json"), JSON.stringify(registry, null, 2) + "\n");
     writeFileSync(join(dir, "tools", "github-ids.json"), JSON.stringify(pins, null, 2) + "\n");
-    const engine = await import(pathToFileURL(join(dir, "tools", "stamp-mint.mjs")).href);
+    // POS-994 (Wright, 2026-11-16): the checkout's own engine only inside the
+    // office's reviewed history, held to git at its commit; past the pin, the
+    // pinned copy or a stop by name (town-tool.mjs § importTownToolAt).
+    // A town folder git cannot name a commit for is checked against the pins as a clone.
+    const { spawnSync } = await import("node:child_process");
+    const { importTownTool, importTownToolAt } = await import("./town-tool.mjs");
+    const head = spawnSync("git", ["-C", townRepo, "rev-parse", "--verify", "-q", "HEAD"], { encoding: "utf8" });
+    const engine = head.status === 0
+      ? await importTownToolAt(dir, head.stdout.trim(), "stamp-mint.mjs", { gitRepo: townRepo })
+      : await importTownTool(dir, "stamp-mint.mjs");
     const { worldHouseholdsAt } = await import("./household-logins.mjs");
     return worldHouseholdsAt(dir, engine).households;
   } finally {
@@ -461,14 +469,32 @@ export async function firstClaimedBySlug(p, slugs, { pending = [] } = {}) {
   return out;
 }
 
-/** Stamp each parcel record with its first claim (`claimed_at`). Edits `marks` in place; returns it. */
+/**
+ * Stamp each record with its first claim (`claimed_at`), and, where its
+ * geometry has changed, its footprints (POS-571). Every mark, not only a parcel:
+ * a mark's age is its first-laid date wherever the law asks who came first, and
+ * seniority at contact reads it of any mark (world tools/consent.mjs §
+ * seniorAtContact). The footprints are read for THIS record's shape, the moment
+ * it was sealed or served (`mark-render.mjs § footprintsThroughShape`): the chain
+ * through that shape, so an amend locked after it neither drops the history that
+ * crossed nor adds a footprint that had not. Edits `marks` in place; returns it.
+ */
 export async function withClaimedAt(p, marks, { pending = [] } = {}) {
-  const parcels = marks.filter((m) => m?.kind === "parcel" && m.id);
-  if (!parcels.length) return marks;
-  const first = await firstClaimedBySlug(p, parcels.map((m) => String(m.id)), { pending });
-  for (const m of parcels) {
+  const dated = marks.filter((m) => m?.id);
+  if (!dated.length) return marks;
+  const first = await firstClaimedBySlug(p, dated.map((m) => String(m.id)), { pending });
+  for (const m of dated) {
     const at = first.get(String(m.id));
     if (at) m.claimed_at = at;
+  }
+  const placed = dated.filter((m) => m.at && m.extent && first.has(String(m.id)));
+  if (!placed.length) return marks;
+  const { rows } = await p.query(FOOTPRINT_CHAIN_SQL, [placed.map((m) => String(m.id))]);
+  const chainOf = new Map(rows.map((r) => [String(r.slug), r]));
+  for (const m of placed) {
+    const r = chainOf.get(String(m.id));
+    const footprints = r ? footprintsThroughShape({ chain: r.claim_chain, originId: r.id, originSince: first.get(String(m.id)), current: m }) : null;
+    if (footprints) m.footprints = footprints;
   }
   return marks;
 }

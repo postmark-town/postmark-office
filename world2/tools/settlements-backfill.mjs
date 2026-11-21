@@ -144,6 +144,62 @@ export function settlementRowsFrom(tagLines) {
   return rows;
 }
 
+// ── THE WINDOW THE CROSSING NAMES, AND THE GUARD (POS-940; POS-354 fix c) ────
+//
+// A clearing 12 h or more late made this tool name the SUCCESSOR window: by the
+// time that crossing published, the next window's close had passed too, so
+// `windowFor` took it, and the row went in with no snapshot (the successor had
+// not been sealed) — permanently, since INSERT is the only write. Darko,
+// 2026-10-10: "Cheap guard: refuse a row whose window isn't closed. Durable fix:
+// settlement-auto.sh writes a `Window: <id>` trailer, and the backfill prefers it."
+//
+//   · The trailer. settlement-auto.sh § name_window puts `Window: <id>` on the
+//     commit the crossing publishes, the id being the docket it folded (the
+//     window await-clearing saw locked for THIS crossing). The tag blesses that
+//     commit, so the row's window is read from the blessed commit's own message.
+//   · The guard. A NEW row is written only when its window is in the store,
+//     `closed`, and was cleared at or before the crossing published. A window
+//     still open (or cleared after the push) is not the window that crossing
+//     closed, whichever way it was found; the row is HELD, named, and the tick
+//     exits 1 so the roll-call carries it to a person. Rows already present are
+//     never touched (this tool never updates).
+
+/** `Window: <id>` from a commit message's trailer block (its last paragraph, never the subject); null when absent or when two disagree. PURE. */
+export const WINDOW_TRAILER = /^Window:[ \t]*(\d+)[ \t]*$/;
+export function windowTrailer(message) {
+  const paras = String(message ?? "").replace(/\r\n/g, "\n").trim().split(/\n[ \t]*\n/);
+  if (paras.length < 2) return null;
+  const ids = new Set(paras[paras.length - 1].split("\n")
+    .map((l) => WINDOW_TRAILER.exec(l.trim())).filter(Boolean).map((m) => Number(m[1])));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+/** Each blessed commit's `Window:` trailer, by sha, in one `git log` over all of them. */
+export function readWindowTrailers(repo, shas) {
+  const want = [...new Set(shas.filter(Boolean))];
+  const out = new Map();
+  if (!want.length) return out;
+  const text = execFileSync("git", ["-C", repo, "log", "--no-walk=unsorted", "--format=%H%x1f%B%x1e", ...want],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 26 });
+  for (const rec of text.split("\x1e")) {
+    const at = rec.indexOf("\x1f");
+    if (at === -1) continue;
+    out.set(rec.slice(0, at).trim(), windowTrailer(rec.slice(at + 1)));
+  }
+  return out;
+}
+
+/** Null when a new row may be written with `window_id`, else the sentence holding it. A row with no window (before the first) is never held. PURE. */
+export function heldWindow({ window_id, published_at }, windows) {
+  if (window_id == null) return null;
+  const w = windows.find((x) => Number(x.id) === Number(window_id));
+  if (!w) return `window ${window_id} is not in the store`;
+  if (w.status !== "closed") return `window ${window_id} is ${w.status ?? "of no status"}, not closed`;
+  if (w.cleared_at == null || new Date(w.cleared_at).getTime() > new Date(published_at).getTime())
+    return `window ${window_id} was not closed when this crossing published (cleared ${w.cleared_at == null ? "never" : new Date(w.cleared_at).toISOString()}, published ${new Date(published_at).toISOString()})`;
+  return null;
+}
+
 /** The window a crossing closed: the newest whose close is at or before the publish; null before the first. */
 export function windowFor(publishedAt, windows) {
   const t = new Date(publishedAt).getTime();
@@ -163,15 +219,21 @@ const sameInstant = (a, b) => (a == null && b == null) || (a != null && b != nul
  *   present   in the table and equal on every column
  *   CONFLICT  in the table with a different tag_sha — a moved tag; refuses the apply
  *   DRIFT     in the table, same sha, some other column differs — verify reds, apply skips
+ *   HELD      absent, and its window is not one this crossing closed (heldWindow) — never written
  * plus `extra`: table rows no tag stands behind (verify reds on them).
+ * A row's window is its blessed commit's `Window:` trailer when it has one
+ * (`stated_window`, readWindowTrailers), else windowFor's time rule.
  */
 export function planFrom(derived, existing, windows) {
   const byNumber = new Map(existing.map((r) => [Number(r.number), r]));
   const plan = derived.map((d) => {
-    const window_id = windowFor(d.published_at, windows);
-    const row = { ...d, window_id };
+    const window_id = d.stated_window ?? windowFor(d.published_at, windows);
+    const row = { ...d, window_id, window_from: d.stated_window != null ? "trailer" : "time" };
     const have = byNumber.get(d.number);
-    if (!have) return { ...row, state: "new" };
+    if (!have) {
+      const held = heldWindow(row, windows);
+      return held ? { ...row, state: "HELD", held } : { ...row, state: "new" };
+    }
     if (have.tag_sha !== d.tag_sha) return { ...row, state: "CONFLICT", have: { tag_sha: have.tag_sha } };
     const drift = [];
     if (!sameInstant(have.published_at, d.published_at)) drift.push("published_at");
@@ -370,7 +432,7 @@ function render(plan, extra, { dbName, user, repo, mode }) {
   const count = (s) => plan.filter((r) => r.state === s).length;
   const lines = [
     `settlements-backfill · ${mode} · ${repo} → ${dbName} as ${user}`,
-    `tags ${plan.length} · new ${count("new")} · present ${count("present")} · DRIFT ${count("DRIFT")} · CONFLICT ${count("CONFLICT")} · extra rows ${extra.length}`,
+    `tags ${plan.length} · new ${count("new")} · present ${count("present")} · DRIFT ${count("DRIFT")} · CONFLICT ${count("CONFLICT")}${count("HELD") ? ` · HELD ${count("HELD")}` : ""} · extra rows ${extra.length}`,
     "",
     "  S     state     tag_sha   published_at          window  blessed_at",
   ];
@@ -378,7 +440,9 @@ function render(plan, extra, { dbName, user, repo, mode }) {
     lines.push(`  ${String(r.number).padStart(4)}  ${r.state.padEnd(8)}  ${r.tag_sha.slice(0, 8)}  ${iso(r.published_at)}  ${String(r.window_id ?? "—").padStart(6)}  ${iso(r.blessed_at)}`
       + (r.lightweight ? "  (lightweight tag: no bless date)" : "")
       + (r.state === "CONFLICT" ? `  ← table holds ${r.have.tag_sha.slice(0, 8)}` : "")
-      + (r.state === "DRIFT" ? `  ← differs on ${r.drift.join(", ")}` : ""));
+      + (r.state === "DRIFT" ? `  ← differs on ${r.drift.join(", ")}` : "")
+      + (r.state === "HELD" ? `  ← ${r.held}` : "")
+      + (r.window_from === "trailer" ? "  (window from its Window: trailer)" : ""));
   }
   if (extra.length) lines.push("", `rows in the table with no tag behind them: ${extra.map((n) => `S${n}`).join(", ")}`);
   return lines.join(NL);
@@ -422,6 +486,11 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
   catch (e) { console.error(String(e?.message ?? e)); process.exit(2); }
   const derived = settlementRowsFrom(tagLines);
   if (!derived.length) { console.error(`${repo} carries no settlement/S<n> tag at all — a shallow or unfetched clone answers nothing, not zero`); process.exit(2); }
+  // Each blessed commit's own `Window:` trailer (POS-940): the window the crossing says it folded.
+  try {
+    const stated = readWindowTrailers(repo, derived.map((d) => d.tag_sha));
+    for (const d of derived) d.stated_window = stated.get(d.tag_sha) ?? null;
+  } catch (e) { console.error(`cannot read the blessed commits' Window: trailers in ${repo}: ${String(e?.message ?? e).slice(0, 200)}`); process.exit(2); }
 
   const client = url ? new pg.Client({ connectionString: url }) : new pg.Client();
   try { await client.connect(); }
@@ -434,7 +503,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
   let receipt;
   try {
     const { rows: [who] } = await client.query("SELECT current_user AS u, current_database() AS d");
-    const { rows: windows } = await client.query("SELECT id, closes_at FROM windows ORDER BY id");
+    const { rows: windows } = await client.query("SELECT id, closes_at, status, cleared_at FROM windows ORDER BY id");
     let existing;
     try { ({ rows: existing } = await client.query("SELECT number, tag_sha, published_at, window_id, blessed_at FROM settlements ORDER BY number")); }
     catch (e) {
@@ -445,6 +514,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
     const conflicts = plan.filter((r) => r.state === "CONFLICT");
     const drift = plan.filter((r) => r.state === "DRIFT");
     const fresh = plan.filter((r) => r.state === "new");
+    const held = plan.filter((r) => r.state === "HELD");
 
     const text = render(plan, extra, { dbName: who.d, user: who.u, repo, mode });
     if (!json && !quiet) console.log(text);
@@ -481,6 +551,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
       // nothing still says so with the number the table is at.
       console.log(`${quiet ? "" : NL}wrote ${wrote} row(s)${wrote ? ` — ${fresh.map((r) => `S${r.number}`).join(", ")}` : ""}; the table now holds ${n} (tags in the checkout: ${derived.length})`);
       if (drift.length) console.error(`${NL}${drift.length} present row(s) differ from their tag on a non-sha column and were LEFT ALONE (this tool never updates): ${drift.map((r) => `S${r.number}`).join(", ")}`);
+      if (held.length) verdict = "HELD";
       // WHICH SETTLEMENT CARRIED EACH MARK (049, POS-142 Proposal B): with the
       // settlement rows in, the published marks the store has no row for are
       // asked of 1.0 and recorded, checked against its receipt before commit.
@@ -501,7 +572,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
       if (!json) console.log(amends.line);
       if (carried.verdict === "DISAGREE") verdict = "CONFLICT";
     } else if (verify) {
-      const missing = fresh.map((r) => r.number);
+      const missing = [...fresh, ...held].map((r) => r.number).sort((a, b) => a - b);
       if (missing.length || drift.length || extra.length) {
         verdict = "DRIFT";
         console.error(`${NL}DRIFT: ` + [
@@ -512,7 +583,14 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
       } else {
         console.log(`${NL}EQUAL: ${plan.length} tag(s), ${plan.length} row(s), every column agrees (compared ${plan.length})`);
       }
+    } else if (held.length) {
+      verdict = "HELD";
     }
+    // A HELD ROW IS A PERSON'S FINDING (POS-940): named on every run, never written, and the exit is 1, so
+    // the keep tick's `settlements` step reads refused and the roll-call carries it if it stands.
+    if (held.length && !conflicts.length)
+      console.error(`${NL}HELD: ${held.length} settlement row(s) not written — ${held.map((r) => `S${r.number} (${r.held})`).join("; ")}. ` +
+        "The window a crossing closed is one the store holds closed by the time it published; settlement-auto.sh's Window: trailer names it.");
     // ORPHANED SET-DOWNS (WLD-27 F0), on EVERY --apply tick — a new settlement
     // or none, a refused tag or not: it reads acts and claims, not the tags.
     // This is the office tick's one live step (postmark-office-keep.timer →
@@ -528,8 +606,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
       if (!json) console.log(endings.line);
     }
     receipt = { mode, verdict, db: who.d, user: who.u, repo, tags: derived.length, new: fresh.length, present: plan.filter((r) => r.state === "present").length,
-      drift: drift.map((r) => r.number), conflict: conflicts.map((r) => r.number), extra, wrote, compared: plan.length,
-      rows: plan.map((r) => ({ number: r.number, state: r.state, tag_sha: r.tag_sha, published_at: iso(r.published_at), window_id: r.window_id, blessed_at: iso(r.blessed_at) })),
+      drift: drift.map((r) => r.number), conflict: conflicts.map((r) => r.number), held: held.map((r) => r.number), extra, wrote, compared: plan.length,
+      rows: plan.map((r) => ({ number: r.number, state: r.state, tag_sha: r.tag_sha, published_at: iso(r.published_at), window_id: r.window_id, window_from: r.window_from, blessed_at: iso(r.blessed_at), ...(r.held ? { held: r.held } : {}) })),
       ...(carried ? { carried: carried.line } : {}), ...(amends ? { amends: amends.line } : {}), ...(drops ? { drops: drops.line } : {}), ...(endings ? { endings: endings.line } : {}) };
   } finally {
     await client.end();

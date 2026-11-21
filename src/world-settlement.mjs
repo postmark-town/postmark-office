@@ -70,7 +70,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { firstClaimedBySlug, snapshotFoldArgs } from "./world-snapshot.mjs";
+import { firstClaimedBySlug, snapshotFoldArgs, withClaimedAt } from "./world-snapshot.mjs";
 import { TOWN_CLONES, leaseEntry, ownedRoot, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
 import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
@@ -479,8 +479,18 @@ export function stanceReturnsWhole(inputs, state) {
  * state, and a limit the engine found and could not apply (an engine older than
  * the first-claim order) leaves too. `{ slugs, vetoes }`. Throws when the
  * settlement cannot be folded; the caller withholds the clearing's forecast instead.
+ *
+ * A TOWN RETURN LEAVES GIT ONLY WITH ITS STAMPS HOME (POS-1138; Darko
+ * 2026-11-18: "Back to each staker", "Town-authored return"). A town stance
+ * return takes its mark and subtree away only when the live ledger holds no
+ * open stamps on any of them (src/town-return.mjs § the gate). With
+ * `townReturns.write` (the crossing that removes them) the town's return is
+ * written first, under this settlement's `S<n>`, then the ledger is read; a
+ * return that did not land leaves the mark standing for the next settlement.
+ * Without it nothing is written and the gate alone decides. `town_returns`
+ * says what was returned, what waits and why.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
   // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
@@ -497,6 +507,8 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
+  const town = await townReturnsAt(header, gate, state, { townRepo, townReturns });
+  const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
   // WHAT LEAVES WITH A RETURN IS THE ENGINE'S `subtree` (Darko's ruling B,
@@ -509,6 +521,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   // (`stance_returns_whole` says so), never with a fold this office did not run.
   for (const r of state.returned ?? []) {
     if (r?.state !== "returned" && !r?.law) continue;
+    if (waiting.has(String(r.mark))) continue;          // its stamps are not home yet: it stands (POS-1138)
     slugs.add(String(r.mark));
     for (const s of r.subtree ?? []) slugs.add(String(s));
     if (r.law) limitParcels.push(String(r.mark));
@@ -526,6 +539,39 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
     stances: gate.recorded,
     ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
     ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
+    ...(town ? { town_returns: town } : {}),
+  };
+}
+
+/**
+ * THE TOWN'S RETURNS AT A SETTLEMENT (POS-1138): null when there is nothing to
+ * return and nothing to write; otherwise src/town-return.mjs § settleTownReturns
+ * over this World's town returns.
+ *
+ * THE REMOVAL AND ITS DATE ARE THE SEAL'S, never a receipt's (review of Town
+ * #4796, B2/B3): `S<n>` is the number this snapshot was sealed as (its
+ * settlements row, else the seal's recorded reading of itself), and the line's
+ * date is the seal's day in town time. A snapshot that names neither writes
+ * nothing (`unnamed` says so); the gate still reads.
+ */
+async function townReturnsAt(header, gate, state, { townRepo, townReturns }) {
+  const { townReturnTargets, settleTownReturns, removalOf, townDate } = await import("./town-return.mjs");
+  const targets = townReturnTargets(state);
+  if (!targets.length) return null;
+  const write = townReturns?.write ?? null;
+  const number = header?.settlement ?? gate.recorded?.settlement_inferred ?? null;
+  const removal = number == null ? null : removalOf(number);
+  const date = header?.taken_at ? townDate(new Date(header.taken_at)) : null;
+  const named = removal && date;
+  // The snapshot's stakes never decide what leaves (reviews of #1143, F1/F2):
+  // the live ledger, or this run's own successful write, or nothing leaves.
+  const settled = await settleTownReturns({
+    targets, removal, date, townClone: townRepo, write: named ? write : null,
+  });
+  return {
+    ...settled,
+    ...(townReturns?.why ? { not_written: townReturns.why } : {}),
+    ...(write && !named ? { unnamed: `snapshot ${header?.id ?? "?"} names no settlement number or seal time, so no return could name its removal and nothing was written` } : {}),
   };
 }
 
@@ -971,6 +1017,25 @@ async function overlapsAt(worldRepo, sha) {
   return GEOMETRY.get(sha);
 }
 
+// THE ENGINE'S PER-CELL SENIORITY AT THE SAME LAW (POS-571): world consent.mjs §
+// firstCoverOrder, read at the sha `overlapsAt` reads, so the label weighs who
+// came first on the shared cells as that settlement's own fold did. Null when the
+// law predates it (or it cannot be read): that fold read the whole-mark order,
+// and so does the label.
+const FIRST_COVER = new Map();
+async function firstCoverAt(worldRepo, sha) {
+  if (!FIRST_COVER.has(sha)) {
+    let order = null;
+    try {
+      const { materializeAtRef } = await import("./world-branches.mjs");
+      const c = await import(pathToFileURL(join(materializeAtRef(worldRepo, sha, "tools"), "tools", "consent.mjs")).href);
+      order = typeof c.firstCoverOrder === "function" ? c.firstCoverOrder : null;
+    } catch { order = null; }
+    FIRST_COVER.set(sha, order);
+  }
+  return FIRST_COVER.get(sha);
+}
+
 /**
  * The served marks, labelled (§ labelMarks): `{ marks }`, or `{ unread }` when
  * the cutover, the versions or the words could not be read — a label nobody
@@ -1015,9 +1080,20 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
     // reads it (world-snapshot.mjs § firstClaimedBySlug: the origin claim). A
     // thing is not ground, its class read off this World's own class nodes
     // (extendsFromMarks, as the positioned set above reads them).
-    const { elderByFirstLaid } = await import("./town-stance.mjs");
+    // And on the shared cells (POS-571): copies of the served marks, decorated with
+    // the first-laid facts the fold reads (world-snapshot.mjs § withClaimedAt: the
+    // first claim and, where its geometry changed, the footprints), asked through
+    // the one combinator the inbox and the door use (town-stance.mjs §
+    // elderByFirstCover). The copies stay here; the labelled marks are the served ones.
+    const { elderByFirstLaid, elderByFirstCover } = await import("./town-stance.mjs");
     const { isThingMark } = await import("./held.mjs");
-    const elder = elderByFirstLaid(await firstClaimedBySlug(p, ids));
+    const decorated = await withClaimedAt(p, (world.marks ?? []).filter((m) => m?.id && m.kind !== "class").map((m) => ({ ...m })));
+    const recordById = new Map(decorated.map((m) => [String(m.id), m]));
+    const elder = elderByFirstCover({
+      firstCoverOrder: await firstCoverAt(worldRepo, header.law_sha),
+      recordOf: (m) => recordById.get(String(m?.id)) ?? m,
+      wholeMark: elderByFirstLaid(await firstClaimedBySlug(p, ids)),
+    });
     const thingOpts = { classOf: markClassOf, extendsOf: extendsFromMarks(world.marks ?? []) };
     const marks = await labelMarks(world.marks ?? [], {
       townWords: words.townWords, cutover, versions: read.versions, words: words.words,

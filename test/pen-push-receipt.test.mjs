@@ -5,15 +5,15 @@
 // which advances origin between the other's commit and its push.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { LOST_RACE, NOT_LANDED, penCommit } from "../src/write.mjs";
 
 const sh = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 function stage() {
-  const dir = mkdtempSync(join(tmpdir(), "pen-race-"));
+  const dir = tempDir("pen-race-");
   const origin = join(dir, "origin.git"); const a = join(dir, "a"); const b = join(dir, "b");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
   execFileSync("git", ["clone", "-q", origin, a]);
@@ -93,7 +93,7 @@ test("{ rebase: false }: a clone holding its own unpushed ledger commit stands a
 // other writer, and a commit object moved aside is the read that fails.
 const hook = (repo, name, body) => writeFileSync(join(repo, ".git", "hooks", name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
 const objectOf = (sha) => `.git/objects/$(echo ${sha} | cut -c1-2)/$(echo ${sha} | cut -c3-)`;
-const aside = () => join(mkdtempSync(join(tmpdir(), "pen-aside-")), "object");
+const aside = () => join(tempDir("pen-aside-"), "object");
 /** The machinery's throw (an exec trip, logged), not the pen's no-effect refusal. */
 const notTheSafeRefusal = (e) => !!e && e.pen !== NOT_LANDED && !/safe to make again|nothing was recorded/.test(String(e.hint ?? ""));
 const addsRowTwo = (repo, c) => sh(repo, "diff", `${c}^`, c, "--", "ledger.md").split("\n").includes("+- row two");

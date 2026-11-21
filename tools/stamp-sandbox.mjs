@@ -13,14 +13,33 @@
 //
 // ── WHAT IT RUNS ────────────────────────────────────────────────────────────
 //
-//   node tools/stamp-sandbox.mjs [--town <town checkout>] [--keep] [--json]
-//                                [--report <file>]
+//   node tools/stamp-sandbox.mjs [--town <town checkout>] [--at <town ref>]
+//                                [--keep] [--json] [--report <file>]
 //
 // One command, from the office tree whose head is under test. The office code
 // it drives is THIS tree's (src/*-exec.mjs, the watchers, the drain, the
 // ceremony, the ingests); the town engines it drives are the town checkout's
 // own (tools/stamp-mint.mjs, ballot, epoch-close, the ferry), exactly the pair
 // the box runs. `--town` defaults to this tree's `town-clone/`.
+//
+// WHICH TOWN (POS-1161). With neither flag the sandbox runs the town commit THE OFFICE
+// PINS (src/town-pins/PINS.json's town_commit, read from the checkout): the code the
+// office itself runs next to a key or the store, so the money code the sandbox
+// exercises is the pinned money code, not the suite's older town (test/clone-pins.json).
+// `--at <ref>` runs another commit of that checkout (a paired town PR's head: the
+// workflow passes `--at HEAD` after it checks the town PR's ref out); `--town <dir>`
+// alone runs that checkout's HEAD, as it always did. A checkout that does not hold the
+// commit asked for stops the build by name, never falling back to another.
+//
+// ITS OWN PINS (POS-1161, POS-994's missing half). The re-sign below rewrites the town's
+// own tools (the public key, and the ruled-welcome signatures inside stamp-verify.mjs),
+// so the sandbox's clone can never hash to the office's real pins. As the dev office does
+// for the same reason (deploy/postmark-dev-freshen.sh), the sandbox pins ITS OWN setup
+// commit (`tools/town-pins.mjs --write --town <clone> --ref <setup commit> --out
+// <sandbox dir>/town-pins`) and runs every child, and this process's own office readers,
+// under TOWN_PINS_DIR pointing there. The office's real pins, its money target and the
+// mismatch refusal are not touched: a clone whose pinned module is changed after setup
+// still stops by name (src/town-tool.mjs § TownPinMismatch).
 //
 //   1. THE SANDBOX. A temp directory holding a local `git clone` of the town
 //      checkout with its remotes REMOVED (nothing can push), SPARSE: the whole
@@ -76,6 +95,7 @@
 // Node 22+. Runs anywhere the office suite runs (the embedded-postgres
 // devDependency). Prints no secrets; holds none.
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createPublicKey, generateKeyPairSync, verify as edVerify } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -83,6 +103,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { standinClone } from "../test/helpers/clone-sparse.mjs";
+import { PIN_ROOT } from "../src/town-tool.mjs"; // the office's REAL pins: only read here, for the town commit they name
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -96,7 +117,7 @@ const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { enco
 const importFrom = (path) => import(pathToFileURL(path).href);
 
 /** The sandbox's environment for every child: the store and key are the sandbox's, nothing pushes, no real store is reachable. */
-function childEnv(sb, extra = {}) {
+export function childEnv(sb, extra = {}) {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL|STAMP_KEY|TOWN_CLONE|TOWN_PUSH)$/.test(k)) delete env[k];
   return {
@@ -105,6 +126,8 @@ function childEnv(sb, extra = {}) {
     WORLD2_PG: "1", WORLD2_PG_URL: sb.store.url("office_api", SANDBOX_DB),
     // POS-341: the stamp pens record their lines in stamp_lines, as the box does once 066/067 are installed
     STAMP_LINES: "store",
+    // POS-1161: once the sandbox has pinned its own setup commit, every child reads THOSE pins, never the office's
+    ...(sb.pinsDir ? { TOWN_PINS_DIR: sb.pinsDir } : {}),
     ...extra,
   };
 }
@@ -166,7 +189,7 @@ export function resignLedger(text, keyPem, engine) {
  */
 export function chainCheck(engine, prevText, nextText, pubPem) {
   const problems = [];
-  const prev = prevText.replace(/\s*$/, "\n");
+  const prev = endWithNewline(prevText);
   if (!nextText.startsWith(prev.trimEnd())) problems.push("append-only: the ledger's earlier bytes changed");
   const before = engine.parseStampLedger(prevText).length;
   const entries = engine.parseStampLedger(nextText);
@@ -376,12 +399,31 @@ export const COMPARATORS = [
  * Build the throwaway town and store. Answers the sandbox object the script
  * drives (`sb`). `log` receives progress lines.
  */
-export async function openSandbox({ townSource, log = () => {} } = {}) {
+/** The town commit the office pins: the code it runs next to a key or the store (src/town-pins/PINS.json). */
+export const pinnedTownCommit = (root = PIN_ROOT) => JSON.parse(readFileSync(join(root, "PINS.json"), "utf8")).town_commit;
+
+/** The ref the sandbox runs the town at: `--at`, else the office's pinned commit for the default checkout, else null (a named checkout's own HEAD). */
+export const townRefToRun = ({ townSource = null, townAt = null, pinned = pinnedTownCommit } = {}) => townAt ?? (townSource == null ? pinned() : null);
+
+/**
+ * `ref` as a commit of the town checkout `source`, or a setup error naming what to fetch. Never another commit in its place:
+ * a sandbox that quietly ran the wrong town would be green about code the office does not run.
+ */
+export function townCommitOf(source, ref) {
+  try { return git(source, "rev-parse", "--verify", `${ref}^{commit}`); }
+  catch {
+    throw Object.assign(new Error(`the town checkout at ${source} does not hold ${ref}${/^[0-9a-f]{40}$/.test(ref) ? " (the commit the office pins)" : ""}: fetch it first (git -C ${source} fetch origin ${ref}), or name the town with --town / --at`), { setup: true });
+  }
+}
+
+export async function openSandbox({ townSource, townAt = null, log = () => {} } = {}) {
   const source = resolve(townSource ?? join(OFFICE, "town-clone"));
   if (!existsSync(join(source, LEDGER_REL))) throw new Error(`no ${LEDGER_REL} under ${source}: --town must be a town checkout`);
-  const sourceSha = git(source, "rev-parse", "HEAD");
+  // POS-1161: the pinned town by default; a named checkout without --at runs its own HEAD; --at names a commit of it
+  const want = townRefToRun({ townSource, townAt });
+  const sourceSha = want ? townCommitOf(source, want) : git(source, "rev-parse", "HEAD");
   const dir = mkdtempSync(join(tmpdir(), "stamp-sandbox-"));
-  const sb = { dir, source, sourceSha, town: join(dir, "town"), keyPath: join(dir, "sandbox-key.pem"), steps: [], cleanups: [] };
+  const sb = { dir, source, sourceSha, townAt: want, town: join(dir, "town"), keyPath: join(dir, "sandbox-key.pem"), steps: [], cleanups: [] };
 
   // the key: fresh, throwaway, never the box's
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -426,6 +468,30 @@ export function prepareTown(sb, { log = () => {} } = {}) {
   log(`setup commit: ${held} real outbox item(s) set aside, ${lines} ledger lines re-signed` +
     (carried.length ? `; ${carried.length} ruled exception(s) the town names by signature carried to the new signature (${carried.map((c) => `${c.file}:line ${c.line}`).join(", ")})` : ""));
   return { held, carried };
+}
+
+/**
+ * THE SANDBOX'S OWN PINS (POS-1161). After the setup commit (the re-sign and the carried signatures), pin THAT commit's pinned
+ * modules into `<sandbox dir>/town-pins` with the office's own writer (tools/town-pins.mjs --write --out, the dev office's route),
+ * check them against the clone, and point TOWN_PINS_DIR at them: for every child (childEnv) and for this process's own office readers.
+ * The office's real pins stay as they were; the folder is outside the clone (the writer refuses one inside it) and goes with the
+ * sandbox's directory. Answers `{ pinsDir, setupCommit, files }`; throws a setup error when the pins cannot be written or do not check.
+ */
+export function pinSandboxTown(sb, { log = () => {} } = {}) {
+  const setupCommit = git(sb.town, "rev-parse", "HEAD");
+  const pinsDir = join(sb.dir, "town-pins");
+  const run = (args) => spawnSync(process.execPath, [join(OFFICE, "tools", "town-pins.mjs"), ...args], { cwd: OFFICE, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, TOWN_PINS_DIR: "" } });
+  const written = run(["--write", "--town", sb.town, "--ref", setupCommit, "--out", pinsDir]);
+  if (written.status !== 0) throw Object.assign(new Error(`the sandbox's own town pins could not be written: ${(written.stderr || written.stdout || "").trim().split("\n").slice(-1)[0]}`), { setup: true });
+  const checked = run(["--check", "--town", sb.town, "--out", pinsDir]);
+  if (checked.status !== 0) throw Object.assign(new Error(`the sandbox's own town pins do not match its clone at the setup commit: ${(checked.stderr || checked.stdout || "").trim().split("\n").slice(0, 3).join(" | ")}`), { setup: true });
+  const files = Object.keys(JSON.parse(readFileSync(join(pinsDir, "PINS.json"), "utf8")).files).length;
+  const had = Object.hasOwn(process.env, "TOWN_PINS_DIR"), prior = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = pinsDir;
+  sb.cleanups.push(() => { if (had) process.env.TOWN_PINS_DIR = prior; else delete process.env.TOWN_PINS_DIR; });
+  Object.assign(sb, { pinsDir, setupCommit });
+  log(`pins: the sandbox's own ${files} pinned town files at its setup commit ${setupCommit.slice(0, 9)} (TOWN_PINS_DIR; the office's real pins untouched)`);
+  return { pinsDir, setupCommit, files };
 }
 
 /**
@@ -584,17 +650,48 @@ export function fullVerify(sb) {
  * Stops at the first red step: what follows a red step would be judged against
  * a state the script did not intend.
  */
-export async function runSandbox({ townSource, keep = false, log = () => {} } = {}) {
+// ── WHERE IT NEVER RUNS (POS-994, Wright 2026-11-16 08:5x EST) ───────────────
+// This sandbox is exempt from the office's pin law (test/town-tool.test.mjs §
+// the source law) BY NAME, for one reason: its whole job is to run the --town
+// checkout's OWN engines (stamp-mint, ballot, epoch-close, the ferry), often a
+// town PR's, against this office tree, which is exactly the code the office
+// otherwise refuses to run unpinned. That is safe only where no real mint key
+// can be reached. So it refuses to start where one is present: the box's key
+// path, or the path the office environment names for the mint (STAMP_KEY).
+/** The places a real stamp key would be on a machine that mints. */
+export const stampKeyPaths = (env = process.env) => [
+  "/srv/postmark-office/stamp-key.pem",      // prod's mint key
+  "/srv/postmark-office-dev/stamp-key.pem",  // dev's own mint key (POS-354)
+  env.STAMP_KEY,                             // the office env's mint key
+  env.WITNESS_KEY,                           // the witness's key (Truey's review of #1065: "a key or the store")
+].filter(Boolean);
+
+/**
+ * Null where none of `paths` exists and no store credential is named; else the
+ * sentence the sandbox refuses with. The store's credentials (WORLD2_PG_URL) are
+ * refused like a key (Truey's re-read of #1065, finding 6: "a key or the store").
+ */
+export function stampKeyRefusal(paths = stampKeyPaths(), { storeUrl = process.env.WORLD2_PG_URL } = {}) {
+  if (storeUrl) return `stamp-sandbox: refused — the store's credentials are present (WORLD2_PG_URL). The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where the store can be reached; it opens its own store.`;
+  const hit = paths.find((p) => existsSync(p));
+  return hit ? `stamp-sandbox: refused — a stamp key is present at ${hit}. The sandbox runs the town checkout's own engines, unpinned (POS-994), so it never runs where a mint key can be reached; run it on a machine without one.` : null;
+}
+
+export async function runSandbox({ townSource, townAt = null, keep = false, log = () => {} } = {}) {
+  const refused = stampKeyRefusal();
+  if (refused) throw new Error(refused);
   const t0 = Date.now();
   const report = { green: false, office_head: null, town_source: null, town_sha: null, steps: [], verifies: 0 };
   try { report.office_head = git(OFFICE, "rev-parse", "HEAD"); } catch { /* an exported tree */ }
   let sb;
   try {
-    sb = await openSandbox({ townSource, log });
+    sb = await openSandbox({ townSource, townAt, log });
     report.town_source = sb.source;
     report.town_sha = sb.sourceSha;
+    report.town_at = sb.townAt; // the ref asked for: the office's pinned commit by default, null for a named checkout's own HEAD
     report.sandbox = sb.dir;
     prepareTown(sb, { log });
+    report.pins = pinSandboxTown(sb, { log }); // before the store: the in-process readers and every child run under the sandbox's own pins
     await openStore(sb, { log });
 
     // the whole real history, verified once under the sandbox key, before any event
@@ -821,6 +918,7 @@ export function renderReport(r) {
   out.push(`# stamp sandbox: ${r.green ? "GREEN" : "RED"}`);
   out.push("");
   out.push(`office head ${r.office_head ?? "(unknown)"} · town ${r.town_sha ?? "(none)"} (${r.town_source ?? "?"}) · ${Math.round((r.ms ?? 0) / 1000)} s · ${r.verifies} full verifies`);
+  if (r.pins) out.push(`pins: the sandbox's own ${r.pins.files} town files at its setup commit ${String(r.pins.setupCommit).slice(0, 9)}; the office's real pins untouched`);
   if (r.history) out.push(`history under the sandbox key: ${r.history}`);
   if (r.error) out.push(`\nTHE SANDBOX ${r.setup_failed ? "COULD NOT BE BUILT" : "TRIPPED"}: ${r.error}`);
   out.push("");
@@ -843,21 +941,24 @@ export function renderReport(r) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
-const USAGE = "usage: node tools/stamp-sandbox.mjs [--town <town checkout>] [--keep] [--json] [--report <file>]";
+const USAGE = "usage: node tools/stamp-sandbox.mjs [--town <town checkout>] [--at <town ref>] [--keep] [--json] [--report <file>]  (no --town/--at: the town commit the office pins)";
 
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(USAGE); return 0; }
+  const refused = stampKeyRefusal();
+  if (refused) { console.error(refused); return 3; }
   const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
-  const known = new Set(["--town", "--keep", "--json", "--report"]);
+  const known = new Set(["--town", "--at", "--keep", "--json", "--report"]);
   for (let i = 0; i < argv.length; i++) {
     if (!argv[i].startsWith("--")) continue;
     if (!known.has(argv[i])) { console.error(`unknown flag ${argv[i]}\n${USAGE}`); return 2; }
   }
+  if (argv.includes("--at") && !(arg("--at") ?? "").trim()) { console.error(`--at names a town ref\n${USAGE}`); return 2; }
   const town = arg("--town");
   if (town && !existsSync(join(town, LEDGER_REL))) { console.error(`no ${LEDGER_REL} under ${town}\n${USAGE}`); return 2; }
   const json = argv.includes("--json");
   const report = await runSandbox({
-    townSource: town, keep: argv.includes("--keep"),
+    townSource: town, townAt: arg("--at"), keep: argv.includes("--keep"),
     log: json ? () => {} : (l) => console.log(l),
   });
   const text = renderReport(report);

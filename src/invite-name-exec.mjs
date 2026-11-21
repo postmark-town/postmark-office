@@ -13,6 +13,7 @@
 // Exit 0 with the answer or { error: { code, field, defect, hint } } (a refusal
 // is an answer); exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,8 +36,7 @@ async function main() {
   // push cannot land, leaves none of its printed files behind, and
   // nameInviterUnderLock takes its row back.
   answer(await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     // No index probe, unlike the join: nothing here reads the town index, only
     // the registry, which nameInviterUnderLock reads from the record itself.
     try {

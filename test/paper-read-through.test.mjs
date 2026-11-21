@@ -32,6 +32,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -429,6 +430,11 @@ both("NEXT STEPS (office wiring only) · the paper rows handed to the composer s
   const { nextStepsFor } = await import("../src/queries.mjs");
   const clone = townClone();
   writeFileSync(join(clone, "tools", "quest-progress.mjs"), QUEST_STUB);
+  // POS-994: the office runs its pinned copy of the clone's quest law; this clone
+  // (stub and all) is pinned to itself for the length of this test.
+  const pinsBefore = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = pinTown(clone);
+  try {
   const run = async () => {
     delete globalThis.__pos603PaperRows;
     const ns = await nextStepsFor("limen", clone, { own: true, key: keyFor("limen"), worldBlock: async () => null, ix: tis.storeIndexPooled(clone) });
@@ -439,4 +445,5 @@ both("NEXT STEPS (office wiring only) · the paper rows handed to the composer s
   assert.ok((await run()).includes("tend-your-home"), "owed to start with");
   okAct(await act("home", "limen", HOME, clone), "home");
   assert.equal((await run()).includes("tend-your-home"), false, "the office's paper rows no longer ask");
+  } finally { if (pinsBefore === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = pinsBefore; }
 });

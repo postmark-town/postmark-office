@@ -53,13 +53,15 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 // registry read (sign-in among them) between a deploy and its migration.
 // `invited_by` (085, POS-576) is read the same way, for the same reason, and so is `likeness_state`
 // (092, POS-726 slice B): a store that has not taken 092 yet reads it as NULL. And so is `hearth` (093, POS-962): the id of the Hearth the
-// household chose, as text, NULL when it chose nothing or the store has not taken 093.
+// household chose, as text, NULL when it chose nothing or the store has not taken 093. And so is `human_profile` (101, POS-721): before
+// 101, every house reads "nothing set".
 const HOUSEHOLDS_SQL = `
   SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
          provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness,
          to_jsonb(households) -> 'invited_by' AS invited_by,
          to_jsonb(households) -> 'likeness_state' AS likeness_state,
-         to_jsonb(households) ->> 'hearth' AS hearth
+         to_jsonb(households) ->> 'hearth' AS hearth,
+         to_jsonb(households) -> 'human_profile' AS human_profile
     FROM households
    ORDER BY ord`;
 
@@ -127,11 +129,11 @@ const META_SQL = `
  * it stays the entry point for everything that is not already holding one.)
  */
 export async function registryRowsVia(q) {
-  const [households, pins, meta] = await Promise.all([
-    q.query(HOUSEHOLDS_SQL).then((r) => r.rows),
-    q.query(PINS_SQL).then((r) => r.rows),
-    q.query(META_SQL).then((r) => r.rows),
-  ]);
+  // ONE AT A TIME (POS-1057). `q` is often a HELD client (the pen's transaction, POS-963's fix): pg queues a second query on a client that is
+  // already running one and warns that it will stop doing so (pg 9), so the three reads are awaited in turn. The same three statements, the same answer.
+  const households = (await q.query(HOUSEHOLDS_SQL)).rows;
+  const pins = (await q.query(PINS_SQL)).rows;
+  const meta = (await q.query(META_SQL)).rows;
   return foldRegistryRows(households, pins, meta);
 }
 
@@ -228,8 +230,8 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
 // its one writer is `setHouseholdInvitedBy`, at the declaration. `likeness_state`
 // (092, POS-726 slice B) too: its one writer is `setLikenessRequest` (a request only), from the signed-in form. `hearth` (093, POS-962)
-// too: its one writer is `setHouseholdHearth`.
-const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state", "hearth"];
+// too: its one writer is `setHouseholdHearth`. And `human_profile` (101, POS-721): its one writer is `setHouseholdHumanProfile`.
+const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state", "hearth", "human_profile"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -249,7 +251,7 @@ const valuesOf = (row, cols) => cols.map((c) => {
   if (c === "accounts") return JSON.stringify(row[c] ?? []);
   if (c === "provisional") return row[c] === true;
   if (c === "home_images") return JSON.stringify(row[c] ?? {});
-  if (c === "likeness" || c === "invited_by" || c === "likeness_state") return row[c] == null ? null : JSON.stringify(row[c]);
+  if (c === "likeness" || c === "invited_by" || c === "likeness_state" || c === "human_profile") return row[c] == null ? null : JSON.stringify(row[c]);
   return row[c] ?? null;
 });
 
@@ -577,6 +579,44 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
 }
 
 /**
+ * The household's human's town name, short line and pronouns (POS-721,
+ * migration 101), changed on its row.
+ *
+ * The ONE store writer of `human_profile`; `src/human-profile.mjs §
+ * setHumanProfile` is the one act that calls it. `set` holds the fields given a
+ * value and `clear` the fields given an empty string: ONE statement merges the
+ * one and drops the other, so a field nobody named keeps its value and two
+ * sign-ins changing different fields never undo each other. A profile left
+ * with nothing in it is stored NULL (101's shape refuses `{}`).
+ *
+ * THE ACCOUNT IS CHECKED IN THE SAME STATEMENT THAT WRITES, as the likeness
+ * answer's is: the row is found by its slug AND by the signed-in account being
+ * one of its `accounts`, so no other house's sign-in reaches it.
+ *
+ * Returns `{ slug, human_profile }` of the row written, `null` when the office
+ * is not pointed at the record, `{ slug: null }` when no row matched, or
+ * `{ missingColumn: true }` on a store that has not taken 101 (the Hearth's
+ * answer, `setHouseholdHearth`).
+ */
+export async function setHouseholdHumanProfile({ slug, set = {}, clear = [], ghId }, env = process.env) {
+  let r;
+  try {
+    r = await actsQuery(
+      `UPDATE households
+          SET human_profile = NULLIF((COALESCE(human_profile, '{}'::jsonb) || $2::jsonb) - $3::text[], '{}'::jsonb)
+        WHERE slug = $1
+          AND accounts @> jsonb_build_array(jsonb_build_object('id', ($4)::bigint))
+    RETURNING slug, human_profile`,
+      [slug, JSON.stringify(set), clear, ghId], env);
+  } catch (e) {
+    if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 101 is not on this store yet
+    throw e;
+  }
+  if (r === null) return null;
+  return r.length ? { slug: r[0].slug, human_profile: r[0].human_profile ?? null } : { slug: null };
+}
+
+/**
  * Take back a naming made after joining that never reached the town's printout
  * (POS-947, src/invite-name.mjs): the drain refused, or the commit could not
  * land, so the credit is unpublished and the store and the printed registry
@@ -616,6 +656,9 @@ export const MOVE_ROW_REFUSALS = Object.freeze({
   NOT_OWNER: { code: 403, defect: "the move writes as the store's owner (world2_owner), and this connection is another role" },
   MOVED: { code: 409, defect: "the households changed since the plan was read" },
   LIKENESS_STATE: { code: 409, defect: "the household the resident leaves holds likeness state (a request, a selection or an official pointer): this tool neither moves nor discards it — nothing was written" },
+  // POS-1055 (the Dreaming): the one move that also settles the house's answer, and only on the words of the two residents.
+  NO_SOURCE_NO: { code: 409, defect: "the household the resident leaves has not answered no to the likeness question: the settled answer is that recorded no, and there is none to carry — nothing was written" },
+  TARGET_LIKENESS_STATE: { code: 409, defect: "the household the resident joins holds likeness state (a request, a selection or an official pointer): settling its answer to no would strand it, and no policy for that is ruled — nothing was written" },
 });
 
 // LIKENESS STATE (092, POS-726 slice B; Wright 2026-11-09 12:43Z, on #985: "If the source household has any likeness
@@ -632,13 +675,17 @@ export async function likenessStateHeld(slug, env = process.env) {
 }
 
 /** The target row as it stands after the move: pure, so the plan and the transaction compute it alike. */
-export function movedTargetRow({ handle, source, target }) {
+export function movedTargetRow({ handle, source, target, settleLikeness = false }) {
   const ids = new Set((target.accounts ?? []).map((a) => Number(a?.id)));
   const accounts = [...(target.accounts ?? []), ...(source.accounts ?? []).filter((a) => !ids.has(Number(a?.id)))];
   const formerly = [...new Set([...(target.formerly ?? []), source.slug, ...(source.formerly ?? [])])].filter((f) => f !== target.slug);
   const picture = (source.home_images ?? {})[handle];
   const home_images = picture == null ? { ...(target.home_images ?? {}) } : { ...(target.home_images ?? {}), [handle]: picture };
-  return { residents: [...(target.residents ?? []), handle], accounts, formerly, home_images };
+  const moved = { residents: [...(target.residents ?? []), handle], accounts, formerly, home_images };
+  // POS-1055: the combined house reads the recorded NO the resident brings, in the same row write as the move; a house that
+  // already answers no keeps its own record. Only when asked for (settleLikeness), never by the generic move.
+  if (settleLikeness && target.likeness?.answer !== "no") moved.likeness = source.likeness;
+  return moved;
 }
 
 const asJson = (v) => (typeof v === "string" ? JSON.parse(v) : v);
@@ -648,7 +695,7 @@ const asJson = (v) => (typeof v === "string" ? JSON.parse(v) : v);
  * refusal (`code`, `defect`, `detail`) and writes nothing, or answers
  * `{ from, to, target }` with the target row as committed.
  */
-export async function moveResidentInStore(client, { handle, from, to }) {
+export async function moveResidentInStore(client, { handle, from, to, settleLikeness = false }) {
   const refuse = (r, detail = null) => Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, detail });
   const { rows: [who] } = await client.query("SELECT current_user::text AS u");
   if (who?.u !== "world2_owner") throw refuse(MOVE_ROW_REFUSALS.NOT_OWNER, `connected as ${who?.u ?? "nobody"}`);
@@ -656,7 +703,7 @@ export async function moveResidentInStore(client, { handle, from, to }) {
   try {
     const { rows } = await client.query(
       `SELECT slug, residents, accounts, formerly, home_images, to_jsonb(households) -> 'invited_by' AS invited_by,
-              ${LIKENESS_STATE_HELD} AS likeness_state_held
+              ${LIKENESS_STATE_HELD} AS likeness_state_held, to_jsonb(households) -> 'likeness' AS likeness
          FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE`,
       [[from, to]]);
     const source = rows.find((r) => r.slug === from);
@@ -672,13 +719,18 @@ export async function moveResidentInStore(client, { handle, from, to }) {
     // LIKENESS STATE, RECHECKED UNDER THE LOCK (Wright 12:43Z): state that arrived after the plan refuses here and
     // rolls back, named by the house alone; its contents are never read.
     if (source.likeness_state_held === true) throw refuse(MOVE_ROW_REFUSALS.LIKENESS_STATE, from);
-    const after = movedTargetRow({ handle,
-      source: { ...source, accounts: asJson(source.accounts), home_images: asJson(source.home_images) },
-      target: { ...target, accounts: asJson(target.accounts), home_images: asJson(target.home_images) } });
+    if (settleLikeness) {
+      // POS-1055, rechecked under the lock: the answer carried is the one the source recorded, and a target with private state is not touched.
+      if (asJson(source.likeness)?.answer !== "no") throw refuse(MOVE_ROW_REFUSALS.NO_SOURCE_NO, from);
+      if (target.likeness_state_held === true) throw refuse(MOVE_ROW_REFUSALS.TARGET_LIKENESS_STATE, to);
+    }
+    const after = movedTargetRow({ handle, settleLikeness,
+      source: { ...source, accounts: asJson(source.accounts), home_images: asJson(source.home_images), likeness: asJson(source.likeness) },
+      target: { ...target, accounts: asJson(target.accounts), home_images: asJson(target.home_images), likeness: asJson(target.likeness) } });
     const up = await client.query(
-      `UPDATE households SET residents = $2::text[], accounts = $3::jsonb, formerly = $4::text[], home_images = $5::jsonb
+      `UPDATE households SET residents = $2::text[], accounts = $3::jsonb, formerly = $4::text[], home_images = $5::jsonb${after.likeness !== undefined ? ", likeness = $6::jsonb" : ""}
         WHERE slug = $1 RETURNING slug`,
-      [to, after.residents, JSON.stringify(after.accounts), after.formerly, JSON.stringify(after.home_images)]);
+      [to, after.residents, JSON.stringify(after.accounts), after.formerly, JSON.stringify(after.home_images), ...(after.likeness !== undefined ? [JSON.stringify(after.likeness)] : [])]);
     const del = await client.query(`DELETE FROM households WHERE slug = $1 AND residents = ARRAY[$2]::text[] RETURNING slug`, [from, handle]);
     if (up.rowCount !== 1 || del.rowCount !== 1) throw refuse(MOVE_ROW_REFUSALS.MOVED, `updated ${up.rowCount}, retired ${del.rowCount}`);
     await client.query("COMMIT");

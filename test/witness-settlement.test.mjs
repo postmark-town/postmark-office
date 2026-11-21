@@ -20,17 +20,18 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { settlementDecided } from "../world2/tools/witness-settlement.mjs";
+import { collect, manifest } from "../tools/town-pins.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "world2", "tools", "witness-settlement.mjs");
-const scratch = mkdtempSync(join(tmpdir(), "postmark-witness-settlement-"));
+const scratch = tempDir("postmark-witness-settlement-");
 after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const GIT_ENV = {
@@ -120,6 +121,16 @@ process.exit(Number(process.env["STUB_" + verb.toUpperCase() + "_EXIT"] || 0));
 `);
   return town;
 }
+// POS-994: the tool runs the office's PINNED copy of the witness chain, checked
+// against the town. The stub town gets pins of its own stub (beside it, never
+// inside it), named in TOWN_PINS_DIR, so what runs is still the stub.
+function pinsOf(town) {
+  const root = `${town}-pins`;
+  const files = collect((p) => readFileSync(join(town, p)), ["witness-chain.mjs"]);
+  for (const [p, { bytes }] of files) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), bytes); }
+  writeFileSync(join(root, "PINS.json"), JSON.stringify(manifest(files, { townCommit: "e".repeat(40), readAt: "2026-11-16T00:00:00Z" })));
+  return root;
+}
 function runTool(town, { attempt = "1", rec = receipt(), env = {} } = {}) {
   const d = dir("run");
   const receiptPath = join(d, "settlement-auto.json");
@@ -127,7 +138,7 @@ function runTool(town, { attempt = "1", rec = receipt(), env = {} } = {}) {
   const calls = join(d, "calls.jsonl");
   const r = spawnSync(process.execPath, [TOOL, "--receipt", receiptPath, "--attempt", attempt, "--event", "2026-11-06T18:00:01Z", "--town", town, "--lock", join(d, "town.lock")], {
     encoding: "utf8",
-    env: { ...process.env, WITNESS_KEY: join(d, "key.pem"), WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls, ...env },
+    env: { ...process.env, TOWN_PINS_DIR: pinsOf(town), WITNESS_KEY: join(d, "key.pem"), WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls, ...env },
   });
   const seen = existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
   return { ...r, seen, lock: join(d, "town.lock") };
@@ -162,7 +173,7 @@ test("--open: the run is opened before it acts, held by the crossing's own shell
   const d = dir("open");
   const calls = join(d, "calls.jsonl");
   const r = spawnSync(process.execPath, [TOOL, "--open", "--attempt", "1", "--event", "2026-11-06T18:00:01Z", "--town", town, "--pid", "4242"], {
-    encoding: "utf8", env: { ...process.env, WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
+    encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinsOf(town), WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
   });
   assert.equal(r.status, 0, r.stderr);
   const [call] = readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -201,6 +212,37 @@ test("KEEP RUNNING: an owe or a publish that fails leaves the tool at exit 0, sa
   assert.match(pubFails.stderr, /the record is owed, not published/);
 });
 
+// POS-994 (Truey's re-read of #1065, finding 2): the settlement half of the pin
+// stop. The town's witness-chain changes after the office pinned it: the opening
+// and the incomplete owe still run, from the pinned copy, without the clone's
+// check (CLONE_FREE_VERBS); the owe of the decided outcome stops by name and is
+// owed as incomplete, "town-pin-mismatch: <file>"; the publish stops, and the
+// record stays owed for the first publish after the re-pin.
+test("A PIN STOP is witnessed too: the run is opened, its outcome owed as incomplete town-pin-mismatch, and the record stays owed", () => {
+  const town = stubTown();
+  const pinned = `${pinsOf(town)}-before`;
+  cpSync(`${town}-pins`, pinned, { recursive: true });
+  writeFileSync(join(town, "tools", "witness-chain.mjs"), readFileSync(join(town, "tools", "witness-chain.mjs"), "utf8") + "// a town change the office has not reviewed\n");
+
+  // the opening: clone-free, so the pinned copy owes it whatever the clone holds
+  const d = dir("open-pinstop");
+  const calls = join(d, "calls.jsonl");
+  const open = spawnSync(process.execPath, [TOOL, "--open", "--attempt", "1", "--event", "2026-11-06T18:00:01Z", "--town", town, "--pid", "4242"], {
+    encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinned, WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
+  });
+  assert.equal(open.status, 0, open.stderr);
+  assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l).verb), ["owe-open"], "the run is opened from the pinned copy");
+
+  // the decision: the owe stops by name; the incomplete owe lands; the publish is held
+  const r = runTool(town, { env: { TOWN_PINS_DIR: pinned } });
+  assert.equal(r.status, 0, `LAW: "the town keeps running": ${r.stderr}`);
+  assert.deepEqual(r.seen.map((c) => c.verb), ["owe-incomplete"], "nothing the clone was checked for ran; the incomplete owe did");
+  assert.ok(r.seen[0].rest.join(" ").includes("--why town-pin-mismatch: tools/witness-chain.mjs"), r.seen[0].rest.join(" "));
+  assert.match(r.stderr, /tools\/witness-chain\.mjs is not the copy the office pinned/);
+  assert.match(r.stderr, /owed as incomplete: town-pin-mismatch: tools\/witness-chain\.mjs/);
+  assert.match(r.stderr, /the record is owed, not published \(the pin stopped it\)/);
+});
+
 // ── the crossing, with the town's real witness ──────────────────────────────
 
 const TOWN_TREE = process.env.POSTMARK_TOWN_WITNESS_TREE || join(OFFICE, "town-clone");
@@ -208,7 +250,8 @@ const HAS_WITNESS = existsSync(join(TOWN_TREE, "tools", "witness-chain.mjs"));
 const SH_OK = spawnSync("sh", ["-c", "true"], { stdio: "ignore" }).status === 0;
 const crossingSkip = !SH_OK ? "no POSIX sh"
   : !HAS_WITNESS ? `skipped until the town's witness ships: no tools/witness-chain.mjs in ${TOWN_TREE} (set POSTMARK_TOWN_WITNESS_TREE to a town tree that has it)` : false;
-const WITNESS_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
+// the real witness's whole closure as the loader walks it: stamp-mint imports ./registry-source.mjs (a dynamic import, still walked)
+const WITNESS_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/registry-source.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
 
 function crossingFixture() {
   const root = dir("crossing");

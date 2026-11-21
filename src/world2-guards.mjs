@@ -469,7 +469,9 @@ const unconfigured = (which) => {
 export async function storeHoldingRows({ thing = null, since = null, until = null, afterId = null } = {}) {
   const off = unconfigured("holding");
   if (off) throw off;
-  return reading(async (client) => port.pgHoldingRows(client, { thing, since, until, ...(afterId != null ? { afterId } : {}) }));
+  // POS-1098: the rows are read under the pen's connection and mapped after it is back (a held connection idles while the thread maps a whole record's acts)
+  const rows = await reading(async (client) => port.pgHoldingRawRows(client, { thing, since, until, ...(afterId != null ? { afterId } : {}) }));
+  return port.holdingRowsFrom(rows);
 }
 
 /**
@@ -490,10 +492,9 @@ export async function storeHoldingRows({ thing = null, since = null, until = nul
 export async function storeAttachmentRows({ until = null, afterId = null } = {}) {
   const off = unconfigured("holder");
   if (off) throw off;
-  return reading(async (client) => {
-    const { rows } = await port.pgAttachmentsFor(client, { until, ...(afterId != null ? { afterId } : {}) });
-    return rows;
-  });
+  // POS-1098: the rows under the connection; the hydration, the strict refusal and `until` after it is back
+  const raw = await reading(async (client) => port.pgAttachmentRows(client, { ...(afterId != null ? { afterId } : {}) }));
+  return port.attachmentsFromRows(raw, { until }).rows;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

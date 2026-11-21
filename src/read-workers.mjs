@@ -43,6 +43,7 @@ import { availableParallelism } from "node:os";
 import { Writable } from "node:stream";
 import { workerSafe } from "./role.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { nowMs, newTiming, runTiming, currentTiming, workerReport } from "./read-timing.mjs"; // POS-1064/b: measurement only
 
 /** True inside a read worker. Everything that must not run twice keys on this. */
 export const IN_READ_WORKER = !isMainThread && workerData?.readWorker === true;
@@ -126,9 +127,60 @@ export function mcpWorkerTakes(messages) {
     const name = m.params?.name;
     const args = m.params?.arguments ?? {};
     if (MCP_WORKER_TOOLS.has(name)) return true;
+    if (name === "household") return householdReadOnWorker(args);
+    if (name === "doorstep") return doorstepReadOnWorker(args);
     if (name !== "world" || typeof args !== "object" || Array.isArray(args)) return false;
     if (args.do != null && args.do !== "") return false;
     return String(args.read ?? "").trim() !== "say";
+  });
+}
+
+/**
+ * THE HOUSEHOLD'S READS (POS-1064). `household` is answered on the main thread
+ * today, so a doorstep waited in line behind everything that thread does (POS-1057:
+ * ~100-300 ms of its synchronous CPU per read, 12 residents polling together queued
+ * 3-8 s). The same reads already run on a worker as REST GETs (/doorstep, /quests,
+ * /stamps); these are the household reads that answer from the store, the clone and
+ * the files, through the same functions, with no main-thread memory but ONE, which
+ * the handover carries (the world-write budget, `wantsWorldWrites`).
+ *
+ * A NAMED LIST, as above. NOT on it, and so on the main thread: every `do:` (an act),
+ * `read: "letter"` (opening a letter clears it for the key's residents, a write:
+ * `opensALetter`), `explain:`, and every read this list does not name (mail, window,
+ * address, home, media, earpiece, fund, blocks, settings, house, day, hearth: not
+ * audited for this lane, they keep their thread).
+ */
+export const HOUSEHOLD_WORKER_READS = new Set(["doorstep", "stamps", "quests", "stances", "outcomes", "stakes", "waiting", "marks", "needs-you", "happened", "closer", "correspondents", "posts", "standing"]);
+function householdReadOnWorker(args) {
+  if (typeof args !== "object" || Array.isArray(args)) return false;
+  if ((args.do != null && args.do !== "") || args.explain != null) return false;
+  const read = String(args.read ?? "").trim();
+  // the bare call is the glance (v2) or the checklist (v1): both carry the standing's world_writes
+  if (read === "") return args.read == null || args.read === "";
+  return HOUSEHOLD_WORKER_READS.has(read);
+}
+/** `doorstep` (the apex of apexes): a read, never an act; its `world` item carries `heard`, so it takes the earshot too. */
+function doorstepReadOnWorker(args) {
+  if (typeof args !== "object" || Array.isArray(args)) return false;
+  if ((args.do != null && args.do !== "") || args.explain != null) return false;
+  const read = String(args.read ?? "").trim();
+  return read === "" || read === "bundle";
+}
+
+/**
+ * Does a handed-over household call state the standing's `world_writes`? That block
+ * is the bouncer's live budget, this thread's memory (admission is one thread's), so
+ * the main thread reads it for the key's household at admission and hands it over
+ * with the call, as it does earshot; a worker's own bouncer is empty and would say 0.
+ */
+export function wantsWorldWrites(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((m) => {
+    if (m?.params?.name !== "household") return false;
+    const a = m.params?.arguments ?? {};
+    if (a.do != null && a.do !== "") return false;
+    const read = String(a.read ?? "").trim();
+    return read === "" || read === "standing";
   });
 }
 
@@ -140,9 +192,14 @@ export function mcpWorkerTakes(messages) {
 export function wantsEarshot(messages, shape = "v0") {
   if (!Array.isArray(messages)) return false;
   return messages.some((m) => {
+    if (m?.params?.name === "doorstep") return true; // the doorstep's world item is a v2 bare read
     if (m?.params?.name !== "world") return false;
     const a = m.params?.arguments ?? {};
     if ((a.do != null && a.do !== "") || (a.read != null && a.read !== "")) return false;
+    // WLD-187: a top-level at: is the spectator look, which is always the v2 read (and so carries `heard`), whatever the office's
+    // default shape: before the default flip it must reach a worker WITH the earshot snapshot, or its heard block is "unavailable".
+    // A look that asks another shape is refused at the door, so it needs none.
+    if (a.at != null && a.at !== "") return a.read_shape == null || a.read_shape === "" || a.read_shape === "v2";
     return (a.read_shape ?? shape) === "v2";
   });
 }
@@ -227,12 +284,15 @@ export function serveReadsInWorker(handle) {
       return;
     }
     if (msg?.type !== "read") return;
-    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null } = msg;
+    const { id, method, url, headers, ip, body = null, mcp = false, earshot = null, worldWrites = null, timing = null } = msg;
+    // POS-1064/b: the instant this worker picked the read up, and a context of its own for the leases and bundles it runs (the main thread's rid joins them)
+    const taken = nowMs();
+    const tm = timing && typeof timing.rid === "string" ? newTiming(taken, timing.rid.slice(0, 32)) : null;
     // An ended request: a GET's is empty, an agent's MCP read (POS-284) carries
     // the JSON-RPC body the main thread already read, delivered as one chunk
     // before the end.
     const req = new Writable({ write(_c, _e, cb) { cb(); } });
-    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp), handedEarshot: earshot });
+    Object.assign(req, { method, url, headers, socket: { remoteAddress: ip }, connection: { remoteAddress: ip }, handedMcpRead: Boolean(mcp), handedEarshot: earshot, handedWorldWrites: worldWrites });
     req.on = ((on) => function (ev, fn) {
       if (ev === "end") { queueMicrotask(() => queueMicrotask(fn)); return this; }
       if (ev === "data") { if (body != null) queueMicrotask(() => fn(body)); return this; }
@@ -241,9 +301,9 @@ export function serveReadsInWorker(handle) {
     const res = new CollectedResponse((r) => {
       const body = r.body();
       const ab = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
-      parentPort.postMessage({ type: "answer", id, status: r.statusCode, statusMessage: r.statusMessage, headers: r.headerPairs(), body: ab }, [ab]);
+      parentPort.postMessage({ type: "answer", id, status: r.statusCode, statusMessage: r.statusMessage, headers: r.headerPairs(), body: ab, ...(tm ? { timing: workerReport(tm, taken) } : {}) }, [ab]);
     });
-    try { handle(req, res); }
+    try { if (tm) runTiming(tm, () => handle(req, res)); else handle(req, res); }
     catch (e) {
       parentPort.postMessage({ type: "answer", id, status: 500, headers: [["Content-Type", "application/json"]],
         body: Buffer.from(JSON.stringify({ error: "the read worker tripped", hint: faultLogged("the read worker tripped", e) })).buffer }); // its error goes to the log (POS-578)
@@ -298,6 +358,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
       if (!p) return;
       pending.delete(msg.id);
       rec.served++;
+      if (p.tm) { p.tm.answer = msg.timing ?? null; p.tm.answer_at = nowMs(); } // POS-1064/b: the worker's report, and when this thread received it
       write(p.res, msg, slot);
     });
     // Kept for the exit's one line: an `error` is always followed by an `exit`.
@@ -311,7 +372,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         const p = pending.get(id);
         if (!p) continue;
         pending.delete(id);
-        if (p.tries < 1 && dispatch(p.res, p.msg, p.tries + 1)) continue;
+        if (p.tries < 1 && dispatch(p.res, p.msg, p.tries + 1, p.tm)) continue;
         refuse(p.res);
       }
       rec.inflight.clear();
@@ -356,13 +417,15 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
     return best;
   }
 
-  function dispatch(res, msg, tries = 0) {
+  function dispatch(res, msg, tries = 0, tm = currentTiming()) {
     const r = pick();
     if (!r) return false;
     const id = nextId++;
     const m = { ...msg, id };
-    pending.set(id, { res, msg, tries });
+    pending.set(id, { res, msg, tries, tm });
     r.inflight.add(id);
+    // POS-1064/b: which worker and when this thread posted the read (the first post stays `first_sent` across a retry); the rid rides to the worker to join the two records
+    if (tm) { const sent = nowMs(); tm.hand = { first_sent: tm.hand?.first_sent ?? sent, sent, slot: r.slot, tries: tries + 1 }; m.timing = { rid: tm.rid }; }
     r.w.postMessage(m);
     return true;
   }
@@ -381,7 +444,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
      * main thread already read, and the flag that lets the worker's POST /mcp
      * past the read role's refusal for this call alone.
      */
-    forward(req, res, { body = null, mcp = false, earshot = null } = {}) {
+    forward(req, res, { body = null, mcp = false, earshot = null, worldWrites = null } = {}) {
       if (stopped) return false;
       return dispatch(res, {
         type: "read",
@@ -391,6 +454,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         ip: req.socket?.remoteAddress ?? null,
         ...(mcp ? { body, mcp: true } : {}),
         ...(earshot ? { earshot } : {}),
+        ...(worldWrites ? { worldWrites } : {}),
       });
     },
     /** What the pool is, for /release: how many workers are up and what each has served. */

@@ -11,9 +11,11 @@
 // Exit 0 with {applied,...} or {error:{code,defect,hint}} (a bounce is an answer);
 // exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's stake engine is the office's pinned copy
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
 import { landStamped } from "./stamp-lines.mjs"; // POS-341: the ledger's lines are recorded in the store in the commit's transaction
@@ -30,13 +32,21 @@ async function main() {
     console.log(JSON.stringify({ error: { code: 409, defect: "not-yet-open", hint: "the office has no pen key configured for the stamp-ledger" } }));
     return;
   }
-  const enginePath = join(CLONE, "tools", "world-stake.mjs");
-  if (!existsSync(enginePath)) {
+  if (!existsSync(join(CLONE, "tools", "world-stake.mjs"))) {
     console.log(JSON.stringify({ error: { code: 503, defect: "not-yet-open", hint: "this town clone carries no world-stake engine — the P3 grammar is not merged there yet" } }));
     return;
   }
   const keyPem = readFileSync(KEY_PATH, "utf8");
-  const { worldStakeApply, worldUnstakeApply } = await import(pathToFileURL(enginePath));
+  // POS-994: the office's pinned copy of the stake engine, checked against the
+  // clone before anything is written; a town change the office has not pinned
+  // stops the stake by name.
+  let worldStakeApply, worldUnstakeApply;
+  try { ({ worldStakeApply, worldUnstakeApply } = await importTownTool(CLONE, "world-stake.mjs")); }
+  catch (e) {
+    if (!isPinStop(e)) throw e;
+    console.log(JSON.stringify({ error: { code: 503, defect: "town-pin-mismatch", hint: pinStopHint(e) } }));
+    return;
+  }
 
   // THE WHOLE CHANGE UNDER THE MARK'S LOCK (mark-stake-lock.mjs, WLD-27 A and
   // Bevel's first review R1): taken before the append, let go only after the
@@ -53,8 +63,7 @@ async function main() {
       // WHOLE OR NOTHING (POS-296), stake-exec's shape: a stake or unstake the pen
       // cannot land leaves no line and no commit behind.
       return penTransaction(CLONE, async () => {
-        if (process.env.TOWN_PUSH === "1")
-          execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+        freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
         let result;
         try {

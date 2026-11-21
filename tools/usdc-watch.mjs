@@ -101,6 +101,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 
 import { baseRpc, INTAKE, USDC, TRANSFER_TOPIC, MIN_CONF } from "../src/usdc-witness.mjs";
 import { readWalletRegistry, handleForAddress } from "../src/wallet-registry.mjs";
@@ -354,9 +355,9 @@ export function ledgerEntries(clone, engine) {
 }
 
 export async function townEngine(clone) {
-  const mint = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(mint)) return null;
-  const m = await import(pathToFileURL(mint));
+  if (!existsSync(join(clone, "tools", "stamp-mint.mjs"))) return null;
+  // POS-994: the office's pinned copy, checked against the clone; a pin stop throws by name, never "no engine".
+  const m = await importTownTool(clone, "stamp-mint.mjs");
   return typeof m.foldPotReceipts === "function" && typeof m.parseStampLedger === "function" ? m : null;
 }
 

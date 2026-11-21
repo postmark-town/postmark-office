@@ -80,6 +80,7 @@ import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994: the town's clock is the office's pinned copy
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -535,7 +536,7 @@ function readRoles(L) {
 
 /** The town's crossing number now (the town's own clock, tools/crossings.mjs). */
 async function crossingNow(town) {
-  const { crossingAt } = await importFrom(join(town, "tools", "crossings.mjs"));
+  const { crossingAt } = await importTownTool(town, "crossings.mjs"); // POS-994: the office's pinned copy
   return crossingAt(Date.now());
 }
 

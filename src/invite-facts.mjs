@@ -22,7 +22,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { ledgerFacts } from "./invite-pay.mjs";
 import { meepLawOf } from "./fund-holder.mjs";
 
@@ -72,9 +71,10 @@ export async function inviteStoreFacts(q) {
  * plan cannot see what is already paid, and nothing may be paid twice.
  */
 export async function townInviteLedger(town, registryHouseholds, { on = new Date() } = {}) {
-  const tool = join(town, "tools", "stamp-mint.mjs");
-  if (!existsSync(tool)) throw new Error(`invite: no tools/stamp-mint.mjs in ${town} — the town clone is named wrong`);
-  const engine = await import(pathToFileURL(tool).href);
+  if (!existsSync(join(town, "tools", "stamp-mint.mjs"))) throw new Error(`invite: no tools/stamp-mint.mjs in ${town} — the town clone is named wrong`);
+  // POS-994: the office's pinned copy, checked against the clone; a mismatch throws TownPinMismatch, by name.
+  const { importTownTool } = await import("./town-tool.mjs");
+  const engine = await importTownTool(town, "stamp-mint.mjs");
   if (typeof engine.inviteInvitedLine !== "function" || typeof engine.houseCanonOf !== "function")
     throw new Error("invite: this town's stamp-mint.mjs has no invite grammar (invite:<invited>/<inviter>/…), so the plan cannot see what is already paid — the town must carry --invite-mint first (POS-816's town half)");
   const ledgerFile = join(town, "WHITE_PAGES", "stamp-ledger.md");

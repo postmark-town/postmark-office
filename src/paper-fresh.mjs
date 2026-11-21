@@ -210,11 +210,26 @@ const same = (a, b) => {
 // (the garnish rule: every failure answers "no overlay"), so a suspended
 // resident's live files are never shown because a read failed.
 export async function freshFor(handle, { odb = null, clone = null, asOf = null } = {}) {
-  let pendingRows = [];
-  try { pendingRows = await pendingPaperRows(odb, handle); } catch { /* garnish only */ }
+  const pendingRows = await pendingRowsFor(odb, handle);
+  let standing = { v: null };
+  if (handle) { try { standing = { v: await standingForRead(handle) }; } catch (e) { standing = { e }; } }
+  return freshOf(handle, { clone, asOf, pendingRows, standing });
+}
+
+/** The town log's pending paper rows for `handle`, or none when the log will not read (garnish only). */
+export async function pendingRowsFor(odb, handle) {
+  try { return await pendingPaperRows(odb, handle); } catch { return []; /* garnish only */ }
+}
+
+/**
+ * THE FRESH CONTEXT FROM ITS TWO INPUTS, read elsewhere (POS-1129): the doorstep loads the standing in its one town-index transaction and builds
+ * this after the connection is back; `freshFor` reads the standing on its own and builds the same thing. `standing` is `{ v }` (the handle's
+ * standing, or null) or `{ e }` (the read failed): an unreadable standing composes no overlay, as `freshFor` always answered.
+ */
+export function freshOf(handle, { clone = null, asOf = null, pendingRows = [], standing = { v: null } } = {}) {
   let suspended = false;
   if (handle) {
-    try { suspended = isSuspended(await standingForRead(handle)); }
+    try { if (standing?.e) throw standing.e; suspended = isSuspended(standing?.v ?? null); }
     catch { suspended = true; /* unreadable: no overlay, the settled index answers */ }
   }
   return { clone, asOf, pendingRows, suspended };

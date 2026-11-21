@@ -14,9 +14,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 
@@ -98,12 +98,19 @@ test("the crossing the copy names is the boat next_crossing named before it sail
   assert.equal(copyBlock({ newest: NEWEST, seal: { sha: "s1sha", at: SEAL } }, AS_OF, BEFORE_NEXT).crossing.crossing, boat.crossing);
 });
 
+// The copy's history is read in the page's one town-index lease since POS-1129 (town-index-store.mjs § doorstepPage, `copy` as `{ v }` or `{ e }`),
+// so a case stands its copy in there. Until 2026-11-18 these two cases replaced `ix.copy`, which the page read on a lease of its own then.
+const withCopy = (copy) => {
+  const real = storeIx();
+  return { ...real, doorstepPage: async (...a) => { const p = await real.doorstepPage(...a); return p && { ...p, copy }; } };
+};
+
 test("a copy holding no seal says it cannot name one, never a clock guess", async () => {
   const c = await NO_SEAL.store.connect("office_api");
   let copy;
   try { copy = await tis.indexCopy(c); } finally { await c.end(); }
   assert.deepEqual(copy, { newest: NEWEST, seal: null }, "the store's history holds no seal");
-  const ix = { ...storeIx(), copy: async () => copy };
+  const ix = withCopy({ v: copy });
   const d = await doorstepBundle("wright", { key: null, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix, nowMs: AFTER_NEXT });
   assert.equal(d.copy.crossing, null);
   assert.equal(d.copy.caught_up, null);
@@ -111,7 +118,7 @@ test("a copy holding no seal says it cannot name one, never a clock guess", asyn
 });
 
 test("a history that cannot be read is said, and the page still arrives", async () => {
-  const ix = { ...storeIx(), copy: async () => { throw new Error("the store blinked"); } };
+  const ix = withCopy({ e: new Error("the store blinked") });
   const d = await doorstepBundle("wright", { key: null, asOf: AS_OF, canWrite: false, clone: null, odb: null, ix, nowMs: AFTER_NEXT });
   assert.equal(d.copy.caught_up, null);
   assert.match(d.copy.sentence, /could not say what it has caught up to/);
@@ -125,7 +132,7 @@ const SAILED_AFTER = "limen-2026-07-12-to-wright-after-the-copy";
 
 /** A town clone the envelope pre-flight can scan. */
 function mailClone() {
-  const d = mkdtempSync(join(tmpdir(), "pm-stale-copy-town-"));
+  const d = tempDir("pm-stale-copy-town-");
   for (const h of ["wright", "limen"]) {
     mkdirSync(join(d, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(d, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -211,7 +218,7 @@ test("GET /letters/{id}: the same truthful 404, from a running office", async ()
   const { spawn } = await import("node:child_process");
   const { fileURLToPath } = await import("node:url");
   const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-  const tmp = mkdtempSync(join(tmpdir(), "pm-stale-copy-rest-"));
+  const tmp = tempDir("pm-stale-copy-rest-");
   const offices = [];
   try {
     for (const [name, env] of [["office", IX.env]]) {

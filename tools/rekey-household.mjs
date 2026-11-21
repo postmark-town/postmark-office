@@ -40,6 +40,7 @@
 // leaves the store renamed; running the same command again RESUMES (it finds
 // the new key with the old one in `formerly`) and lands the files.
 
+import { endWithNewline } from "../src/text-linear.mjs"; // POS-923: the trailing blanks read once, not at every blank of a long run
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -202,7 +203,7 @@ export async function rekeyHousehold({ from, to, name, clone, env = process.env,
   if (signed.length) {
     const ledgerAbs = join(clone, LEDGER);
     const prior = readFileSync(ledgerAbs, "utf8");
-    writeFileSync(ledgerAbs, prior.replace(/\s*$/, "\n") + signed.join("\n") + "\n");
+    writeFileSync(ledgerAbs, endWithNewline(prior) + signed.join("\n") + "\n");
     paths.push(ledgerAbs);
   }
 

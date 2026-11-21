@@ -46,6 +46,9 @@ export const ACT_ANNOUNCE = "announce";
 export const ACT_POST = "post";
 export const ACT_AMEND_POST = "amend";
 export const ACT_CLOSE = "close";
+// POS-1035: the town's INTERNAL completion of a staked event (the keep tick's, never a resident's door act): the event's spark made
+// and its stake come home in one act. The stored state stays as it was; "ended" is still the clock's (Rivet's seam response (3)).
+export const ACT_COMPLETE = "complete";
 // The bug class's one move along its lifecycle (Posts phase 2): the state it
 // moves to, and the class's own fields that stage sets.
 export const ACT_ADVANCE = "advance";
@@ -233,6 +236,27 @@ export function judgePlaceShape(place) {
     return { at: { x, y } };
   }
   throw refuse(422, "an event needs a place", hint, { field: "place" });
+}
+
+// POS-1133 (postmark#4577, Moose's bug post; Wright's CORE-105 ruling): the Origin is the town's null bucket, not a place.
+// Hosting a NEW event with no mark and the point (0, 0) is refused, in these words, at the door and under `preview: true`.
+// It is a rule of CREATING an event only: `judgePlaceShape` above is shared with amendments and is not widened, an event
+// already on the calendar at (0, 0) stays as it is, a standing mark that happens to be centred at (0, 0) is a mark (named,
+// with an extent) and stays valid, and a point with only one axis at zero is a real point.
+export const BARE_ORIGIN_DEFECT = "an event needs a place: name a mark, or give its x and y";
+const BARE_ORIGIN_HINT = 'the Origin (0, 0) is the null bucket of the town, where what has no place is kept, not a place of its own — place: { mark: "<owner>/<slug>" } names a standing mark, or place: { at: { x, y } } gives a real point, such as { at: { x: 120, y: 64 } }';
+
+/** Is this `place` (as sent) a bare-Origin point: well-formed, no mark, x and y both zero? Never throws. */
+export function isBareOrigin(place) {
+  let shape;
+  try { shape = judgePlaceShape(place); } catch { return false; }
+  return Boolean(shape.at) && shape.at.x === 0 && shape.at.y === 0;
+}
+
+/** Refuse a judged place shape that is the bare Origin; returns it otherwise. */
+export function refuseBareOrigin(shape) {
+  if (shape?.at && shape.at.x === 0 && shape.at.y === 0) throw refuse(422, BARE_ORIGIN_DEFECT, BARE_ORIGIN_HINT, { field: "place" });
+  return shape;
 }
 
 /**
@@ -450,6 +474,25 @@ export function applyPostAct(state, act) {
   if (act.action === ACT_CANCEL || act.action === ACT_CLOSE) {
     if (!prev) return null;
     const row = { ...prev, state: act.action === ACT_CANCEL ? STATE_CANCELLED : (p.state ?? STATE_CANCELLED), last_act: actId };
+    // POS-1035 (Darko 11:00 EST: "All 20 come home, no spark"): a staked event's whole stake returns IN the cancellation's own
+    // act, and the fold carries that it did — so a second cancellation, or a completion, can see it was paid and never pays twice
+    if (p.stake_returned && prev.fields?.stake)
+      row.fields = { ...prev.fields, stake: { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) } } };
+    state.posts.set(id, row);
+    return row;
+  }
+  // THE COMPLETION (POS-1035; call 22): `fields.completed { act, sparks, at }` — the identities of the sparks it made, one per room
+  // in their order, recorded ONCE — and the stake's whole return with the backing it now gives them (1 each). A FREE event's
+  // completion is `{ act, at, free: true }` and nothing more: its sparks are its host's private drafts, never named on the row.
+  // Nothing else about the row moves.
+  if (act.action === ACT_COMPLETE) {
+    if (!prev) return null;
+    const sparks = Array.isArray(p.sparks) ? p.sparks.map(String) : [];
+    const fields = { ...prev.fields, completed: p.free === true ? { act: actId, at: String(p.at), free: true } : { act: actId, sparks, at: String(p.at) } };
+    if (p.stake_returned && prev.fields?.stake)
+      fields.stake = { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) },
+        backing: { sparks, n: Number(p.backing ?? 0) } };
+    const row = { ...prev, fields, last_act: actId };
     state.posts.set(id, row);
     return row;
   }

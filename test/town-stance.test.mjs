@@ -28,20 +28,22 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
-import { CLASS_STANCE, ACTION_STANCE, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
+import { CLASS_STANCE, ACTION_STANCE, STANCE_TOOLS, __forgetStanceWorldForTest, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances, townOpposedEffect } from "../src/world-stance.mjs";
+import { validateArgs } from "../src/validate-args.mjs";
+import { capabilityIndex } from "../src/household-apex.mjs";
 import {
-  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstLaid,
+  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstCover, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
 } from "../src/town-stance.mjs";
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
-const scratch = mkdtempSync(join(tmpdir(), "postmark-town-stance-"));
+const scratch = tempDir("postmark-town-stance-");
 after(() => sweep(scratch));
 
 // ── the world in a bottle ────────────────────────────────────────────────────
@@ -444,6 +446,235 @@ test("5g · elderByFirstLaid: first-laid instants as ISO or milliseconds, else t
   assert.equal(same(b, a), false);
 });
 
+// ── 5h · the door reads seniority cell by cell, as the fold does (POS-571) ──
+//
+// World LOGOS conflict-matrix § Roles from seniority (RULED 2026-10-04):
+// "per-cell (whoever first covered a cell is that cell's incumbent)", and "an
+// expansion is a newcomer on its new cells". The fold reads that off a mark's
+// footprints (world consent.mjs § seniorAtContact). Bevel's FIX of office#1019
+// (2026-11-13 16:33Z): the door's offers and its recording ask the same blessed
+// engine, of the same locked claims the stance credential already reads.
+//
+// The estate was first laid 08-01 over x -50..50 and amended 08-20 to reach
+// x 150; the mill was laid 08-15 at x 100..140, ground only the amend reached.
+// This World carries the real engine at the suite's pin.
+//
+// FLIP: in world-stance.mjs § worldForStances, hand `awaitingOf` the whole-mark
+// `elderByFirstLaid(firstLaid)` again → the estate is offered the mill, the
+// mill's word is refused, and the first half reds.
+
+/** A World in a bottle carrying the real engine at the suite's pin, serving `marks`. → its path. */
+async function cellWorld(name, marks, households) {
+  const dir = join(scratch, name);
+  const { worldClone } = await import("./fixture-paths.mjs");
+  const engine = execFileSync("git", ["-C", worldClone(), "ls-tree", "--name-only", "HEAD", "tools/"], { encoding: "utf8" })
+    .split("\n").filter((p) => /^tools\/[^/]+\.mjs$/.test(p) && !p.endsWith(".test.mjs"));
+  for (const p of engine) {
+    const f = join(dir, p);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, execFileSync("git", ["-C", worldClone(), "show", `HEAD:${p}`], { encoding: "utf8", maxBuffer: 64 << 20 }));
+  }
+  const f = join(dir, "WORLD", "world-state.json");
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, JSON.stringify({ tick: 0, marks, parcels: [], households }));
+  writeFileSync(join(dir, "WORLD", "skeleton.json"), JSON.stringify({ features: [] }));
+  const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  g("init", "-q", "-b", "main"); g("config", "user.email", "t@postmark.invalid"); g("config", "user.name", "cells");
+  g("add", "-A"); g("commit", "-qm", "canon");
+  return dir;
+}
+const CELL_HOUSEHOLDS = { east: "hh:east", miller: "hh:mill", holder: "hh:holder", shedder: "hh:shed", barner: "hh:barn" };
+let cellRepo;
+{
+  const D = (d) => `2026-08-${d}T00:00:00.000Z`;
+  const cellMarks = [
+    { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: D("20"), body: "the estate, reaching east" },
+    { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: D("15"), body: "the mill" },
+    // P2's shapes, far from the estate: a parcel claimed 08-10, and a shed first laid 08-01 over its
+    // west edge, amended 09-01 to reach further in
+    { id: "holder/the-plot", by: "holder", kind: "parcel", tier: "home", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: D("10"), body: "the plot" },
+    { id: "shedder/the-shed", by: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", body: "the shed" },
+    // P3's barn, laid 09-05 at x 220..240: ground only the estate's later amend (09-10) reaches
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
+  ];
+  cellRepo = await cellWorld("world-cells", cellMarks, CELL_HOUSEHOLDS);
+}
+const CELL_D = (d) => `2026-08-${d}T00:00:00.000Z`;
+const ESTATE_ORIGIN = { slug: "east/the-estate", id: "c-estate-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 0, y: 0 }, extent: { w: 100, h: 100 } } };
+const ESTATE_AMEND = { slug: "east/the-estate", id: "c-estate-1", status: "locked", laid_date: CELL_D("20"), submitted_at: CELL_D("19"), decided_at: CELL_D("20"), geometry: { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } } };
+const MILL_CLAIM = { slug: "miller/the-mill", id: "c-mill-0", status: "locked", laid_date: CELL_D("15"), submitted_at: CELL_D("15"), decided_at: CELL_D("15"), geometry: { at: { x: 120, y: 0 }, extent: { w: 40, h: 40 } } };
+const east = { household: "hh:east", handles: new Set(["east"]) };
+const miller = { household: "hh:mill", handles: new Set(["miller"]) };
+const cellSpeak = (args, key) => declareStanceViaOffice(cellRepo, args, key, { crossing: 145 });
+const offered = async (key) => (await stanceInbox(cellRepo, key)).candidates.map((c) => c.mark);
+
+test("5h · an EXPANSION is a newcomer on its new cells at the door too: the mill is offered the estate and its word is recorded; the estate's obsolete word on the mill is refused; the fold agrees", async () => {
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-1"), claim("miller/the-mill", "c-mill-0")];
+  assert.deepEqual(await offered(miller), ["east/the-estate"], "the mill was first on the cells the estate's amend added");
+  assert.deepEqual(await offered(east), [], "and the estate has no word on the mill there");
+  const r = await cellSpeak({ on: "east/the-estate", stance: "opposed" }, miller);
+  assert.equal(r.on, "east/the-estate", "the incumbent's word is recorded");
+  assert.equal(written().filter((w) => w.payload.on === "east/the-estate").length, 1);
+  await assert.rejects(() => cellSpeak({ on: "miller/the-mill", stance: "opposed" }, east), (e) => {
+    assert.equal(e.code, 403, "the obsolete word, the one the fold would now discard, is refused");
+    return true;
+  });
+  assert.equal(written().filter((w) => w.payload.on === "miller/the-mill").length, 0, "and nothing was written for it");
+
+  // THE FOLD AGREES: the same engine, the same footprints (the write-down's own builder), the same claims
+  const { pathToFileURL } = await import("node:url");
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const estate = { id: "east/the-estate", slug: "the-estate", by: "east", household: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: CELL_D("20"), claimed_at: CELL_D("01"), body: "e",
+    footprints: footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } } }) };
+  const mill = { id: "miller/the-mill", slug: "the-mill", by: "miller", household: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), body: "m" };
+  const stood = (state, id) => state.marks.some((m) => m.id === id);
+  const millSays = engine.fold({ marks: [estate, { ...mill, consent: { "east/the-estate": "opposed" } }], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: "miller/the-mill", n: 100, weight: 100, tick: 0 }] });
+  assert.equal(stood(millSays, "east/the-estate"), false, "the fold counts the word the door recorded");
+  const estateSays = engine.fold({ marks: [{ ...estate, consent: { "miller/the-mill": "opposed" } }, mill], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: "east/the-estate", n: 100, weight: 100, tick: 0 }] });
+  assert.equal(stood(estateSays, "miller/the-mill"), true, "and discards the word the door refused");
+});
+
+test("5h · NO HISTORY keeps the whole-mark door: without the amend's locked claim the estate is the mill's elder, and no date or footprint reaches a candidate", async () => {
+  FIRST = [ESTATE_ORIGIN, MILL_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-0"), claim("miller/the-mill", "c-mill-0")];
+  assert.deepEqual(await offered(east), ["miller/the-mill"], "dated 08-01 as a whole, the estate is offered the mill");
+  assert.deepEqual(await offered(miller), [], "and the mill is offered nothing");
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM];
+  // the estate's own date (08-20, its amend) is a candidate field as it always was; its first-laid instant and footprints are not
+  const read = JSON.stringify((await stanceInbox(cellRepo, miller)).candidates);
+  assert.ok(read.includes("east/the-estate"), "the candidate is there to read");
+  for (const leak of ["2026-08-01", "footprints", "claimed_at", "since", "geometry"])
+    assert.equal(read.includes(leak), false, `no ${leak} in the candidate rows`);
+});
+
+// 5h, A LATER AMEND LOCKED BUT NOT YET CROSSED (P3, round 3 of the review of
+// office#1019; Bevel's FIX 17:35Z): the estate's expansion (08-20) crossed, so
+// canon serves it and the fold read its file's two footprints; a further amend
+// (09-10, reaching x 250) is locked and has not crossed. The door judges canon's
+// shape, so it reads the chain through that shape (mark-render.mjs §
+// footprintsThroughShape), never the whole-chain rule that drops it. Once the
+// newer shape is served, the door reads through it. FLIP: in worldForStances use
+// footprintsFromChain again → the first two assertions red (the scalar answer).
+const ESTATE_LATER = { slug: "east/the-estate", id: "c-estate-2", status: "locked", laid_date: "2026-09-10T00:00:00.000Z", submitted_at: "2026-09-10T00:00:00.000Z", decided_at: "2026-09-10T00:00:00.000Z", geometry: { at: { x: 100, y: 0 }, extent: { w: 300, h: 100 } } };
+const BARN_CLAIM = { slug: "barner/the-barn", id: "c-barn-0", status: "locked", laid_date: "2026-09-05T00:00:00.000Z", submitted_at: "2026-09-05T00:00:00.000Z", decided_at: "2026-09-05T00:00:00.000Z", geometry: { at: { x: 230, y: 0 }, extent: { w: 20, h: 20 } } };
+const barner = { household: "hh:barn", handles: new Set(["barner"]) };
+const offeredAt = async (repo, key) => (await stanceInbox(repo, key)).candidates.map((c) => c.mark);
+
+test("5h · a LATER amend locked but not crossed keeps the door on the served history: the mill is still offered the estate, the estate refused on the mill; once the newer shape is served, the door advances", async () => {
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER, MILL_CLAIM, BARN_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-2"), claim("miller/the-mill", "c-mill-0"), claim("barner/the-barn", "c-barn-0")];
+  assert.deepEqual(await offered(miller), ["east/the-estate"], "the crossed expansion still makes the mill first on those cells");
+  assert.deepEqual(await offered(east), [], "and gives the estate no word on the mill");
+  assert.deepEqual(await offered(barner), [], "the barn is on no ground the served estate covers");
+  const r = await cellSpeak({ on: "east/the-estate", stance: "opposed" }, miller);
+  assert.equal(r.on, "east/the-estate", "the incumbent's word is recorded");
+  await assert.rejects(() => cellSpeak({ on: "miller/the-mill", stance: "opposed" }, east), (e) => e.code === 403);
+  assert.equal(written().filter((w) => w.payload.on === "miller/the-mill").length, 0);
+
+  // THE SERVED FOLD'S HISTORY: what the crossed file carries is exactly what the door reads now
+  const { footprintsFromChain, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  const served = { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } };
+  const atTheCrossing = footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: served });
+  assert.equal(atTheCrossing?.length, 2, "the write-down printed two footprints at the crossing");
+  assert.deepEqual(footprintsThroughShape({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), atTheCrossing,
+    "the door's history through the served shape is the file's");
+  assert.equal(footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), null,
+    "where the whole-chain rule, the write-down's, would read nothing");
+
+  // ONCE THE NEWER SHAPE IS SERVED: the door reads through it
+  const next = await cellWorld("world-cells-next", [
+    { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 100, y: 0 }, extent: { w: 300, h: 100 }, date: "2026-09-10T00:00:00.000Z", body: "the estate, reaching further" },
+    { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), body: "the mill" },
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
+  ], CELL_HOUSEHOLDS);
+  assert.deepEqual(await offeredAt(next, barner), ["east/the-estate"], "the barn was first on the cells the later amend added");
+  assert.deepEqual(await offeredAt(next, east), [], "and the estate has no word on the barn or the mill");
+  // (the mill's household has already spoken on the estate above, so its inbox no longer offers it)
+  await assert.rejects(() => declareStanceViaOffice(next, { on: "miller/the-mill", stance: "opposed" }, east, { crossing: 145 }), (e) => e.code === 403,
+    "the mill keeps its cells: the estate's word on it is still refused");
+});
+
+// 5h, A PARCEL KEEPS ITS OWN LAW (P2, round 2 of the review of office#1019; Bevel's
+// FIX 17:07Z): a parcel "speaks only on what came after it", whole-mark (world
+// consent.mjs § cameAfter), and seniority at contact never reads cells for a
+// parcel. The shed was first laid 08-01, before the plot (08-10), and amended
+// 09-01 further into it: the fold ignores the plot's word on it, so the door
+// neither offers it nor records it. FLIP: drop the parcel guard in town-stance.mjs
+// § elderByFirstCover → the plot's household is offered the shed, and this reds.
+const PLOT_CLAIM = { slug: "holder/the-plot", id: "c-plot-0", status: "locked", laid_date: CELL_D("10"), submitted_at: CELL_D("10"), decided_at: CELL_D("10"), geometry: { at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 } } };
+const SHED_ORIGIN = { slug: "shedder/the-shed", id: "c-shed-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 980, y: 0 }, extent: { w: 20, h: 20 } } };
+const SHED_AMEND = { slug: "shedder/the-shed", id: "c-shed-1", status: "locked", laid_date: "2026-09-01T00:00:00.000Z", submitted_at: "2026-09-01T00:00:00.000Z", decided_at: "2026-09-01T00:00:00.000Z", geometry: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } };
+const holder = { household: "hh:holder", handles: new Set(["holder"]) };
+
+test("5h · a PARCEL keeps its own law at the door: the plot's household is not offered the shed amended into it, its word is refused with nothing written, and the fold ignores that word too", async () => {
+  FIRST = [PLOT_CLAIM, SHED_ORIGIN, SHED_AMEND];
+  CLAIMS = [claim("holder/the-plot", "c-plot-0"), claim("shedder/the-shed", "c-shed-1")];
+  assert.deepEqual(await offered(holder), [], "first laid before the plot, the shed is not the plot's to answer, whatever its amend reached");
+  await assert.rejects(() => cellSpeak({ on: "shedder/the-shed", stance: "opposed" }, holder), (e) => {
+    assert.equal(e.code, 403, "the word the fold would ignore is refused");
+    return true;
+  });
+  assert.equal(written().filter((w) => w.payload.on === "shedder/the-shed").length, 0, "and nothing was written");
+
+  const { pathToFileURL } = await import("node:url");
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const shed = { id: "shedder/the-shed", slug: "the-shed", by: "shedder", household: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", claimed_at: CELL_D("01"), body: "s",
+    footprints: footprintsFromChain({ chain: [SHED_ORIGIN, SHED_AMEND], originId: "c-shed-0", originSince: CELL_D("01"), current: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } }) };
+  const plot = { id: "holder/the-plot", slug: "the-plot", by: "holder", household: "holder", kind: "parcel", tier: "market", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: CELL_D("10"), body: "p", consent: { "shedder/the-shed": "opposed" } };
+  assert.equal(shed.footprints?.length, 2, "the shed carries its history, so the cells could have been asked");
+  const state = engine.fold({ marks: [plot, shed], terrain: { features: [] }, tick: 1, stakes: [] });
+  assert.ok(state.marks.some((m) => m.id === "shedder/the-shed"), "the fold ignores the plot's word: the shed came first");
+});
+
+test("elderByFirstCover · a parcel on EITHER side keeps the whole-mark answer, whatever the cells would say", () => {
+  const always = (grantorFirst) => () => ({ grantorFirst });
+  const asked = [];
+  const wholeMark = (g, m) => { asked.push([g.id, m.id]); return g.id < m.id; };
+  const parcel = { id: "a/plot", kind: "parcel" }, sited = { id: "b/shed", kind: "sited" }, other = { id: "c/mill", kind: "sited" };
+  for (const cells of [true, false]) {
+    const elder = elderByFirstCover({ firstCoverOrder: always(cells), recordOf: (m) => m, wholeMark });
+    assert.equal(elder(parcel, sited), true, "a parcel as the ground: whole-mark");
+    assert.equal(elder(sited, parcel), false, "a parcel as the newcomer: whole-mark");
+    assert.equal(elder(sited, other), cells, "and two non-parcels take the cells' answer");
+  }
+  assert.deepEqual(asked, [["a/plot", "b/shed"], ["b/shed", "a/plot"], ["a/plot", "b/shed"], ["b/shed", "a/plot"]], "whole-mark answered every parcel comparison, and only those");
+});
+
+// 5f, on the estate and the mill (Bevel's FIX, 16:39Z: "the label and door agree
+// with the fold, not merely the helper names"): the label and the inbox, each
+// handed `elderByFirstCover` over the engine's own `firstCoverOrder`, say what
+// the fold does. FLIP: hand labelMarks `elderByFirstLaid` instead → the label
+// files the estate over the mill, and the first assertion reds.
+test("5f · on an EXPANSION the label, the inbox and the fold agree: the estate awaits the mill's household, the mill awaits nothing of the estate's", async () => {
+  const { labelMarks } = await import("../src/world-settlement.mjs");
+  const { pathToFileURL } = await import("node:url");
+  const consent = await import(pathToFileURL(join(cellRepo, "tools", "consent.mjs")).href);
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const estate = { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: CELL_D("20"), published: true };
+  const mill = { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), published: true };
+  const facts = new Map([
+    [estate.id, { ...estate, claimed_at: CELL_D("01"), footprints: footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: estate }) }],
+    [mill.id, { ...mill, claimed_at: CELL_D("15") }],
+  ]);
+  const elder = elderByFirstCover({ firstCoverOrder: consent.firstCoverOrder, recordOf: (m) => facts.get(m.id) ?? m,
+    wholeMark: elderByFirstLaid(new Map([[estate.id, CELL_D("01")], [mill.id, CELL_D("15")]])) });
+  const hh = { east: "hh:east", miller: "hh:mill" };
+  const ctx = { townWords: new Map(), overlaps, isThing: () => false, elder, householdOf: (h) => hh[h] ?? h };
+  const labelled = await labelMarks([estate, mill], ctx);
+  const awaits = (id) => (labelled.find((m) => m.id === id)?.awaiting ?? []).filter((w) => w !== TOWN);
+  assert.deepEqual(awaits(estate.id), ["hh:mill"], "the label: the estate awaits the mill's household");
+  assert.deepEqual(awaits(mill.id), [], "and the mill awaits no one of the estate's");
+  assert.deepEqual(candidatesFrom({ mine: [mill], all: [estate, mill], overlaps, householdOf: ctx.householdOf, isThing: ctx.isThing, elder }).map((c) => c.mark), [estate.id], "the inbox offers the mill the estate");
+  assert.deepEqual(candidatesFrom({ mine: [estate], all: [estate, mill], overlaps, householdOf: ctx.householdOf, isThing: ctx.isThing, elder }), [], "and offers the estate nothing");
+  const rec = (m, extra) => ({ ...facts.get(m.id), slug: m.id.split("/")[1], household: m.by, body: "x", ...extra });
+  const state = engine.fold({ marks: [rec(estate), rec(mill, { consent: { [estate.id]: "opposed" } })], terrain: { features: [] }, tick: 1, stakes: [{ holder: "s", mark: mill.id, n: 100, weight: 100, tick: 0 }] });
+  assert.equal(state.marks.some((m) => m.id === estate.id), false, "and the fold counts the mill's word");
+});
+
 // ── 6 · the cutover ─────────────────────────────────────────────────────────
 // FLIP: make clearedAtCutover answer false → a mark that stood at the cutover
 // awaits the town.
@@ -524,4 +755,227 @@ test("stancesCountAt: the cutover is a settlement NUMBER; below it nothing count
   assert.match(below.why, /^S10 is below the cutover S11/);
   assert.equal(stancesCountAt(null, { TOWN_STANCE_CUTOVER: "S11" }).counts, false, "a number nobody can read is not known to be after it");
   assert.throws(() => stancesCountAt(11, { TOWN_STANCE_CUTOVER: "yes" }), /names no settlement/, "a cutover is a number, never a yes");
+});
+
+// ── POS-1057 · the inbox's pair work: overlap first, one read per mark, the words by their mark ──
+//
+// Why: from w47 a doorstep cost about 2.7 times more (POS-1064's table, 2026-11-17). The stance inbox weighs every mark against
+// the house's ground, and POS-571 made the seniority question a cell-by-cell read that was asked before the overlap question, of
+// every pair. None of these change an answer; each test holds the answer and the work.
+// FLIPS: (a) put `!elder(g, mark)` back before `!overlaps(g, mark)` in awaitingOf → `asked` holds all three marks;
+// (b) drop the WeakMap in elderByFirstLaid → `reads` counts a read per comparison, not per mark;
+// (c) hand awaitingOf every word again in candidatesFrom → still green (the answer is the same), so (c) is pinned by its two answers only.
+
+test("POS-1057 · seniority is asked only of ground that overlaps, each mark's date is read once, and a word is found by its mark", () => {
+  const box = (id, by, x, date) => ({ id, by, kind: "structure", at: { x, y: 0 }, extent: { w: 2, h: 2 }, date });
+  const touches = (a, b) => Math.abs(a.at.x - b.at.x) < 2;
+  const incoming = box("new/arrival", "new", 0, "2026-11-10");
+  const under = box("old/under-it", "old", 1, "2026-09-01");
+  const marks = [under, box("far/away", "far", 50, "2026-09-01"), box("far2/away", "far2", 90, "2026-09-01")];
+
+  // (a) overlap first
+  const asked = [];
+  const elder = (g, m) => { asked.push(g.id); return Date.parse(g.date) < Date.parse(m.date); };
+  assert.deepEqual(awaitingOf(incoming, { marks, overlaps: touches, elder }), [{ who: "old", ground: ["old/under-it"] }], "the answer the old order gave");
+  assert.deepEqual(asked, ["old/under-it"], "the two marks that touch nothing are never weighed for seniority");
+
+  // (b) one read per mark, however many pairs ask
+  let reads = 0;
+  const dated = (id, date) => ({ id, get date() { reads += 1; return date; } });
+  const a = dated("a/one", "2026-09-01"), b = dated("b/two", "2026-10-01");
+  const byDate = elderByFirstLaid(new Map());
+  for (let i = 0; i < 5; i += 1) { assert.equal(byDate(a, b), true); assert.equal(byDate(b, a), false); }
+  assert.equal(reads, 2, "each mark's date is read once for the life of the comparison");
+  assert.equal(byDate({ id: "a/one", date: "2026-11-01" }, b), false, "a fresh object is read fresh: the same id with a later date is the younger one");
+
+  // (c) the words by their mark: a word on another mark clears nothing, a word on this one clears the house
+  const ask = (words) => candidatesFrom({ mine: [under], all: [incoming, ...marks], overlaps: touches, words }).map((c) => c.mark);
+  assert.deepEqual(ask([]), ["new/arrival"]);
+  assert.deepEqual(ask([{ on: "far/away", by: "old", stance: "neutral" }]), ["new/arrival"], "a word spoken on another mark is not a word on this one");
+  assert.deepEqual(ask([{ on: "new/arrival", by: "old", stance: "neutral" }]), [], "the house's word on this mark takes it off the list");
+});
+
+// ── POS-1057 · the slow half of the stance world is kept until its inputs move ──
+//
+// Why: Darko, 2026-11-17 09:44 EST: "instead of cell by cell, could we just sacrifice big O space instead of time by having
+// everything precomputed? like each settlement it's very clear which marks are new". worldForStances keeps canon's marks and
+// the locked claims' fold per office thread, keyed on the published state, the live ids and the store's print of its locked
+// claims (their count, newest decision and the sum of their row versions), which it reads on every call.
+//
+// The stub answers that print the way the store does: any write to a locked row moves it. `laidReads` counts the first-laid
+// read, which is the read the memo saves.
+// FLIPS, in world-stance.mjs § stanceWorldFor's `is`:
+//   (a) drop `k.print === want.print` → the amend locked between settlements is not seen: the mill is offered nothing (red);
+//   (b) drop `k.liveKey === want.liveKey` → the new sketch's slug is never asked of the first-laid read: `laidReads` stays (red);
+//   (c) answer `slot.built` for any key (drop the whole test) → both of the above red;
+// and in § worldForStances: (d) drop `canonMark &&` from the record cache's set → a live claim's record would outlive its read
+//   (not reachable by a test here: a WeakMap keyed on a fresh object is never found again; kept as a note, not a pin).
+
+test("POS-1057 · the stance world's slow half is kept between reads, equals a fresh build, and a claim locked between settlements is seen on the very next read", async () => {
+  __forgetStanceWorldForTest();
+  let writes = 100, laidReads = 0, printReads = 0, printAnswers = true;
+  __setStancePoolForTest({
+    async query(text, params = []) {
+      if (/sum\(xmin::text::bigint\)/.test(text)) {
+        printReads += 1;
+        if (!printAnswers) throw new Error("this store cannot say");
+        return { rows: [{ n: FIRST.filter((c) => c.status === "locked").length, newest: null, writes: String(writes) }] };
+      }
+      if (/WHERE slug = ANY\(\$1\) AND status = 'locked'\s*$/.test(text)) laidReads += 1;
+      return stancePool.query(text, params);
+    },
+    async end() {},
+  });
+  const storeWrites = (rows) => { FIRST = rows; writes += 1; };   // a write to a locked row moves the print, as xmin does
+  const whole = async (key) => { const i = await stanceInbox(cellRepo, key); return JSON.stringify({ candidates: i.candidates, standing: i.standing, mine: i.mine, scope: i.scope }); };
+  try {
+    // KEPT: two houses read one world, and the first-laid read ran once; the print is read every time
+    storeWrites([ESTATE_ORIGIN, MILL_CLAIM]);
+    CLAIMS = [claim("east/the-estate", "c-estate-0"), claim("miller/the-mill", "c-mill-0")];
+    assert.deepEqual(await offered(east), ["miller/the-mill"], "no history yet: the estate, dated 08-01 as a whole, is offered the mill");
+    assert.deepEqual(await offered(miller), []);
+    assert.equal(laidReads, 1, "the second house's read reused the first's fold");
+    assert.equal(printReads, 2, "and each read asked the store whether its locked claims had moved");
+
+    // A CLAIM LOCKED BETWEEN SETTLEMENTS: the estate's amend locks now, and the very next read sees it
+    storeWrites([ESTATE_ORIGIN, ESTATE_AMEND, MILL_CLAIM]);
+    CLAIMS = [claim("east/the-estate", "c-estate-1"), claim("miller/the-mill", "c-mill-0")];
+    assert.deepEqual(await offered(miller), ["east/the-estate"], "the mill was first on the cells the amend added");
+    assert.deepEqual(await offered(east), [], "and the estate has no word on the mill there");
+    assert.equal(laidReads, 2, "one more fold, for the moved print");
+
+    // EQUAL TO A FRESH BUILD: the kept answer, then the same read with nothing kept
+    const keptAnswers = [await whole(miller), await whole(east), await whole(barner)];
+    assert.equal(laidReads, 2, "all three were kept reads");
+    __forgetStanceWorldForTest();
+    assert.deepEqual([await whole(miller), await whole(east), await whole(barner)], keptAnswers, "byte for byte what a fresh build answers");
+
+    // READS THAT ARRIVE TOGETHER share one build
+    __forgetStanceWorldForTest();
+    const before = laidReads;
+    assert.deepEqual(await Promise.all([offered(miller), offered(east), offered(barner)]), [["east/the-estate"], [], []]);
+    assert.equal(laidReads, before + 1, "three reads at once, one fold");
+
+    // A NEW SKETCH's slug is asked of the first-laid read: the live ids are part of the key
+    const sketchAt = laidReads;
+    LIVE = [{ slug: "walker/a-new-hut", claimant: "walker", status: "draft", at: { x: 125, y: 0 }, extent: { w: 10, h: 10 }, kind: "sited", date: "2026-11-17T00:00:00.000Z", declared_by: "walker" }];
+    assert.ok((await offered(miller)).includes("walker/a-new-hut"), "the sketch on the mill's ground is offered to the mill at once (the-late-welcome)");
+    assert.equal(laidReads, sketchAt + 1, "and the fold was built for the slugs that now include it");
+    LIVE = [];
+
+    // A STORE THAT CANNOT SAY gets no memo: every read builds, and answers the same
+    printAnswers = false;
+    const unsure = laidReads;
+    assert.deepEqual(await offered(miller), ["east/the-estate"]);
+    assert.deepEqual(await offered(miller), ["east/the-estate"]);
+    assert.equal(laidReads, unsure + 2, "nothing is kept when the store's print cannot be read");
+  } finally {
+    LIVE = [];
+    __forgetStanceWorldForTest();
+  }
+});
+
+// ── 8 · POS-1136 · the town's opposed removes the mark, a parcel included, and says so ────────────────────────
+//
+// Darko, 2026-11-18 14:53 EST: "the town declaring opposed to something should remove it, even parcels". Wright, 20:38Z: "stamps
+// staked on a town-opposed mark go back to each staker when it leaves, the owner included. Nobody loses stamps because the town
+// removed a mark." The act's answer, its preview and the row it writes SAY that; the fold that does it and the return of the stamps are
+// the World's (WLD-201): this door computes, moves and refunds nothing.
+// FLIP: put the old "an opposed mark with open stakes stands until they unwind" back in declareTownStance → 8a goes red.
+// FLIP: let the preview fall through to writeStanceAct → 8b's no-write assertions go red.
+
+const OPPOSED_WORDS = /the mark leaves at the next settlement, a parcel included, and any stamps staked on it go back to each staker, the owner included$/;
+const OPPED = { as: "town", stance: "opposed", law: ["the-town/the-unmoved-past"] };
+
+test("8a · an opposed town word says the mark leaves at the next settlement, a parcel included, and the staked stamps go back to each staker, the owner included", async () => {
+  for (const [what, on] of [["an ordinary mark", "beta/on-alphas-edge"], ["a parcel", "alpha/alphas-parcel"]]) {
+    const r = await speak({ ...OPPED, on, ...{} }, wright);
+    assert.equal(r.stance, "opposed", what);
+    assert.match(r.effect, OPPOSED_WORDS, `${what}: the answer`);
+    assert.equal(r.effect, townOpposedEffect("the-town/the-unmoved-past"), `${what}: one sentence, built in one place`);
+    assert.doesNotMatch(r.effect, /stands until|unwind|open stakes/, `${what}: the old exception is gone`);
+    const row = written().at(-1);
+    assert.equal(row.object, on);
+    assert.equal(row.effect, r.effect, `${what}: the record says what the answer says`);
+  }
+  // the neutral word, the resident's words, and the cited law are untouched
+  const n = await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral" }, wright);
+  assert.match(n.effect, /clears "awaiting the town" and confers nothing/);
+  const own = await speak({ on: "beta/on-alphas-edge", stance: "opposed" }, alpha);
+  assert.equal(own.stance, "opposed", "a resident's opposed is still a resident's word");
+  assert.ok(!("effect" in own) || !OPPOSED_WORDS.test(own.effect ?? ""), "and does not carry the town's meaning");
+});
+
+test("8b · preview: true runs every town judgment, answers the same effect, and appends NOTHING", async () => {
+  for (const [what, on] of [["an ordinary mark", "beta/on-alphas-edge"], ["a parcel", "alpha/alphas-parcel"]]) {
+    const before = written().length;
+    const p = await speak({ ...OPPED, on, preview: true }, wright);
+    assert.equal(p.preview, true, what);
+    assert.equal(p.would, "declare");
+    assert.deepEqual([p.on, p.stance, p.as, p.by, p.household, p.hand], [on, "opposed", "town", TOWN_SPEAKER, TOWN, "wright"], `${what}: who and what`);
+    assert.match(p.effect, OPPOSED_WORDS, `${what}: the preview says the ruled meaning`);
+    assert.deepEqual(p.law, [{ law: "the-town/the-unmoved-past", law_text: UNMOVED }], "the law is judged and shown verbatim");
+    assert.equal(p.law_sha, MAIN_SHA);
+    assert.ok(!("seq" in p) && !("crossing" in p), "no act was made, so there is no seq");
+    assert.match(p.nothing_written, /no act appended/);
+    assert.equal(written().length, before, `${what}: nothing was appended`);
+    // the real act then says exactly what its preview said
+    const real = await speak({ ...OPPED, on }, wright);
+    assert.equal(real.effect, p.effect, `${what}: the preview and the act answer the same effect`);
+    assert.equal(written().length, before + 1, "and the act writes one row");
+  }
+  // a preview of a word that would replace another says so
+  await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral" }, wright);
+  const p2 = await speak({ ...OPPED, on: "beta/on-alphas-edge", preview: true }, wright);
+  assert.equal(p2.would_supersede?.stance, "neutral");
+  // a neutral preview says the neutral effect
+  const pn = await speak({ as: "town", on: "beta/on-alphas-edge", stance: "neutral", preview: true }, wright);
+  assert.match(pn.effect, /clears "awaiting the town" and confers nothing/);
+});
+
+test("8c · a preview passes the same refusals as the act, and writes nothing on any of them", async () => {
+  const before = written().length;
+  const refuses = (args, key, code, re) => assert.rejects(() => speak({ ...args, preview: true }, key), (e) => { assert.equal(e.code, code); if (re) assert.match(e.defect, re); return true; });
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed", law: ["the-town/the-unmoved-past"] }, beta, 403, /only the town's hands/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed" }, wright, 422, /cites the law it applies/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "opposed", law: ["the-town/a-market-stall"] }, wright, 422, /is not law/);
+  await refuses({ as: "town", on: "beta/on-alphas-edge", stance: "welcomed", law: ["the-town/the-unmoved-past"] }, wright, 422, /adoption, and it is reserved/);
+  await refuses({ as: "town", on: "nobody/no-such-mark", stance: "opposed", law: ["the-town/the-unmoved-past"] }, wright, 404, /no published mark/);
+  await refuses({ as: "town", on: "", stance: "opposed", law: ["the-town/the-unmoved-past"] }, wright, 422, /which mark/);
+  assert.equal(written().length, before, "no refusal left a row, and no preview made one");
+});
+
+test("8d · the flag is never accepted and dropped: a resident's stance and a list refuse a preview by name, a non-boolean refuses, false writes as ever", async () => {
+  const before = written().length;
+  await assert.rejects(() => speak({ on: "beta/on-alphas-edge", stance: "opposed", preview: true }, alpha), (e) => e.code === 422 && /a preview is the town's word on one mark/.test(e.defect),
+    "a resident's stance is not previewed, so it never writes under a flag that says it will not");
+  await assert.rejects(() => speak({ on: "beta/on-alphas-edge", stance: "neutral", preview: true }, alpha), (e) => e.code === 422);
+  await assert.rejects(() => speak({ ...OPPED, on: ["beta/on-alphas-edge", "alpha/alphas-parcel"], preview: true }, wright), (e) => e.code === 422 && /a list of marks/.test(e.hint),
+    "nor a list, the town's included");
+  for (const bad of ["true", "yes", 1, 0, {}, [], null]) // null too: a generated call that sends it for an unset field must not become a write
+    await assert.rejects(() => speak({ ...OPPED, on: "beta/on-alphas-edge", preview: bad }, wright), (e) => e.code === 422 && /preview is true or false/.test(e.defect), `preview ${JSON.stringify(bad)}`);
+  assert.equal(written().length, before, "none of them wrote");
+  // false and absent write normally, resident and town alike
+  const a = await speak({ ...OPPED, on: "beta/on-alphas-edge", preview: false }, wright);
+  assert.equal(a.stance, "opposed");
+  const b = await speak({ on: "beta/on-alphas-edge", stance: "neutral", preview: false }, alpha);
+  assert.equal(b.stance, "neutral");
+  const l = await speak({ ...OPPED, on: ["beta/on-alphas-edge", "alpha/alphas-parcel"] }, wright);
+  assert.equal(l.landed, 2, "a list of the town's words still writes each");
+  assert.equal(written().length, before + 4);
+  assert.ok(written().filter((r) => r.payload.as === "town" && r.payload.stance === "opposed").every((r) => OPPOSED_WORDS.test(r.effect)), "every written opposed row carries the ruled meaning");
+});
+
+test("8e · the door's schema takes preview as a boolean, and no agent-facing text still says an opposed mark stands while stakes are open", () => {
+  const tool = STANCE_TOOLS[0];
+  assert.equal(tool.inputSchema.properties.preview.type, "boolean");
+  assert.equal(validateArgs(tool, { on: "beta/on-alphas-edge", stance: "opposed", as: "town", preview: true }), null, "the shared grammar accepts the flag at every door");
+  assert.match(validateArgs(tool, { on: "beta/on-alphas-edge", stance: "opposed", preview: "true" })?.defect ?? "", /should be a boolean/);
+  const text = JSON.stringify(tool);
+  assert.doesNotMatch(text, /stands until|until they unwind|open stakes/);
+  assert.match(text, /A TOWN OPPOSED REMOVES THE MARK, A PARCEL INCLUDED: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included/);
+  assert.match(tool.inputSchema.properties.stance.description, /town's opposed removes the mark at the next settlement, a parcel included/);
+  // the connector's abridged index keeps the town hands' fields off it (the byte budget; household-apex.mjs § OFF_INDEX): preview joins as and law there
+  const idx = capabilityIndex({}).find((a) => a.act === ACTION_STANCE);
+  assert.deepEqual(Object.keys(idx.fields), ["on", "stance", "handle"], "the index row is unchanged; the card, REST and MCP schema carry preview");
 });

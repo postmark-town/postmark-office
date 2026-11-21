@@ -36,7 +36,8 @@ import { APEX_TOOL, DISPATCHABLE as WORLD_ACTS, FIND_READ, FIND_READ_FIELDS, WOR
 import { BLOCK_READS } from "./world-read-v2.mjs";
 import { APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_TOOL } from "./household-apex.mjs";
 import { TOWN_TOOL } from "./town-apex.mjs";
-import { READ_SHAPES } from "./world-read-shape.mjs";
+import { READ_SHAPES, readShape } from "./world-read-shape.mjs";
+import { doorShape } from "./door-read-shape.mjs";
 import { RESIDENT_WORDS } from "./town-stance.mjs";
 import { READ_CLASSES } from "./town-posts.mjs";
 import { BUG_STAGES, BUG_SIDE_EXITS } from "./bugs.mjs";
@@ -130,11 +131,44 @@ const present = (v) => v != null && v !== "" && v !== false;
 const nameIn = (v, names) => (typeof v === "string" && names.has(v.trim()) ? v.trim() : "other");
 
 /**
+ * THE SHAPE SERVED (POS-1099): the bare read's shape as the door answers it,
+ * after the env default is applied, not the `read_shape` the caller passed
+ * (a bare call after the v2 default passes none). Only a call that neither
+ * acts nor names a read has a shape to serve, and only at the three apexes.
+ * The per-call `read_shape` wins over the default, which only the MCP door
+ * applies (REST answers the control shape whatever the box sets):
+ *   world      v0 | v1 | v2   (READ_SHAPES)
+ *   household  v2 when the house's glance answers, else v1 (today's read, h-shape variants included)
+ *   town       t0 | t1 | t2   (the door has no per-call shape)
+ * Always a member of those fixed sets, never the caller's text.
+ */
+export function servedShape(tool, args, { door = "rest", env = process.env } = {}) {
+  const top = isObj(args) ? args : {};
+  const env_ = isObj(top.args) ? top.args : {};
+  if (present(top.do) || present(top.read)) return undefined;
+  const asked = Object.hasOwn(top, "read_shape") ? top.read_shape : env_.read_shape;
+  const mcp = door === "mcp";
+  if (tool === "world") {
+    if (typeof asked === "string" && READ_SHAPES.includes(asked.trim())) return asked.trim();
+    return mcp ? readShape(env) : "v0";
+  }
+  if (tool === "household") {
+    if (typeof asked === "string" && asked.trim() === "v2") return "v2";
+    if (typeof asked === "string" && asked.trim() === "v1") return "v1";
+    return mcp && doorShape("household", env) === "v2" ? "v2" : "v1";
+  }
+  if (tool === "town") return mcp ? doorShape("town", env) : "t0";
+  return undefined;
+}
+
+/**
  * The shape of one call: `tool` is the apex or MCP tool name when the office
  * answers it (the caller decides; pass "other" otherwise), `args` the arguments
  * as they arrived. Answers a plain object of at most CALL_MAX bytes of JSON.
+ * `door` is "mcp" for the MCP door, which alone applies the env default shape.
  */
-export function callShape(tool, args) {
+export function callShape(tool, args, { door = "rest" } = {}) {
+
   const { fields, names, enums } = knownNames();
   const top = isObj(args) ? args : {};
   const env = isObj(top.args) ? top.args : {};
@@ -144,6 +178,8 @@ export function callShape(tool, args) {
   if (apex) {
     if (present(top.do)) call.do = nameIn(top.do, apex.do);
     if (present(top.read)) call.read = nameIn(top.read, apex.read);
+    const served = servedShape(call.tool, args, { door });
+    if (served) call.shape = served;
   }
 
   const focus = {};

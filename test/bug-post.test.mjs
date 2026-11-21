@@ -103,6 +103,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { holdMedia } from "./helpers/media-ledger.mjs";
@@ -249,7 +250,8 @@ function bugTables() {
       const rows = [...posts.values()].filter((r) => r.id.startsWith(pre)).map((r) => ({ id: r.id, state: r.state, ends: r.ends }));
       return { rows, rowCount: rows.length };
     }],
-    [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
+    // POS-942: the bug class's rows carry their body (household-posts.mjs § BODY_CLASSES), so the read may ask for it
+    [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act(?:, body)? FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
       const rows = byClass(p[0]);
       return { rows, rowCount: rows.length };
     }],
@@ -591,6 +593,10 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
   assert.deepEqual(one.fields, { steps: "Twice.", size: "S", critter: "Stickle", named_by: "finn", links: { fixed: FIXED_BY_FINN } });
   const single = await postsAtOffice({ class: "bug", post: "ada/the-door-sticks" }, { now: NOW, roll: ROLL });
   assert.equal(single.post.state, "reported");
+  // POS-942: the reporter's own words are on the public read, the list's rows and one post alike, exactly as posted
+  assert.equal(one.body, BUG.body, "the list row carries the body");
+  assert.equal(single.post.body, BUG.body, "and so does one post, read by its id");
+  assert.ok(r.posts.every((p) => typeof p.body === "string"), "every bug row on the page has a body field");
 
   const out = await dryRun(pen);
   assert.equal(out.equal, true, out.drift.join("\n"));
@@ -1477,8 +1483,7 @@ test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recre
 
 const { githubAuthorOf } = await import("../src/bug-credit.mjs");
 const { judgeEarnedLink } = await import("../src/bugs.mjs");
-const { mkdtempSync, writeFileSync: writeFile, rmSync: rmTree } = await import("node:fs");
-const { tmpdir } = await import("node:os");
+const { writeFileSync: writeFile, rmSync: rmTree } = await import("node:fs");
 const { join: joinPath } = await import("node:path");
 
 /** A fetch that answers `statuses` in turn and records each call's url and headers. */
@@ -1495,7 +1500,7 @@ function recordingFetch(statuses) {
 const LINKED = (() => { const e = judgeEarnedLink("diagnosed", "https://github.com/postmark-town/postmark/issues/3500#issuecomment-7"); return { to: "diagnosed", link: e.link, earned: e.ref }; })();
 
 test("15 · the read token goes to api.github.com only: never to another base, and a refused token (401) is retried once, keyless", async () => {
-  const dir = mkdtempSync(joinPath(tmpdir(), "bug-credit-token-"));
+  const dir = tempDir("bug-credit-token-");
   const tokenFile = joinPath(dir, "token");
   writeFile(tokenFile, "tok-not-a-secret\n");
   try {

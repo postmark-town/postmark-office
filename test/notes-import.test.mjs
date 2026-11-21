@@ -12,9 +12,9 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
 
@@ -22,7 +22,7 @@ const TOOL = join(dirname(fileURLToPath(import.meta.url)), "..", "world2", "tool
 const store = await startStore({ db: "notes_import_test" });
 after(() => store.stop?.());
 const skip = store.skip ?? false;
-const scratch = mkdtempSync(join(tmpdir(), "postmark-notes-import-"));
+const scratch = tempDir("postmark-notes-import-");
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 // Three houses in the registry; "ghost" is housed nowhere.

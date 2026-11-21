@@ -110,6 +110,14 @@ const inRecordForm = async (text) => {
   let v;
   try { v = text.includes('"stakes"') ? JSON.parse(text) : null; } catch { v = null; }
   if (v == null) return text;
+  // POS-1100 / POS-1102: a key that holds the handle now gets the house's `allocation` on the doorstep's stakes segment (read from the town ledger, which the
+  // record never had), and, when it has more, the top level's one paging contract. The twins' record predates both; their own claims are
+  // pos1100-house-stakes*.test.mjs. Strip them here, and only them: the marks part, and every other byte, still bind to the record.
+  if (v.stakes && typeof v.stakes === "object" && "allocation" in v.stakes) {
+    delete v.stakes.allocation;
+    if (v.stakes.args && v.stakes.args.limit === 10) delete v.stakes.args.limit;   // the pointer names the page the allocation is (POS-1100 review fix 6)
+    if (!("shown" in v.stakes)) for (const k of ["limit", "offset", "complete", "next_offset", "more_note"]) delete v.stakes[k];
+  }
   const { stakeKindsInOldForm, worldKinds } = await import("./helpers/kind-forms.mjs");
   const { worldClone } = await import("./fixture-paths.mjs");
   return JSON.stringify(await stakeKindsInOldForm(v, () => worldKinds(worldClone())));
@@ -208,7 +216,16 @@ test("every moved REST door answers as the unswitched office did", async (t) => 
   if (skip) return t.skip(skip);
   for (const door of DOORS) {
     const b = await fetch(offices.switched.base + door);
-    const got = steady({ status: b.status, body: steady(await b.text()) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
+    let text = await b.text();
+    // POS-1086: a REST doorstep now carries `rev` (src/doorstep-rev.mjs), a key the unswitched office's golden predates.
+    // It is held here to be present and a rev, then set aside; every other byte is still compared to the golden.
+    if (door.startsWith("/doorstep/") && b.status === 200) {
+      const body = JSON.parse(text);
+      assert.match(body.rev, /^[0-9a-f]{16}$/, `${door} carries its rev`);
+      delete body.rev;
+      text = JSON.stringify(body);
+    }
+    const got = steady({ status: b.status, body: steady(text) }), was = TWINS.of(`REST ${door}`, { dark: DARK.has(`REST ${door}`) });
     if (got !== was) assert.fail(`${door}: ${firstDiff(JSON.parse(got), JSON.parse(was))}`);
   }
 });
@@ -272,6 +289,8 @@ test("the house and needs-you answer through the store's index as they did over 
   // the world's reads, stubbed: they are not the index, and both sides get the same
   const readers = {
     stances: async (_h, opts) => ({ stances_awaiting: 0, awaiting: [], standing: [], cursor: null, complete: true, set_downs_awaiting: [], limit: opts.limit }),
+    // each resident's own waiting count (POS-1084), the batch reader answered the same way: nothing waits
+    stanceCounts: async (handles) => new Map(handles.map((h) => [h, { stances_awaiting: 0 }])),
     stakesFor: async () => ({ next_settlement: { at: "2026-07-15T00:00:00.000Z" }, count: 0, at_risk: 0, rows: [] }),
     walkers: async () => ({ at: 190.5, walkers: [] }),
     claimEffects: async () => ({ readable: true, store: "docket", events: [] }),

@@ -38,6 +38,32 @@ export function hearable(bornMs, atMs, since) {
   return bornMs <= atMs && (since == null || bornMs >= since);
 }
 
+// ── A ROOM ACROSS A SETTLEMENT (CORE-97; Darko 2026-11-14 10:09 EST: "allowing conversations to persist an hour after settlement and if anyone contributes during
+// that time they can keep it going"; Wright's settlement, 15:54Z: ANY say that belongs to the existing room contributes, and there is no new idle timeout inside a
+// settlement). This amends POS-226's hard split. A room (a cluster of says that chain by earshot or a shared deck) whose newest say came BEFORE a settlement stays open
+// for ROOM_GRACE_MS after that settlement: a say belonging to it in that hour carries the SAME room through the settlement, and it then lives as rooms do (no idle
+// timeout) until the next settlement, where the same test applies again; with no say in the hour it closes at the hour, and a later say cannot revive it.
+// ONE POLICY, here, for every reader: the memory's clustering and hearing (voices.mjs), the stored record's clustering (world2/tools/conversations.mjs vendors the same
+// two functions) and the stored say read (world2-serve.mjs). The instants are the settlements the box PUBLISHED (the list this module keeps), never scheduled clock times.
+export const ROOM_GRACE_MS = 60 * 60 * 1000;
+
+/** The first settlement strictly after `atMs`, or null. `marks`: settlement instants (ms), ascending. */
+export function edgeAfter(atMs, marks) {
+  let lo = 0, hi = marks.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= atMs) lo = mid + 1; else hi = mid; }
+  return lo < marks.length ? marks[lo] : null;
+}
+
+/**
+ * Is a room whose newest say is at `latestMs` still open at `atMs`? Open while no settlement has come between its newest say and `atMs`, and, once one has, for
+ * `graceMs` after the FIRST settlement that came after its newest say (a say in that hour carries it, which moves its newest say past the edge). No settlement known:
+ * open (the caller discloses it).
+ */
+export function roomOpen(latestMs, atMs, marks, graceMs = ROOM_GRACE_MS) {
+  const edge = edgeAfter(latestMs, marks);
+  return edge == null || edge > atMs || atMs - edge <= graceMs;
+}
+
 // Both mains, whichever the clone has: `--glob` implies a trailing `/*` unless
 // the pattern holds a wildcard, so the bracket is what makes it match the ref
 // itself — and a glob that matches nothing is not an error, as a missing ref is.

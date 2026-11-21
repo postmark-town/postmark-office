@@ -14,6 +14,7 @@
 // Exit 0 with the answer or {error:{code,defect,hint,field?}} (a refusal is an
 // answer); exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -28,8 +29,7 @@ async function main() {
   // WHOLE OR NOTHING (POS-296): an act the pen cannot land leaves no file, no
   // commit and (the store's transaction rolling back with it) no post act.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     const commit = { message: (a) => `ballot: ${a.topic} · ${a.did.join(" + ")} (by ${hand}'s hand, via postmark-office)` };
     try {
       return await ballotActInStore({ clone: CLONE, verb, args, hand, today, commit });

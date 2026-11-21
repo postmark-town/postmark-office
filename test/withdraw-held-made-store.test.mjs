@@ -12,9 +12,9 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync } from "node:child_process";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -23,7 +23,7 @@ import { markRecord } from "../src/mark-record.mjs";
 const WORLD = worldClone();
 const store = await startStore({ db: "withdraw_held_made" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
-const repo = mkdtempSync(join(tmpdir(), "pos992-withdraw-held-"));
+const repo = tempDir("pos992-withdraw-held-");
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE", "WORLD2_CANDLE"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));

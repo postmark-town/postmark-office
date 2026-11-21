@@ -319,10 +319,13 @@ test("an embodied WALK is refused rather than recorded under the resident's hand
     (e) => {
       assert.equal(e.code, 501, "the office's own gap, answered as one");
       assert.match(e.defect, /cannot record a walk under a human's own hand/);
-      assert.match(e.hint, /human class exists to prevent exactly that/,
-        "the refusal names WHY the resident's row is not an option");
-      assert.match(e.law, /everything further waits for the humans-as-residents design/,
-        "and quotes the law sentence that leaves the other row unwritable");
+      // POS-977: the reason is the law as ruled (Darko 2026-11-08, POS-955's World half), and the refusal quotes it; the retired own-ground
+      // grant ("Your parcel grants your human this walk") is no longer asserted to a caller.
+      assert.match(e.hint, /Speaking only, for now\. A household's human speaks beside one of their own household's residents/,
+        "the refusal names WHY, in the human class's own words");
+      assert.doesNotMatch(e.hint, /grants your human this walk|law behind it stands/, "and does not claim a grant the law no longer gives");
+      assert.match(e.law, /The human class: 'Speaking only, for now\.'/, "and points at the law sentence it quotes");
+      assert.equal(e.granted_by, undefined, "no grant is named, because none stands");
       assert.match(e.hint, /act as your resident to move, or as your human to be heard/,
         "a refusal says what IS still open, not only what is closed");
       return true;

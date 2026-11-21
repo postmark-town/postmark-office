@@ -21,9 +21,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import {
   updateAddressFields, updateAddressBody, updateProfile,
@@ -54,7 +54,7 @@ const AT_JOIN = [
 ].join("\n");
 
 function joinerClone() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-joinhh-"));
+  const dir = tempDir("pm-joinhh-");
   mkdirSync(join(dir, "WHITE_PAGES", "levi-kieran-ackerman"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "levi-kieran-ackerman", "ADDRESS.md"), AT_JOIN);
   execFileSync("git", ["-C", dir, "init", "-b", "main"], { stdio: "ignore" });

@@ -24,6 +24,8 @@
 // `error` after settlement is swallowed by a no-op listener so a late socket
 // error cannot become an unhandled stream error.
 
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the body's arrival, timed under an act's request (measurement only)
+
 export class BodyTooLarge extends Error {
   constructor(cap) {
     super("the request body is too large");
@@ -55,7 +57,8 @@ const noop = () => {};
  * rejects a TypeError before a byte is read.
  */
 export function readBody(req, cap) {
-  return readBodyBytes(req, cap, "readBody").then((bytes) => bytes.toString("utf8"));
+  // POS-1110: the body's arrival, timed under the request's act record (the wait for the client's bytes is part of it); measurement only
+  return actSpan("body", () => readBodyBytes(req, cap, "readBody").then((bytes) => bytes.toString("utf8")));
 }
 
 /**

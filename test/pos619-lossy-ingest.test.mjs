@@ -22,8 +22,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,7 +60,7 @@ const commitAll = (repo, msg) => { git(repo, "add", "-A"); git(repo, "commit", "
 
 let PIN = null;
 before(() => {
-  dir = mkdtempSync(join(tmpdir(), "pos619-"));
+  dir = tempDir("pos619-");
   PIN = git(WORLD_CLONE, "rev-parse", "HEAD");
   const mf = readFileSync(join(WORLD_CLONE, "tools", "marks-fold.mjs"), "utf8");
   assert.match(mf, /export function lossyMessage/,

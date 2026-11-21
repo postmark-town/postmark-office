@@ -28,8 +28,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import {
   archiveLine, checkArchives, Cannot,
@@ -61,7 +61,7 @@ const D220 = { id: "w40.3-backfill-220", class: "rows-added",
   reason: "the w40.3 backfill (office #220) added acts to closed windows", go: "Keemin, 2026-09-28" };
 
 function notary(bytes = file(FROZEN)) {
-  const dir = mkdtempSync(join(tmpdir(), "w2notary-declared-"));
+  const dir = tempDir("w2notary-declared-");
   execFileSync("git", ["-C", dir, "init", "-q", "-b", "main"]);
   mkdirSync(join(dir, "archives", "acts"), { recursive: true });
   writeFileSync(join(dir, "archives/acts/201.jsonl"), bytes);
@@ -223,7 +223,7 @@ const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "u
 
 test("END TO END · the 09-28 night replayed through runExport: certified, then re-frozen AS DECLARED, the ledger committed, and spent", async () => {
   const { runExport, Red } = await import("../world2/tools/snapshot-export.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "w2notary-e2e-"));
+  const dir = tempDir("w2notary-e2e-");
   try {
     git(dir, "init", "-q", "-b", "main");
     // A notary checkout always holds mark renders; this store has none, so the

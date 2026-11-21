@@ -20,12 +20,15 @@
 // ferry's flock (src/stake-exec.mjs), which writes the vote and the ledger
 // line together (src/ballots-store.mjs § stakeInStore).
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { refShaFromDisk } from "./world-branches.mjs"; // a ref's commit, read from disk with no git process
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
 import { headroomOf, appliedBy, choiceOf, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
+import { titleOf } from "./candidate-titles.mjs"; // POS-1140: a Hearth candidate's design title, one projection for both readers
 import { refuse } from "./events.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { viaFor } from "./channel.mjs";
@@ -35,22 +38,55 @@ import { toConfirm, NOTHING_MOVED } from "./stamps-preview.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-let engineCache = null; // { clone, mod }
+// POS-994: the office's pinned copy, checked against the clone on every call
+// (cheap: the blob check is cached on size and mtime, node caches the import).
 async function engine(clone) {
-  if (engineCache?.clone === clone) return engineCache.mod;
-  const mod = await import(pathToFileURL(join(clone, "tools", "ballot.mjs")));
-  engineCache = { clone, mod };
-  return mod;
+  return importTownTool(clone, "ballot.mjs");
 }
 
 export function votesAvailable(clone) {
   return existsSync(join(clone, "tools", "ballot.mjs"));
 }
 
+// ── THE LEDGER IS FOLDED ONCE PER CHANGE, FOR THE MINT KEY (POS-1057) ───────
+//
+// `ballotState` is the town engine's own fold of the whole stamp ledger (8 MB on 2026-11-17), and the doorstep's votes
+// section asked for it once per resident to read one household key: about 40% of a bulk doorstep page's CPU once the
+// stance world was kept. The fold is kept while its inputs stand:
+//   - the clone's HEAD commit, so any committed change to the ledger, the pins or the registry moves it;
+//   - the size and mtime of the two files the fold reads from the working tree (the ledger and tools/github-ids.json),
+//     so a line appended before its commit moves it too.
+//   - the engine copy that folded it (the train's own key, POS-994): `engine` hands back the office's pinned copy of the
+//     town's ballot.mjs, checked against the clone on every call, so a changed tool is a different module, and a fold made
+//     by the old one is not answered for the new.
+// A clone whose HEAD cannot be read from disk gets no memo: the fold runs every time, as it did.
+// Only this read is kept. `intakeOwed` and the stake path fold the ledger themselves, as before.
+let keptState = null; // { clone, key, engine, state }
+function ballotStateKey(clone) {
+  try {
+    const head = readFileSync(join(clone, ".git", "HEAD"), "utf8").trim();
+    const ref = /^ref: (refs\/\S+)$/.exec(head)?.[1];
+    const sha = ref ? refShaFromDisk(clone, ref) : /^[0-9a-f]{40,64}$/.test(head) ? head : null;
+    if (!sha) return null;
+    const stamp = (p) => { try { const s = statSync(p); return `${s.size}:${s.mtimeMs}`; } catch { return "absent"; } };
+    return `${sha}|${stamp(join(clone, "WHITE_PAGES", "stamp-ledger.md"))}|${stamp(join(clone, "tools", "github-ids.json"))}`;
+  } catch { return null; }
+}
+/** Tests only: the kept fold for a clone, as mintKeyOf reads it. */
+export async function __ballotStateForTest(clone) { return ballotStateKept(await engine(clone), clone); }
+function ballotStateKept(b, clone) {
+  const key = ballotStateKey(clone);
+  if (key === null) return b.ballotState(clone);
+  if (keptState?.clone === clone && keptState.key === key && keptState.engine === b) return keptState.state;
+  const state = b.ballotState(clone);
+  keptState = { clone, key, engine: b, state };
+  return state;
+}
+
 /** The household a resident's stake counts in today: the town engine's mint key. */
 async function mintKeyOf(clone, handle, date) {
   const b = await engine(clone);
-  return b.ballotState(clone).householdOf(handle, date);
+  return ballotStateKept(b, clone).householdOf(handle, date);
 }
 
 // ── A BALLOT THE OFFICE HAS NOT TAKEN IN YET (Wright's review of #415) ──────
@@ -72,8 +108,12 @@ async function intakeOwed(clone, posts) {
   const staked = new Set(b.ballotState(clone).stakes.map((s) => s.topic));
   return { missing, staked: missing.filter((t) => staked.has(t)) };
 }
-/** A choice's words as every vote reader answers them (POS-983): candidate, credit, link, note, added; null where a bare-name ballot has none. */
-const wordsOf = (post, name) => choiceOf(post.fields, name);
+/**
+ * A choice's words as every vote reader answers them (POS-983): candidate, credit, link, note, added; null where a bare-name ballot has none.
+ * And (POS-1140) its Hearth design's `title` when the town clone holds that design's hearth.md: the one projection both readers spread
+ * (src/candidate-titles.mjs), additive, and absent, not null, where there is no such file.
+ */
+const wordsOf = (post, name, clone) => ({ ...choiceOf(post.fields, name), ...titleOf(clone, name) });
 
 const notTakenIn = (topic) => refuse(503, `the office has not taken ballot "${topic}" into its record yet`, INTAKE_HINT, { awaiting_intake: [topic] });
 
@@ -91,7 +131,7 @@ export async function voteList(clone, { env = process.env } = {}) {
         window: full.window,
         // POS-983: the ballot's own words, and each choice's beside its count (candidate and staked as they were)
         title: post.title, body: post.body ?? "", post: post.id,
-        candidates: full.candidates.map((c) => ({ ...wordsOf(post, c.candidate), staked: c.staked, backing_households: c.backing_households })),
+        candidates: full.candidates.map((c) => ({ ...wordsOf(post, c.candidate, clone), staked: c.staked, backing_households: c.backing_households })),
       };
     }),
     ...(owed.missing.length ? { awaiting_intake: owed.missing, awaiting_intake_note: INTAKE_HINT } : {}),
@@ -109,7 +149,7 @@ export async function voteView(clone, topic, key, { env = process.env } = {}) {
   const tally = tallyOf(one.post, one.votes);
   // POS-983: the ballot's words, and each choice's, beside the engine's own tally shape
   const t = { ...tally, title: one.post.title, body: one.post.body ?? "", post: one.post.id,
-    candidates: tally.candidates.map((c) => ({ ...wordsOf(one.post, c.candidate), ...c })) };
+    candidates: tally.candidates.map((c) => ({ ...wordsOf(one.post, c.candidate, clone), ...c })) };
   if (key && key.handles?.size) {
     const handle = [...key.handles][0];
     const mk = await mintKeyOf(clone, handle, townDay());

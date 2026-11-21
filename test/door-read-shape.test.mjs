@@ -86,7 +86,7 @@ test("t1: the reads by name with one line, each act one line, handle said once, 
   await at("TOWN_READ_SHAPE", "t1", () => assert.deepEqual(TOWN_TOOL.inputSchema.properties.cards.enum, ["full"]));
 });
 
-test("h1/h2: papers lean (settled, gaps, parcel; no transport), declare only without a household, begin only from a berth", () => {
+test("h1/h2: papers lean (settled, gaps, parcel; no transport); begin, declare and buy-parcel-room are on no tier's index (CORE-114)", () => {
   const acts = capabilityIndex({ schemas, schemaRequired });
   const resident = {
     tier: "resident", household: "the-garrison", residents: ["sol-of-garrison"],
@@ -97,12 +97,14 @@ test("h1/h2: papers lean (settled, gaps, parcel; no transport), declare only wit
   };
   const h1 = shape.shapeHouseholdRead(resident, { shape: "h1" });
   assert.deepEqual(h1.papers["sol-of-garrison"], { settled: true, gaps: ["tend your home"], parcel: "sol-of-garrison/the-heart-house-parcel" });
-  assert.ok(!h1.acts.some((a) => a.act === "declare" || a.act === "begin"), "a resident sees neither declare nor begin");
+  const OFFERED = ["declare", "begin", "buy-parcel-room"]; // CORE-114: offered (the tier's next; first_steps), never listed
+  assert.ok(!acts.some((a) => OFFERED.includes(a.act)), "the index itself lists none of them, at any shape");
+  assert.ok(!h1.acts.some((a) => OFFERED.includes(a.act)), "a resident sees none of them");
   assert.match(h1.handle, /picks which resident acts/);
   assert.ok(!JSON.stringify(h1).includes('"teaches"'));
   const berth = shape.shapeHouseholdRead({ tier: "berth", household: null, acts }, { shape: "h2" });
-  assert.ok(berth.acts.includes("begin") && !berth.acts.includes("declare"), "a berth sees begin only");
+  assert.ok(!berth.acts.some((a) => OFFERED.includes(a)), "a berth's index lists none of them: its next carries begin");
   const visitor = shape.shapeHouseholdRead({ tier: "visitor", household: null, acts }, { shape: "h2" });
-  assert.ok(visitor.acts.includes("declare") && !visitor.acts.includes("begin"), "a caller with no household sees declare");
+  assert.ok(!visitor.acts.some((a) => OFFERED.includes(a)), "nor does a caller with no household: its next carries declare");
   assert.deepEqual(shape.shapeHouseholdRead(resident, { shape: "h1", cards: "full" }).acts, acts, "cards: full gives today's index");
 });

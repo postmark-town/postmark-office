@@ -147,6 +147,10 @@ lawful AS (
     -- 096_parcel_room_nonces.sql (POS-939), a room purchase's retry key, kept
     -- before any stamp burns. INSERT only: a key names one purchase for good.
     ('office_api',   'parcel_room_nonces', 'INSERT'),
+    -- 098_refused_acts.sql (POS-1003), the private record of an act a door refused.
+    -- Narrowed by its row policies to the acting household's own rows; INSERT only,
+    -- because a refusal is never edited, and expiry is a definer function, not a DELETE.
+    ('office_api',   'refused_acts',     'INSERT'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.
@@ -291,6 +295,13 @@ lawful AS (
     ('law_ingester', 'town_rooms',                 'DELETE'),
     ('law_ingester', 'town_mail_lines',            'INSERT'),
     ('law_ingester', 'town_mail_lines',            'DELETE'),
+    -- 097_town_discovery.sql (POS-497): discovery's pieces and letter edges,
+    -- derived by the same ingest from town_letters and town_homes; replaced,
+    -- never edited.
+    ('law_ingester', 'town_discovery_chunks',      'INSERT'),
+    ('law_ingester', 'town_discovery_chunks',      'DELETE'),
+    ('law_ingester', 'town_letter_edges',          'INSERT'),
+    ('law_ingester', 'town_letter_edges',          'DELETE'),
     ('law_ingester', 'projection_heads', 'INSERT'),
     ('law_ingester', 'projection_heads', 'UPDATE'),
     ('law_ingester', 'projection_heads', 'DELETE'),

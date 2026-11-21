@@ -156,6 +156,7 @@
             "push",
             "sync",
             "rollback",
+            "sparks",
             "settlements",
             "carried",
             "chests",
@@ -165,7 +166,8 @@
             "positions",
             "hhkeys",
             "hhkeys_log",
-            "world"
+            "world",
+            "bluesky"
           ],
           "step_refused_runs": 3,
           "stale_after_minutes": 45,
@@ -247,7 +249,7 @@
         "stamp_field": "generated_at",
         "stale_after_minutes": 30
       },
-      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. Since POS-556 (2026-10-10) the sentinel is also the box's ONE alarm route to Discord and the board /fleet reads, and it carries the root disk (probe disk_root, DOWN at 85%), which postmark-disk-watch used to shout on its own timer, and the meeps (probe meeps, from /srv/postmark-sentinel/meeps.json, which Wright's desktop watcher lands every 5 minutes; STALE past 15), and since POS-619 the law pen (probe law_pen, from /srv/world2-lab/state/ingest-law.json; DOWN on a refused or failed law run): a dead sentinel is now a blind disk, unwatched meeps and an unwatched law pen as well. The allowance is three ticks."
+      "stale_means": "THE WATCHMAN ITSELF HAS STOPPED, and it is the one failure the sentinel is structurally incapable of reporting — its own header says so: 'it cannot see its own death'. A dead sentinel presents as a permanently green board, which is worse than no board. This row is the answer to that, and it is the single most load-bearing row in this file. Since POS-556 (2026-10-10) the sentinel is also the box's ONE alarm route to Discord and the board /fleet reads, and it carries the root disk (probe disk_root, DOWN at 85%), which postmark-disk-watch used to shout on its own timer, and the meeps (probe meeps, from /srv/postmark-sentinel/meeps.json, which Wright's desktop watcher lands every 5 minutes; STALE past 15; and, since CORE-72, probe meeps_town_rig from meeps-town-rig.json, landed by the watcher on town-rig, same window), and since POS-619 the law pen (probe law_pen, from /srv/world2-lab/state/ingest-law.json; DOWN on a refused or failed law run): a dead sentinel is now a blind disk, unwatched meeps and an unwatched law pen as well. The allowance is three ticks."
     },
     {
       "unit": "postmark-settlement.timer",

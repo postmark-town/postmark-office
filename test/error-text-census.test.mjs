@@ -48,8 +48,10 @@ const OPERATOR = "an operator's tool, pass or panel, never a resident's read";
 const OWN_URL = "what a household's own url answered (Wright's G4: like media.mjs, it stays)";
 const ALLOWED = {
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
+  "bluesky-publisher.mjs": [3, `${OPERATOR} (POS-904: the publisher's own refusal words, composed only of the method, the HTTP status and an error name from a small fixed vocabulary holding none of the run's secrets, never the server's message, relayed into its receipt and state for the hook's log; never a resident's read)`],
   "ballots-store.mjs": [7, `${OWN}: LateCrossingError's ruled message (x3: the write, the stake, a hand's ballot act), an UNREACHABLE refusal's \`cause\` field (x4, never sent)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
+  "clone-fresh.mjs": [1, `${OWN}: a classifier (POS-382): it reads git's own refusal of a pull to tell dirt (the named 503) from any other pull failure, and never says the text`],
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],
   "drop-recovery.mjs": [2, `${OPERATOR} (the drop-recovery pass's report)`],
@@ -69,6 +71,7 @@ const ALLOWED = {
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
   "media-sweep.mjs": [5, `${OPERATOR} (the sweep's and the takedown's reports on the box: a source's or storage's refusal, named for the operator who reads last.json)`],
+  "month-close.mjs": [16, `${OPERATOR} (POS-851: the manual monthly close's plan and apply reports, printed to the operator who ran the command and answering no resident: an error's or a child's or git's own words in a refusal or an outcome's detail (x12), and four reads that are not errors: a refusal object's own message (x2) and a spawn result's stderr (x2)); nothing here is an HTTP answer`],
   "oauth.mjs": [2, `${OWN}: SignInUnreadable's why, and the co-sign's unread berth place (POS-740), both of which go to the log`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
   "registry-store.mjs": [1, `${OWN}: a classifier`],
@@ -109,6 +112,8 @@ const ALLOWED = {
 
 const walk = (d) => readdirSync(d).flatMap((n) => {
   const p = join(d, n);
+  // POS-994: src/town-pins/ holds byte copies of the TOWN's modules; their words are the town's, not the office's doors.
+  if (n === "town-pins" && d === SRC) return [];
   return statSync(p).isDirectory() ? walk(p) : p.endsWith(".mjs") ? [p] : [];
 });
 const census = {};

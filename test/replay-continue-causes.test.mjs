@@ -270,8 +270,8 @@ test("stripSlug: an object emptied BY the strip becomes null; a genuinely empty 
 // standing in for the store. What they assert is the plan's exact add and amend
 // counts, so re-introducing either original bug moves a number.
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -298,7 +298,7 @@ const rec = (by, slug, over = {}) => ({
 
 /** A world repo whose commits carry the two authorships the classifier splits on. */
 function fixtureWorld(steps) {
-  const dir = mkdtempSync(join(tmpdir(), "dec18-bf-"));
+  const dir = tempDir("dec18-bf-");
   mkdirSync(join(dir, "tools"), { recursive: true });
   mkdirSync(join(dir, "WORLD", "marks"), { recursive: true });
   // `deriveSeed` reads the town's clock out of STATE/log before it reads a single

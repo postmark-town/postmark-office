@@ -41,6 +41,7 @@
 import { freshLaw, PIN_SQL as LAW_PIN_SQL, LAW_REFRESH_DEADLINE_MS } from "./law-snapshot.mjs";
 import { freshGraph, PIN_SQL as GRAPH_PIN_SQL } from "./world-graph-snapshot.mjs";
 import { startLoad, endLoad, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
+import { actSpan } from "./read-timing.mjs"; // POS-1110: the act-law pin check, timed under the act's request (measurement only)
 
 /** The refusal, in one place for both doors. */
 export const LAW_MOVED = Object.freeze({
@@ -107,7 +108,10 @@ const unconfirmed = (told) => (told?.busy ? AT_THE_CAP : told?.late ? NO_ANSWER 
  * saying which copy is behind, or why nothing could be confirmed). `pins`,
  * `law` and `graph` are the seams a test hands in.
  */
-export async function lawForAnAct({ pins = askPins, law = freshLaw, graph = freshGraph } = {}) {
+export async function lawForAnAct(seams = {}) {
+  return actSpan("law_moved", () => lawForAnActOf(seams)); // POS-1110: one writer for every door, timed here
+}
+async function lawForAnActOf({ pins = askPins, law = freshLaw, graph = freshGraph } = {}) {
   if (forTest && pins === askPins && law === freshLaw && graph === freshGraph) return forTest();
   const told = await pins();
   const none = unconfirmed(told);

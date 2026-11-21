@@ -13,9 +13,9 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -26,7 +26,7 @@ const CLONE = join(ROOT, "town-clone");
 const skip = existsSync(join(CLONE, "tools", "stamp-mint.mjs")) ? false : "no town-clone beside the office: the town's engine signs the fixtures";
 const LEDGER = join("WHITE_PAGES", "stamp-ledger.md");
 
-const tmp = mkdtempSync(join(tmpdir(), "stamp-lines-"));
+const tmp = tempDir("stamp-lines-");
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const PRIV = privateKey.export({ type: "pkcs8", format: "pem" });
 const PUB = publicKey.export({ type: "spki", format: "pem" });

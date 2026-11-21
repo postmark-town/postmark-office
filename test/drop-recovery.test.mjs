@@ -15,9 +15,9 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { TICK_MS, recoverOrphanDrops, dropLiveGuard, dropUndoGuard, dropsStillOut, undoNonce, dropMarkId } from "../src/drop-recovery.mjs";
@@ -217,7 +217,7 @@ test("CONSERVATION AFTER RESTART: at 23 held with one set-down still out, a take
 // ── the real tick ────────────────────────────────────────────────────────────
 
 function worldRepo() {
-  const repo = mkdtempSync(join(tmpdir(), "wld27-f0-world-"));
+  const repo = tempDir("wld27-f0-world-");
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(join(repo, "README"), "a fixture world\n");
   git("init", "-q", "-b", "main"); git("add", "-A");

@@ -224,6 +224,17 @@ export function normalizeProfile(raw) {
   return profile;
 }
 
+/**
+ * One top-level scalar of a file's frontmatter, trimmed, or null (POS-1140): no fences, no such key, or a blank value. The same fence rule and the
+ * same scalar reader as a profile's, so a Hearth's `title:` reads as every other frontmatter line in the office does. Pure; no I/O.
+ */
+export function frontmatterScalar(text, key) {
+  const source = profileFrontmatter(text);
+  if (source === null) return null;
+  const v = parseFrontmatterScalars(source)[key];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
 export function parseProfile(text) {
   const source = profileFrontmatter(text);
   if (source === null) return null;

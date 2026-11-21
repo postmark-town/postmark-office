@@ -14,8 +14,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import { resignLedger, chainCheck, conservation, holdings, judge } from "../tools/stamp-sandbox.mjs";
@@ -102,7 +102,7 @@ test("the judge holds every number the script writes, and every resident it does
 test("the mint comparison agrees with the town's own --append, and names the first line that does not", { skip: SKIP }, async () => {
   const { compareMints } = await import("../tools/stamp-sandbox.mjs");
   const { key } = keys();
-  const dir = mkdtempSync(join(tmpdir(), "sandbox-mints-"));
+  const dir = tempDir("sandbox-mints-");
   try {
     const town = join(dir, "town");
     const g = (...a) => execFileSync("git", ["-C", town, ...a], { encoding: "utf8" }).trim();

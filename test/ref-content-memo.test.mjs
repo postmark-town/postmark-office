@@ -5,13 +5,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { readAtRef, readJsonAtRef, refExists, refShaFromDisk } from "../src/world-branches.mjs";
 
 function repoWith() {
-  const dir = mkdtempSync(join(tmpdir(), "refmemo-"));
+  const dir = tempDir("refmemo-");
   const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
   g("init", "-q", "-b", "main");
   g("config", "user.email", "t@t"); g("config", "user.name", "t");

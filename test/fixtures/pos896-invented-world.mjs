@@ -13,8 +13,8 @@
 // the store holding no ingested town sha, escrow is unread, so no row is judged: `escrow` and `at_risk` are null and the
 // segment says why. That state, and the segment's other sentences, stay the record's.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tempDir } from "../helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 /** The marks of the invented world. `wright`'s four are the scope of the asks; the fifth is another owner's and must stay out. */
@@ -42,7 +42,7 @@ export const INVENTED_STAKE_ROWS = [
   { mark: "wright/delta-lamp", kind: "sited", body: "An invented lamp the registry does not hold.", class: null, escrow: null, at_risk: null },
 ];
 
-const dir = mkdtempSync(join(tmpdir(), "pos896-invented-world-"));
+const dir = tempDir("pos896-invented-world-");
 export const INVENTED_WORLD = dir;
 mkdirSync(join(dir, "WORLD"), { recursive: true });
 writeFileSync(join(dir, "WORLD", "world-state.json"), JSON.stringify({ marks: INVENTED_MARKS }));
