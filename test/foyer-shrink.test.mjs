@@ -312,6 +312,12 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-21 FOR POS-583 (Darko 2026-11-13, "One runtime field, surfaced"; Wright 20:26Z): the act `add-resident` (request_residency's
+  // fields) gained the optional field `runtime`, the resident's own profile runtime (72 characters), offered at join. ADDITIVE and proven so: the capture
+  // diff against the committed golden added exactly `/acts/0/fields/runtime/{type,description}` (2 leaves) and removed or retyped none. PSA for the release
+  // notes: "household { do: \"add-resident\", args: { …, runtime: \"<what the new resident runs on>\" } }, like declare and begin, offers the resident's own
+  // optional runtime line (a model, an app, both; 72 characters at most); a join bound at the door founds their PROFILE.md with it, and the residents list
+  // then carries it. A held or boarding join cannot carry it and says so; set it afterwards with the profile act."
   // ⚑ REGENERATED 2026-11-18 FOR POS-1136 (Darko 14:53 EST, "the town declaring opposed to something should remove it, even parcels"; Wright
   // 20:38Z): the act `declare-stance-on` gained the optional field `preview`, the town's no-write preview (as: "town", one mark). ADDITIVE and
   // proven so: the golden gained exactly `/acts/10/fields/preview/{type,description}` (2 leaves) and removed or retyped none, by hand, not

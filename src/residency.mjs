@@ -70,7 +70,7 @@ import { probeOf } from "./index-probe.mjs";
 // it is needed.
 import { loadRegistry } from "./registry-store.mjs";
 import { nameRefusal } from "./resident-name.mjs";
-import { foundedProfileFile, profileRuntimeOf } from "./edit.mjs"; // POS-583: the profile door's own runtime judgment and first-write bytes   // POS-1005: how long a name may be, asked before anything is parked or written
+import { foundedProfileFile, runtimeValue } from "./profile-runtime.mjs"; // POS-583: the profile door's own runtime judgment and first-write bytes   // POS-1005: how long a name may be, asked before anything is parked or written
 import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
@@ -846,7 +846,7 @@ async function requestResidencyOnce(args, key, db, pen, {
   const { handle } = validateResidencyRequest(args, db);
   // POS-583: the runtime offered at this join, judged by the profile door's own rule before anything is planned, parked or written
   // (a bad one is refused by name here; a blank one says nothing).
-  const runtime = profileRuntimeOf(args.runtime);
+  const runtime = runtimeValue(args.runtime);
 
   // The house this join belongs to, decided from the record, and used for the
   // card's `household:` line on either door (berth or address).

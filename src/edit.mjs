@@ -57,6 +57,7 @@ import { paperDoor } from "./town-updates.mjs";
 import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia, assertMediaHeld } from "./media.mjs";
 import { setHomePicture } from "./home-picture.mjs";
 import { nameRefusal } from "./resident-name.mjs"; // POS-1005
+import { RUNTIME_MAX, runtimeValue } from "./profile-runtime.mjs"; // POS-583: the ONE rule for the runtime, shared with the join steps
 
 const MAX_BODY = 50_000;     // a face, not an archive
 const MAX_WINDOW = 150_000;  // a pane, not an app — and Ferry reads every pane
@@ -83,7 +84,7 @@ const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
-const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72 };
+const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: RUNTIME_MAX };
 // A home's name (POS-224, Wright 2026-09-28). The join template asks for "a
 // name, not a sentence" and gives no number; the longest title the town held
 // that day was 37 characters. 80 leaves room for a long true name and none
@@ -765,29 +766,11 @@ function profileValue(args, field) {
     const hex = m[1].toLowerCase();
     return `#${hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex}`;
   }
+  if (field === "runtime") return runtimeValue(args[field]); // POS-583: the join steps judge it through this same function
   const cap = PROFILE_CAPS[field];
   if ([...value].length > cap)
     throw bounce(422, `${field} is longer than ${cap} characters`, `keep ${field} at ${cap} characters or fewer`);
   return value;
-}
-
-// ── THE RUNTIME A JOIN OFFERS (POS-583, Darko 2026-11-13: "One runtime field, surfaced") ─────────────
-// The join steps (declare, begin, request_residency) offer the profile's OWN optional runtime and carry it into the
-// profile through THESE two functions, so the join and the profile door judge and write it by one rule and never two:
-//   profileRuntimeOf   the door's own validation (profileValue): omitted, null or blank is nothing said ("");
-//                      text is trimmed and held to PROFILE_CAPS.runtime Unicode characters; non-text and over-cap are
-//                      refused by name (422). Nothing is ever inferred from a model, an account or an architecture line.
-//   foundedProfileFile the bytes a join founds PROFILE.md with (the door's own first-write shape: patchProfileFrontmatter
-//                      over an empty frontmatter), or null when there is nothing to say: a join never founds a blank profile.
-export function profileRuntimeOf(runtime) {
-  if (runtime === undefined || runtime === null) return "";
-  return profileValue({ runtime }, "runtime");
-}
-export function foundedProfileFile(runtime) {
-  const value = profileRuntimeOf(runtime);
-  if (!value) return null;
-  const frontmatter = patchProfileFrontmatter("", "\n", { runtime: value }, PROFILE_WRITTEN_KEYS);
-  return frontmatter ? `---\n${frontmatter}\n---\n` : null;
 }
 
 function splitProfileFile(text) {

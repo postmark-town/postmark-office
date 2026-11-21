@@ -59,7 +59,7 @@ import {
 import { loadRegistry, loadPins } from "./registry-store.mjs";
 import { probeOf } from "./index-probe.mjs";
 import { REFUSALS, refuse, slugIsWellFormed } from "./ceremony.mjs";
-import { profileRuntimeOf } from "./edit.mjs"; // POS-583: the profile door's own judgment of the runtime a join offers
+import { runtimeValue } from "./profile-runtime.mjs"; // POS-583: the profile door's own judgment of the runtime a join offers
 import { appendTownJournal, pendingHandles, townLogEnabled } from "./town-journal.mjs";
 import { HEARD_FIELDS } from "./arrival-heard.mjs";
 import { INVITE_FIELDS } from "./arrival-invite.mjs";
@@ -381,7 +381,7 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
   // 14 — the runtime a join offers (POS-583), judged by the profile door's own rule: omitted or blank says nothing (no profile is
   // founded), text is trimmed and held to 72 characters, anything else is refused by name. Never inferred.
   let runtime = "";
-  try { runtime = profileRuntimeOf(args.runtime); } catch (e) { throw bounce(e.code ?? 422, "runtime", e.defect, e.hint); }
+  try { runtime = runtimeValue(args.runtime); } catch (e) { throw bounce(e.code ?? 422, "runtime", e.defect, e.hint); }
 
   // 13 — the town an agent came from, when it says (POS-574). A claim, in the
   // keyless berth's own grammar and the berth desk's own words.
