@@ -228,3 +228,93 @@ test("the guard's edges: sited and parcel never; its own published filing never;
   assert.equal(filingOccupantId(SETH_FILE, rec(["kind: predicated", "slot: sign"], "no author")), null, "a file that names no author is not an occupant");
   assert.equal(ask(normalizeMark(predicate({ by: "seth", value: "Seth", household: "gh:111", body: "again" }))), null, "the same id (by + leaf) at its own file");
 });
+
+// ── WHO FILES UNDER A HELD MARK (Truey's review of 2bc96df0) ────────────────────────────────────────────────────
+
+const NOTE = "lyra-of-the-east-tower/a-note-on-it";
+const REPLY = "lyra-of-the-east-tower/a-reply-to-the-note";
+/** A predicate of Lyra's filed under another mark of the SAME batch: its filing is planned from that parent's planned path. */
+const child = (slug, parent, extra = {}) => {
+  const fileRec = { kind: "predicated", by: "lyra-of-the-east-tower", date: "2026-11-21T13:55:00.000Z", slot: "sign", value: "note", parent_id: parent };
+  return { slug: `lyra-of-the-east-tower/${slug}`, kind: "predicated", by: "lyra-of-the-east-tower", household: "gh:222", locked_window: 325, status: "standing",
+    fileRec, body: `A note, ${slug}.`, at_frame: "file", bytes: markRecord(fileRec, `A note, ${slug}.`), ...extra };
+};
+const SETH_DIR = SETH_FILE.replace(/\/mark\.md$/, "");
+const writtenPaths = (plan) => plan.households.flatMap((h) => h.upserts.map((u) => u.path)).sort();
+const CANON = { [SETH_FILE]: SETH_BYTES };
+
+test("a mark FILED UNDER a held mark is held with it: never written inside the occupant's directory (reported, counted, excluded)", () => {
+  const plan = planOf([LYRA_ROW(), child("a-note-on-it", LYRA), SOUP_ROW()], { canon: CANON });
+  assert.deepEqual(plan.held.map((h) => [h.id, h.crossing_output]), [[NOTE, "parent-held"], [LYRA, "path-held-by-another-id"]], "named in full, ordered by id");
+  const dep = plan.held.find((h) => h.id === NOTE);
+  assert.equal(dep.depends_on, LYRA);
+  assert.equal(dep.held_under, LYRA);
+  assert.equal(dep.held_by_filing_of, SETH, "traceable to whose filing the root collided with");
+  assert.equal(dep.path, `${SETH_DIR}/a-note-on-it/mark.md`, "the path it WOULD have been written at: inside Seth's directory");
+  assert.deepEqual(writtenPaths(plan), [SOUP_FILE], "only the unrelated mark is written");
+  assert.equal(plan.counts.held, 2);
+  assert.equal(plan.counts.written, 1);
+  assert.deepEqual(plan.counts.written_by_locked_window, { 325: 1 });
+});
+
+test("transitively, and in either input order: the account is the same", () => {
+  const grand = child("a-reply-to-the-note", NOTE);
+  const rows = () => [LYRA_ROW(), child("a-note-on-it", LYRA), grand, SOUP_ROW()];
+  const forward = planOf(rows(), { canon: CANON });
+  const backward = planOf(rows().reverse(), { canon: CANON });
+  const scrambled = planOf([grand, SOUP_ROW(), child("a-note-on-it", LYRA), LYRA_ROW()], { canon: CANON });
+  for (const plan of [forward, backward, scrambled]) {
+    assert.deepEqual(plan.held.map((h) => h.id).sort(), [LYRA, NOTE, REPLY].sort());
+    assert.equal(plan.held.find((h) => h.id === REPLY).held_under, LYRA, "the grandchild is held under the colliding mark");
+    assert.equal(plan.held.find((h) => h.id === REPLY).depends_on, NOTE, "through the parent it was actually filed under");
+    assert.deepEqual(writtenPaths(plan), [SOUP_FILE]);
+    assert.deepEqual(plan.counts, { marks: 4, written: 1, unchanged: 0, held: 3, framed: 0, households: 1, removed: 0, written_by_locked_window: { 325: 1 } });
+  }
+  assert.deepEqual(backward.held, forward.held, "held list identical whatever order the marks arrived in");
+  assert.deepEqual(scrambled.held, forward.held);
+});
+
+test("CONTROLS: only ACTUAL filing dependencies are held: a sited or parcel mark, a frozen filing, a child of canon's Seth mark, and an unrelated child of a free parent are not", () => {
+  const sitedChild = { ...sitedMark({ by: "lyra-of-the-east-tower", slug: "a-lantern", household: "gh:222", body: "A lantern." }) };
+  sitedChild.fileRec = { ...sitedChild.fileRec, parent_id: LYRA }; // a raw parent_id, but a sited mark files at its own root and never asks for a parent
+  const frozen = { ...child("a-frozen-note", LYRA), path: "WORLD/marks/lyra-of-the-east-tower/a-frozen-note/mark.md" }; // the supplier named its filing
+  const underSeth = child("a-note-on-seths", SETH); // parented to the PUBLISHED mark: canon's, not this batch's
+  const free = child("another-signature", GUESTBOOK);
+  const freeKid = child("a-kid-of-the-free-one", "lyra-of-the-east-tower/another-signature");
+  const plan = planOf([LYRA_ROW(), sitedChild, frozen, underSeth, free, freeKid],
+    { canon: CANON, published: { [SETH]: SETH_FILE } });
+  assert.deepEqual(plan.held.map((h) => h.id), [LYRA], "only the collision itself");
+  const written = writtenPaths(plan);
+  assert.ok(written.includes("WORLD/marks/lyra-of-the-east-tower/a-lantern/mark.md"), "a sited mark files at its own root, whatever its raw parent_id");
+  assert.ok(written.includes("WORLD/marks/lyra-of-the-east-tower/a-frozen-note/mark.md"), "a frozen filing is where the supplier said");
+  assert.ok(written.includes(`${SETH_DIR}/a-note-on-seths/mark.md`), "a child genuinely parented to Seth's published mark is filed under it, as it always was, though that directory is the colliding path");
+  assert.ok(written.includes(`WORLD/marks/${GUESTBOOK}/another-signature/mark.md`));
+  assert.ok(written.includes(`WORLD/marks/${GUESTBOOK}/another-signature/a-kid-of-the-free-one/mark.md`));
+  assert.equal(plan.counts.held, 1);
+  assert.equal(plan.counts.written, 5);
+});
+
+test("through the REAL write-down: a child of the held mark reaches no branch, and Seth's directory holds exactly what canon holds", { skip: WHY_SKIP }, async (t) => {
+  const w = world(t);
+  const out = await run(w, [LYRA_ROW(), child("a-note-on-it", LYRA), SOUP_ROW()]);
+  assert.equal(out.refused, undefined);
+  assert.equal(out.written, 1);
+  assert.deepEqual(out.held_path_collision.map((h) => [h.id, h.crossing_output]), [[NOTE, "parent-held"], [LYRA, "path-held-by-another-id"]]);
+  assert.equal(out.held_path_collision_count, 2);
+  const branch = out.households[0].branch;
+  assert.deepEqual(out.households.map((h) => h.household_key), ["gh:333"], "no sketchbook for the held mark's household");
+  assert.equal(w.git("ls-tree", "-r", "--name-only", branch, "--", SETH_DIR).trim(), SETH_FILE, "Seth's directory holds only Seth's file");
+  const ids = foldIds(w, branch);
+  assert.ok(ids.has(SETH) && !ids.has(LYRA) && !ids.has(NOTE), "the fold: Seth stands, nothing of Lyra's is published, nothing hangs under Seth's mark");
+});
+
+test("the occupant is read from the FRONTMATTER: a body line that starts 'by:' names no author", () => {
+  const bodyOnly = "---\nkind: predicated\nslot: sign\n---\n\nby: seth wrote this line in the body\n";
+  assert.equal(filingOccupantId(SETH_FILE, bodyOnly), null, "no frontmatter by: means no occupant, however the body reads");
+  assert.equal(pathCollision(normalizeMark(LYRA_ROW()), SETH_FILE, { canonBytesAt: () => bodyOnly }), null, "and so no hold");
+  assert.equal(filingOccupantId(SETH_FILE, "by: seth\nno fence at all\n"), null, "a file with no frontmatter fence names no author");
+  assert.equal(filingOccupantId(SETH_FILE, SETH_BYTES.replace(/\n/g, "\r\n")), SETH, "CRLF bytes read the same");
+  assert.equal(filingOccupantId(SETH_FILE, SETH_BYTES), SETH, "the real thing still reads");
+  const both = "---\nkind: predicated\nby: seth\n---\n\nby: someone-else\n";
+  assert.equal(filingOccupantId(SETH_FILE, both), SETH, "the frontmatter's by wins over a body line");
+});

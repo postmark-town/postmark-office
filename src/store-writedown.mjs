@@ -509,9 +509,12 @@ export function normalizeFoldInput(input) {
 // renamed, relocated or demoted, and the occupant's bytes, identity, parent and filing are not read into the plan again.
 // The layout that lets both live (a filing that keeps both author/slug identities) is the joint class fix, not this guard.
 
+/** A record's frontmatter block (between its opening `---` line and the next one), or null when it has none. The same fence the writer emits. */
+const frontmatterOf = (bytes) => String(bytes ?? "").replace(/\r\n/g, "\n").match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1] ?? null;
+
 /** The id a published file stands for: its `by:` plus its directory leaf, as the loader derives it. Null when the file names no author. */
 export function filingOccupantId(path, bytes) {
-  const by = String(bytes ?? "").match(/^by:\s*(.+)$/m)?.[1]?.trim();
+  const by = frontmatterOf(bytes)?.match(/^by:\s*(.+)$/m)?.[1]?.trim(); // the FRONTMATTER's `by:`; a body line that starts `by:` names no author
   const leaf = String(path ?? "").replace(/\/mark\.md$/, "").split("/").at(-1);
   return by && leaf ? `${by}/${leaf}` : null;
 }
@@ -562,6 +565,11 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   // neither, the root fallback, as before.
   const byId = new Map(marks.map((m) => [m.id, m]));
   const plannedPathOf = new Map();
+  // WLD-230: WHICH MARKS' ACTUAL FILING WAS PLANNED UNDER A SAME-BATCH PARENT. `pathFor` consults `parentPathOf` only for a mark that is
+  // neither sited nor a parcel, and uses what it answers; a sited/parcel mark, and a mark whose supplier named its `plannedPath`
+  // (a frozen filing), never ask. So this records the real dependency, not every raw `parent_id`: child id -> the batch parent whose
+  // planned path its own path was built from. A parent that is canon's (not in this batch) is no edge.
+  const filedUnder = new Map();
   const planPath = (m, seen) => {
     if (plannedPathOf.has(m.id)) return plannedPathOf.get(m.id);
     const kind = m.fileRec?.kind ?? m.kind ?? null;
@@ -575,6 +583,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
           const parent = byId.get(pid);
           const pp = parent ? planPath(parent, new Set([...seen, m.id]))
             : (typeof publishedPathOf === "function" ? publishedPathOf(pid) : null);
+          if (parent && pp) filedUnder.set(m.id, pid);
           return pp ? pp.replace(/\/mark\.md$/, "") : null;
         },
       },
@@ -596,6 +605,37 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   const unchanged = [];
   const framed = [];
   const held = [];
+  // ── THE HOLD, AND WHO FILES UNDER IT (WLD-230, Truey's review of 2bc96df0) ──────────────────────────────────────────────
+  // A held mark is not written, and neither is a mark whose ACTUAL filing was planned under it: the planner would file it at
+  // `<held mark's planned path>/<slug>/mark.md`, inside the OTHER author's directory (the loader derives a parent from the directory),
+  // counted written and invisible to the harm gate, which looks for lost identities. Decided BEFORE the write loop, in a pass of its own,
+  // so input order decides nothing; followed transitively along the recorded filing dependencies only (see `filedUnder`). A mark
+  // parented to a mark canon holds (even Seth's, whose directory is the colliding path), a sited/parcel mark, and a frozen filing
+  // are not dependents: they never filed under a batch parent. Nothing is redirected; the held row stays the store's.
+  const rootHolds = new Map();
+  for (const m of marks) {
+    const p = planPath(m, new Set());
+    const c = p ? pathCollision(m, p, { publishedPathOf, canonBytesAt }) : null;
+    if (c) rootHolds.set(m.id, c);
+  }
+  const heldBy = new Map(); // id -> the colliding mark's hold it is held under (itself when it IS the collision)
+  const rootOf = (id, seen = new Set()) => {
+    if (heldBy.has(id)) return heldBy.get(id);
+    if (rootHolds.has(id)) return id;
+    const parent = filedUnder.get(id);
+    if (!parent || seen.has(id)) return null;
+    return rootOf(parent, new Set([...seen, id]));
+  };
+  for (const m of marks) { const r = rootOf(m.id); if (r) heldBy.set(m.id, r); }
+  for (const m of marks) {
+    const r = heldBy.get(m.id);
+    if (!r || r === m.id) continue;
+    const root = rootHolds.get(r);
+    heldBy.set(m.id, r);
+    rootHolds.set(`dependent:${m.id}`, { id: m.id, by: m.by ?? null, slug: m.slug ?? null, household: m.household ?? null, locked_window: m.locked_window ?? null,
+      path: plannedPathOf.get(m.id) ?? null, held_by_filing_of: root.held_by_filing_of, depends_on: filedUnder.get(m.id), held_under: r,
+      crossing_output: "parent-held" });
+  }
   for (const m of marks) {
     // `kind` RIDES SEPARATELY AND IT IS LOAD-BEARING. `pathFor` takes GATE A/B —
     // the freeze's "an existing filing never moves", then "a new mark files at
@@ -633,7 +673,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
 
     // WLD-230: the filing at this path is another id's. Held, reported, not written, not framed, never thrown (see § A FILING IS
     // ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a file it will not write.
-    const collision = pathCollision(m, path, { publishedPathOf, canonBytesAt });
+    const collision = rootHolds.get(m.id) ?? rootHolds.get(`dependent:${m.id}`) ?? null;
     if (collision) { held.push(collision); continue; }
 
     // ── THE ONE FRAMER, at the one place a row becomes a file (2026-09-18) ────
@@ -827,6 +867,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     b.removals.sort((a, c) => a.id.localeCompare(c.id));
   }
 
+  held.sort((a, c) => a.id.localeCompare(c.id)); // the account does not depend on the order the marks arrived in
   const heldIds = new Set(held.map((h) => h.id));
   const written = marks.filter((m) => !unchanged.some((u) => u.id === m.id) && !heldIds.has(m.id));
   const byWindow = {};
