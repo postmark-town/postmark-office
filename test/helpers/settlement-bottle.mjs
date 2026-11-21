@@ -116,7 +116,7 @@ process.stdout.write(JSON.stringify({ changed: true, commit_message: "registry: 
 
 // The real files the crossing composes its receipt and its history with.
 const REAL = ["deploy/settlement-auto.sh", "deploy/settlement-receipt.mjs", "deploy/surveyed-reading.mjs", "deploy/refused-marks.mjs",
-  "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
+  "deploy/parcel-captures-reading.mjs", "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
 
 let seq = 0;
 

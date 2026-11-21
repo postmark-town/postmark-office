@@ -87,6 +87,7 @@ import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 // Same module, same predicate, same rewrite. One owner, now four readers.
 import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
+import { speakerBook } from "./speaker-line.mjs"; // POS-1132
 import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
 import { acceptedSparksOfCircle } from "./event-sparks.mjs"; // POS-1035: the accepted sparks under a circle
 import * as apex from "../world2/tools/apex-reads.mjs";
@@ -1473,7 +1474,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       heard: live.earshotAt(emissions, near, { radiusM, mode }).sort((a, b) => a.distance_m - b.distance_m) } };
   }
 
-  if (path === "/world2/conversations") return conversationsFromRecord(p, searchParams, { settlements, hearingWindow });
+  if (path === "/world2/conversations") { await speakerBook(); /* POS-1132: the book the line shapers read */ return conversationsFromRecord(p, searchParams, { settlements, hearingWindow }); }
 
   if (path === "/world2/occupancy") {
     // The containment stack, folded from the crossings. P-036's door: the

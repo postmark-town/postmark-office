@@ -34,6 +34,7 @@ import { markRecord, recordKindOf } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
 import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { placementRelations } from "./placement-relations.mjs"; // POS-1156: what a placement overlaps and contains, beside its parent
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -377,13 +378,23 @@ async function main() {
   // run and the record is composed; a preview answers where it would nest, by
   // the engine's own containment rule over the sketchbook's marks plus the
   // candidate, and writes nothing — no file, no commit, no push.
+  // POS-1156: the two lists beside the parent, over the same marks plus the candidate, for the preview and the write alike.
+  // Null (the answer carries neither list) when the engine's geometry cannot be read: not read is never printed as empty.
+  const candidate = { id, kind: p.kind, by: p.by, at: p.at ?? null, extent: p.extent ?? null, ...(p.points ? { points: p.points } : {}) };
+  const geomMod = await import(pathToFileURL(join(tools, "geometry.mjs"))).catch(() => ({}));
+  const relations = (() => {
+    try {
+      return placementRelations(candidate, marks, {
+        marksOverlapArea: geomMod.marksOverlapArea, containmentParentOf, worldRootOf,
+      }); // rows are { id } here: the door (world.mjs § projectRelationRows) fills name and household, as on the journal path
+    } catch { return null; }
+  })();
   if (p.preview === true) {
-    const candidate = { id, kind: p.kind, by: p.by, at: p.at ?? null, extent: p.extent ?? null, ...(p.points ? { points: p.points } : {}) };
     const all = [...marks.filter((m) => m.id !== id), candidate];
     const parent = typeof containmentParentOf === "function" ? (containmentParentOf(candidate, all) ?? null)
       : typeof placementParent === "function" ? (placementParent(candidate, all) ?? worldRootOf?.(all)?.id ?? null)
       : null;
-    return answer({ preview: true, id, kind: p.kind, parent, would: amending ? "amend" : "leave",
+    return answer({ preview: true, id, kind: p.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
       dir: relative(MARKS_DIR, dir).replace(/\\/g, "/"), at: p.at ?? null, extent: p.extent ?? null, branch,
       ...(amending ? { amended: true, moved: amendMoves } : {}),
       nothing_written: "a preview: no file, no commit, no push — leave the mark without preview: true to write it" });
@@ -429,7 +440,7 @@ async function main() {
   // arrived: a parcel's extent is the town's dial, set here and never declared.
   // The door reads them back to tell an author where their claim actually landed
   // (issue #5 §1), and a resident reading the answer learns the same thing.
-  answer({ id, dir: relative(MARKS_DIR, dir).replace(/\\/g, "/"), parent: parentId, kind: p.kind,
+  answer({ id, dir: relative(MARKS_DIR, dir).replace(/\\/g, "/"), parent: parentId, ...(relations ?? {}), kind: p.kind,
            at: p.at ?? null, extent: p.extent ?? null, branch, commit, pushed, push_error,
            ...(amending ? { amended: true, moved: amendMoves,
              superseded: "the prior declaration — every version stays in the log; canon shows the latest at the next crossing" } : {}) });

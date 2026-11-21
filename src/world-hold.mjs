@@ -1429,7 +1429,7 @@ async function setDownMade({ made, args, key, actor }) {
   const stood = await standpointOfActor(actor);
   if (!stood) throw bounce(409, "the record does not place you anywhere",
     `a thing is set down where you stand, and the walk ledger has no position for ${actor}: walk somewhere first. Nothing was changed.`);
-  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.SET_DOWN_EXTENT });
+  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.setDownExtentOf(made) });
   if (dropStake?.terms) return dropStake.terms;
   const { leaveMarkViaOffice } = await import("./world.mjs");
   const { WORLD_CLONE } = await import("./world-store.mjs");
