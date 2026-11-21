@@ -2378,6 +2378,11 @@ async function sayAct(args = {}, key = null) {
 // answer (POS-265 lifted it out of worldSayHuman so the page's stream stands
 // the human exactly where their say would). Returns `{ speaker, standAs }`,
 // or a bounce.
+// POS-1132: the human's stand asks where a housemate stands through ONE function, so a test can say who is placed instead of
+// depending on whether this environment has a World clone. Unset (always, outside a test) it is residentStandpoint, unchanged.
+let _humanStandpointSeam = null;
+const humanStandpointOf = (handle) => (_humanStandpointSeam ?? residentStandpoint)(handle);
+export const __setHumanStandpointForTest = (fn) => { _humanStandpointSeam = fn ?? null; };
 async function humanStand(args = {}, key = null) {
   if (args.handle)
     return { error: "bounce", defect: "one voice at a time",
@@ -2420,16 +2425,24 @@ async function humanStand(args = {}, key = null) {
     if (!handles.includes(w))
       return { error: "bounce", defect: `"${w}" is not one of your residents`,
         hint: `with: names the housemate you stand beside — one of ${handles.join(", ")}` };
-    const here = await residentStandpoint(w).catch(() => null);
-    if (!here?.placed)
-      return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
-        hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    const here = await humanStandpointOf(w).catch(() => null);
+    if (!here?.placed) {
+      // POS-1132 (Wright, CORE-122 03:06Z): "The office accepts an explicit `with` for the unplaced resident it would pick itself
+      // (speaking from the Origin)." Omitting `with` when NOBODY is placed picks the first handle, whom the voice's standpoint stands at
+      // the Origin; the always-with box sends that disclosed resident back, so it is accepted, and ONLY it: any other unplaced
+      // housemate, or this one while another is placed (the office would pick the placed one), is still refused.
+      const first = handles[0];
+      const nobodyPlaced = w === first && (await Promise.all(handles.map((h) => humanStandpointOf(h).catch(() => null)))).every((p) => !p?.placed);
+      if (!nobodyPlaced)
+        return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
+          hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    }
     standAs = w;
   } else {
     let firstPlaced = null;
     const placed = [];
     for (const h of handles) {
-      const here = await residentStandpoint(h).catch(() => null);
+      const here = await humanStandpointOf(h).catch(() => null);
       if (!here?.placed) continue;
       placed.push(h);
       if (here.aboard) { standAs = h; break; }
@@ -2442,6 +2455,8 @@ async function humanStand(args = {}, key = null) {
   }
   return { speaker, standAs };
 }
+/** The one answer, as a test asks it (POS-1132): who the human is and whose body they borrow, with no voice read after it. */
+export const __humanStandForTest = humanStand;
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function worldSayHuman(args = {}, key = null) { return perceived(() => sayHumanAct(args, key)); }
@@ -5340,7 +5355,7 @@ async function namedMadeRecord(payload, by, key, bounce) {
   if (taken) throw bounce(409, `you already have a mark "${slug}"`,
     "a slug is unique per author, and that one names a mark of yours, published or a draft. Pick another slug for the thing you are making. Nothing was made.");
   if ((await madeMarksOrRefuse([id], bounce)).has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }
-  return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
+  return madeRecordOf({ by, slug, kind, body, holderFields, image, extent: payload.extent, household, date: new Date().toISOString() });
 }
 
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
@@ -7630,10 +7645,10 @@ export const WORLD_TOOLS = [
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
       // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
-      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at, extent, points are refused). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at and points are refused), but it may declare extent { w, h }: how big it is, in metres; it's used when it's set down (left off, it is set down 1×1). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
       count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
-      extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
+      extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door). With to: and a slug and body (a thing made into hands or a holder) it is how big the thing is, in metres; it's used when it's set down", properties: { w: { type: "number" }, h: { type: "number" } } },
       points: { type: "array", description: "optional polygon ring [[x,y],…] for an irregular shape, in grid meters. On a sited mark the town derives at (the ring's bounding-box centre) and extent (its w×h) from it, so you may leave both off; a sent at/extent that disagrees is replaced and the answer's `outline` says so. On a parcel the ring must fill the town's 25×25 box exactly" },
       body: { type: "string", description: "one present-tense observation; maximum 150 characters — the mark's face in every view" },
       // `tier` is DELIBERATELY ABSENT: standing is derived from the ground a
