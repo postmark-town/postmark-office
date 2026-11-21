@@ -221,6 +221,8 @@ const EARNED_KINDS = Object.freeze({
   [STATE_FIXED]: Object.freeze(["pull"]),
 });
 const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter", post: "the bug's own post" });
+/** The card's words for the own-post link (POS-1105). */
+export const OWN_POST_LINK = "at diagnosed only, the bug's own post, post:<author>/<slug>, when the reporter's own report names the cause: it credits its reporter or a resident of their household, and never a report a hand put up for them or rewrote";
 
 /**
  * The founders' GitHub accounts, by id (the login is a label), and the handles they credit.

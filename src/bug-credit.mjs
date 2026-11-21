@@ -13,6 +13,10 @@
 //                            GitHub hands abandoned ones out again.
 //   a letter                 its `from` is the credited resident, or a resident
 //                            of the same household.
+//   the bug's own post       (POS-1105) its reporter is the credited resident,
+//                            or a resident of the same household, the letter's
+//                            rule, when the post's own acts show its text is the
+//                            reporter's own words (§ ownPostEvidenceOf).
 //   the founders             wright-starforge and keeminlee may credit only wright
 //                            or keemin, and only they may credit them.
 //   Starforge's Apps         the four Apps (bugs.mjs § HOUSE_APPS), by id AND
@@ -63,11 +67,11 @@
 
 import { readFileSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { refuse } from "./events.mjs";
+import { refuse, ACT_POST, ACT_AMEND_POST } from "./events.mjs";
 import { registryRowsVia } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse, VIA } from "./household-deriver.mjs";
-import { EARNED_BY, FOUNDER_ACCOUNTS, FOUNDER_HANDLES, HOUSE_APPS, STATE_FIXED } from "./bugs.mjs";
+import { BUG_CLASS, EARNED_BY, FOUNDER_ACCOUNTS, FOUNDER_HANDLES, HOUSE_APPS, STATE_FIXED } from "./bugs.mjs";
 
 export const GITHUB_READ_TOKEN_FILE = "/srv/postmark-office/git-metrics-token";
 const GITHUB_API = "https://api.github.com";
@@ -91,7 +95,7 @@ function readToken(env) {
  */
 export async function githubAuthorOf(j, { env = process.env, fetchImpl = fetch } = {}) {
   const ref = j?.earned;
-  if (!ref || ref.kind === "letter") return null;
+  if (!ref || ref.kind === "letter" || ref.kind === "post") return null;
   const api = String(env.GITHUB_API_URL ?? GITHUB_API).replace(/\/+$/, "");
   const token = api === GITHUB_API ? readToken(env) : null;
   const plain = { accept: "application/vnd.github+json", "user-agent": "postmark-office", "x-github-api-version": "2022-11-28" };
@@ -395,32 +399,101 @@ export function judgeEarnedCredit({ to, credit, link, earned }, author, { regist
         `${teach}: credit a resident of the author's household, or link ${credit}'s own work`, { field: "credit" });
     return;
   }
-  if (author?.letter) {
-    const { id, from } = author.letter;
+  // A letter, and the bug's own post (POS-1105): one rule, its writer or their household; a founder's credits only a founder.
+  const sent = author?.letter ? { ...author.letter, noun: "letter", is: "is from", whose: "the letter's sender" }
+    : author?.post ? { ...author.post, noun: "post", is: "was written by", whose: "its reporter" } : null;
+  if (sent) {
+    const { id, from, noun, is, whose } = sent;
     const fromFounder = FOUNDER_HANDLES.includes(from);
     if (fromFounder !== creditFounder)
       throw refuse(422, fromFounder
-        ? `letter "${id}" is from ${from}, a founder, and a founder's work credits only ${FOUNDER_HANDLES.join(" or ")}`
-        : `only a founder's own letter earns ${credit} a stage, and letter "${id}" is from ${from}`, teach, { field: "credit" });
+        ? `${noun} "${id}" ${is} ${from}, a founder, and a founder's work credits only ${FOUNDER_HANDLES.join(" or ")}`
+        : `only a founder's own ${noun} earns ${credit} a stage, and ${noun} "${id}" ${is} ${from}`, teach, { field: "credit" });
     if (from === credit || fromFounder) return;
     const want = keyOfHandle(credit, registry, pins);
     const have = keyOfHandle(from, registry, pins);
     if (have !== want)
-      throw refuse(422, `letter "${id}" is from ${from}, of ${have}, and ${credit} stands in ${want}`,
-        `${teach}: credit the letter's sender or a resident of their household`, { field: "credit" });
+      throw refuse(422, `${noun} "${id}" ${is} ${from}, of ${have}, and ${credit} stands in ${want}`,
+        `${teach}: credit ${whose} or a resident of their household`, { field: "credit" });
     return;
   }
   throw refuse(503, `the office could not prove who wrote ${link}`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
 }
 
+// ── THE BUG'S OWN POST (POS-1105) ───────────────────────────────────────────
+//
+// Wright's § 3b (CORE-105): "The cause has to be in the text the reporter
+// wrote, dated by the act that wrote it." The post's own acts say who wrote its
+// words. Its `post` act's actor is the reporter, and a hand that put it up on
+// their behalf (`for`) is named on it as `hand`: that text is the hand's
+// transcription, so it earns nothing (link the letter the report came in). An
+// `amend` that changed the body or the steps is the reporter's own when it names
+// no hand; a hand's rewrite of either means the words are no longer all the
+// reporter's, and it refuses. Title, issue and record carry no report of a
+// cause, so a hand amending them changes nothing here. The words are dated by
+// the last act that wrote the body or steps. The checker judges whether they
+// name the cause; the office judges only whose they are and when they were
+// written. Missing or unreadable acts refuse, and nothing is written.
+const OWN_TEXT = Object.freeze(["body", "steps"]);
+const OWN_POST_HOW = (to) => `${EARNED_BY[to]} — the post's own link is earned only by the words its reporter wrote: a report a hand put up, or rewrote, is linked by the letter or comment the reporter wrote`;
+const actPayload = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
+
 /**
- * The write's half: the registry, and a letter when the link is one, read
- * through the write's own client, then judged. `gh` is githubAuthorOf's answer,
- * read before the transaction opened.
+ * Whose words the bug's own post holds, and when they were written: `{ from,
+ * act, at }` from the post's `post` and `amend` acts (oldest first), or the
+ * refusal. Pure. `to` is the stage the link earns, for the refusals' teaching.
+ */
+export function ownPostEvidenceOf(id, acts, to = "diagnosed") {
+  const how = OWN_POST_HOW(to);
+  const mine = (acts ?? []).filter((a) => a.object === id);
+  const posted = mine.find((a) => a.action === ACT_POST);
+  if (!posted || !posted.actor)
+    throw refuse(422, `the office holds no post act for "${id}", so it cannot show who wrote its words`, how, { field: "link" });
+  let wrote = posted;
+  try {
+    const p = actPayload(posted);
+    if (p.hand)
+      throw refuse(422, `"${id}" was put up by ${p.hand}'s hand on ${posted.actor}'s behalf, so its words are the hand's transcription, not ${posted.actor}'s own`, how, { field: "link" });
+    for (const a of mine.filter((x) => x.action === ACT_AMEND_POST)) {
+      const q = actPayload(a);
+      const words = (Array.isArray(q.changed) ? q.changed : []).filter((k) => OWN_TEXT.includes(k));
+      if (!words.length) continue;
+      if (q.hand || a.actor !== posted.actor)
+        throw refuse(422, `"${id}"'s ${words.join(" and ")} was rewritten by ${q.hand ?? a.actor}'s hand (act ${a.id}), so its words are not all ${posted.actor}'s own`, how, { field: "link" });
+      wrote = a;
+    }
+  } catch (e) {
+    if (e?.code === 422) throw e;
+    throw refuse(503, `the office could not read the acts of "${id}", so it cannot show who wrote its words`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
+  }
+  const at = new Date(wrote.at);
+  if (Number.isNaN(at.getTime()))
+    throw refuse(503, `the office could not read when "${id}"'s words were written (act ${wrote.id})`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
+  return { from: String(posted.actor), act: wrote.id, at: at.toISOString() };
+}
+
+/**
+ * The write's half: the registry, and a letter or the bug's own post's acts
+ * when the link is one, read through the write's own client, then judged. `gh`
+ * is githubAuthorOf's answer, read before the transaction opened. Answers the
+ * own post's evidence, `{ from, act, at }`, for the receipt; otherwise nothing.
  */
 export async function judgeEarnedCreditVia(client, j, gh) {
   const rows = await registryRowsVia(client);
   const folded = { registry: registryFromRows(rows), pins: pinsFromRows(rows) };
+  if (j.earned.kind === "post") {
+    let acts;
+    try {
+      ({ rows: acts } = await client.query(
+        "SELECT id, object, action, actor, at, payload FROM acts WHERE class = $1 AND object = ANY($2) AND action = ANY($3) ORDER BY id",
+        [BUG_CLASS, [j.earned.id], [ACT_POST, ACT_AMEND_POST]]));
+    } catch {
+      throw refuse(503, `the office could not read the acts of "${j.earned.id}", so it cannot show who wrote its words`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
+    }
+    const ev = ownPostEvidenceOf(j.earned.id, acts, j.to);
+    judgeEarnedCredit(j, { post: { id: j.earned.id, from: ev.from } }, folded);
+    return ev;
+  }
   // a carried fix is judged as its carried PR's work, and its refusals name both PRs
   if (j.earned.kind !== "letter")
     return judgeEarnedCredit(gh?.carried ? { ...j, link: `${gh.carried.link} (carried by ${j.link})` } : j, gh ? { gh } : null, folded);
