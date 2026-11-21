@@ -48,7 +48,7 @@ import {
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
   RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
-import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { githubAuthorOf, judgeEarnedCreditVia, ownWordsReceipt } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
@@ -885,7 +885,7 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
     const own = await judgeEarnedCreditVia(client, r, gh);
-    const ownWords = own ? `, the report's own words, written by ${own.from} (act ${own.act}, ${own.at})` : "";
+    const ownWords = own ? ownWordsReceipt(own) : "";
     const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
       ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
@@ -957,7 +957,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
-        + (own ? `, the report's own words, written by ${own.from} (act ${own.act}, ${own.at})` : "")
+        + (own ? ownWordsReceipt(own) : "")
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
         + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),

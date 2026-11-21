@@ -15,8 +15,9 @@
 //                            of the same household.
 //   the bug's own post       (POS-1105) its reporter is the credited resident,
 //                            or a resident of the same household, the letter's
-//                            rule, when the post's own acts show its text is the
-//                            reporter's own words (§ ownPostEvidenceOf).
+//                            rule, when the post's own acts show its body or
+//                            steps stand in the reporter's own words, each dated
+//                            by the act that wrote it (§ ownPostEvidenceOf).
 //   the founders             wright-starforge and keeminlee may credit only wright
 //                            or keemin, and only they may credit them.
 //   Starforge's Apps         the four Apps (bugs.mjs § HOUSE_APPS), by id AND
@@ -423,25 +424,37 @@ export function judgeEarnedCredit({ to, credit, link, earned }, author, { regist
 // ── THE BUG'S OWN POST (POS-1105) ───────────────────────────────────────────
 //
 // Wright's § 3b (CORE-105): "The cause has to be in the text the reporter
-// wrote, dated by the act that wrote it." The post's own acts say who wrote its
-// words. Its `post` act's actor is the reporter, and a hand that put it up on
-// their behalf (`for`) is named on it as `hand`: that text is the hand's
-// transcription, so it earns nothing (link the letter the report came in). An
-// `amend` that changed the body or the steps is the reporter's own when it names
-// no hand; a hand's rewrite of either means the words are no longer all the
-// reporter's, and it refuses. Title, issue and record carry no report of a
-// cause, so a hand amending them changes nothing here. The words are dated by
-// the last act that wrote the body or steps. The checker judges whether they
-// name the cause; the office judges only whose they are and when they were
-// written. Missing or unreadable acts refuse, and nothing is written.
+// wrote, dated by the act that wrote it." A report carries its words in two
+// fields, the body and the steps, and the post's own acts say who last wrote
+// EACH, and when (the review of #1167 at d1f298c2: one date for both named a
+// cause by an act that wrote only the other field):
+//   · the `post` act writes the body, and the steps when it sends them. Its
+//     actor is the reporter; when a hand put it up on their behalf (`for`), it
+//     names that `hand`, and the words are the hand's transcription.
+//   · an `amend` writes only the fields its `changed` names. It is the
+//     reporter's own when its actor is the reporter and it names no hand.
+// So each field stands as written by the last act that wrote it: the reporter's
+// own words, dated by that act, or a hand's, which are never counted as the
+// reporter's. A hand's edit is not permanent: a field the reporter writes again
+// is theirs from that act, and a hand's edit to one field leaves the other as
+// it was. Title, issue and record are not the report's words, and an amend of
+// them dates nothing. The receipt names each field's writer, act and date, and
+// the checker judges which field, if either, names the cause. The office
+// refuses only when neither field stands in the reporter's own words, or the
+// acts are missing or cannot be read; nothing is written.
 const OWN_TEXT = Object.freeze(["body", "steps"]);
-const OWN_POST_HOW = (to) => `${EARNED_BY[to]} — the post's own link is earned only by the words its reporter wrote: a report a hand put up, or rewrote, is linked by the letter or comment the reporter wrote`;
+const OWN_POST_HOW = (to) => `${EARNED_BY[to]} — the post's own link is earned by the words its reporter wrote: a body or steps a hand put up or last rewrote is not theirs, so link the letter or comment the reporter wrote`;
+const NO_DOUBT_ACTS = "nothing was written: the office never pays a stage on doubt — ask again shortly";
 const actPayload = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
+const was = (field) => (field === "steps" ? "were" : "was");
 
 /**
- * Whose words the bug's own post holds, and when they were written: `{ from,
- * act, at }` from the post's `post` and `amend` acts (oldest first), or the
- * refusal. Pure. `to` is the stage the link earns, for the refusals' teaching.
+ * Who last wrote each of the bug's own post's words, and when: `{ from, fields:
+ * { body, steps? } }`, each `{ act, at, by, own }` (`own`: the reporter's own
+ * words; `by`: the reporter, or the hand that wrote them), from the post's
+ * `post` and `amend` acts, oldest first. Refuses when no field is the
+ * reporter's own, or the acts are missing or unreadable. Pure. `to` is the stage
+ * the link earns, for the refusals' teaching.
  */
 export function ownPostEvidenceOf(id, acts, to = "diagnosed") {
   const how = OWN_POST_HOW(to);
@@ -449,34 +462,44 @@ export function ownPostEvidenceOf(id, acts, to = "diagnosed") {
   const posted = mine.find((a) => a.action === ACT_POST);
   if (!posted || !posted.actor)
     throw refuse(422, `the office holds no post act for "${id}", so it cannot show who wrote its words`, how, { field: "link" });
-  let wrote = posted;
+  const reporter = String(posted.actor);
+  const fields = {};
+  const wrote = (field, a, hand) => {
+    const at = new Date(a.at);
+    if (Number.isNaN(at.getTime()))
+      throw refuse(503, `the office could not read when "${id}"'s ${field} was written (act ${a.id})`, NO_DOUBT_ACTS, { field: "link" });
+    const own = !hand && String(a.actor) === reporter;
+    fields[field] = { act: a.id, at: at.toISOString(), by: own ? reporter : String(hand ?? a.actor), own };
+  };
   try {
     const p = actPayload(posted);
-    if (p.hand)
-      throw refuse(422, `"${id}" was put up by ${p.hand}'s hand on ${posted.actor}'s behalf, so its words are the hand's transcription, not ${posted.actor}'s own`, how, { field: "link" });
+    wrote("body", posted, p.hand);
+    if (p.fields?.steps !== undefined) wrote("steps", posted, p.hand);
     for (const a of mine.filter((x) => x.action === ACT_AMEND_POST)) {
       const q = actPayload(a);
-      const words = (Array.isArray(q.changed) ? q.changed : []).filter((k) => OWN_TEXT.includes(k));
-      if (!words.length) continue;
-      if (q.hand || a.actor !== posted.actor)
-        throw refuse(422, `"${id}"'s ${words.join(" and ")} was rewritten by ${q.hand ?? a.actor}'s hand (act ${a.id}), so its words are not all ${posted.actor}'s own`, how, { field: "link" });
-      wrote = a;
+      for (const field of (Array.isArray(q.changed) ? q.changed : []).filter((k) => OWN_TEXT.includes(k))) wrote(field, a, q.hand);
     }
   } catch (e) {
-    if (e?.code === 422) throw e;
-    throw refuse(503, `the office could not read the acts of "${id}", so it cannot show who wrote its words`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
+    if (e?.code === 422 || e?.code === 503) throw e;
+    throw refuse(503, `the office could not read the acts of "${id}", so it cannot show who wrote its words`, NO_DOUBT_ACTS, { field: "link" });
   }
-  const at = new Date(wrote.at);
-  if (Number.isNaN(at.getTime()))
-    throw refuse(503, `the office could not read when "${id}"'s words were written (act ${wrote.id})`, "nothing was written: the office never pays a stage on doubt — ask again shortly", { field: "link" });
-  return { from: String(posted.actor), act: wrote.id, at: at.toISOString() };
+  if (!Object.values(fields).some((f) => f.own))
+    throw refuse(422, `no word of "${id}"'s report stands as ${reporter}'s own: ${Object.entries(fields).map(([k, f]) => `its ${k} ${was(k)} last written by ${f.by}'s hand (act ${f.act})`).join(", and ")}`, how, { field: "link" });
+  return { from: reporter, fields };
+}
+
+/** The receipt's words for the own post's evidence: each field's writer, act and date, and which are not the reporter's. */
+export function ownWordsReceipt({ from, fields }) {
+  const own = Object.entries(fields).filter(([, f]) => f.own).map(([k, f]) => `its ${k} written by act ${f.act} (${f.at})`);
+  const not = Object.entries(fields).filter(([, f]) => !f.own).map(([k, f]) => `its ${k} ${was(k)} last written by ${f.by}'s hand (act ${f.act}, ${f.at}), so ${k === "steps" ? "they are" : "it is"} not ${from}'s and earn${k === "steps" ? "" : "s"} nothing`);
+  return `, the report's own words by ${from}: ${own.join(", and ")}${not.length ? `; ${not.join("; ")}` : ""}`;
 }
 
 /**
  * The write's half: the registry, and a letter or the bug's own post's acts
  * when the link is one, read through the write's own client, then judged. `gh`
  * is githubAuthorOf's answer, read before the transaction opened. Answers the
- * own post's evidence, `{ from, act, at }`, for the receipt; otherwise nothing.
+ * own post's evidence, `{ from, fields }`, for the receipt; otherwise nothing.
  */
 export async function judgeEarnedCreditVia(client, j, gh) {
   const rows = await registryRowsVia(client);

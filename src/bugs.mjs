@@ -196,11 +196,12 @@ export function judgeLink(v) {
 // 2026-11-17: "A cause in the report itself counts"; Wright's § 3b). diagnosed
 // also takes the bug's own post, `post:<author>/<slug>`: only the post being
 // advanced, credited to its reporter or someone in their household, the rule a
-// letter follows. Its text must be the reporter's own, dated by the act that
-// wrote it (bug-credit.mjs § ownPostEvidenceOf reads the post's acts). The
-// checker still judges whether it is the cause; the office judges only whose
-// words they are. briefed is unchanged: a brief needs its acceptance test and
-// falsifier written out.
+// letter follows. Its words must be the reporter's own, each field dated by
+// the act that wrote it (bug-credit.mjs § ownPostEvidenceOf reads the post's
+// acts, field by field). The checker still judges which words, if any, are the
+// cause; the office judges only whose they are and when each was written.
+// briefed is unchanged: a brief needs its acceptance test and falsifier
+// written out.
 export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STATE_FIXED]);
 
 /** What earns each checked stage, in the words every refusal teaches with. */
@@ -222,7 +223,7 @@ const EARNED_KINDS = Object.freeze({
 });
 const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter", post: "the bug's own post" });
 /** The card's words for the own-post link (POS-1105). */
-export const OWN_POST_LINK = "at diagnosed only, the bug's own post, post:<author>/<slug>, when the reporter's own report names the cause: it credits its reporter or a resident of their household, and never a report a hand put up for them or rewrote";
+export const OWN_POST_LINK = "at diagnosed only, the bug's own post, post:<author>/<slug>, when the reporter's own report names the cause: it credits its reporter or a resident of their household, and counts only the body or steps the reporter last wrote themselves, each dated by the act that wrote it";
 
 /**
  * The founders' GitHub accounts, by id (the login is a label), and the handles they credit.
