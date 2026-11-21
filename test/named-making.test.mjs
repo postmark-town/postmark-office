@@ -89,7 +89,8 @@ test("the form: anything of its own with to: is the named form; a place, or a co
   assert.equal(isNamedForm({ to: LB, holder: true }), true, "a holder field is the thing's own");
   assert.equal(namedFormRefusal({ to: LB, slug: "a", body: "b" }), null);
   assert.match(namedFormRefusal({ to: LB, kind: "candy", count: 2, at: { x: 1, y: 1 } }).defect, /has no place: at is for a mark on the ground/);
-  assert.match(namedFormRefusal({ to: LB, slug: "a", body: "b", extent: { w: 1, h: 1 }, points: [] }).defect, /extent, points are for a mark on the ground/);
+  assert.match(namedFormRefusal({ to: LB, slug: "a", body: "b", extent: { w: 1, h: 1 }, points: [] }).defect, /has no place: points is for a mark on the ground/, "POS-1155: a size is taken; the place (at, points) is not");
+  assert.match(namedFormRefusal({ to: LB, slug: "a", body: "b", at: { x: 1, y: 1 }, points: [] }).defect, /at, points are for a mark on the ground/);
   const both = namedFormRefusal({ to: LB, kind: "candy", count: 2, slug: "a", body: "b" });
   assert.match(both.defect, /count makes that many alike, with nothing of their own, and slug, body are one thing's own/);
   assert.match(both.hint, /leave-mark \{ kind, count, to \}.*leave-mark \{ slug, body, kind\?, to \}/);

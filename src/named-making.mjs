@@ -63,6 +63,35 @@ export const NAMED_OWN = Object.freeze(["slug", "body", ...HOLDER_FIELDS, "image
 /** A place: never carried by a thing made into hands or a holder (G10). */
 export const PLACE_FIELDS = Object.freeze(["at", "extent", "points"]);
 
+/**
+ * WHAT A HELD THING STILL HAS NONE OF (POS-1155, Darko 2026-11-19 22:21 EST: "we should make it so you can declare an extent when
+ * making things into someone's hands"). A thing made into hands has no PLACE: `at` and `points` stay refused. Its SIZE is not a
+ * place: `extent {w,h}`, in metres, rides the make and is what it is set down with.
+ */
+export const HELD_PLACE_REFUSED = Object.freeze(["at", "points"]);
+
+/**
+ * The extent a make declared, as the made record keeps it: `{ w, h }`, each a finite number above 0 (the sited door's own
+ * positive side; the office has no size cap at that door to apply, so none is invented here). Null for anything else.
+ */
+export function declaredExtentOf(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const w = typeof raw.w === "number" ? raw.w : NaN, h = typeof raw.h === "number" ? raw.h : NaN;
+  return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { w, h } : null;
+}
+
+/** The refusal for an extent sent with a make that is not a well formed size, or for one sent with the batch form. Null when fine. */
+export function declaredExtentRefusal(payload = {}) {
+  if (payload.extent === undefined) return null;
+  if (!isNamedForm(payload))
+    return { code: 422, defect: "extent is one named thing's own size, and a count of a kind has nothing of its own",
+      hint: "leave-mark { slug, body, kind?, extent: { w, h }, to } makes ONE thing of your own with its size, in metres; leave-mark { kind, count, to } makes that many alike with none. Nothing was made." };
+  if (declaredExtentOf(payload.extent) === null)
+    return { code: 422, defect: "extent is how big the thing is, in metres: { w, h }, each a number above 0",
+      hint: "for example extent: { w: 0.3, h: 0.2 }. It is the thing's size, used when it is set down; leave it off and it is set down 1×1. Nothing was made." };
+  return null;
+}
+
 /** Never taken with to:, each refused by name (G4, G6, G7). */
 export const NAMED_REFUSED = Object.freeze(["slot", "value", "parent_id", "amend", "consent", "placed_by", "tier", "ask", "reward", "status", "label", "dropped"]);
 
@@ -78,10 +107,11 @@ export const isNamedForm = (payload = {}) => sent(payload, NAMED_OWN).length > 0
  */
 export function namedFormRefusal(payload = {}, by = "<you>") {
   const own = sent(payload, NAMED_OWN);
-  const place = sent(payload, PLACE_FIELDS);
+  const place = sent(payload, HELD_PLACE_REFUSED);
   if (place.length)
     return { code: 422, defect: `a thing made into hands or a holder has no place: ${place.join(", ")} ${place.length === 1 ? "is" : "are"} for a mark on the ground`,
-      hint: `with to:, the thing is held from the moment it is made, so it stands nowhere. To leave a mark on the ground, leave to: off. Nothing was made.` };
+      hint: `with to:, the thing is held from the moment it is made, so it stands nowhere (its size is extent, which it takes). To leave a mark on the ground, leave to: off. Nothing was made.` };
+  { const r = declaredExtentRefusal(payload); if (r) return r; }
   if (own.length && payload.count !== undefined)
     return { code: 422, defect: `count makes that many alike, with nothing of their own, and ${own.join(", ")} ${own.length === 1 ? "is" : "are"} one thing's own`,
       hint: `two forms, one verb: leave-mark { kind, count, to } makes that many of a kind, none named; leave-mark { slug, body, kind?, to } makes ONE thing of your own, named, held, free and live. Send count without slug and body, or slug and body without count. Nothing was made.` };
@@ -111,9 +141,11 @@ export function namedFormRefusal(payload = {}, by = "<you>") {
  * 2: `kind: <class>`, no `class:` line), `holder` its own sovereign holder
  * fields as the leave door judged them (kind-holding.mjs § holderWordOf).
  */
-export function madeRecordOf({ by, slug, kind, body, holderFields = null, image, household = null, date = null }) {
+export function madeRecordOf({ by, slug, kind, body, holderFields = null, image, extent = null, household = null, date = null }) {
+  const size = declaredExtentOf(extent);
   return {
     id: `${by}/${slug}`, by: String(by), slug: String(slug), kind: String(kind), body: String(body).trim(),
+    ...(size ? { extent: size } : {}), // POS-1155: the thing's declared size, kept with it; absent = today's 1×1 at set-down
     ...(holderFields ?? {}), ...(image !== undefined ? { image: String(image) } : {}),
     ...(household ? { household: String(household) } : {}), ...(date ? { date: String(date) } : {}),
   };
@@ -158,8 +190,11 @@ export const withdrawnWords = ({ actor, id }) => `${actor} withdrew ${id}: withd
 
 // ── SETTING ONE DOWN (POS-766/e; P2-a..e on the lead's word, 2026-10-23) ─────
 
-/** The extent a thing made in hand is set down with: it never had one, so the thing default (P2-c). */
+/** The extent a thing made in hand is set down with when it declared none (and every record made before POS-1155): the thing default (P2-c). */
 export const SET_DOWN_EXTENT = Object.freeze({ w: 1, h: 1 });
+
+/** The extent THIS thing is set down with: the one its make declared, else the default 1×1. The one answer the ground check and the draft both read. */
+export const setDownExtentOf = (made) => ({ ...(declaredExtentOf(made?.extent) ?? SET_DOWN_EXTENT) });
 
 /**
  * P2-a: the maker's house sets it down, because the draft it becomes is its
@@ -186,7 +221,7 @@ export function setDownCandy(id, kind) {
  */
 export function setDownDraftOf(made, { at, free }) {
   const { id: _id, by, slug, kind, body, household: _h, date: _d, ...own } = made;
-  return { slug, kind, body, ...own, by, at: { x: at.x, y: at.y }, extent: { ...SET_DOWN_EXTENT }, ...(free ? { stamps: 0 } : {}) };
+  return { slug, kind, body, ...own, by, at: { x: at.x, y: at.y }, extent: setDownExtentOf(made), ...(free ? { stamps: 0 } : {}) };
 }
 
 /**
