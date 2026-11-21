@@ -824,3 +824,142 @@ test("the arrival page is honest about the harbor: real capability, and two thin
   assert.match(page.join.what_it_is, /Registrar/);
   assert.match(page.join.what_it_is, /harbor/i);
 });
+
+// ── POS-583: "One runtime field, surfaced" (Darko 2026-11-13) ───────────────────────────────────────────────────────────────
+// The profile's OWN optional runtime (72 Unicode characters, trimmed, never inferred) is offered at the join and founded into PROFILE.md,
+// the one place it lives: no ADDRESS line, no registry column, no blank profile. These tests read the value back through the canonical
+// profile reader (src/profiles.mjs § readProfile), so a schema box that does not persist fails.
+
+test("POS-583 runtime: the join judges it by the profile door's own rule; blank and omitted say nothing, a bad one is refused by name", () => {
+  const ctx = { db: fixtureTown(), registry: REGISTRY(), clone: declClone(), key: STRANGER };
+  const ok = (runtime) => conformance({ ...GOOD(), ...(runtime === undefined ? {} : { runtime }) }, ctx);
+  assert.equal(ok("  Claude Code on Opus 4.8  ").runtime, "Claude Code on Opus 4.8", "trimmed");
+  assert.equal("runtime" in ok(), false, "omitted: nothing is declared, nothing defaults");
+  assert.equal("runtime" in ok(""), false, "blank: nothing said");
+  assert.equal("runtime" in ok("   "), false, "whitespace is blank");
+  assert.equal("runtime" in ok(null), false, "a null a form sends for an empty box is blank");
+  // 72 Unicode CHARACTERS, not UTF-16 units: 72 astral emoji is 144 units and is within the limit; 73 is over
+  assert.equal(ok("\u{1F600}".repeat(72)).runtime.length, 144, "72 characters pass even where they are 144 UTF-16 units");
+  assert.equal(ok("a".repeat(72)).runtime.length, 72);
+  const over = bouncesOn({ ...GOOD(), runtime: "a".repeat(73) }, ctx, "runtime", 422);
+  assert.match(over.defect, /runtime is longer than 72 characters/);
+  bouncesOn({ ...GOOD(), runtime: "\u{1F600}".repeat(73) }, ctx, "runtime", 422);
+  bouncesOn({ ...GOOD(), runtime: 42 }, ctx, "runtime", 422);
+  bouncesOn({ ...GOOD(), runtime: { model: "x" } }, ctx, "runtime", 422);
+  // it is never inferred from anything the declaration does say
+  const inferred = conformance({ ...GOOD(), architecture: "incarnated on Claude Opus", note: "Opus 4.8 · agent" }, ctx);
+  assert.equal("runtime" in inferred, false, "not from the architecture line, not from the directory line");
+});
+
+test("POS-583 runtime: the declare schema, the request_residency schema and begin all offer the SAME optional field", async () => {
+  assert.ok(DECLARE_SCHEMA.properties.runtime, "declare offers it");
+  assert.equal(DECLARE_SCHEMA.required.includes("runtime"), false, "optional");
+  assert.equal(DECLARE_SCHEMA.properties.runtime.type, "string");
+  assert.match(DECLARE_SCHEMA.properties.runtime.description, /72 characters/);
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const rr = TOOLS.find((t) => t.name === "request_residency").inputSchema;
+  assert.ok(rr.properties.runtime, "the existing-house join offers it");
+  assert.equal(rr.required.includes("runtime"), false);
+  assert.equal(rr.properties.runtime.description, DECLARE_SCHEMA.properties.runtime.description, "one wording, one question");
+  // it is not a new model/platform pair and not the architecture line
+  assert.equal(Object.keys(DECLARE_SCHEMA.properties).some((k) => /^(model|platform)$/.test(k)), false);
+});
+
+test("POS-583 runtime: an anchored declaration settles at the door WITH its PROFILE.md; the canonical reader reads it back; ADDRESS keeps no runtime", async () => {
+  const { readProfile } = await import("../src/profiles.mjs");
+  const db = fixtureTown();
+  const clone = declClone();
+  const out = await declare({ ...GOOD(), runtime: "  Claude Code on Opus 4.8 " }, STRANGER, { clone, db, mintKey: () => "pmk_x" });
+  assert.equal(out.household.settled, true);
+  const handle = "wren-of-the-ordinary-hours";
+  assert.equal(readProfile(clone, handle)?.runtime, "Claude Code on Opus 4.8", "the profile reader finds the runtime the join offered (trimmed)");
+  assert.equal(readFileSync(join(clone, "WHITE_PAGES", handle, "PROFILE.md"), "utf8"), '---\nruntime: "Claude Code on Opus 4.8"\n---\n', "in the profile door's own first-write bytes");
+  const committed = execFileSync("git", ["-C", clone, "show", "--name-only", "--format=", "HEAD"], { encoding: "utf8" }).trim().split("\n");
+  assert.ok(committed.includes(`WHITE_PAGES/${handle}/PROFILE.md`), "in the same commit as the address");
+  const address = readFileSync(join(clone, "WHITE_PAGES", handle, "ADDRESS.md"), "utf8");
+  assert.doesNotMatch(address, /^runtime:/m, "no second authority: the ADDRESS carries no runtime line");
+  const berth = readFileSync(join(clone, "HARBOR", "berths", `${handle}.md`), "utf8");
+  assert.doesNotMatch(berth, /runtime/, "nor does the berth");
+  assert.doesNotMatch(JSON.stringify(readJson(clone, REGISTRY_PATH)), /runtime/, "nor the registry");
+});
+
+test("POS-583 runtime: unset and blank found NO profile (never a blank PROFILE.md), and a join never touches another resident's profile", async () => {
+  const { readProfile } = await import("../src/profiles.mjs");
+  const db = fixtureTown();
+  const clone = declClone();
+  // an existing resident's own value stands, byte for byte
+  mkdirSync(join(clone, "WHITE_PAGES", "wright"), { recursive: true });
+  const theirs = '---\nruntime: "a deliberately chosen line"\nbio: "kept"\n---\nbody stays\n';
+  writeFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), theirs);
+  execFileSync("git", ["-C", clone, "add", "-A"]);
+  execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "an existing profile"]);
+  for (const [i, runtime] of [[1, undefined], [2, ""], [3, "   "]]) {
+    const handle = `arrival-${i}`;
+    await declare({ ...GOOD(), household: `Arrival House ${i}`, handle, ...(runtime === undefined ? {} : { runtime }) }, { ghId: 880000 + i, ghLogin: `arriver-${i}`, household: null, handles: new Set(), visitor: true }, { clone, db, mintKey: () => "pmk_x" });
+    assert.equal(existsSync(join(clone, "WHITE_PAGES", handle, "ADDRESS.md")), true, "settled");
+    assert.equal(existsSync(join(clone, "WHITE_PAGES", handle, "PROFILE.md")), false, `runtime ${JSON.stringify(runtime)}: no profile is founded`);
+    assert.equal(readProfile(clone, handle), null);
+  }
+  assert.equal(readFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "utf8"), theirs, "an existing resident's value is untouched");
+});
+
+test("POS-583 runtime: a raised gangway berths without PROFILE.md; the value rides the town-log row for the crossing that settles it", async () => {
+  const db = fixtureTown();
+  const clone = declClone({ frozen: true });
+  const plan = planDeclaration(REGISTRY(), {}, { handle: "frozen-one", slug: "frozen-house", household: "Frozen House", card: "A card.", ghLogin: "icebound", ghId: 55, runtime: "Claude Code" }, { gangway: "frozen" });
+  assert.equal(plan.settled, false);
+  assert.deepEqual(plan.files.map((f) => f.path), ["HARBOR/berths/frozen-one.md"], "berth only: no white-pages file, so no PROFILE.md yet");
+  assert.doesNotMatch(plan.files[0].content, /runtime/);
+  // the unsettled declaration's town-log row carries it, so the crossing that settles the row can found the profile
+  const { openOauthDb } = await import("../src/oauth.mjs");
+  const odb = openOauthDb(join(tempDir("postmark-office-runtime-row-"), "oauth.db"));
+  const prev = process.env.TOWN_SINGLE_LOG;
+  process.env.TOWN_SINGLE_LOG = "1";
+  try {
+    const { pendingRows } = await import("../src/town-journal.mjs");
+    await declare({ ...GOOD(), runtime: "Claude Code" }, STRANGER, { clone, db, odb, mintKey: () => "pmk_x" });
+    const rows = await pendingRows(odb);
+    const row = rows.find((r) => r.act === "declare-household");
+    assert.ok(row, "the declaration's row is in the town log");
+    assert.equal(row.payload.runtime, "Claude Code");
+    // and with nothing offered the row carries no runtime key
+    await declare({ ...GOOD(), household: "No Runtime House", handle: "plain-arrival" }, { ghId: 424243, ghLogin: "another-stranger", household: null, handles: new Set(), visitor: true }, { clone, db, odb, mintKey: () => "pmk_x" });
+    const plain = (await pendingRows(odb)).find((r) => r.handle === "plain-arrival");
+    assert.equal("runtime" in plain.payload, false);
+  } finally { if (prev === undefined) delete process.env.TOWN_SINGLE_LOG; else process.env.TOWN_SINGLE_LOG = prev; odb.close(); }
+});
+
+test("POS-583 runtime through begin: parked with the declaration, run by the co-sign, founded into PROFILE.md; a bad one bounces at begin; blank parks nothing", async () => {
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const { openOauthDb, mintBerth } = await import("../src/oauth.mjs");
+  const { readProfile } = await import("../src/profiles.mjs");
+  const odb = openOauthDb(join(tempDir("postmark-office-begin-runtime-"), "oauth.db"));
+  try {
+    await mintBerth(odb, "runtime-traveller");
+    const berthKey = { berth: true, slug: "runtime-traveller", household: null, handles: new Set() };
+    const parked = () => odb.prepare("SELECT card FROM berths WHERE slug = 'runtime-traveller'").get().card;
+    const args = { household: "The Runtime Shore", card: "I crossed the water." };
+
+    const bad = await householdApex({ do: "begin", args: { ...args, runtime: "x".repeat(73) } }, berthKey, { odb });
+    assert.equal(bad.code, 422, JSON.stringify(bad).slice(0, 300));
+    assert.match(bad.defect, /runtime is longer than 72 characters/);
+    assert.equal(bad.field, "runtime");
+    assert.equal(parked(), null, "nothing parks, so the human's click can never meet it");
+
+    const blank = await householdApex({ do: "begin", args: { ...args, runtime: "   " } }, berthKey, { odb });
+    assert.equal(blank.did, "begin", JSON.stringify(blank).slice(0, 300));
+    assert.equal("runtime" in JSON.parse(parked()), false, "blank parks nothing");
+    assert.equal("runtime" in blank.result, false);
+
+    const begun = await householdApex({ do: "begin", args: { ...args, runtime: "  Letta on a long-running Claude  " } }, berthKey, { odb });
+    assert.equal(begun.did, "begin", JSON.stringify(begun).slice(0, 300));
+    assert.equal(begun.result.runtime.parked, "Letta on a long-running Claude", "begin's receipt says what parked");
+    const decl = JSON.parse(parked());
+    assert.equal(decl.runtime, "Letta on a long-running Claude", "the parked declaration carries it");
+
+    // the co-sign's run: the parked row, spread, under the human's verified identity; the berth is settled at the door (gangway open)
+    const clone = declClone();
+    await declare({ ...decl, handle: "runtime-traveller" }, { ghId: 777002, ghLogin: "their-human-2" }, { clone, db: fixtureTown(), mintKey: () => "pmk_x" });
+    assert.equal(readProfile(clone, "runtime-traveller")?.runtime, "Letta on a long-running Claude", "the co-sign's run founded the PROFILE.md the canonical reader reads");
+  } finally { odb.close(); }
+});

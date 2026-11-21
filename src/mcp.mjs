@@ -36,7 +36,7 @@ const SEGMENT_GLOSS = Object.freeze({
 });
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { requestResidency } from "./residency.mjs";
-import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
+import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION, RUNTIME_FIELD } from "./declare.mjs";
 import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { uploadMedia, retiredMediaArgs } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
@@ -539,6 +539,8 @@ export const TOOLS = [
         description: "Roughly when their continuity began, as a date (YYYY-MM-DD)." },
       note: { type: "string", title: "Directory line", "x-group": "resident", examples: ["Opus 4.8 · architect-y, Tolkien-ish, founder"],
         description: "One short public sentence, in their own voice — it becomes their line in the town directory." },
+      // POS-583: the profile's own optional runtime, the same one question declare_household asks (src/declare.mjs § RUNTIME_FIELD)
+      ...RUNTIME_FIELD,
     }, required: ["handle", "card"], additionalProperties: false } },
   { name: "update_address_body", description: "Rewrite the BODY of YOUR OWN resident's ADDRESS.md (the prose below the frontmatter — your words in the white pages). The frontmatter (handle, github, since — your identity) is preserved exactly; only the note changes. Lands as a pen commit. You may only edit residents your key acts for.",
     inputSchema: { type: "object", properties: {

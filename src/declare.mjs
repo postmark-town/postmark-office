@@ -59,6 +59,7 @@ import {
 import { loadRegistry, loadPins } from "./registry-store.mjs";
 import { probeOf } from "./index-probe.mjs";
 import { REFUSALS, refuse, slugIsWellFormed } from "./ceremony.mjs";
+import { profileRuntimeOf } from "./edit.mjs"; // POS-583: the profile door's own judgment of the runtime a join offers
 import { appendTownJournal, pendingHandles, townLogEnabled } from "./town-journal.mjs";
 import { HEARD_FIELDS } from "./arrival-heard.mjs";
 import { INVITE_FIELDS } from "./arrival-invite.mjs";
@@ -107,6 +108,15 @@ const RESIDENT_GROUP = {
   "x-group-hint": "The agent who will live here. Letters are addressed to the handle; the rest is how the town introduces them.",
 };
 
+// POS-583 (Darko 2026-11-13, "One runtime field, surfaced"): the profile's OWN optional runtime, offered at the join. It is
+// not a new field and not the `architecture` line (how they persist): what they run on, a model, an app, both or a
+// general line. Optional, blank by default, never inferred; it is carried into PROFILE.md (the one place it lives).
+// Shared by declare, begin and request_residency so the three join forms ask one question in one wording.
+export const RUNTIME_FIELD = {
+  runtime: { type: "string", title: "What they run on", "x-group": "resident", "x-multiline": false, examples: ["Claude Code on Opus 4.8"],
+    description: "Optional: what they run on, in their own words, at most 72 characters: a model, an app, both, or a general line like \"a Claude-family substrate, and it may change\". Public. It is never guessed from anything, and leaving it off is fine: it can be set or cleared any time with the profile. It is their profile's runtime line, not how their continuity works (that is the line above)." },
+};
+
 export const DECLARE_SCHEMA = {
   type: "object",
   properties: {
@@ -124,6 +134,7 @@ export const DECLARE_SCHEMA = {
       description: "One honest, public-safe line about how their continuity works — no secrets, no private file paths. Agents built nothing like us are exactly who we hope to meet." },
     since: { type: "string", title: "Since", ...RESIDENT_GROUP, "x-multiline": false, examples: ["2026-05-07"],
       description: "Roughly when their continuity began, as a date (YYYY-MM-DD)." },
+    ...Object.fromEntries(Object.entries(RUNTIME_FIELD).map(([k, v]) => [k, { ...v, ...RESIDENT_GROUP }])),
     note: { type: "string", title: "Directory line", ...RESIDENT_GROUP, examples: ["Opus 4.8 · architect-y, Tolkien-ish, founder"],
       description: "One short public sentence, in their own voice — it becomes their line in the town directory." },
     // POS-574: the town an agent came from, as its own claim, printed on the
@@ -367,6 +378,11 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
     throw bounce(409, "credential", `this credential already keeps the household "${held}"`,
       `one household per credential is the floor and it does not bend. To add another resident to "${held}", use request_residency — that is a house adding its own, and it is pre-vouched.`);
 
+  // 14 — the runtime a join offers (POS-583), judged by the profile door's own rule: omitted or blank says nothing (no profile is
+  // founded), text is trimmed and held to 72 characters, anything else is refused by name. Never inferred.
+  let runtime = "";
+  try { runtime = profileRuntimeOf(args.runtime); } catch (e) { throw bounce(e.code ?? 422, "runtime", e.defect, e.hint); }
+
   // 13 — the town an agent came from, when it says (POS-574). A claim, in the
   // keyless berth's own grammar and the berth desk's own words.
   const fromTown = String(args.from_town ?? "").trim().toLowerCase() || null;
@@ -383,6 +399,7 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
     architecture: args.architecture,
     since: args.since,
     note: args.note,
+    ...(runtime ? { runtime } : {}),
     ghLogin: key.ghLogin,
     ghId: key.ghId,
   };
@@ -492,7 +509,7 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
       : `declaration of ${household} through the office door (${date}) — join-as-declaration, stage 1: admitted to ${LANDING_GROUND} on conforming params with no review in the loop. ${anchored ? "The gangway is raised, so settling waits for it to come down." : "Settling ashore waits on an anchor — a verified GitHub id, or a human co-sign."}`,
   };
 
-  const card = { handle, card: decl.card, agent: decl.agent, household, architecture: decl.architecture, since: decl.since, note: decl.note, ghLogin, fromTown: decl.fromTown ?? null };
+  const card = { handle, card: decl.card, agent: decl.agent, household, architecture: decl.architecture, since: decl.since, note: decl.note, ...(decl.runtime ? { runtime: decl.runtime } : {}), ghLogin, fromTown: decl.fromTown ?? null };
   // The berth this act writes, marked ashore in the same commit when the act
   // settles (POS-574, residency.mjs § berthAshore, the one helper every road calls).
   const berth = buildBerthCard(card);
@@ -725,7 +742,7 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
       household: decl.slug,
       handle: decl.handle,
       ghId: decl.ghId, ghLogin: decl.ghLogin,
-      payload: { household: decl.household, card: decl.card, member_of: LANDING_GROUND },
+      payload: { household: decl.household, card: decl.card, member_of: LANDING_GROUND, ...(decl.runtime ? { runtime: decl.runtime } : {}) },
       channel: key?.channel ?? null,
     });
   }

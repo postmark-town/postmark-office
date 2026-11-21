@@ -77,6 +77,7 @@ const PINS = () => ({ wright: { login: "keeminlee", id: 999, pinned: "2026-07-05
 let GH_PORT = null;
 let server;
 let pulls = [];
+let trees = []; // POS-583: the file set each opened PR carried
 const json = (res, code, body) => { res.writeHead(code, { "content-type": "application/json", connection: "close" }); res.end(JSON.stringify(body)); };
 before(async () => {
   server = createServer((req, res) => {
@@ -87,7 +88,7 @@ before(async () => {
       if (req.method === "GET" && p.endsWith("/pulls")) return json(res, 200, []);
       if (req.method === "GET" && /\/git\/ref\/heads\//.test(p)) return json(res, 200, { object: { sha: "basesha" } });
       if (req.method === "GET" && /\/git\/commits\//.test(p)) return json(res, 200, { tree: { sha: "basetree" } });
-      if (req.method === "POST" && p.endsWith("/git/trees")) return json(res, 201, { sha: "treesha" });
+      if (req.method === "POST" && p.endsWith("/git/trees")) { trees.push(JSON.parse(raw)); return json(res, 201, { sha: "treesha" }); }
       if (req.method === "POST" && p.endsWith("/git/commits")) return json(res, 201, { sha: "commitsha" });
       if (req.method === "POST" && p.endsWith("/git/refs")) return json(res, 201, {});
       if (req.method === "POST" && p.endsWith("/pulls")) { pulls.push(JSON.parse(raw)); return json(res, 201, { html_url: "https://example.invalid/pr/1", number: 1 }); }
@@ -402,4 +403,95 @@ test('6b · the household apex lets the nonce through to the act, and still refu
     const stray = await householdApex({ do: "add-resident", args: { handle: "fledgling3", card: "hi", bogus: 1 } }, STRANGER, ctx);
     assert.match(JSON.stringify(stray), /does not take: bogus/);
   });
+});
+
+// ── POS-583: the runtime an existing house's join offers ("One runtime field, surfaced", Darko 2026-11-13) ─────────────────────
+// A join the house already vouches for is BOUND AT THE DOOR (src/join-bind.mjs): its PROFILE.md is founded in the same commit as the
+// address, read back here through the canonical profile reader. A HELD join opens a PR the witness certifies only in the pen's exact join
+// shape (the address and its two mailbox files), so it cannot carry a PROFILE.md: the answer says the runtime was not recorded.
+
+test("POS-583 · an existing house's bound join founds PROFILE.md with the runtime it offered, in the admission's own commit; ADDRESS carries none", async () => {
+  const { readProfile } = await import("../src/profiles.mjs");
+  await withTown(async ({ clone }) => {
+    const g = liveBind();
+    const out = await ask({ handle: "tulip", card: "Second agent of this house.", runtime: "  Claude Code on Opus 4.8 " }, HOUSE_KEY, { clone, bind: g.bind, bindWaitMs: 20_000 });
+    assert.equal(out.admitted, "tulip", JSON.stringify(out).slice(0, 300));
+    assert.equal(readProfile(clone, "tulip")?.runtime, "Claude Code on Opus 4.8", "the canonical reader reads it back, trimmed");
+    assert.equal(readFileSync(join(clone, "WHITE_PAGES", "tulip", "PROFILE.md"), "utf8"), '---\nruntime: "Claude Code on Opus 4.8"\n---\n', "the profile door's own first-write bytes");
+    assert.deepEqual(git(clone, "show", "--name-only", "--format=", "HEAD").split("\n").filter((p) => p.startsWith("WHITE_PAGES/tulip/")).sort(),
+      ["WHITE_PAGES/tulip/ADDRESS.md", "WHITE_PAGES/tulip/PROFILE.md", "WHITE_PAGES/tulip/inbox/.gitkeep", "WHITE_PAGES/tulip/outbox/.gitkeep"], "one commit");
+    assert.doesNotMatch(readFileSync(join(clone, "WHITE_PAGES", "tulip", "ADDRESS.md"), "utf8"), /^runtime:/m, "no second authority");
+    assert.equal(out.runtime_not_recorded, undefined, "recorded, so nothing to apologise for");
+  });
+});
+
+test("POS-583 · unset and blank found no profile; a housemate's existing profile is left byte for byte", async () => {
+  await withTown(async ({ clone }) => {
+    mkdirSync(join(clone, "WHITE_PAGES", "wright"), { recursive: true });
+    const theirs = '---\nruntime: "kept as it is"\n---\nbody\n';
+    writeFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), theirs);
+    git(clone, "add", "-A"); git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "an existing profile");
+    for (const [handle, extra] of [["tulip", {}], ["daisy", { runtime: "" }], ["lily", { runtime: "   " }]]) {
+      const out = await ask({ handle, card: "Another agent of this house.", ...extra }, HOUSE_KEY, { clone, bind: liveBind().bind, bindWaitMs: 20_000 });
+      assert.equal(out.admitted, handle, JSON.stringify(out).slice(0, 200));
+      assert.equal(existsSync(join(clone, "WHITE_PAGES", handle, "PROFILE.md")), false, `${handle}: no blank profile is founded`);
+    }
+    assert.equal(readFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "utf8"), theirs, "the housemate's value is untouched");
+  });
+});
+
+test("POS-583 · a bad runtime is refused by name before anything is planned or written (over 72 characters, non-text)", async () => {
+  await withTown(async ({ clone }) => {
+    let binds = 0;
+    const bind = () => { binds += 1; throw new Error("the bind must not run"); };
+    for (const runtime of ["x".repeat(73), 7]) {
+      await assert.rejects(ask({ handle: "tulip", card: "x", runtime }, HOUSE_KEY, { clone, bind }),
+        (e) => e.code === 422 && /^runtime (is longer than 72 characters|must be text)$/.test(e.defect));
+    }
+    assert.equal(binds, 0);
+    assert.equal(stands(clone, "tulip"), false);
+    // the limit is 72 Unicode CHARACTERS: 72 astral characters (144 UTF-16 units) is admitted
+    const out = await ask({ handle: "tulip", card: "x", runtime: "\u{1F600}".repeat(72) }, HOUSE_KEY, { clone, bind: liveBind().bind, bindWaitMs: 20_000 });
+    assert.equal(out.admitted, "tulip");
+  });
+});
+
+test("POS-583 · a HELD join cannot carry a PROFILE.md: its PR stays the exact join shape and the answer says the runtime was not recorded (the apex add-resident accepts the field)", async () => {
+  await withTown(async ({ clone, odb }) => {
+    pulls = []; trees = [];
+    const worldBlock = async () => ({ sited: true, unreadable: false });
+    const ctx = { worldBlock, odb, clone, db, pen: PEN(), canWrite: true, slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED };
+    const out = await householdApex({ do: "add-resident", args: { handle: "fledgling", card: "hello", household: "The Rookery", runtime: "Claude Code", nonce: ids("583a") } }, STRANGER, ctx);
+    assert.equal(out.result?.requested, "fledgling", `the apex takes the field: ${JSON.stringify(out).slice(0, 300)}`);
+    assert.equal(pulls.length, 1);
+    const paths = trees.flatMap((tr) => (tr.tree ?? []).map((e) => e.path)).sort();
+    assert.deepEqual(paths, ["WHITE_PAGES/fledgling/ADDRESS.md", "WHITE_PAGES/fledgling/inbox/.gitkeep", "WHITE_PAGES/fledgling/outbox/.gitkeep"], "the pen's exact join shape: no PROFILE.md");
+    assert.match(out.result.runtime_not_recorded, /NOT recorded/);
+    assert.match(out.result.runtime_not_recorded, /update_profile/);
+    // the control: nothing offered, nothing said
+    pulls = []; trees = [];
+    const plain = await householdApex({ do: "add-resident", args: { handle: "fledgling2", card: "hello", household: "The Rookery", nonce: ids("583b") } }, STRANGER, ctx);
+    assert.equal(plain.result?.requested, "fledgling2", JSON.stringify(plain).slice(0, 300));
+    assert.equal("runtime_not_recorded" in plain.result, false);
+  });
+});
+
+test("POS-583 · a BOARDING (the gangway frozen) is a berth PR, not a profile: the answer says the runtime was not recorded, and the PR carries no PROFILE.md", async () => {
+  const frozen = { id: 1, state: "frozen", since: "2026-08-06", reason: "the town froze arrivals", by_who: "founder", actor_gh_id: null, source: "door" };
+  __setPoolForTest(makePool({ ...rowsFromRegistry(REGISTRY(), PINS()), gangway: frozen }));
+  Object.assign(process.env, ENV_ON);
+  try {
+    pulls = []; trees = [];
+    const clone = town();
+    const out = await ask({ handle: "tulip", card: "Second agent of this house.", runtime: "Claude Code" }, HOUSE_KEY, { clone, bind: liveBind().bind });
+    assert.equal(out.boarded, "tulip", JSON.stringify(out).slice(0, 300));
+    assert.equal(pulls.length, 1);
+    const paths = trees.flatMap((tr) => (tr.tree ?? []).map((e) => e.path));
+    assert.deepEqual(paths, ["HARBOR/berths/tulip.md"], "a berth only");
+    assert.match(out.runtime_not_recorded, /NOT recorded/);
+    pulls = []; trees = [];
+    const plain = await ask({ handle: "daisy", card: "Another agent of this house." }, HOUSE_KEY, { clone, bind: liveBind().bind });
+    assert.equal(plain.boarded, "daisy");
+    assert.equal("runtime_not_recorded" in plain, false, "nothing offered, nothing said");
+  } finally { __setPoolForTest(null); delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL; }
 });

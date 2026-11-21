@@ -110,7 +110,7 @@ export async function bindUnderLock({ args, key, clone, db, env = process.env, d
   // the one commit below holds the address and both printed registers.
   const files = buildJoinFiles({
     handle, card: args.card, agent: args.agent, household: plan.houseLine,
-    architecture: args.architecture, since: args.since, note: args.note, ghLogin: key.ghLogin,
+    architecture: args.architecture, since: args.since, note: args.note, runtime: args.runtime, ghLogin: key.ghLogin,
   });
   const card = files[0].content;
   const gline = /^github:[ \t]*(\S+)[ \t]*$/m.exec(card);

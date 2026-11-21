@@ -771,6 +771,25 @@ function profileValue(args, field) {
   return value;
 }
 
+// ── THE RUNTIME A JOIN OFFERS (POS-583, Darko 2026-11-13: "One runtime field, surfaced") ─────────────
+// The join steps (declare, begin, request_residency) offer the profile's OWN optional runtime and carry it into the
+// profile through THESE two functions, so the join and the profile door judge and write it by one rule and never two:
+//   profileRuntimeOf   the door's own validation (profileValue): omitted, null or blank is nothing said ("");
+//                      text is trimmed and held to PROFILE_CAPS.runtime Unicode characters; non-text and over-cap are
+//                      refused by name (422). Nothing is ever inferred from a model, an account or an architecture line.
+//   foundedProfileFile the bytes a join founds PROFILE.md with (the door's own first-write shape: patchProfileFrontmatter
+//                      over an empty frontmatter), or null when there is nothing to say: a join never founds a blank profile.
+export function profileRuntimeOf(runtime) {
+  if (runtime === undefined || runtime === null) return "";
+  return profileValue({ runtime }, "runtime");
+}
+export function foundedProfileFile(runtime) {
+  const value = profileRuntimeOf(runtime);
+  if (!value) return null;
+  const frontmatter = patchProfileFrontmatter("", "\n", { runtime: value }, PROFILE_WRITTEN_KEYS);
+  return frontmatter ? `---\n${frontmatter}\n---\n` : null;
+}
+
 function splitProfileFile(text) {
   const m = /^(\uFEFF?---)(\r?\n)([\s\S]*?)(\r?\n---)([\s\S]*)$/.exec(text);
   if (m) return { opening: m[1], eol: m[2], frontmatter: m[3], closing: m[4], rest: m[5] };

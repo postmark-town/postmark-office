@@ -200,6 +200,12 @@ CHANGED["MCP household {}"].push(
     `"acts":[{"act":"add-resident"`],
   [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
     `,{"act":"letter-note"`]);
+// POS-583 ("One runtime field, surfaced", Darko 2026-11-13): the join cards offer the profile's own optional `runtime`. add-resident's card
+// (request_residency's fields) is the one join card still on the connector's index, and it gains the one field, last, after `note`; nothing
+// else in the answer moves (the recorded begin and declare cards are the ones the CORE-114 substitution above removes).
+CHANGED["MCP household {}"].push(
+  [`"fields":{"household":{},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"address"`,
+    `"fields":{"household":{},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{},"runtime":{}}},{"act":"address"`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };
