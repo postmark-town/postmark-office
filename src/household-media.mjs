@@ -85,7 +85,11 @@ export async function embeddedScan({ handles, clone, urls }) {
   try {
     const { WORLD_CLONE } = await import("./world.mjs");
     const { publishedState } = await import("./world-branches.mjs");
-    for (const mark of publishedState(WORLD_CLONE).state.marks ?? []) {
+    // POS-686: a body is content: the house's own-parcel amendments and withdrawals canon has not carried yet are laid over the published
+    // marks, so a media URL an amendment added is embedded now and one a withdrawn mark held is not (world-live-parcel.mjs)
+    const { editsForRepo, overlayMarks } = await import("./world-live-parcel.mjs");
+    const published = publishedState(WORLD_CLONE).state.marks ?? [];
+    for (const mark of overlayMarks(published, await editsForRepo(WORLD_CLONE, { owners: [...mine] }))) {
       if (!mine.has(mark.by)) continue;
       sweep(mark.image);
       sweep(mark.body);

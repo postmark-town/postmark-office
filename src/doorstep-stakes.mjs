@@ -75,11 +75,13 @@
 import { nextSettlement, SETTLEMENT_CLOCK } from "./world-forecast.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { heldBy } from "./held.mjs"; // POS-688: the printed `held_by`, the world's own spelling (pure, no I/O)
+import { overlayMarks } from "./world-live-parcel.mjs"; // POS-686: the house's own edits canon has not carried yet
 
 const defaultWorld = async () => {
   const [{ publishedState }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
   return publishedState(WORLD_CLONE);
 };
+const defaultLiveEdits = async (state, _ref, handles) => (await import("./world-live-parcel.mjs")).liveEdits(state?.marks ?? [], { owners: handles });
 const defaultRegistry = async (ref) => {
   const [{ readJsonAtRef }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
   return readJsonAtRef(WORLD_CLONE, ref, REGISTRY_PATH)?.published ?? {};
@@ -234,6 +236,7 @@ export async function stakesFor(handles, {
   escrow = defaultEscrow,
   rule = defaultRule,
   pathAt = defaultPathAt,
+  liveEditsFor = defaultLiveEdits,   // POS-686: (state, ref, handles) => the edits owed to those handles' marks; a suite's seam
   now = new Date(),
   limit = null,
   offset = 0,   // POS-1102: where the marks part's page starts, the lists' own `offset`; with `allocationPage` it pages both parts in step
@@ -247,7 +250,13 @@ export async function stakesFor(handles, {
   const base = { next_settlement: { at }, clock: SETTLEMENT_CLOCK, rule: SWEEP_RULE };
 
   let state, ref;
-  try { ({ state, ref } = await world()); }
+  try {
+    ({ state, ref } = await world());
+    // POS-686: this house's own amendments and withdrawals canon has not carried yet, so its stakes rows carry the body it has
+    // now and not a withdrawn mark. Asked for THESE handles only: another house's read finds nothing owed and does no overlay.
+    const edits = await liveEditsFor(state, ref, scope);
+    if (edits?.key) state = { ...state, marks: overlayMarks(state?.marks ?? [], edits) };
+  }
   catch (e) {
     return { ...base, unavailable: `the world record could not be read (${plainReason(e, "files", "the stakes' world record")}) — what you hold is unknown here, not empty`,
       escrow_at_town_sha: null, escrow_ingested_at: null, catches_up_at: at, later_stakes: LATER_STAKES, count: 0, at_risk: null, rows: [] };

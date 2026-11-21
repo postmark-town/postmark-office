@@ -1646,7 +1646,7 @@ async function householdMarks(f, key, ctx) {
     if (d.readable) lists.drafts.push(...d.rows.map((r) => ({ ...r, by: h }))); else unread.drafts = d.reason;
     const p = await tm.liveDocketFor(h, { docket });
     if (p.readable) lists.pending.push(...p.rows); else unread.pending = p.reason;
-    try { lists.standing.push(...tm.publishedMarksOf(h).map((r) => ({ ...r, by: h }))); }
+    try { lists.standing.push(...tm.publishedMarksOf(h, { edits: await tm.editsForOwner(h) }).map((r) => ({ ...r, by: h }))); }
     catch { unread.standing = "the world checkout could not be read"; }
   }
   const newestFirst = (a, b) => String(b.date ?? b.submitted_at ?? "").localeCompare(String(a.date ?? a.submitted_at ?? "")) || String(a.id ?? a.slug).localeCompare(String(b.id ?? b.slug));
