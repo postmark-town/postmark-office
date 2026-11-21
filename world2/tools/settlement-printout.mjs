@@ -366,8 +366,8 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   for (const [slug, sealed] of missing) {
     const path = printedPath.get(slug) ?? publishedPathOf(slug);
     const household = householdOf.has(slug) ? sketchbookNameFor(householdOf.get(slug), wall) : null;
-    if (!path || !household)
-      throw new PrintoutRefusal("registry-unprintable", `the sealed registry holds ${slug} and neither this printout nor main files it: a row the file cannot say where it stands`);
+    const refusal = registryRowRefusal({ slug, path, household, held: plan.held });
+    if (refusal) throw new PrintoutRefusal(refusal.reason, refusal.detail);
     published[slug] = { household, path, class: sealed.class };
     registryChange.added.push(slug);
   }
@@ -389,6 +389,8 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     changed: changed.length, written: upserts.map((u) => ({ id: u.id, path: u.path })), unchanged: plan.unchanged.map((u) => u.id),
     removed: gone, reframed: reframed.map((r) => ({ id: r.id ?? null, file: r.file ? relative(world, r.file).replace(/\\/g, "/") : null })),
     framed: plan.framed, registry: registryChange,
+    // WLD-230: marks the write-down planner held because their filing is another id's published file (and their dependents): not written
+    held_path_collision: plan.held, held_path_collision_count: plan.held.length,
     // where each mark was filed from: the seal, never the live table (sealedHouseOf, firstSealedWindows)
     filed_from: { household: "the register sealed with this settlement", locked_window: "the first seal that carried the version", register_digest: S.register_digest ?? null },
   };
@@ -401,12 +403,40 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   // is an EMPTY printout commit, so each settlement has its own commit, dated when it printed, for its tag
   // to stand on. A tag on an older commit would date the settlement by that commit (settlements-backfill
   // reads the window and published_at off the tagged commit's date) and stand two numbers on one commit.
-  const message = `settlement: S${S.sealed_settlement} printout — ${summary.written} written, ${summary.removed} removed, ${summary.reframed} re-framed`
-    + `\n\nThe settlement's printout of its sealed snapshot (POS-1025): window ${window}, snapshot ${S.id} ${S.digest}, town ${S.town_sha ?? "-"}.`
-    + `\nMeasured from S${P.sealed_settlement ?? "?"} (window ${P.window_id}). Nothing here was decided after the seal.`
-    + (staged ? "" : "\nThe settlement changed nothing on main: an empty printout, so it is printed and tagged like every other.");
+  const message = printoutMessage({ settlement: S.sealed_settlement, window, snapshotId: S.id, digest: S.digest, townSha: S.town_sha,
+    written: summary.written, removed: summary.removed, reframed: summary.reframed, from: P, quiet: !staged });
   git(world, ["commit", "--quiet", ...(staged ? [] : ["--allow-empty"]), "-F", "-"], { input: message });
   return { status: staged ? "printed" : "quiet", ...receipt, summary, commit: git(world, ["rev-parse", "HEAD"]).trim() };
+}
+
+/**
+ * WHY A SEALED REGISTRY ROW CANNOT BE FILED, or null when it can. A row the printout neither wrote nor main files is "unprintable"; when
+ * the reason is that the write-down planner HELD the mark (WLD-230: its planned filing is another id's published file, or it files
+ * under a held mark) the refusal says so by name, with whose filing, instead of the generic words. The refusal is the same refusal (a
+ * refused printout publishes nothing and alarms): this does not decide whether a sealed-published mark whose file would overwrite
+ * another's should print around the hold. PURE.
+ */
+export function registryRowRefusal({ slug, path, household, held = [] }) {
+  if (path && household) return null;
+  const h = (held ?? []).find((x) => x.id === slug);
+  if (h) return { reason: "filing-held-by-another-id",
+    detail: `the sealed registry holds ${slug}, and the write-down held it (${h.crossing_output}): its filing ${h.path ?? "(none)"} is ${h.held_by_filing_of}'s published file${h.depends_on ? `, and it files under ${h.depends_on}` : ""}. Printing it would overwrite that file or hang it under another's mark, so nothing was printed (WLD-230; the filing layout that keeps both is the class fix)` };
+  return { reason: "registry-unprintable", detail: `the sealed registry holds ${slug} and neither this printout nor main files it: a row the file cannot say where it stands` };
+}
+
+/**
+ * THE PRINTOUT COMMIT'S MESSAGE. It ends in a `Window: <id>` trailer: the window the sealed snapshot closed, which settlements-backfill
+ * prefers to naming a window by the clock (POS-940; POS-354 fix c, Darko 2026-10-10: "settlement-auto.sh writes a `Window: <id>`
+ * trailer, and the backfill prefers it"). A clearing 12 h or more late would otherwise leave the backfill naming the SUCCESSOR window,
+ * with no snapshot, permanently. The retired script's `name_window` amended the sweep's commit; the printout is the commit the tag
+ * now blesses, so it says its window itself. PURE.
+ */
+export function printoutMessage({ settlement, window, snapshotId, digest, townSha, written, removed, reframed, from, quiet }) {
+  return `settlement: S${settlement} printout — ${written} written, ${removed} removed, ${reframed} re-framed`
+    + `\n\nThe settlement's printout of its sealed snapshot (POS-1025): window ${window}, snapshot ${snapshotId} ${digest}, town ${townSha ?? "-"}.`
+    + `\nMeasured from S${from?.sealed_settlement ?? "?"} (window ${from?.window_id}). Nothing here was decided after the seal.`
+    + (quiet ? "\nThe settlement changed nothing on main: an empty printout, so it is printed and tagged like every other." : "")
+    + `\n\nWindow: ${window}`;
 }
 
 /** The annotated tag's message: the pair the notary certifies, and the town line snapshot-backfill reads. PURE. */

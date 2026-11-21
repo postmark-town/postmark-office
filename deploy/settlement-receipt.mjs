@@ -178,6 +178,9 @@ const receipt = {
             framed: printout.framed ?? [],
             // WORLD/settlement-publications.json as sealed: admitted, reclassed, removed by name
             registry: printout.registry ?? null,
+            // WLD-230: marks held (not written) because their filing is another id's published file; null when the printout reported none
+            held_path_collision: printout.held_path_collision ?? null,
+            held_path_collision_count: printout.held_path_collision_count ?? null,
             summary: printout.summary ?? null,
           })
     : { ran: false, reason: "the crossing ended before its printout" },

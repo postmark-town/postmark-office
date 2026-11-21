@@ -22,6 +22,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { pinTown } from "./helpers/pinned-town.mjs"; // POS-994: a fixture town's stub engine is pinned to itself, as the box would pin its own
 
 const sweep = (d) => { try { rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* litter */ } };
 
@@ -96,6 +97,7 @@ put(town, "tools/world-stake.mjs", `
 export function worldStakeState() { return { positions: new Map([["solace/the-old-mill|stranger", 3]]) }; }
 export function markEscrow(clone, mark) { return mark === "solace/the-old-mill" ? 3 : 0; }
 `);
+process.env.TOWN_PINS_DIR = pinTown(town); // POS-994 (the train's fixture-town rule): the office runs only town code it pinned; this stub is pinned to itself
 
 const PINS = {
   reader: { login: "readerhouse", id: 9 },

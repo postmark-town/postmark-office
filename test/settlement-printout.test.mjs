@@ -155,6 +155,8 @@ test("1 · PRINT, DELAYED PAST A HOUSEHOLD CHANGE: the sealed delta and nothing 
   const head = git(WORLD, "rev-parse", "HEAD").trim();
   assert.equal(out.commit, head);
   assert.match(git(WORLD, "log", "-1", "--format=%s"), new RegExp(`^settlement: S${S2.sealed_settlement} printout — 1 written, 1 removed`), "the subject the printout's readers know");
+  // POS-940 (fix c), carried onto the printout: the commit the tag blesses names its window in a Window: trailer, which the backfill prefers to the clock
+  assert.match(git(WORLD, "log", "-1", "--format=%B"), new RegExp("\\n\\nWindow: " + (WIN + 1) + "\\s*$"), "the printout commit ends in its window's trailer");
   const touched = git(WORLD, "diff", "--name-only", `${LAW_SHA}..HEAD`).split("\n").filter(Boolean).sort();
   const newPath = out.written[0].path;
   assert.ok(touched.includes(newPath) && touched.includes(takenRow.path) && touched.includes("WORLD/settlement-publications.json"), touched.join(", "));
