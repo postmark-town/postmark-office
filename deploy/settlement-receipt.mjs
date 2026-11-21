@@ -312,7 +312,14 @@ const receipt = {
             households: (drain.households ?? []).filter((h) => h.changed).map((h) => h.household),
             state_commit: drain.state_commit ?? null,
           })
-    : { ran: false, reason: "the drain step did not run for this crossing" },
+    // No drain report. When THIS crossing's store write-down did run (its report is present: that is the fact,
+    // not a `ran` field on it and not a positive write count, so a store crossing that wrote nothing still ran),
+    // the absence is by design, not a miss: the store's write-down replaced the journal drain at G1 and the drain
+    // has no caller at settlement (POS-1127: a reader took the old wording as a fault and went looking for a drain
+    // to run). `ran: false` stays; it says what replaced it. Neither report is the real miss and keeps its words.
+    : store
+      ? { ran: false, superseded_by: "store", reason: "the store's write-down replaces the journal drain since G1" }
+      : { ran: false, reason: "the drain step did not run for this crossing" },
 
   // ── THE STORE'S WRITE-DOWN (G1 lane 3) ─────────────────────────────────────
   //
