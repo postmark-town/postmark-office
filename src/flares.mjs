@@ -34,11 +34,15 @@
 // ── WHO ADVANCES IT ─────────────────────────────────────────────────────────
 //
 // The law: "Iris, wright and keemin". wright and keemin are the founders' own
-// handles. IRIS IS NOT BOUND HERE: the town's public handle `iris` is cass's
-// resident (WHITE_PAGES), and nothing on the record shows it is the
-// Illuminator's own credential, so naming it would grant a stranger the hand.
-// Iris joins FLARE_HANDS when her actual operator handle is settled (asked on
-// POS-1163). The hand is the credential's own, as a bug's is (named-hand.mjs).
+// handles. IRIS, THE ILLUMINATOR, IS THE RESIDENT `illuminator` (Wright, on
+// POS-1163, 2026-11-21 21:57Z), not `iris` (cass's resident) nor any other
+// Iris name. She is matched by the authenticated caller's OWN resident, never
+// by household (hers moves under POS-448/POS-1162) nor by a shared key's handle
+// list. A key in a resident's own hand stands for that resident alone
+// (named-hand.mjs § handsOf), so it distinguishes her. A human's, household or
+// operator key holds every handle it lists, so it cannot: one that lists or
+// names illuminator is HELD OFF for her (refused, and the card says so). Every
+// hand is the credential's own, as a bug's is (named-hand.mjs).
 
 import { refuse, TITLE_MAX } from "./events.mjs";
 import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
@@ -54,10 +58,17 @@ export const FLARE_STATES = Object.freeze([STATE_REPORTED, STATE_ACCEPTED_TEXT, 
 /** The states a flare is finished in: its acceptance (as text or as video), or its decline. */
 export const FLARE_FINISHED = Object.freeze([STATE_ACCEPTED_TEXT, STATE_ACCEPTED_VIDEO, STATE_DECLINED]);
 
-/** Who advances a flare: the law's Iris, wright and keemin, less Iris until her operator handle is settled (above). */
-export const FLARE_HANDS = Object.freeze(["wright", "keemin"]);
-/** What is unsettled about the hands, in the words every refusal and card says it with. */
-export const FLARE_HANDS_PENDING = "Iris, the Illuminator, joins them when her own operator handle is settled (POS-1163): the public handle iris is another household's resident";
+/** The Illuminator's resident handle (Wright, POS-1163, 21:57Z): Iris, who holds flares. */
+export const ILLUMINATOR = "illuminator";
+/** Who advances a flare: the law's Iris (the resident illuminator), wright and keemin. */
+export const FLARE_HANDS = Object.freeze(["wright", "keemin", ILLUMINATOR]);
+/** The hands, as a sentence names them. */
+export const FLARE_HANDS_WORDS = `${FLARE_HANDS.slice(0, -1).join(", ")} or ${FLARE_HANDS.at(-1)}`;
+/** How the Illuminator's hand is held, in the words every refusal and card says it with. */
+export const FLARE_HANDS_PENDING = "Iris, the Illuminator, is the resident illuminator, and she acts only with her own resident key: a household's, a founder's or any other shared key that lists or names illuminator holds her hand off (the public handle iris is another household's resident)";
+
+/** Is this credential the Illuminator's own: a key in the resident illuminator's own hand, and nothing wider? */
+const ownIlluminator = (key) => key?.heldBy === "resident" && key?.claimedHandle === ILLUMINATOR && holdsHand(key, ILLUMINATOR);
 
 export const FLARE_FORMS = Object.freeze(["text", "video"]);
 /** The town's own household, the maker of a flare the town posted on its own channels. */
@@ -70,7 +81,7 @@ export const PLATFORM_MAX = 40;
 const SPARK_ID_RE = /^[a-z0-9][a-z0-9._-]{0,39}\/[a-z0-9][a-z0-9._-]{0,119}$/;
 
 const POST_HOW = `town { do: "post", args: { class: "flare", title, about: "<the public spark's id>", destinations: [{ url, platform, form: "text" | "video", screenshot? }] } } — one destination for every place it was posted`;
-const ADVANCE_HOW = `town { do: "advance", args: { post, to: "${STATE_ACCEPTED_TEXT}" | "${STATE_ACCEPTED_VIDEO}" | "${STATE_DECLINED}" } } — by ${FLARE_HANDS.join(" or ")}`;
+const ADVANCE_HOW = `town { do: "advance", args: { post, to: "${STATE_ACCEPTED_TEXT}" | "${STATE_ACCEPTED_VIDEO}" | "${STATE_DECLINED}" } } — by ${FLARE_HANDS_WORDS}`;
 
 /** An external URL: http(s), one line, at most URL_MAX characters. Returns it trimmed, or throws naming `field`. */
 function judgeUrl(v, field) {
@@ -139,9 +150,13 @@ export function judgeFlareHand(fields, key, { act }) {
   const held = [...(key?.handles ?? [])];
   const named = typeof fields?.handle === "string" ? fields.handle.trim() : "";
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
-  const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find((h) => FLARE_HANDS.includes(h)) ?? "");
+  // unnamed, the illuminator is chosen only for her own key: a shared key that lists her stands as its founder, or as no one
+  const usable = (h) => FLARE_HANDS.includes(h) && (h !== ILLUMINATOR || ownIlluminator(key));
+  const hand = named || (held.length === 1 ? held[0] : [...handsOf(key)].find(usable) ?? "");
   if (!hand || !FLARE_HANDS.includes(hand))
-    throw refuse(403, `only ${FLARE_HANDS.join(" and ")} ${act}`, `the law: Iris, wright and keemin advance a flare. ${FLARE_HANDS_PENDING}. Anyone may report a flare with ${POST_HOW}`);
+    throw refuse(403, `only ${FLARE_HANDS_WORDS} ${act}`, `the law: Iris, wright and keemin advance a flare. ${FLARE_HANDS_PENDING}. Anyone may report a flare with ${POST_HOW}`);
+  if (hand === ILLUMINATOR && !ownIlluminator(key))
+    throw refuse(403, "the Illuminator's hand is held off for this key", `${FLARE_HANDS_PENDING}. This key is not the resident illuminator's own`);
   if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }
@@ -170,6 +185,6 @@ export function flareOnSpark(row) {
 export const FLARE_NO_AMEND = (id) => refuse(422, `"${id}" is a flare, and a flare is not amended`,
   "its record is what was reported; the law gives it no amendment. A place posted later is its own flare");
 export const FLARE_NO_CLOSE = (id) => refuse(422, `"${id}" is a flare, and a flare is not closed`,
-  `it finishes by advance, by ${FLARE_HANDS.join(" or ")}: ${ADVANCE_HOW}`);
+  `it finishes by advance, by ${FLARE_HANDS_WORDS}: ${ADVANCE_HOW}`);
 export const FLARE_NO_STAKE = (id) => refuse(422, `${id ? `"${id}" is a flare, and ` : ""}a flare takes no stake`,
   "what a flare pays is the posting quest's word, not this class's (LOGOS/classes.md, the flare)", { field: "stamps" });

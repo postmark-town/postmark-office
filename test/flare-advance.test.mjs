@@ -5,10 +5,12 @@
 // A flare starts reported and is taken ONCE, by a flare hand: accepted as text,
 // accepted as video, or declined. The hand is this credential's own, as a bug's
 // is (named-hand.mjs): naming a hand a key merely lists is not holding it.
-// Nobody else advances a flare: not its reporter, not a resident, and not the
-// public handle `iris`, which is another household's resident and no proof of
-// the Illuminator (Iris joins the hands when her operator handle is settled).
-// A flare's advance carries no bug privilege: no credit, link, skip or force.
+// Iris, the Illuminator, is the resident `illuminator` (Wright, POS-1163,
+// 21:57Z), matched by the caller's OWN resident key: a founder's, a household's
+// or any shared key that lists or names illuminator holds her hand off, and so
+// does the public handle `iris` (another household's resident). Nobody else
+// advances a flare. Its advance carries no bug privilege: no credit, link, skip
+// or force.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in flare-post.test.mjs.
 //
@@ -32,8 +34,13 @@ const FINN = { household: "finn", handles: new Set(["finn"]) };
 const IRIS = { household: "cass", handles: new Set(["iris"]) };
 // POS-389: a housemate's OWN key that lists wright is not wright's hand
 const MARI_OWN_KEY = { household: "starforge", handles: new Set(["wright", "mari"]), keyKind: "claim", heldBy: "resident", claimedHandle: "mari" };
+// the Illuminator's own resident key: it stands for illuminator alone, whatever else her house lists
+const ILLUMINATOR_OWN = { household: "starforge", handles: new Set(["wright", "mari", "illuminator"]), keyKind: "claim", heldBy: "resident", claimedHandle: "illuminator" };
+// keys that LIST illuminator without being hers: a founder's shared key, and her household's human key
+const FOUNDER_SHARED = { household: "starforge", handles: new Set(["illuminator", "wright", "mari"]) };
+const HER_HOUSE_KEY = { household: "lantern-house", handles: new Set(["illuminator"]) };
 const HOUSES = [
-  { slug: "starforge", ord: 3, residents: ["wright", "mari", "keemin"], accounts: [] },
+  { slug: "starforge", ord: 3, residents: ["wright", "mari", "keemin", "illuminator"], accounts: [] },
   { slug: "cass", ord: 4, residents: ["iris"], accounts: [] },
 ];
 const SPARK = "kinofire/a-lantern-walk";
@@ -99,11 +106,27 @@ test("a flare hand takes a reported flare once: the state, the act, the history;
 test("NOBODY ELSE ADVANCES A FLARE: its reporter, another resident, the public handle iris, or a housemate's key that only lists a hand", async () => {
   const { pen } = setup();
   const { post: { id } } = await postAtTown(FLARE, FINN, opts);
-  assert.deepEqual([...FLARE_HANDS], ["wright", "keemin"], "Iris is not bound from a public name");
-  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video" }, FINN, opts), 403, /^only wright and keemin advance a flare.*Iris, the Illuminator, joins them when her own operator handle is settled/);
-  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video" }, IRIS, opts), 403, /^only wright and keemin advance a flare/);
-  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video", handle: "wright" }, MARI_OWN_KEY, opts), 403, /wright/);
+  assert.deepEqual([...FLARE_HANDS], ["wright", "keemin", "illuminator"], "Iris is the resident illuminator, never the public name iris");
+  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video" }, FINN, opts), 403, /^only wright, keemin or illuminator advance a flare.*Iris, the Illuminator, is the resident illuminator/);
+  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video" }, IRIS, opts), 403, /^only wright, keemin or illuminator advance a flare/);
+  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video", handle: "wright" }, MARI_OWN_KEY, opts), 403, /"wright" is not this key's own hand/);
   await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-video", handle: "keemin" }, WRIGHT, opts), 403, /"keemin" is not one of your residents/);
+});
+
+test("THE ILLUMINATOR advances with her own resident key; a founder's shared key, her household's key or a name asked for holds her hand off", async () => {
+  const { pen } = setup();
+  const { post: { id } } = await postAtTown(FLARE, FINN, opts);
+  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-text", handle: "illuminator" }, FOUNDER_SHARED, opts), 403, /^the Illuminator's hand is held off for this key/);
+  await refusedNothing(pen, advanceAtTown({ post: id, to: "accepted-text" }, HER_HOUSE_KEY, opts), 403, /^the Illuminator's hand is held off for this key.*acts only with her own resident key/);
+  const a = await advanceAtTown({ post: id, to: "accepted-text" }, ILLUMINATOR_OWN, opts);
+  assert.deepEqual([a.hand, a.state], ["illuminator", "accepted-text"], "her own key stands as illuminator, never as the wright it also lists");
+  assert.equal(JSON.parse(pen.rows().at(-1).payload).hand, "illuminator");
+  // a founder's shared key that lists her, unnamed, stands as its founder, never as the Illuminator
+  const b = await postAtTown({ ...FLARE, title: "The lantern walk, again" }, FINN, opts);
+  assert.equal((await advanceAtTown({ post: b.post.id, to: "declined" }, FOUNDER_SHARED, opts)).hand, "wright");
+  // and she reports the town's own
+  const t = await postAtTown({ ...FLARE, title: "The town's lantern reel", maker: "town" }, ILLUMINATOR_OWN, opts);
+  assert.deepEqual([t.post.author, t.post.fields.maker], ["illuminator", "hh:the-town"]);
 });
 
 test("A FLARE'S ADVANCE CARRIES NO BUG PRIVILEGE, AND NAMES A FINISHED STATE: no credit, link, skip, force or stake; reported is no target", async () => {

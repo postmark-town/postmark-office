@@ -55,7 +55,7 @@ import {
 import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
 import { REPORT_CLASS } from "./reports.mjs"; // POS-757: the private post class; its pen is report-store.mjs
 import { BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES } from "./ballots.mjs"; // POS-983: the town's vote, by its hands (ballot-acts.mjs)
-import { FLARE_CLASS, FLARE_HANDS, FLARE_HANDS_PENDING, FLARE_FINISHED, FLARE_FORMS, DESTINATIONS_MAX, STATE_REPORTED as FLARE_REPORTED, FLARE_NO_STAKE } from "./flares.mjs"; // POS-1163
+import { FLARE_CLASS, FLARE_HANDS_WORDS, FLARE_HANDS_PENDING, FLARE_FINISHED, FLARE_FORMS, DESTINATIONS_MAX, STATE_REPORTED as FLARE_REPORTED, FLARE_NO_STAKE } from "./flares.mjs"; // POS-1163
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -102,7 +102,7 @@ export const FLARE_POST_PROPERTIES = Object.freeze({
     description: `class "flare": every place it was posted, one each — { url: the external URL (https://…), platform ("YouTube", "TikTok", "Bluesky", …), form: ${FLARE_FORMS.map((f) => `"${f}"`).join(" or ")}, screenshot?: a URL of one, where the platform allows } — at most ${DESTINATIONS_MAX}; a flare with no place, or a place whose URL is lost, is not a complete flare`,
     items: { type: "object", properties: { url: { type: "string" }, platform: { type: "string" }, form: { type: "string", enum: [...FLARE_FORMS] }, screenshot: { type: "string" } },
       required: ["url", "platform", "form"], additionalProperties: false } },
-  maker: { type: "string", enum: ["town"], description: `class "flare": optional — "town" says the town posted it on its own channels, which only ${FLARE_HANDS.join(" or ")} say; left off, its maker is your own household` },
+  maker: { type: "string", enum: ["town"], description: `class "flare": optional — "town" says the town posted it on its own channels, which only ${FLARE_HANDS_WORDS} say; left off, its maker is your own household` },
 });
 
 // Each lane's own fields, so the other lane's can be refused by name.
@@ -227,7 +227,7 @@ const CLASS_REF = IDEAS_ON
 // POS-983: what a ballot's amend, advance and close say, on each card
 const BALLOT_CARD = `A BALLOT is the town's vote, carried only by the town's hands (${BALLOT_HANDS.join(", ")}): ${BALLOT_STATES.join(" → ")}.`;
 // POS-1163: what a flare's advance says, on its card
-const FLARE_CARD = `A FLARE (a post about a public spark, with every place it was posted) is advanced by ${FLARE_HANDS.join(" or ")} only (${FLARE_HANDS_PENDING}): ${FLARE_REPORTED} → ${FLARE_FINISHED.join(" | ")}, once; the advance takes only to. It pays nothing: what a flare pays is the posting quest's word.`;
+const FLARE_CARD = `A FLARE (a post about a public spark, with every place it was posted) is advanced by ${FLARE_HANDS_WORDS} only (${FLARE_HANDS_PENDING}): ${FLARE_REPORTED} → ${FLARE_FINISHED.join(" | ")}, once; the advance takes only to. It pays nothing: what a flare pays is the posting quest's word.`;
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",

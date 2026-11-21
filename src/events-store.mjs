@@ -54,7 +54,7 @@ import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import { BALLOT_CLASS, topicOfPost } from "./ballots.mjs"; // POS-983: a ballot is put up and carried by the town's hands (ballot-acts.mjs)
-import { FLARE_CLASS, STATE_REPORTED as FLARE_REPORTED, FLARE_HANDS, FLARE_FINISHED, TOWN_MAKER, judgeFlarePost, judgeFlareHand, judgeFlareAdvance,
+import { FLARE_CLASS, STATE_REPORTED as FLARE_REPORTED, FLARE_HANDS_WORDS, FLARE_FINISHED, TOWN_MAKER, judgeFlarePost, judgeFlareHand, judgeFlareAdvance,
   FLARE_NO_AMEND, FLARE_NO_CLOSE, FLARE_NO_STAKE } from "./flares.mjs"; // POS-1163: the flare, a post about a public spark (its record; no pay)
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_COMPLETE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
@@ -1096,7 +1096,7 @@ async function postFlare(fields, key, { now, env }) {
     const n = f.destinations.length;
     return { post: flareAnswer(row), act_id: actId,
       receipt: `reported: ${id} (a flare) about the spark ${f.about}, posted at ${n} place${n === 1 ? "" : "s"} (${f.destinations.map((d) => d.platform).join(", ")}), made by ${maker === TOWN_MAKER ? "the town" : maker}, reported by ${reporter}. `
-        + `The spark lists it, with every place it was posted. It stands reported until ${FLARE_HANDS.join(" or ")} take${FLARE_HANDS.length === 1 ? "s" : ""} it: accepted as text, accepted as video, or declined. A flare's record pays nothing; what it pays is the posting quest's word.`,
+        + `The spark lists it, with every place it was posted. It stands reported until ${FLARE_HANDS_WORDS} takes it: accepted as text, accepted as video, or declined. A flare's record pays nothing; what it pays is the posting quest's word.`,
       read: flareReadHint(id) };
   }, env);
 }

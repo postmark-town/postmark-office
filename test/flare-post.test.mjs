@@ -191,7 +191,7 @@ test("a flare hand reports the town's own with maker \"town\"; nobody else says 
   const t = await postAtTown({ ...FLARE, title: "The town's lantern reel", maker: "town" }, WRIGHT, opts);
   assert.deepEqual([t.post.author, t.post.fields.maker], ["wright", "hh:the-town"]);
   assert.match(t.receipt, /made by the town, reported by wright/);
-  await refusedNothing(pen, postAtTown({ ...FLARE, title: "Mine, the town's", maker: "town" }, FINN, opts), 403, /^only wright and keemin report a flare as the town's own/);
+  await refusedNothing(pen, postAtTown({ ...FLARE, title: "Mine, the town's", maker: "town" }, FINN, opts), 403, /^only wright, keemin or illuminator report a flare as the town's own/);
 });
 
 test("THE DOOR'S SHAPE: every place needs its url, platform and form; no place twice; a flare takes no other class's field, no stake, no amend and no close", async () => {
