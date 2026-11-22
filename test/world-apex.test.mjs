@@ -2285,3 +2285,54 @@ test("v2 LIGHTS · the deep reads: read: \"view\" carries its rows' lit and, whe
   assert.ok(rows.some((r) => r.lit === null), `a house in the deep view is unknown: ${JSON.stringify(rows.map((r) => [r.id, r.lit]))}`);
   assert.equal(typeof slow.lit_unknown, "string", "the deep view carries lit_unknown");
 });
+
+// ── POS-1173: the approved meaning of a spark, where a resident makes one (Darko 2026-11-21 20:31 EST) ──────────────────────────
+// The block below is the issue's approved wording, copied here as the falsifier: delete or change any sentence in the tool description or the
+// `kind` field's description (which the act card serves) and this is red. LOGOS `classes.md` § The spark takes the same words (WLD-231).
+const APPROVED_SPARK = [
+  "**A spark is a moment someone would retell on its own: one place, one stretch of time, and something in it that turns.** Someone finds out, arrives, gives, fails, or is seen differently.",
+  "",
+  "* What led up to it, and what came right after, go in its recounting, not in sparks of their own.",
+  "* Its time is the story's: usually minutes, an hour or a few when it's one story, a day only when nothing smaller holds it.",
+  "* **The test:** tell it to a friend who wasn't there. If it stands up without the rest of the week, it's a spark. If it only makes sense inside something bigger, it belongs to that spark.",
+].join("\n");
+
+test("POS-1173: the tool description and the kind field carry every approved sentence of what a spark is, unchanged", async () => {
+  const { WORLD_TOOLS } = await import("../src/world.mjs");
+  const leave = WORLD_TOOLS.find((t) => t.name === "world_leave_mark");
+  assert.ok(leave.description.includes(APPROVED_SPARK), "the flat tool's description carries the approved block whole");
+  assert.ok(leave.inputSchema.properties.kind.description.includes(APPROVED_SPARK), "so does the kind field a resident sets to make a spark");
+  // every sentence on its own, so a single deleted or reworded one names itself
+  for (const sentence of [
+    "A spark is a moment someone would retell on its own: one place, one stretch of time, and something in it that turns.",
+    "Someone finds out, arrives, gives, fails, or is seen differently.",
+    "What led up to it, and what came right after, go in its recounting, not in sparks of their own.",
+    "Its time is the story's: usually minutes, an hour or a few when it's one story, a day only when nothing smaller holds it.",
+    "The test:",
+    "tell it to a friend who wasn't there.",
+    "If it stands up without the rest of the week, it's a spark.",
+    "If it only makes sense inside something bigger, it belongs to that spark.",
+  ]) {
+    assert.ok(leave.description.includes(sentence), `tool description: ${sentence}`);
+    assert.ok(leave.inputSchema.properties.kind.description.includes(sentence), `kind field: ${sentence}`);
+  }
+  assert.doesNotMatch(APPROVED_SPARK, /\u2019/, "the words are the issue's own, plain apostrophes");
+});
+
+test("POS-1173: the act card a resident reads serves the same words in its kind field", async () => {
+  on();
+  const fields = apex.fieldsFor("leave-mark");
+  assert.ok(fields.kind.description.includes(APPROVED_SPARK), "the leave-mark card's kind field carries the approved block");
+});
+
+test("POS-1173: text only: the tool's fields, required list and class words are unchanged", async () => {
+  const { WORLD_TOOLS } = await import("../src/world.mjs");
+  const leave = WORLD_TOOLS.find((t) => t.name === "world_leave_mark");
+  assert.deepEqual(leave.inputSchema.required, ["kind"]);
+  assert.equal(leave.inputSchema.additionalProperties, false);
+  // the field list as it stood on train/2026-w48 (POS-1173 adds words, not a field, a class or a rule)
+  assert.deepEqual(Object.keys(leave.inputSchema.properties), [
+    "slug", "kind", "to", "count", "at", "extent", "points", "body", "slot", "value", "parent_id", "by", "consent", "placed_by", "class", "ask", "reward", "status", "image", "stamps", "preview", "amend", "holder", "capacity", "open", "portable", "properties",
+  ]);
+  assert.match(leave.inputSchema.properties.properties.description, /parent: "<by>\/<slug>" is your spark's own link to another spark \(stored as parent_spark\); it never places it\./, "the existing spark property sentence is intact");
+});
