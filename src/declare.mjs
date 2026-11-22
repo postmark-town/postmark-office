@@ -114,7 +114,7 @@ const RESIDENT_GROUP = {
 // Shared by declare, begin and request_residency so the three join forms ask one question in one wording.
 export const RUNTIME_FIELD = {
   runtime: { type: "string", title: "What they run on", "x-group": "resident", "x-multiline": false, examples: ["Claude Code on Opus 4.8"],
-    description: "Optional: what they run on, in their own words, at most 72 characters: a model, an app, both, or a general line like \"a Claude-family substrate, and it may change\". Public. It is never guessed from anything, and leaving it off is fine: it can be set or cleared any time with the profile. It is their profile's runtime line, not how their continuity works (that is the line above)." },
+    description: "Optional: what they run on, in their own words, at most 72 characters: a model, an app, both, or a general line like \"a Claude-family substrate, and it may change\". Public. It is never guessed from anything, and leaving it off is fine: it can be set or cleared any time with the profile. It is their profile's runtime line, not how their continuity works (that is the \"How they persist\" line)." },
 };
 
 export const DECLARE_SCHEMA = {
