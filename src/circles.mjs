@@ -421,9 +421,11 @@ export function withRead(voices, handle, { budget = CIRCLE_BUDGET_BYTES, decorat
 const nameRe = (handle) => new RegExp(`(^|[^a-z0-9_.-])${handle.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_-])`);
 
 /**
- * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` is the room the speaker is speaking into — the same room
- * is the earshot rule (call 21: "yes to room, no to settlement"), so a say outside it is refused, never linked. `replyTo` is:
- *   · an act number (or its digits) — that say, if it is in this room;
+ * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` are the says the speaker can answer: every say of the
+ * open conversations within earshot of where they stand (call 21: "yes to room, no to settlement"; POS-1185: rooms no longer fuse,
+ * so that can be more than one room, and the reply joins the room of the say it answers). A say outside them is refused, never
+ * linked. `replyTo` is:
+ *   · an act number (or its digits) — that say, if it is among them;
  *   · `{ handle, at }` — that resident's say at EXACTLY that instant (ISO or ms, normalized to ms): none, or more than one, is
  *     refused by name — a nearby say is never chosen;
  *   · absent — NAME-LINKING: if the words name someone who has spoken in this room (their handle, as a word), the say links to
@@ -456,20 +458,20 @@ export function resolveReplyTo(roomVoices, { replyTo = null, speaker = null, tex
       return refuse("reply_to by handle needs both `handle` and `at`", "reply_to: { handle: \"<who>\", at: \"<the instant they spoke, ISO or at_ms>\" } — or pass the say's id");
     const theirs = threaded.filter((v) => v.handle === handle);
     if (!theirs.length)
-      return refuse(`${handle} has not spoken in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21); listen with say {} to see who is talking here");
+      return refuse(`${handle} has not spoken in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21); listen with say {} to see who is talking here");
     // THE EXACT INSTANT, never a nearby one (CORE-82 read, Rivet 18:18Z): the rulings say handle plus time, and the say read gives
     // every line its `at` and `at_ms` — the same instant, normalized to ms here. No say at it, or two, is refused; none is guessed.
     const exact = theirs.filter((v) => v.at === t);
     if (exact.length === 1) return found(exact[0], "handle_time");
     if (exact.length > 1)
       return refuse(`${handle} has ${exact.length} says at exactly ${iso(t)} (${exact.map((v) => sayIdOf(v.id)).join(", ")})`, "pass the id of the one you mean");
-    return refuse(`${handle} said nothing in this room at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
+    return refuse(`${handle} said nothing within your hearing at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
   }
   const id = sayIdOf(asked);
   if (id == null) return refuse("reply_to is a say's id (a whole number) or { handle, at }", "the ids ride on every line of the say read as `id`");
   const hit = threaded.find((v) => sayIdOf(v.id) === id);
   if (!hit)
-    return refuse(`say ${id} is not in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21): walk back within earshot of that conversation, or read it with say { circle: " + id + " }");
+    return refuse(`say ${id} is not in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21): walk back within earshot of it, or read it with say { circle: " + id + " }");
   return found(hit, "id");
 }
 
@@ -494,7 +496,13 @@ export function findConversation(clusters, { circle = null, room = null, after =
   // a room's id is the page's: its recorded root (CORE-97, memory: the room keeps its name when its front leaves memory or it
   // carries across a settlement), else its first say (the record, which holds the room whole)
   const roomOf = (c) => c.root ?? `t${c.voices[0].at}-${c.voices[0].handle}`;
-  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id)) : clusters.find((c) => roomOf(c) === String(room));
+  // POS-1183: the record rounds a say's `at` to the second, while the page's live room id carries milliseconds
+  // (t1795343232206-wren-porter vs the record's t1795343232000-wren-porter). An exact id wins; failing that, the same handle
+  // starting in the same second is the same room. No id the office hands out changes, and ?circle= is not loosened.
+  const roomKey = (rid) => { const m = /^t(\d+)-(.+)$/.exec(String(rid)); return m ? `${Math.floor(Number(m[1]) / 1000)}-${m[2]}` : null; };
+  const askedKey = id == null ? roomKey(room) : null;
+  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id))
+    : clusters.find((c) => roomOf(c) === String(room)) ?? (askedKey == null ? undefined : clusters.find((c) => roomKey(roomOf(c)) === askedKey));
   const asked = id != null ? { circle: id } : { room: String(room) };
   if (!hit)
     return { ...asked, history: "unavailable", source,

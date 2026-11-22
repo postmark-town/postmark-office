@@ -1,20 +1,27 @@
-// pos-1184-voice-scan-single-flight.test.mjs — the conversations voice scan runs one at a time, and never serves a reader a scan that began before it asked (POS-1184).
+// pos-1184-voice-scan-single-flight.test.mjs — a burst of conversations reads makes ONE whole read of the voices, and no reader is served a room that is missing a say already spoken (POS-1184, held against POS-1185's door).
 //
 // LAW (POS-1184, the box's measurement 2026-11-22): three `world2Serve` conversations reads each ran the unbounded voice scan at once (1.2 to
 // 2.1 s each, once 10.4 s) and held all three `serve` connections, so every other world-door read queued and timed out. The ask: at most one
-// voice scan holds a `serve` connection at a time, "No TTL, no cache of settled results: a resident who speaks and then reads must see their
-// say, so nothing may be served stale" (Wright, 2026-11-22: a reader that arrives while a scan runs waits for the NEXT scan, one that starts
-// after it asked).
+// voice scan holds a `serve` connection at a time, and "a resident who speaks and then reads must see their say, so nothing may be served
+// stale" (Wright, 2026-11-22).
 //
-//   FALSIFIER 1  a burst of bare, ?room=, ?circle= and ?before= reads: at most two voice queries (the running one and the next), never two at once.
-//   FALSIFIER 2  a read that starts after the scans settled issues its own scan, and sees a say written in between (nothing is kept).
-//   FALSIFIER 3  a scan that rejects rejects the readers waiting on it and nobody else; the next read starts clean.
-//   FALSIFIER 4  the burst's answers equal the same reads made one after another, each with its own scan, byte for byte.
-//   FALSIFIER 5  the shared rows are only read: they are deep-frozen, and no reader throws on them.
-//   FALSIFIER 6  a say recorded after scan 1 began, and a reader who arrives mid-scan: the reader's answer holds that say.
+// REWRITTEN THE SAME DAY BY POS-1185. Until then this file held the stopgap: every read still scanned every voice act, one scan at a time,
+// a reader arriving mid-scan waiting for the NEXT scan, and "nothing is kept" (FALSIFIER 2 asserted a second read opened a second scan).
+// POS-1185 ended the per-read scan: which says are in which room is worked out once and KEPT (world2-serve.mjs § THE ROOMS, KEPT), and
+// every read then asks only for the acts newer than the kept ones and for the rooms it serves. So the law is held by different means, and
+// the cases below assert the law, not the old mechanism:
 //
-// Invented speakers and places only. The pool is a fake that counts the voice SQL and holds each scan open until the test lets it go. A scan
-// reads the store as it is when it STARTS (a snapshot), as Postgres does.
+//   FALSIFIER 1  a burst of bare, ?room=, ?circle= and ?before= reads makes ONE whole read of the voices, never two at once.
+//   FALSIFIER 2  a read made after it sees a say written in between, WITHOUT a second whole read (the say's act names its room).
+//   FALSIFIER 2b the same for a say whose act names no room (an office on older code): it is there too, by one more whole read.
+//   FALSIFIER 3  a whole read that rejects rejects the readers waiting on it and is not kept: the next read starts clean.
+//   FALSIFIER 4  the burst's answers equal the same reads made one after another, each on a fresh office, byte for byte.
+//   FALSIFIER 5  the rows the store hands back are only read: they are deep-frozen, and no reader throws on them.
+//   FALSIFIER 6  a say recorded while the whole read runs is in the answer of a reader who asks for it then.
+//
+// Invented speakers and places only. The pool is a fake that honours the door's four queries (every voice, the voices after an act
+// number, voices by act number, marks), counts the whole read and can hold it open until the test lets it go. A query reads the store as
+// it is when the query STARTS (a snapshot), as Postgres does.
 //
 //   node --test --test-concurrency=1 test/pos-1184-voice-scan-single-flight.test.mjs
 
@@ -31,7 +38,7 @@ after(() => {
   if (env.url == null) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = env.url;
 });
 
-const { world2Serve, ALL_VOICES_SQL } = await import("../src/world2-serve.mjs");
+const { world2Serve, ROOMS_BUILD_SQL, ROOMS_TAIL_SQL, ROOM_VOICES_SQL } = await import("../src/world2-serve.mjs");
 const { currentCrossing } = await import("../src/crossings.mjs");
 
 const H = 3600_000, MIN = 60_000;
@@ -43,9 +50,9 @@ const PLACES = ["quay", "hill", "mill"];
 const MARKS = PLACES.map((n, i) => ({ slug: `the-town/${n}`, status: "standing", geometry: { at: { x: 1000 + i * 5000, y: 1000 }, extent: { w: 20, h: 20 } }, data: {} }));
 
 let nextId = 100;
-const row = (place, handle, atMs, text, replyTo = null) => ({
+const row = (place, handle, atMs, text, replyTo = null, conversation = null) => ({
   id: nextId++, at: new Date(atMs), crossing: currentCrossing(atMs), actor: handle, action: "say",
-  at_anchor: `the-town/${place}`, at_dx: 0, at_dy: 0, payload: { text, ...(replyTo != null ? { reply_to: replyTo } : {}) },
+  at_anchor: `the-town/${place}`, at_dx: 0, at_dy: 0, payload: { text, ...(replyTo != null ? { reply_to: replyTo } : {}), ...(conversation ? { conversation } : {}) },
 });
 const roomId = (r) => `t${r.at.getTime()}-${r.actor}`;
 const A1 = row("quay", "ada-vale", S0 + 1 * H, "A one");
@@ -60,28 +67,31 @@ const deepFreeze = (o) => { if (o && typeof o === "object" && !Object.isFrozen(o
 const clone = (r) => ({ ...r, at: new Date(r.at), payload: JSON.parse(JSON.stringify(r.payload)) });
 
 /**
- * A pool that counts the voice scan. `acts` is the live store (a test may push a say into it at any time). `hold`: each scan waits for
- * `release(n)`, n counting scans from 1. `failScans`: the scan numbers that reject. The rows a scan returns are the store as it was when
- * the scan STARTED, deep-frozen.
+ * A pool that honours the door's queries and counts the WHOLE read. `acts` is the live store (a test may push a say into it at any time).
+ * `hold`: each whole read waits for `release(n)`, n counting whole reads from 1. `failWhole`: the whole reads that reject. Every query
+ * returns the store as it was when the query STARTED, deep-frozen.
  */
-function poolOf({ acts = BASE, hold = false, failScans = [] } = {}) {
-  const stats = { voice: 0, live: 0, maxLive: 0, marks: 0 };
+function poolOf({ acts = BASE, hold = false, failWhole = [] } = {}) {
+  const stats = { whole: 0, live: 0, maxLive: 0, newer: 0, rooms: 0, marks: 0 };
   const gates = new Map();
   const gate = (n) => { if (!gates.has(n)) { let ok; const promise = new Promise((r) => { ok = r; }); gates.set(n, { promise, ok }); } return gates.get(n); };
+  const snapshot = (keep) => deepFreeze(acts.filter(keep).map(clone).sort((a, b) => a.at - b.at || a.id - b.id)); // taken at the start, like a Postgres snapshot
   return {
     stats,
     release: (n) => gate(n).ok(),
-    query: async (sql) => {
-      if (sql === ALL_VOICES_SQL) {
-        const n = ++stats.voice;
-        const snapshot = acts.map(clone).sort((a, b) => a.at - b.at || a.id - b.id); // taken at the start, like a Postgres snapshot
+    query: async (sql, params) => {
+      if (sql === ROOMS_BUILD_SQL) {
+        const n = ++stats.whole;
+        const rows = snapshot(() => true);
         stats.live++; stats.maxLive = Math.max(stats.maxLive, stats.live);
         try {
           if (hold) await gate(n).promise;
-          if (failScans.includes(n)) throw new Error(`scan ${n} was cut off (test)`);
-          return { rows: deepFreeze(snapshot) };
+          if (failWhole.includes(n)) throw new Error(`whole read ${n} was cut off (test)`);
+          return { rows };
         } finally { stats.live--; }
       }
+      if (sql === ROOMS_TAIL_SQL) { stats.newer++; return { rows: snapshot((r) => r.id > Number(params[1])) }; }
+      if (sql === ROOM_VOICES_SQL) { stats.rooms++; const want = new Set(params[0].map(String)); return { rows: snapshot((r) => want.has(String(r.id))) }; }
       if (/FROM marks/i.test(sql)) { stats.marks++; return { rows: MARKS }; }
       return { rows: [] };
     },
@@ -90,116 +100,119 @@ function poolOf({ acts = BASE, hold = false, failScans = [] } = {}) {
 
 const ask = (query, p) => world2Serve("/world2/conversations", new URLSearchParams(`at=${new Date(NOW).toISOString()}&${query}`),
   { p, settlements: () => EDGES, hearingWindow: () => ({ since: EDGES.at(-1) }) });
-/** Wait until `n` readers have reached the pool's marks read (each is then past asking for the voice scan). */
-async function untilArrived(p, n) {
-  // the first read of a process loads the speaker book (POS-1132) before it reaches the store, so wait on the event with a generous ceiling
-  for (let t0 = Date.now(); Date.now() - t0 < 20_000 && p.stats.marks < n; ) await new Promise((ok) => setTimeout(ok, 5));
-  assert.equal(p.stats.marks, n, "every reader reached the store");
-}
-async function untilScans(p, n) {
-  for (let t0 = Date.now(); Date.now() - t0 < 20_000 && p.stats.voice < n; ) await new Promise((ok) => setTimeout(ok, 5));
-  assert.equal(p.stats.voice, n, `scan ${n} started`);
+/** Wait on the event: whole read `n` has started. (The first read of a process loads the speaker book, POS-1132, before it reaches the store.) */
+async function untilWhole(p, n) {
+  for (let t0 = Date.now(); Date.now() - t0 < 20_000 && p.stats.whole < n; ) await new Promise((ok) => setTimeout(ok, 5));
+  assert.equal(p.stats.whole, n, `whole read ${n} started`);
 }
 
 const BURST = [`room=${roomId(A1)}`, `room=${roomId(B1)}`, `circle=${B2.id}`, `circle=${C2.id}`, "before=" + new Date(NOW).toISOString(), "closed=50", `room=${roomId(C1)}`, `circle=${A1.id}`];
 
-/** Run BURST at once on a held pool: scan 1 runs, every other reader waits for scan 2. Answers come back in BURST's order. */
+/** Run BURST at once on a held pool: the whole read is open while every reader is in flight. Answers come back in BURST's order. */
 async function burstOn(p) {
-  const reads = BURST.map((q) => ask(q, p));
-  await untilArrived(p, BURST.length);
-  assert.equal(p.stats.voice, 1, `${BURST.length} readers in flight, ${p.stats.voice} scan(s) open: the rest wait for the next one`);
+  let settled = 0;
+  const reads = BURST.map((q) => ask(q, p).finally(() => { settled += 1; }));
+  await untilWhole(p, 1);
+  await new Promise((ok) => setImmediate(ok));
+  assert.equal(settled, 0, "no reader has an answer while the whole read is open");
+  assert.equal(p.stats.whole, 1, `${BURST.length} readers in flight, one whole read open`);
   p.release(1);
-  await untilScans(p, 2);
-  p.release(2);
   return Promise.all(reads);
 }
 
-test("FALSIFIER 1: a burst of bare, room, circle and before reads opens at most two voice scans, one at a time", async () => {
+test("FALSIFIER 1: a burst of bare, room, circle and before reads makes one whole read of the voices, never two at once", async () => {
   const p = poolOf({ hold: true });
   const out = await burstOn(p);
   assert.ok(out.every((r) => r.code === 200), JSON.stringify(out.map((r) => r.code)));
-  assert.equal(p.stats.voice, 2, `${BURST.length} readers, two scans`);
-  assert.equal(p.stats.maxLive, 1, "never two voice scans open at once");
+  assert.equal(p.stats.whole, 1, `LAW: at most one voice scan holds a connection at a time — ${BURST.length} readers, one whole read`);
+  assert.equal(p.stats.maxLive, 1, "never two whole reads open at once");
+  assert.equal(out[0].body.find.room.voice_count, 2, "and each reader has its own room");
 });
 
-test("FALSIFIER 2: a read started after the scans settled issues its own scan, and sees a say written in between", async () => {
+test("FALSIFIER 2: a read made after it sees a say written in between, without a second whole read", async () => {
   const acts = [...BASE];
   const p = poolOf({ acts });
   const first = await ask(`circle=${C2.id}`, p);
   assert.equal(first.code, 200);
-  assert.equal(p.stats.voice, 1);
-  const C3 = row("mill", "jun-lark", EDGES[2] + 100 * MIN, "C three, said after the first read", C2.id);
+  assert.equal(p.stats.whole, 1);
+  const C3 = row("mill", "jun-lark", EDGES[2] + 100 * MIN, "C three, said after the first read", C2.id, roomId(C1));
   acts.push(C3);
   const second = await ask(`circle=${C3.id}`, p);
-  assert.equal(p.stats.voice, 2, "the second read opened its own scan: nothing was kept");
-  assert.equal(second.body.find.history, "complete", "the say written between the two reads is there");
+  assert.equal(second.body.find.history, "complete", 'LAW: "a resident who speaks and then reads must see their say" — the say written between the two reads is there');
   assert.equal(second.body.find.room.voice_count, 3);
+  assert.equal(p.stats.whole, 1, "POS-1185: by the small read of newer acts, not a second whole read (until 2026-11-22 this asserted a second scan: nothing was kept)");
 });
 
-test("FALSIFIER 3a: a scan that rejects rejects the reader that started it, and the readers behind it are not poisoned", async () => {
-  const p = poolOf({ hold: true, failScans: [1] });
+test("FALSIFIER 2b: a say whose act names no room is there too on the next read, by one more whole read", async () => {
+  const acts = [...BASE];
+  const p = poolOf({ acts });
+  assert.equal((await ask(`circle=${C2.id}`, p)).code, 200);
+  const C3 = row("mill", "jun-lark", EDGES[2] + 100 * MIN, "C three, from an office on older code", C2.id);
+  acts.push(C3);
+  const second = await ask(`circle=${C3.id}`, p);
+  assert.equal(second.body.find.history, "complete", 'LAW: "nothing may be served stale" — the unnamed say is in its room');
+  assert.equal(second.body.find.room.voice_count, 3);
+  assert.equal(p.stats.whole, 2, "the kept rooms were built again, once");
+});
+
+test("FALSIFIER 3: a whole read that rejects rejects the readers waiting on it, and is not kept: the next read starts clean", async () => {
+  const p = poolOf({ hold: true, failWhole: [1] });
   const reads = BURST.slice(0, 4).map((q) => ask(q, p).then((r) => `answered ${r.code}`, (e) => `rejected: ${e.message}`));
-  await untilArrived(p, 4);
+  await untilWhole(p, 1);
+  await new Promise((ok) => setImmediate(ok));
+  p.release(2);            // a reader that arrives after the failure opens its own whole read: let it through
   p.release(1);
-  await untilScans(p, 2);
-  p.release(2);
-  assert.deepEqual(await Promise.all(reads), ["rejected: scan 1 was cut off (test)", "answered 200", "answered 200", "answered 200"]);
-  const next = await ask(`circle=${B1.id}`, poolOf());
-  assert.equal(next.code, 200);
+  const out = await Promise.all(reads);
+  assert.equal(out[0], "rejected: whole read 1 was cut off (test)");
+  for (const o of out) assert.ok(o === "rejected: whole read 1 was cut off (test)" || o === "answered 200", o);
+  const clean = await ask(`circle=${B1.id}`, p);
+  assert.equal(clean.code, 200, "the failed read is not kept: the next read opens its own");
+  assert.equal(clean.body.find.room.voice_count, 2);
+  assert.equal(p.stats.whole, 2);
 });
 
-test("FALSIFIER 3b: a scan that rejects rejects every reader waiting on it, and the next read starts clean", async () => {
-  const p = poolOf({ hold: true, failScans: [2] });
-  const reads = BURST.slice(0, 4).map((q) => ask(q, p).then((r) => `answered ${r.code}`, (e) => `rejected: ${e.message}`));
-  await untilArrived(p, 4);
-  p.release(1);
-  await untilScans(p, 2);
-  p.release(2);
-  assert.deepEqual(await Promise.all(reads), ["answered 200", "rejected: scan 2 was cut off (test)", "rejected: scan 2 was cut off (test)", "rejected: scan 2 was cut off (test)"]);
-  const clean = ask(`circle=${B1.id}`, p);
-  await untilScans(p, 3);
-  p.release(3);
-  assert.equal((await clean).code, 200, "the failed scan is not kept: the next read opens its own");
-});
-
-test("FALSIFIER 4: the burst's answers equal the same reads made one after another, each with its own scan", async () => {
+test("FALSIFIER 4: the burst's answers equal the same reads made one after another, each on a fresh office", async () => {
   const burst = await burstOn(poolOf({ hold: true }));
-  const alone = poolOf();
+  let whole = 0;
   for (let i = 0; i < BURST.length; i++) {
+    const alone = poolOf();
     const r = await ask(BURST[i], alone);
-    assert.equal(JSON.stringify(burst[i]), JSON.stringify(r), `${BURST[i]}: the shared scan answered what its own scan answers`);
+    whole += alone.stats.whole;
+    assert.equal(JSON.stringify(burst[i]), JSON.stringify(r), `${BURST[i]}: the shared whole read answered what its own whole read answers`);
   }
-  assert.equal(alone.stats.voice, BURST.length, "control: the sequential reads each opened their own scan (the other side of the comparison is the old behaviour)");
+  assert.equal(whole, BURST.length, "control: each fresh office made its own whole read (the other side of the comparison shares nothing)");
 });
 
-test("FALSIFIER 5: the shared rows are frozen, and no reader of the burst throws on them", async () => {
+test("FALSIFIER 5: the rows the store hands back are frozen, and no reader of the burst throws on them", async () => {
   const out = await Promise.allSettled([burstOn(poolOf({ hold: true }))]);
   assert.equal(out[0].status, "fulfilled", String(out[0].reason));
 });
 
-test("FALSIFIER 6: a say recorded after scan 1 began is in the answer of a reader who arrived while scan 1 ran", async () => {
+test("FALSIFIER 6: a say recorded while the whole read runs is in the answer of a reader who asks for it then", async () => {
   const acts = [...BASE];
   const p = poolOf({ acts, hold: true });
   const first = ask(`circle=${C2.id}`, p);
-  await untilArrived(p, 1);
-  assert.equal(p.stats.voice, 1, "scan 1 is open, and its snapshot has no C3");
-  const C3 = row("mill", "jun-lark", EDGES[2] + 100 * MIN, "C three, said while scan 1 ran", C2.id);
+  await untilWhole(p, 1);
+  // the whole read is open, and its snapshot has no C3
+  const C3 = row("mill", "jun-lark", EDGES[2] + 100 * MIN, "C three, said while the whole read ran", C2.id, roomId(C1));
   acts.push(C3);
   const spoke = ask(`circle=${C3.id}`, p); // the resident who just spoke opens their say
-  await untilArrived(p, 2);
-  p.release(2); // scan 2's gate is opened ahead, so a version that never opens a scan 2 fails on the say below, not on waiting for it
+  await new Promise((ok) => setImmediate(ok));
   p.release(1);
   assert.equal((await first).code, 200);
   const r = await spoke;
-  assert.equal(r.body.find.history, "complete", "the say is there: this reader's rows came from a scan that began after they asked");
+  assert.equal(r.body.find.history, "complete", 'LAW: "a resident who speaks and then reads must see their say" — the shared whole read began before the say, and the reader still has it');
   assert.equal(r.body.find.room.voice_count, 3);
+  assert.equal(p.stats.whole, 1);
+  assert.ok(p.stats.newer >= 2, "each reader asked for the acts newer than the kept ones before it answered");
 });
 
-test("two pools never share a scan (the flight is per pool)", async () => {
+test("two pools never share a whole read (the kept rooms are per pool)", async () => {
   const a = poolOf({ hold: true }), b = poolOf({ hold: true });
   const ra = ask("closed=10", a), rb = ask("closed=10", b);
-  await untilArrived(a, 1); await untilArrived(b, 1);
-  assert.equal(a.stats.voice, 1); assert.equal(b.stats.voice, 1);
+  await untilWhole(a, 1); await untilWhole(b, 1);
   a.release(1); b.release(1);
-  await Promise.all([ra, rb]);
+  const [x, y] = await Promise.all([ra, rb]);
+  assert.equal(x.code, 200); assert.equal(y.code, 200);
+  assert.equal(a.stats.whole, 1); assert.equal(b.stats.whole, 1);
 });
