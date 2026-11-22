@@ -128,14 +128,16 @@ for c in "$D/town-clone" "$D/world-clone"; do
 done
 
 # law_pen <command...>: as meepo with the law pen's PG*, the database asserted
-# where it writes (DEPLOY step 7's line).
+# where it writes (DEPLOY step 7's line). POS-1172: and dev's own town pins, as as_dev_office and the dev units
+# carry them (POS-994): sudo resets the environment, so without TOWN_PINS_DIR steps 5-7 read prod's pins and
+# refuse dev's re-signed town (TownPinMismatch). This binds the pins; it does not loosen that refusal.
 law_pen() {
   sudo -n bash -c '
-    export WORLD2_DB="$1" STAMP_LINES=store; shift
+    export WORLD2_DB="$1" STAMP_LINES=store TOWN_PINS_DIR="$2"; shift 2
     . deploy/world2-lib.sh && w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD || exit 4
     [ "$PGDATABASE" = "$WORLD2_DB" ] || { echo "REFUSED: $PGDATABASE is not the dev sandbox" >&2; exit 9; }
     exec runuser -u meepo -- "$@"
-  ' law-pen "$SANDBOX_DB" "$@"
+  ' law-pen "$SANDBOX_DB" "$D/town-pins-dev" "$@"
 }
 law_pen true || refuse "the law pen does not reach $SANDBOX_DB"
 # stamp-lines, registry-seed and registry-drain reach the store through this file's URL, so it is checked too. -q prints nothing of it.
