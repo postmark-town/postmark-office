@@ -63,7 +63,7 @@ async function main() {
 
   const { openPaper, closePaperworkPools } = await import("../src/paperwork.mjs");
   const { oauthSchema } = await import("../src/oauth.mjs");
-  const { runSweep } = await import("../src/media-sweep.mjs");
+  const { runSweep, sweepClonesFrom } = await import("../src/media-sweep.mjs");
   const odb = await openPaper(resolve(opt("--oauth-db", "oauth.db")), { schema: oauthSchema });
   // The store sources read through the paper's pool when the office is
   // switched, and through their own when it is not; with no store at all they
@@ -76,11 +76,8 @@ async function main() {
   }
   let report;
   try {
-    report = await runSweep({
-      odb, pool, apply, maxDelete,
-      worldClone: process.env.WORLD_CLONE || null, townClone: process.env.TOWN_CLONE || null,
-      extraClones: String(process.env.MEDIA_SWEEP_EXTRA_CLONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
-    });
+    // the same clones the household's own delete reads (media-sweep.mjs § sweepClonesFrom)
+    report = await runSweep({ odb, pool, apply, maxDelete, ...sweepClonesFrom(process.env) });
   } finally {
     await own?.end().catch(() => {});
     await closePaperworkPools();

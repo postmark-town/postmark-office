@@ -72,6 +72,33 @@
 //
 // A RUN THAT WOULD FREE MORE THAN `maxDelete` FILES FREES NONE and says so.
 // A sudden flood of due files is a broken source until a person reads it.
+//
+// ── THE HOUSEHOLD'S OWN DELETE (POS-737/c) ──────────────────────────────────
+//
+// RULED (Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both"), on the call
+// "give a household a delete for its own pictures that nothing uses, with a
+// receipt. Deletion is permanent; a picture still in use can't be deleted."
+// Wright's return (02:21Z): "a door on the household's media that deletes an
+// upload nothing references, using the sweep's own reference check. It's
+// refused while anything still uses the picture, and it leaves a receipt. The
+// bytes leave the household's 200 MB wall at once."
+//
+// THE SWEEP'S SAFETY, WITHOUT ITS GRACE. One reference set (referenceSet, every
+// source, fail closed), one storage delete (deleteObjects) and one conditional
+// claim, the sweep's own three. What the grace gives the sweep (a file a door
+// has hung since cannot be claimed) the claim keeps here through the same
+// clock: `deleteOwnUpload` stamps `unreferenced_since` BEFORE it reads the
+// sources (unless a clock already runs) and claims only while that stamp still
+// stands. A hanging door clears the clock before it hangs (media.mjs §
+// mediaHeldRefusal), so a hang checked after the stamp makes the claim miss and
+// nothing is deleted. A stamp of its own that ends in a refusal is taken back.
+//
+// WHAT IT IS NOT: moderation. A takedown is an operator's, holds in every
+// household and refuses the same bytes again; this is a household's own file,
+// freed because nothing uses it, and the same bytes uploaded again live again.
+// It frees nothing of another household's, never a small copy alone, and never
+// on a source it could not read. Its cause is 'household' (102), and its
+// `deleted_by` is the resident who asked.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -79,7 +106,7 @@ import { readFileSync } from "node:fs";
 import { asPaper } from "./paperwork.mjs";
 import { blessed, freshestMainRef } from "./world-branches.mjs";
 import {
-  MEDIA_BASE, MEDIA_GRACE_DAYS, ensureMediaTable, mediaLedgerHasStates, mediaObjectKeysOf, mediaUrlFor, mediaUrlParts, r2Delete,
+  MEDIA_BASE, MEDIA_GRACE_DAYS, MEDIA_HOUSEHOLD_CAUSE, ensureMediaTable, mediaLedgerHasStates, mediaObjectKeysOf, mediaUrlFor, mediaUrlParts, r2Delete,
 } from "./media.mjs";
 
 export const DAY_MS = 86_400_000;
@@ -213,8 +240,11 @@ export async function storeKeys(pool, { table, where = null }) {
 /**
  * The union of every source, or the sources that failed. `ok` is false when
  * any one failed; the keys are then not to be trusted for a deletion.
+ * `locate`, a row's key, marks each source that names it with `holds: true`
+ * (the household's own delete says where a file is in use); the set itself
+ * does not change.
  */
-export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [], officeFiles = [OFFICE_GALLERY] }) {
+export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [], officeFiles = [OFFICE_GALLERY], locate = null }) {
   const keys = new Set();
   const sources = [];
   const take = async (name, expectSome, fn) => {
@@ -223,7 +253,7 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
       const { found, ...extra } = await fn();
       if (expectSome && found.size === 0) throw new Error("found no picture at all, which a real town never answers: a wrong ref or an empty clone");
       for (const k of found) keys.add(k);
-      sources.push({ name, found: found.size, ...extra });
+      sources.push({ name, found: found.size, ...(locate != null && found.has(locate) ? { holds: true } : {}), ...extra });
     } catch (e) {
       sources.push({ name, error: String(e?.message ?? e).slice(0, 300) });
     }
@@ -253,6 +283,17 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
     await take(`store:${src.table}`, false, pool && (async () => ({ found: await storeKeys(pool, src) })));
   return { keys, sources, ok: sources.every((s) => !s.error) };
 }
+
+/**
+ * The clones every reader of the reference set takes from the office's env
+ * (/etc/postmark-office.env, which the sweep's unit and the office both load),
+ * so the sweep and the household's own delete read the same places.
+ */
+export const sweepClonesFrom = (env = process.env) => ({
+  worldClone: env.WORLD_CLONE || null,
+  townClone: env.TOWN_CLONE || null,
+  extraClones: String(env.MEDIA_SWEEP_EXTRA_CLONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
+});
 
 // ── the plan ────────────────────────────────────────────────────────────────
 
@@ -379,4 +420,136 @@ export async function takedown({ odb, url, reason, by, apply = false, now = Date
   catch (e) { return { taken_down: true, purged: false, receipt, storage_failed: String(e?.message ?? e).slice(0, 200) }; }
   await paper.run(`UPDATE media SET purged_at = ? WHERE ${KEY_WHERE}`, now, ...keyArgs(row));
   return { taken_down: true, purged: true, receipt };
+}
+
+// ── the household's own delete ──────────────────────────────────────────────
+
+export const HOUSEHOLD_DELETE_REASON = "deleted by its household: nothing in the town used it";
+const ROW_COLUMNS = "household, sha, ext, bytes, by_handle, unreferenced_since, deleted_at, deleted_cause, deleted_by, purged_at";
+const refusal = (code, defect, hint, extra = {}) => ({ refused: { code, defect, hint, ...extra } });
+const storageWords = (e) => String(e?.message ?? e).slice(0, 200);
+
+/** The receipt a row carries: the file, who uploaded it, and how it was freed. Who freed it is named only
+ *  when its household did: a takedown's operator and reason stay the operator's receipt (`takedown`). */
+const receiptOf = (r, extra = {}) => ({
+  url: mediaUrlFor(r.household, r.sha, r.ext), household: r.household, bytes: Number(r.bytes), uploaded_by: r.by_handle,
+  cause: r.deleted_cause, ...(r.deleted_cause === MEDIA_HOUSEHOLD_CAUSE ? { deleted_by: r.deleted_by } : {}),
+  objects: mediaObjectKeysOf(r), ...extra,
+});
+
+/**
+ * A household deletes one upload of its own that nothing references (§ THE
+ * HOUSEHOLD'S OWN DELETE, above). The caller has judged the key and names the
+ * acting resident (`by`); the sources are the sweep's own.
+ *
+ * Answers one of:
+ *   { refused: { code, defect, hint, ...extra } }   nothing was written
+ *   { deleted: true, purged, freed_bytes, receipt, storage_failed? }
+ *       a fresh claim (freed_bytes is the file's, given back once) or the
+ *       finish of one storage had not confirmed (freed_bytes 0)
+ *   { already: true, purged: true, freed_bytes: 0, receipt }   freed before
+ */
+export async function deleteOwnUpload({
+  odb, household, by, url, worldClone, townClone, pool, storeSources, extraClones = [], officeFiles = undefined,
+  now = Date.now(), del = r2Delete, log = console.log,
+}) {
+  const paper = asPaper(odb);
+  const p = mediaUrlParts(url);
+  if (!p)
+    return refusal(422, "the town holds no file at that URL",
+      `${String(url ?? "").slice(0, 140)} is not an address the media door mints (${MEDIA_BASE}/media/<household>/<sha256>.<ext>) — household { read: "media" } lists your uploads`);
+  if (p.size != null)
+    return refusal(422, "that is a small copy, not an upload",
+      `name the upload's own URL (without -${p.size}), as household { read: "media" } lists it — its small copies go with it`);
+  // THE OWNER, read off the URL the door minted: no other house writes on your wall (the-household-grain)
+  if (p.household !== household)
+    return refusal(403, "that file is another household's",
+      "a household deletes only its own uploads; a picture another household uploaded is theirs to keep or delete");
+  ensureMediaTable(paper);
+  if (!(await mediaLedgerHasStates(paper)))
+    return refusal(503, "the media ledger cannot record a deletion yet", "the store has not taken 080_media_freed.sql; nothing was deleted");
+  const read = () => paper.get(`SELECT ${ROW_COLUMNS} FROM media WHERE ${KEY_WHERE}`, p.household, p.sha, p.ext);
+  let row = await read();
+  if (!row)
+    return refusal(404, "your household holds no file at that URL", 'household { read: "media" } lists every upload your household holds');
+  if (row.deleted_at != null) return finishClaimed(paper, row, { now, del, log });
+
+  // THE TOKEN: a clock that runs is the claim's condition, as in the sweep. If
+  // none runs, this stamps one now, and it is taken back on any refusal.
+  const stamped = (await paper.run(
+    `UPDATE media SET unreferenced_since = ? WHERE ${KEY_WHERE} AND deleted_at IS NULL AND unreferenced_since IS NULL`, now, ...keyArgs(row))).changes === 1;
+  const unstamp = async () => {
+    if (stamped) await paper.run(`UPDATE media SET unreferenced_since = NULL WHERE ${KEY_WHERE} AND deleted_at IS NULL AND unreferenced_since = ?`, ...keyArgs(row), now);
+  };
+  row = await read();
+  if (row.deleted_at != null) return finishClaimed(paper, row, { now, del, log }); // the sweep claimed it first
+  const token = row.unreferenced_since;
+  const inUse = (holders) => refusal(409, "that file is still in use",
+    "it hangs somewhere in the town, so it cannot be deleted: take it down from there first, then ask again. A mark's picture is in use until the change is published at a settlement",
+    { in_use: holders });
+  const hungMeanwhile = () => refusal(409, "that file is still in use",
+    "a door hung it while the town was checking, so nothing was deleted: take it down from there first, then ask again");
+  if (token == null) return hungMeanwhile(); // a hanging door cleared the clock between the stamp and this read
+
+  const key = rowKey(row);
+  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones, officeFiles, locate: key });
+  if (!refs.ok) {
+    await unstamp();
+    const failed = refs.sources.filter((s) => s.error);
+    log(`[media] delete-media ${household}/${by} ${p.sha.slice(0, 12)}: refused, could not read ${failed.map((s) => `${s.name} (${s.error})`).join("; ")}`);
+    return refusal(503, "the town could not check every place this file could hang, so nothing was deleted",
+      '"could not look" is never "not used" — try again later; if it repeats, tell the office (a letter to wright works)',
+      { unread: failed.map((s) => s.name) });
+  }
+  if (refs.keys.has(key)) {
+    // hung: its clock says so too, exactly as the sweep's own read would
+    await paper.run(`UPDATE media SET unreferenced_since = NULL WHERE ${KEY_WHERE} AND deleted_at IS NULL`, ...keyArgs(row));
+    return inUse(refs.sources.filter((s) => s.holds).map((s) => s.name));
+  }
+
+  // THE CLAIM, conditional on the token: a door that hung the file since the
+  // stamp cleared the clock, and the claim misses.
+  let claimed;
+  try {
+    claimed = await paper.run(
+      `UPDATE media SET deleted_at = ?, deleted_cause = ?, deleted_by = ?, deleted_reason = ? WHERE ${KEY_WHERE} AND deleted_at IS NULL AND unreferenced_since = ?`,
+      now, MEDIA_HOUSEHOLD_CAUSE, by, HOUSEHOLD_DELETE_REASON, ...keyArgs(row), token);
+  } catch (e) {
+    // the store's check on the cause, before 102: nothing was claimed
+    if (e?.code === "23514") {
+      await unstamp();
+      return refusal(503, "the store cannot record a household's delete yet", "the store has not taken 102_media_deleted_by_household.sql; nothing was deleted");
+    }
+    throw e;
+  }
+  if (claimed.changes !== 1) {
+    const now2 = await read();
+    if (now2?.deleted_at != null) return finishClaimed(paper, now2, { now, del, log }); // another hand freed it meanwhile
+    await unstamp();
+    return hungMeanwhile();
+  }
+
+  // FROM THE CLAIM ON its bytes are off the wall and no door can hang it.
+  const receipt = receiptOf({ ...row, deleted_by: by, deleted_cause: MEDIA_HOUSEHOLD_CAUSE }, { at: new Date(now).toISOString() });
+  try { await deleteObjects(row, del); }
+  catch (e) {
+    log(`[media] delete-media ${household}/${by} ${p.sha.slice(0, 12)}: claimed, storage refused: ${storageWords(e)}`);
+    return { deleted: true, purged: false, freed_bytes: Number(row.bytes), receipt, storage_failed: storageWords(e) };
+  }
+  await paper.run(`UPDATE media SET purged_at = ? WHERE ${KEY_WHERE} AND deleted_at IS NOT NULL AND purged_at IS NULL`, now, ...keyArgs(row));
+  log(`[media] delete-media ${household}/${by} ${p.sha.slice(0, 12)}.${p.ext} ${row.bytes}B freed`);
+  return { deleted: true, purged: true, freed_bytes: Number(row.bytes), receipt };
+}
+
+/** A row already claimed: freed before (nothing to do), or owed storage's DELETE, which is retried here. */
+async function finishClaimed(paper, row, { now, del, log }) {
+  const receipt = receiptOf(row, { at: new Date(Number(row.deleted_at)).toISOString() });
+  if (row.purged_at != null) return { already: true, purged: true, freed_bytes: 0, receipt };
+  try { await deleteObjects(row, del); }
+  catch (e) {
+    log(`[media] delete-media retry ${row.household} ${String(row.sha).slice(0, 12)}: storage refused again: ${storageWords(e)}`);
+    return { deleted: true, purged: false, freed_bytes: 0, receipt, storage_failed: storageWords(e) };
+  }
+  await paper.run(`UPDATE media SET purged_at = ? WHERE ${KEY_WHERE} AND deleted_at IS NOT NULL AND purged_at IS NULL`, now, ...keyArgs(row));
+  return { deleted: true, purged: true, freed_bytes: 0, retried: true, receipt };
 }

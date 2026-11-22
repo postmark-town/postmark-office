@@ -162,6 +162,8 @@ export const LANDED = {
   "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
   // 101 (POS-721, small; carried by POS-1131; was 091, then 098, until 098–100 landed first): the household's human's town name, short line and pronouns, on its row.
   "101_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
+  // 102 (POS-737/c): a media file's freeing cause may be 'household', the household's own delete (080's check, widened).
+  "102_media_deleted_by_household.sql": { probe: "EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'office_media_deleted_cause_known' AND pg_get_constraintdef(oid) LIKE '%household%')" },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

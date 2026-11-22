@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { mediaConfigured, mediaQuota, mediaLedgerRows } from "./media.mjs";
 import { lawOf, openStore } from "./world-apex.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { asPaper } from "./paperwork.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
@@ -204,6 +205,8 @@ export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limi
           ? "a surface would not open, so every file not already found elsewhere answers `embedded: null` — unknown, never false"
           : "`embedded` is true only where the URL was actually found on one of the surfaces named above",
       },
+      // POS-737/c: the door that frees an upload, named where the uploads are listed.
+      delete: DELETE_TEACH,
       // Nothing uploaded is an answer, never a bounce. But an office with no
       // storage credentials holds nothing for a DIFFERENT reason, and a reader
       // deserves to know which emptiness this is.
@@ -215,4 +218,89 @@ export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limi
   } finally {
     store.db?.close();
   }
+}
+
+// ── the door: a household deletes its own upload (POS-737/c) ────────────────
+//
+// RULED (Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both"): "give a
+// household a delete for its own pictures that nothing uses, with a receipt.
+// Deletion is permanent; a picture still in use can't be deleted."
+//
+// THIS FILE JUDGES THE KEY AND SPEAKS; media-sweep.mjs § THE HOUSEHOLD'S OWN
+// DELETE DECIDES. `embedded` above is a display hint over three surfaces, with
+// a named draft blind spot, and it is never asked here: the decision is the
+// sweep's own reference set, every source, fail closed.
+
+/** The media read's one line about this door. */
+export const DELETE_TEACH = 'household { do: "delete-media", args: { url } } deletes one of these uploads for good, with its small copies, if nothing in the town uses it. It checks every place a picture can hang, not only the surfaces above, and is refused while anything uses the file or any place cannot be read. Its bytes go back to your wall at once.';
+
+/** Where a source the reference set names is, in a resident's words (`in_use`). */
+export const SOURCE_WORDS = Object.freeze({
+  world: "a mark in the world",
+  drafts: "a draft mark",
+  town: "the town's files (a profile, a home, a window or a letter)",
+  "store:marks": "a standing mark",
+  "store:posts": "a post (a bug report, an event or a notice)",
+  "store:responses": "an answer to a post",
+  "store:households": "a household's home pictures",
+  "store:town_homes": "a home page",
+  "store:town_residents": "a resident's profile or face",
+  "store:town_letters": "a letter",
+  "store:town_threads": "a letter thread",
+  "store:town_bulletin": "the bulletin",
+  "store:depictions": "a resident's six-panel sheet",
+  "office:likeness-gallery.json": "the town's likeness gallery",
+});
+const sourceWords = (name) => SOURCE_WORDS[name] ?? (String(name).startsWith("extra:") ? "work the town holds that is not yet published" : String(name));
+
+// ONE AT A TIME, the simple bound on what a call costs: every delete reads the
+// sweep's whole reference set (git over the world and town clones, and the
+// store's tables), so concurrent asks wait in line rather than each starting
+// its own read of the town.
+let deleting = Promise.resolve();
+const oneAtATime = (fn) => { const turn = deleting.then(fn); deleting = turn.catch(() => {}); return turn; };
+
+/**
+ * household { do: "delete-media", args: { url } }: the household's own upload
+ * that nothing uses, deleted for good, with a receipt. `sources` and `del` are
+ * the tests' seams (the sweep's clones and the store's pool otherwise, and the
+ * one signed DELETE); `now` the clock's.
+ */
+export async function deleteMediaAtOffice(fields, key, { odb, env = process.env, sources = null, del = undefined, now = undefined } = {}) {
+  const household = String(key?.household ?? "").trim();
+  // The callers the upload and the read refuse, refused in their words.
+  if (key?.berth && !household)
+    return bounce(403, "a berth holds no media",
+      'a berth\'s residue is ephemeral by design — declare and cosign your household first (household do: "begin"), then your media begins with your first upload');
+  if (!household)
+    return bounce(403, "media is your household's own",
+      "call with a key that holds a household — media is uploaded by a resident and kept at the household grain");
+  const held = [...(key?.handles ?? [])];
+  const by = String(fields?.handle ?? "").trim() || (held.length === 1 ? held[0] : "");
+  if (!by)
+    return bounce(422, "which of your residents?", `your key acts for ${held.join(", ") || "(none)"} — name one with handle:`, { your_residents: held });
+  if (!key?.handles?.has?.(by)) return bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${held.join(", ") || "(none)"}`);
+  const url = String(fields?.url ?? "").trim();
+  if (!url) return bounce(422, "which upload?", 'name its url, as household { read: "media" } lists it');
+  if (!odb) return bounce(409, "the media ledger is not open", "the office has no credential DB configured");
+
+  const { deleteOwnUpload, sweepClonesFrom } = await import("./media-sweep.mjs");
+  // The sweep's own sources: its clones from the office's env, and the store
+  // through the office's paper (dev and prod both run switched).
+  const from = sources ?? { ...sweepClonesFrom(env), pool: asPaper(odb)?.pool ?? null };
+  const r = await oneAtATime(() => deleteOwnUpload({ odb, household, by, url, ...from,
+    ...(del ? { del } : {}), ...(now != null ? { now } : {}) }));
+  if (r.refused) {
+    const { code, defect, hint, in_use, ...extra } = r.refused;
+    return bounce(code, defect, hint, { ...extra, ...(in_use ? { in_use: in_use.map(sourceWords) } : {}) });
+  }
+  const quota = await mediaQuota(odb, household);
+  const note = r.already
+    ? (r.receipt.cause === "takedown" ? "Already gone: the town's operators took it down, and its bytes left your wall then."
+      : r.receipt.cause === "sweep" ? "Already gone: the daily sweep freed it after it hung nowhere for 30 days, and its bytes left your wall then."
+      : "Already deleted: your household deleted it before, and its bytes left your wall then.")
+    : r.purged
+      ? "Deleted for good: the file and its small copies are gone from storage, and its bytes are back on your household's wall. Nothing in the town used it. The same picture uploaded again comes back at the same URL."
+      : "Its bytes are already off your wall and nothing can hang it now, but storage did not confirm the delete: call delete-media again with the same url to finish it.";
+  return { ...r, quota, note };
 }

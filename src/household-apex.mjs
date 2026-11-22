@@ -199,6 +199,11 @@ const ACTS = {
   // records it. Short, for the foyer's 8 KiB bound; the schema says the rest.
   "letter-note": { tool: null, residue: null,
     inline: "Note a letter." },
+  // POS-737/c (Darko 2026-11-21, "Yes, both"): a household deletes one upload of its own that
+  // nothing in the town uses (src/household-media.mjs § the door; the decision is the sweep's own
+  // reference set, media-sweep.mjs). No class mark defines it. Short, for the foyer's bound.
+  "delete-media": { tool: null, residue: null,
+    inline: "Delete an upload of yours that nothing uses." },
 };
 
 // ── THE ONE-OFF ACTS · offered in `first_steps`, never on a menu (POS-947) ──
@@ -435,6 +440,12 @@ export const APEX_ONLY_FIELDS = {
     },
     required: ["from"],
   },
+  "delete-media": {
+    properties: {
+      url: { type: "string", description: "the upload's URL, as household { read: \"media\" } lists it. Deleted for good with its small copies, and its bytes go back to your wall; refused while anything in the town uses it, or while any place it could hang cannot be read" },
+    },
+    required: ["url"],
+  },
   "letter-note": {
     properties: {
       letter: { type: "string", description: "id of a letter delivered to your house" },
@@ -464,7 +475,8 @@ export const APEX_ONLY_FIELDS = {
 // credited. Stripping those would hide a required field from every caller the
 // grammar exists to serve — the same trap the world apex names for world_walk's
 // x/y, met here in a case where it would actually bite.
-const STANDPOINT_HANDLE_ACTS = new Set(["address", "address-fields", "home", "profile", "window"]);
+// delete-media (POS-737/c) is here too: its handle is which of your residents asks, recorded on the receipt.
+const STANDPOINT_HANDLE_ACTS = new Set(["address", "address-fields", "home", "profile", "window", "delete-media"]);
 
 export const HOUSEHOLD_DISPATCHABLE = Object.freeze(Object.keys(ACTS));
 
@@ -2593,6 +2605,12 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "letter-note": {
         const { letterNoteAtOffice } = await import("./letter-notes.mjs");
         result = await letterNoteAtOffice(fields, key);
+        break;
+      }
+      // POS-737/c: the household's own upload that nothing uses, deleted for good, with a receipt
+      case "delete-media": {
+        const { deleteMediaAtOffice } = await import("./household-media.mjs");
+        result = await deleteMediaAtOffice(fields, key, { odb });
         break;
       }
       // ── a letter's later words, and the mail blocks (POS-666) ───────────
