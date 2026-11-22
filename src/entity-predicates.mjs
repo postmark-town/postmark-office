@@ -67,7 +67,7 @@ export function appearanceIdOf(value) {
 
 export const FOLD_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${APPEARANCE_CLASS}' AND id > $1::bigint ORDER BY acts.id LIMIT 5000`;
-// ACTS COMMIT OUT OF ORDER (review of #661). The pen keeps three connections, so
+// ACTS COMMIT OUT OF ORDER (review of #661). The pen keeps several connections (six since POS-1095), so
 // act 41 can commit after act 42 was read, and `id > cursor` alone would never
 // see it. Every catch-up therefore re-reads the acts behind the cursor that
 // were inserted lately; applyAct is idempotent and ordered by act id, so a row
