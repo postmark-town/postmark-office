@@ -58,7 +58,7 @@ import { NONCE_MAX } from "./town-journal.mjs";
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 import { speakerBook, adoptSpeakerBook, bookToPlain, lineSpeaker, pickSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
-import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
+import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, replyTargetIn, closedRoomRefusal, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
 import { roomsOf, roomFor, roomsHeardFrom, roomIdOf, roomAtOf, roomKeyOf, isRoomId } from "./rooms.mjs"; // POS-1185: which room a say is in, decided once
 
 // The class the dials hang on. Named once, beside the reader, for the same
@@ -763,6 +763,16 @@ export function createVoices({
     if (startedAt) voice.root_place_mark = startedAt;
   }
 
+  /** The closed-conversation refusal when the say a `reply_to` names is held in a room that is over at `t`; else null (not held, or its room is still open). */
+  function closedConversationOf(replyTo, here, t) {
+    const key = here.room ?? null;
+    const target = replyTargetIn(hydrate().filter((v) => (v.room ?? null) === key), replyTo);
+    if (!target) return null;
+    const boundaries = boundariesAt(t);
+    const room = (clusterByRoom(hydrate(), boundaries).get(key) ?? []).find((c) => c.voices.includes(target));
+    return room && !roomOpen(room.latest, t, boundaries) ? closedRoomRefusal(target.id) : null;
+  }
+
   /** The says of every open room `here` can hear, oldest first: what a reply may answer (POS-1185; call 21's earshot rule). */
   function heardRoomVoices(here, t, clusters0, boundaries = boundariesAt(t)) {
     const key = here.room ?? null;
@@ -1323,7 +1333,14 @@ export function createVoices({
       // POS-1185: a reply may answer a say in ANY open room the speaker can hear (rooms no longer fuse, so two can be in earshot),
       // and it joins that say's room (`nameRoom` below)
       link = resolveReplyTo(heardRoomVoices(here, t, clusterByRoom(hydrate(), boundariesAt(t))), { replyTo, speaker: handle, text: body });
-      if (link?.refused) return refused(link.refused.defect, link.refused.hint);
+      if (link?.refused) {
+        // WHY it is refused decides what the caller can do: a say whose conversation has CLOSED cannot be reached by walking back
+        // (WLD-242: such a reply is refused, and nothing reopens the room), so it gets its own words; one that is open but out of
+        // reach keeps the walk-back hint. Asked only after the refusal, over the says this office still holds for the speaker's room.
+        const closed = closedConversationOf(replyTo, here, t);
+        const why = closed ?? link.refused;
+        return refused(why.defect, why.hint);
+      }
       if (link) voice.reply_to = link.id;
     }
     // POS-1152: a say that answers no one starts a circle, and the mark it starts at is recorded on it, once. A reply never carries one (it

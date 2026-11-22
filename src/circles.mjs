@@ -475,6 +475,31 @@ export function resolveReplyTo(roomVoices, { replyTo = null, speaker = null, tex
   return found(hit, "id");
 }
 
+/**
+ * THE SAY A `reply_to` NAMES among `voices` — an id, or `{ handle, at }` at exactly that instant, and only when it names ONE say — or
+ * null. It decides nothing about whether that say may be answered (`resolveReplyTo` does, over the says in reach): the say door asks
+ * this only AFTER a refusal, to tell a say whose conversation has closed from one that is merely out of reach (POS-1185), so each
+ * refusal can say what the caller can do about it.
+ */
+export function replyTargetIn(voices, replyTo) {
+  const threaded = voices.filter((v) => sayIdOf(v.id) != null);
+  if (replyTo != null && typeof replyTo === "object" && !Array.isArray(replyTo)) {
+    const handle = String(replyTo.handle ?? "").trim();
+    const t = typeof replyTo.at === "number" ? replyTo.at : /^\d{10,15}$/.test(String(replyTo.at ?? "")) ? Number(replyTo.at) : Date.parse(String(replyTo.at ?? ""));
+    if (!handle || !Number.isFinite(t)) return null;
+    const exact = threaded.filter((v) => v.handle === handle && v.at === t);
+    return exact.length === 1 ? exact[0] : null;
+  }
+  const id = sayIdOf(replyTo);
+  return id == null ? null : threaded.find((v) => sayIdOf(v.id) === id) ?? null;
+}
+
+/** The refusal for a reply to a say whose conversation has closed (WLD-242: "A reply to a say whose room has closed is refused"). */
+export const closedRoomRefusal = (id) => ({
+  defect: `say ${id} is in a conversation that has closed`,
+  hint: `that conversation has closed, and a reply cannot reopen it. Say it fresh, with no reply_to, and it starts or joins a conversation where you are. The closed one is still there to read: say { circle: ${id} }`,
+});
+
 /** `?circle=<say id>[&after=<id>]` or `?room=<thread id>` on a conversations read — a named conversation; null for a page read. */
 export function findOf(searchParams) {
   const get = (k) => { const v = searchParams?.get(k); return v == null || v === "" ? null : v; };
