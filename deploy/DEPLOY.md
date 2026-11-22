@@ -1840,13 +1840,32 @@ validates the key first, then compares the swap with the head, and persists noth
 absences first and **sends nothing if any of it fails**. Expected: the legacy key
 `settlement-187` answers `400 InvalidRequest` ("Invalid record key…"); the TID answers
 `400 InvalidSwap`; `getRecord` reads `RecordNotFound` for both; the head commit is unchanged.
+**The safe route (the posting switch stays off).** `/etc/postmark-bsky.env` stays at mode `000`: do not
+chmod it, source it into a shell, print it, or put either value in an argument. systemd reads an
+`EnvironmentFile` as root, so a transient unit can run the proof as `meepo` with the two names in its
+environment and nothing else touching them (Jetto's equivalent approved route is also fine). The
+**PDS target is the account's own host**, `https://fibercap.us-west.host.bsky.network` (the
+account's did resolves there; the tool's default `https://bsky.social` is the publisher's, not this
+proof's), passed as `--service`. Replace the two marked paths on the operator host: an isolated office
+checkout at the reviewed head, and the World clone that holds `settlement/S187`:
 ```sh
-# Jetto's approved operator execution: the two env names reach this one run by his route and are never printed;
-# the posting switch (the env file's readability) is not touched by it
-cd <office checkout> && node tools/bluesky-pds-proof.mjs --world <world clone> --settlement 187
+sudo systemd-run --uid=meepo --pipe --wait --collect \
+  -p EnvironmentFile=/etc/postmark-bsky.env \
+  -p WorkingDirectory="<office checkout at the reviewed head>" \
+  "$(command -v node)" tools/bluesky-pds-proof.mjs \
+  --world "<World clone holding S187>" --settlement 187 \
+  --service https://fibercap.us-west.host.bsky.network
 ```
-The run prints one JSON report (no credential, token or header in it), and its exit is 0 only when every expected answer came. The
-three results it carries (the legacy key's refusal, the TID's `InvalidSwap`, both absent afterwards) belong in the PR.
+This is the guarded proof, not the deployment and not S187's re-send. Confirm the binding is the town
+account without exposing it (a yes/no compare of the identifier, as Jetto's first run did). The publisher
+stays off, and the failed S187 state is left untouched: its actual re-send (`--rearm-failed`) is only
+after the correction ships.
+
+The run prints one JSON report (no credential, token or header in it), and its exit is 0 only when every
+expected answer came. Return the exit status and the report. The three results it carries (the legacy
+key's `InvalidRequest` from validation, the TID's `InvalidSwap`, both `RecordNotFound` afterwards with an
+unchanged repo head) belong in the PR. Anything unexpected or inconclusive is not a pass, and does not
+authorize a public test post (that is Darko's).
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
