@@ -42,6 +42,8 @@ export const SOFT_STEPS = Object.freeze([
   "mint", "welcome", "invite", "bugstage", "ballots", "verify", "commit", "push", "sync", "rollback",
   // sparks: a staked event that ended becomes its spark (POS-1035), after the mint's commit and before the snapshot
   "sparks",
+  // hearth_joins: a merged Hearth design joins the Hearth ballot, and its entry pay is queued, never run (STAR-237), right after the sparks
+  "hearth_joins",
   // carried, chests, amends and drops: settlements-backfill's four soft steps,
   // in the order it runs them, recorded apart from it because each is
   // non-fatal by design (POS-612 and POS-627, review-612).
@@ -54,7 +56,7 @@ export const SOFT_STEPS = Object.freeze([
   // the town's day on Bluesky (POS-904): the crossing's and the blessed settlement's posts, after the world step
   "bluesky",
 ]);
-export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 15), "snapshot", ...SOFT_STEPS.slice(15), "publish"]);
+export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 16), "snapshot", ...SOFT_STEPS.slice(16), "publish"]);
 export const STATUSES = Object.freeze(["ok", "refused", "skip", "notrun"]);
 export const SOURCES = Object.freeze(["scheduled", "by-hand"]);
 export const SIGNALS = Object.freeze(["TERM", "INT", "HUP"]);
@@ -64,7 +66,9 @@ export const SIGNALS = Object.freeze(["TERM", "INT", "HUP"]);
 // unmade (it did not land and was unmade to its parent), unconfirmed (that
 // could not be read, so it is kept), moved (another writer's commit sits on it,
 // so it is kept), gone (a hand reset it away). They ride push, rollback and pull.
-export const REASON_RE = /^(?:exit:\d{1,3}|ledger-red|prep-failed|mint-failed|verify-red|commit-failed|push-failed|sync-failed|rolled-back|rollback-failed|not-needed|no-change|switch-off|unchecked|town-pin-mismatch|write-failed|landed-unacked|unmade|unconfirmed|moved|gone|prereq:[a-z_]{1,16}|signal:(?:TERM|INT|HUP))$/;
+// STAR-237: owed:<what> on an OK step says the pass found a payment owed that only a hand may make (owed:hearth_entry,
+// the quest pass the tick never runs); the digest and the rows are in the owed row's file, never here.
+export const REASON_RE = /^(?:exit:\d{1,3}|owed:[a-z_]{1,16}|ledger-red|prep-failed|mint-failed|verify-red|commit-failed|push-failed|sync-failed|rolled-back|rollback-failed|not-needed|no-change|switch-off|unchecked|town-pin-mismatch|write-failed|landed-unacked|unmade|unconfirmed|moved|gone|prereq:[a-z_]{1,16}|signal:(?:TERM|INT|HUP))$/;
 const RUN_RE = /^[A-Za-z0-9._:-]{1,80}$/;
 
 // RETENTION: the last 96 scheduled receipts (a day of quarter-hour ticks; a

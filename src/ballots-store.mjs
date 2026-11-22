@@ -50,7 +50,7 @@ import {
 } from "./events.mjs";
 import { POST_COLUMNS, rowOf, insertPost, updatePost } from "./events-store.mjs";
 import {
-  BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
+  BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, MACHINE_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
   ballotPostId, ballotFileName, ballotFilePath, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
   judgeTermsMove, composeBallotAct, choiceStanding, topicOfPost,
 } from "./ballots.mjs";
@@ -196,8 +196,9 @@ async function takeInVia(client, post, want, { topic, hand, now }) {
   return { post, did: plan.map((a) => a.action), act_ids: ids };
 }
 
-function judgeHand(hand) {
-  if (!BALLOT_HANDS.includes(hand))
+// `machine` is true only for the keeping tick's own in-process act (STAR-237): the door and the founder's-file ingest never pass it.
+function judgeHand(hand, { machine = false } = {}) {
+  if (!BALLOT_HANDS.includes(hand) && !(machine && MACHINE_HANDS.includes(hand)))
     throw refuse(403, `"${hand}" is not a hand that moves the town's ballots`, `the hands are ${BALLOT_HANDS.join(" and ")}`);
   return hand;
 }
@@ -268,14 +269,16 @@ const putBackFile = (path, arrived) => {
 /**
  * One hand's act on a ballot. `verb` is post | amend | advance | close and
  * `args` the door's (post: `{ topic, title, … }`, the others `{ post, … }`);
+ * `machineHand: true` (the keeping tick's own in-process act, STAR-237) also lets
+ * the hand be one of MACHINE_HANDS; the door never passes it.
  * `hand` is judged here as the ingest judges it (the door has already judged
  * that the caller's credential holds it). `today` is the town day a choice
  * joins on. `commit: { message(answer) }` lands the file with the pen;
  * `land(answer, client)` replaces it (a test seam). Answers
  * `{ topic, post, did, act_ids, file, commit? }`; throws a refusal.
  */
-export async function ballotActInStore({ clone, verb, args = {}, hand, today, commit = null, land = null, now = Date.now(), env = process.env }) {
-  judgeHand(hand);
+export async function ballotActInStore({ clone, verb, args = {}, hand, today, commit = null, land = null, machineHand = false, now = Date.now(), env = process.env }) {
+  judgeHand(hand, { machine: machineHand });
   const named = String((verb === "post" ? args.topic : args.post) ?? "").trim();
   const topic = verb === "post" ? named : topicOfPost(named);
   if (verb === "post" && !TOPIC_RE.test(topic))
