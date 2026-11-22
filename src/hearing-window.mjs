@@ -122,23 +122,28 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
     askedAt = clock();
     inFlight = (async () => {
       try { past = await history(repo); } catch { /* the last history stands */ }
-      // POS-1185: the whole list is asked once (again at the next refresh while it has not answered); `past` keeps it current after
+      await openWindow();
+      // POS-1185: the record's whole list is asked LAST, after the ear has its window and its 60 (hearing never waits on it), and
+      // once (again at the next refresh while it has not answered); `past` keeps it current after
       if (every == null) { try { every = await everything(repo); } catch { /* the newest sweeps stand in until it answers */ } }
-      try {
-        const at = await published(repo);
-        if (at != null) { known = { since: at, source: "world main's newest settlement commit", disclosure: null }; return known; }
-      } catch { /* fall through to the tag */ }
-      try {
-        const at = await blessed(repo);
-        if (at != null) {
-          known = { since: at, source: "the newest settlement tag",
-            disclosure: "world main's newest settlement could not be read, so the ear's window opens at the newest BLESSED settlement, which can be one or more crossings older" };
-          return known;
-        }
-      } catch { /* the last answer stands */ }
       return known;
     })().finally(() => { inFlight = null; });
     return inFlight;
+  }
+
+  /** Where the ear's window opens: world main's newest sweep, else the newest blessed tag, else the last answer stands. */
+  async function openWindow() {
+    try {
+      const at = await published(repo);
+      if (at != null) { known = { since: at, source: "world main's newest settlement commit", disclosure: null }; return; }
+    } catch { /* fall through to the tag */ }
+    try {
+      const at = await blessed(repo);
+      if (at != null) {
+        known = { since: at, source: "the newest settlement tag",
+          disclosure: "world main's newest settlement could not be read, so the ear's window opens at the newest BLESSED settlement, which can be one or more crossings older" };
+      }
+    } catch { /* the last answer stands */ }
   }
 
   /**

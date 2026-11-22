@@ -50,13 +50,29 @@ const sortedEdges = (boundaries) => (Array.isArray(boundaries) ? boundaries.filt
  * as it was when it was spoken (the fold below, over the unnamed voices alone). `boundaries` are the published settlements (ms);
  * none known is one settlement, and the caller says so.
  */
-export function roomsOf(list, { earshotM, boundaries = [] } = {}) {
+export function roomsOf(list, opts = {}) {
+  const steps = roomsOfInSteps(list, opts);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/** How many says `roomsOfInSteps` names between two pauses. */
+export const ROOMS_STEP_SAYS = 256;
+
+/**
+ * `roomsOf`, pausable: a generator that yields after every ROOMS_STEP_SAYS says and returns the rooms. The one derivation, for a
+ * caller that must not hold its thread for the whole record at once (the door's kept rooms name every old say at a start, on the
+ * office's main thread: it takes a step, lets the event loop turn, and takes the next). `roomsOf` is this, run to the end.
+ */
+export function* roomsOfInSteps(list, { earshotM, boundaries = [] } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const marks = sortedEdges(boundaries);
   const rooms = [];
   const roomOfVoice = new Map();
   const bySay = new Map(); // say id -> voice, for the reply rule
   const join = (room, v) => { room.voices.push(v); if (v.at > room.latest) room.latest = v.at; roomOfVoice.set(v, room); };
+  let done = 0;
 
   // ── the unnamed says, named as they were when spoken ──
   // The grouping of their day, kept exactly (earshot or a shared deck; a room over once CORE-97's hour ran out; a say within
@@ -64,23 +80,27 @@ export function roomsOf(list, { earshotM, boundaries = [] } = {}) {
   // JOINED: the leading room's. A fused group goes on as one group for later says, and the says a room already held stay its own.
   const open = []; // { room, voices, latest }: a group, and the room that leads it
   for (const v of sorted) {
+    if (++done % ROOMS_STEP_SAYS === 0) yield done;
     if (v.id != null) bySay.set(v.id, v);
     if (isRoomId(v.root)) continue;
     for (let i = open.length - 1; i >= 0; i--) if (!roomOpen(open[i].latest, v.at, marks)) open.splice(i, 1);
     const hits = open.filter((g) => g.voices.some((o) => chains(o, v, earshotM)));
+    // a reply joins its parent's room, in every era: a circle is never split across two rooms
+    const parent = v.reply_to != null ? bySay.get(v.reply_to) : null;
+    const parentRoom = (parent && parent !== v && parent.at <= v.at && roomOfVoice.get(parent)) || null;
     let group = hits[0];
     if (!group) {
-      const room = { root: roomIdOf(v), voices: [], latest: v.at };
-      rooms.push(room);
+      // a say in reach of no open group founds one. Its room is its own, under its own id; a reply's is the room it joins (its
+      // parent's), so no room is ever made that holds no say, and what is said near that reply later sits with it.
+      let room = parentRoom;
+      if (!room) { room = { root: roomIdOf(v), voices: [], latest: v.at }; rooms.push(room); }
       group = { room, voices: [], latest: v.at };
       open.push(group);
     }
     for (const other of hits.slice(1)) { group.voices.push(...other.voices); open.splice(open.indexOf(other), 1); }
     group.voices.push(v);
     group.latest = v.at;
-    // a reply joins its parent's room, in every era: a circle is never split across two rooms
-    const parent = v.reply_to != null ? bySay.get(v.reply_to) : null;
-    join((parent && parent !== v && parent.at <= v.at && roomOfVoice.get(parent)) || group.room, v);
+    join(parentRoom || group.room, v);
   }
 
   // ── the named says: the room their name names ──
@@ -92,6 +112,7 @@ export function roomsOf(list, { earshotM, boundaries = [] } = {}) {
     if (!byKey.has(k)) byKey.set(k, r);
   }
   for (const v of sorted) {
+    if (++done % ROOMS_STEP_SAYS === 0) yield done;
     if (!isRoomId(v.root)) continue;
     let room = byId.get(v.root) ?? byKey.get(roomKeyOf(v.root));
     if (!room) {

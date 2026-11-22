@@ -38,7 +38,7 @@ after(() => {
   if (env.url == null) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = env.url;
 });
 
-const { world2Serve, ROOMS_BUILD_SQL, ROOMS_TAIL_SQL, ROOM_VOICES_SQL } = await import("../src/world2-serve.mjs");
+const { world2Serve, ROOMS_BUILD_SQL, ROOMS_BUILD_PAGE, ROOMS_TAIL_SQL, ROOM_VOICES_SQL } = await import("../src/world2-serve.mjs");
 const { currentCrossing } = await import("../src/crossings.mjs");
 
 const H = 3600_000, MIN = 60_000;
@@ -72,7 +72,10 @@ const clone = (r) => ({ ...r, at: new Date(r.at), payload: JSON.parse(JSON.strin
  * returns the store as it was when the query STARTED, deep-frozen.
  */
 function poolOf({ acts = BASE, hold = false, failWhole = [] } = {}) {
-  const stats = { whole: 0, live: 0, maxLive: 0, newer: 0, rooms: 0, marks: 0 };
+  // EVERY query that reads voices is counted, with the rows it handed back: the whole read, the read of newer acts, and each read of
+  // rooms' says (`roomRows`). Until the review of 7ba23476 only the whole read was counted, so a page that fetched every voice through
+  // the rooms' read could not turn this file red.
+  const stats = { whole: 0, wholePages: 0, live: 0, maxLive: 0, newer: 0, newerRows: [], rooms: 0, roomRows: [], marks: 0 };
   const gates = new Map();
   const gate = (n) => { if (!gates.has(n)) { let ok; const promise = new Promise((r) => { ok = r; }); gates.set(n, { promise, ok }); } return gates.get(n); };
   const snapshot = (keep) => deepFreeze(acts.filter(keep).map(clone).sort((a, b) => a.at - b.at || a.id - b.id)); // taken at the start, like a Postgres snapshot
@@ -81,8 +84,12 @@ function poolOf({ acts = BASE, hold = false, failWhole = [] } = {}) {
     release: (n) => gate(n).ok(),
     query: async (sql, params) => {
       if (sql === ROOMS_BUILD_SQL) {
+        // the whole read comes a page of act numbers at a time: `after` 0 begins one (counted, held and failed as ONE whole read)
+        const after = Number(params[1]);
+        const rows = deepFreeze(acts.filter((r) => r.id > after).map(clone).sort((a, b) => a.id - b.id).slice(0, ROOMS_BUILD_PAGE));
+        stats.wholePages += 1;
+        if (after !== 0) return { rows };
         const n = ++stats.whole;
-        const rows = snapshot(() => true);
         stats.live++; stats.maxLive = Math.max(stats.maxLive, stats.live);
         try {
           if (hold) await gate(n).promise;
@@ -90,8 +97,9 @@ function poolOf({ acts = BASE, hold = false, failWhole = [] } = {}) {
           return { rows };
         } finally { stats.live--; }
       }
-      if (sql === ROOMS_TAIL_SQL) { stats.newer++; return { rows: snapshot((r) => r.id > Number(params[1])) }; }
-      if (sql === ROOM_VOICES_SQL) { stats.rooms++; const want = new Set(params[0].map(String)); return { rows: snapshot((r) => want.has(String(r.id))) }; }
+      if (sql === ROOMS_TAIL_SQL) { stats.newer++; const rows = snapshot((r) => r.id > Number(params[1])); stats.newerRows.push(rows.length); return { rows }; }
+      if (sql === ROOM_VOICES_SQL) { stats.rooms++; const want = new Set(params[0].map(String)); const rows = snapshot((r) => want.has(String(r.id))); stats.roomRows.push(rows.length); return { rows }; }
+      if (/FROM acts/i.test(sql) && !/FROM marks/i.test(sql)) throw new Error(`a voice-reading query this file does not count: ${sql.slice(0, 80)}`);
       if (/FROM marks/i.test(sql)) { stats.marks++; return { rows: MARKS }; }
       return { rows: [] };
     },
@@ -205,6 +213,77 @@ test("FALSIFIER 6: a say recorded while the whole read runs is in the answer of 
   assert.equal(r.body.find.room.voice_count, 3);
   assert.equal(p.stats.whole, 1);
   assert.ok(p.stats.newer >= 2, "each reader asked for the acts newer than the kept ones before it answered");
+});
+
+// ── the review of 7ba23476, block 1: a page must not be a second way to read every voice ──
+// 150 closed rooms of one say each (more than one page holds), beside BASE. Six readers ask for everything at once, three ways.
+const MANY = 150;
+const MANY_MARKS = Array.from({ length: MANY }, (_, i) => ({ slug: `the-town/spot-${i}`, status: "standing", geometry: { at: { x: 100_000 + i * 5000, y: 1000 }, extent: { w: 20, h: 20 } }, data: {} }));
+const manyRows = () => Array.from({ length: MANY }, (_, i) => ({
+  id: 10_000 + i, at: new Date(S0 + 2 * H + i * 1000), crossing: currentCrossing(S0 + 2 * H), actor: `guest-${i}`, action: "say",
+  at_anchor: `the-town/spot-${i}`, at_dx: 0, at_dy: 0, payload: { text: `spot ${i}` } }));
+
+test("FALSIFIER 7: no reader fetches every voice, however it asks: `closed=100000`, behind a cursor, or evaluated before any settlement, six at once", async () => {
+  MARKS.push(...MANY_MARKS);
+  try {
+    const acts = [...BASE, ...manyRows()];
+    for (const [name, query, at] of [
+      ["closed=100000", "closed=100000", NOW],
+      ["closed=100000 behind a cursor", `closed=100000&before=${encodeURIComponent(new Date(NOW).toISOString())}`, NOW],
+      ["a bare read evaluated before any settlement", "", S0 - H],
+    ]) {
+      const p = poolOf({ acts, hold: true });
+      const reads = Array.from({ length: 6 }, () => world2Serve("/world2/conversations", new URLSearchParams(`at=${new Date(at).toISOString()}&${query}`),
+        { p, settlements: () => EDGES, hearingWindow: () => ({ since: EDGES.at(-1) }) }));
+      await untilWhole(p, 1);
+      p.release(1);
+      const out = await Promise.all(reads);
+      assert.ok(out.every((r) => r.code === 200), `${name}: ${JSON.stringify(out.map((r) => r.code))}`);
+      assert.equal(p.stats.whole, 1, `${name}: one whole read (without the words) between six readers`);
+      assert.equal(p.stats.roomRows.length, 6, `${name}: each reader read its own page's rooms`);
+      for (const rows of p.stats.roomRows)
+        assert.ok(rows <= 100 + BASE.length && rows < acts.length, `LAW (POS-1184): ${name}: a reader fetched ${rows} voices with their words; the store holds ${acts.length}`);
+      const body = out[0].body;
+      assert.ok(body.limits, `${name}: a read that asked for more than a page holds is told so`);
+      if (at === NOW) { assert.equal(body.closed.length, 100); assert.equal(body.limits.closed.asked, 100000); assert.ok(body.earlier.remaining >= 50); }
+      else { assert.equal(body.live.length, 100); assert.equal(body.limits.live.open, MANY + 3); }
+    }
+  } finally { MARKS.length = PLACES.length; }
+});
+
+// POS-1185, after w48.3 moved the load onto the office's main thread: a burst of reads must not run back to back on it. Each read's own
+// work takes its own turn of the event loop. The fake pool answers at once, so with no turn-taking every reader would finish in ONE turn.
+test("FALSIFIER 8: each read's own work takes its own turn of the event loop: a burst of readers finishes in as many different turns", async () => {
+  const p = poolOf();
+  assert.equal((await ask(`room=${roomId(A1)}`, p)).code, 200); // the rooms are kept: the burst below is only the readers' own work
+  let turn = 0, counting = true;
+  const tick = () => { turn += 1; if (counting) setImmediate(tick); };
+  setImmediate(tick);
+  const finished = await Promise.all(BURST.map((q) => ask(q, p).then(() => turn)));
+  counting = false;
+  assert.equal(new Set(finished).size, BURST.length, `LAW (POS-1185): one read per turn of the loop — ${BURST.length} readers finished in turns ${finished.join(", ")}`);
+});
+
+// The whole read is paged by act number, so the thread is never held for the parse of every row at once (POS-1185, the loop measurement:
+// one unpaged result of 23,937 rows held the office's main thread about 150 ms in the driver alone).
+test("FALSIFIER 9: the whole read comes a page at a time and misses nothing: a record of more than two pages is read in three, and its first and last rooms open", async () => {
+  const N = 2 * ROOMS_BUILD_PAGE + 100;
+  const marks = [{ slug: "the-town/long-road", status: "standing", geometry: { at: { x: 500_000, y: 0 }, extent: { w: 20, h: 20 } }, data: {} }];
+  const acts = Array.from({ length: N }, (_, i) => ({ id: 50_000 + i, at: new Date(S0 + H + i * 1000), crossing: currentCrossing(S0 + H), actor: `walker-${i}`, action: "say",
+    at_anchor: "the-town/long-road", at_dx: i * 500, at_dy: 0, payload: { text: `step ${i}` } }));
+  MARKS.push(...marks);
+  try {
+    const p = poolOf({ acts });
+    const idOf = (i) => `t${S0 + H + i * 1000}-walker-${i}`;
+    for (const i of [0, ROOMS_BUILD_PAGE - 1, ROOMS_BUILD_PAGE, N - 1]) {
+      const r = await ask(`room=${idOf(i)}`, p);
+      assert.equal(r.body.find.history, "complete", `say ${i} of ${N}: its room opens`);
+      assert.equal(r.body.find.room.voice_count, 1);
+    }
+    assert.equal(p.stats.whole, 1, "one whole read");
+    assert.equal(p.stats.wholePages, 3, `in three pages of at most ${ROOMS_BUILD_PAGE} act numbers`);
+    assert.equal((await ask("", p)).body.voices, N, "and every voice is counted");
+  } finally { MARKS.length = PLACES.length; }
 });
 
 test("two pools never share a whole read (the kept rooms are per pool)", async () => {

@@ -45,7 +45,7 @@ const T = Date.parse("2026-11-20T20:00:00Z");
 const DIR = mkdtempSync(join(tmpdir(), "pos1185-"));
 let logN = 0;
 function door(where, { penMs = 0 } = {}) {
-  const clock = { t: T };
+  const clock = { t: T, settled: [T - H] };            // the published settlements; a test pushes one to publish it
   let next = 80001;
   const penned = [];
   const path = join(DIR, `voices-${++logN}.jsonl`);
@@ -54,8 +54,8 @@ function door(where, { penMs = 0 } = {}) {
     place: async () => "the green",
     logPath: path,
     now: () => clock.t,
-    hearingWindow: () => ({ since: T - H, source: "the bench", disclosure: null }),
-    settlements: () => [T - H],
+    hearingWindow: () => ({ since: clock.settled.at(-1), source: "the bench", disclosure: null }),
+    settlements: () => clock.settled,
     beforeSpoke: async (voice) => {
       penned.push({ ...voice });                       // the say exactly as the pen is handed it: BEFORE its act is written
       if (penMs) await new Promise((r) => setTimeout(r, penMs));
@@ -161,6 +161,32 @@ test("FALSIFIER 6 · a listener between two rooms is shown ONE conversation, the
   assert.deepEqual(west.conversation.participants, ["wes"], "and from nearer the west room, the west room");
 });
 
+// WLD-242 (LOGOS, postmark-world #429 at da369078): "A reply to a say whose room has closed is refused." The door refused it before this
+// change too; this holds it here, at the say door, with the room's two states side by side.
+test("WLD-242 · a reply to a say whose room has closed is refused 422 and writes nothing; in the hour after the settlement the same reply is accepted and joins the room", async () => {
+  const d = door({ wes: { x: 0, y: 0 }, wyn: { x: 5, y: 0 } });
+  await d.store.say("wes", "west opens");                       // 80001
+  const west = `t${T}-wes`;
+  d.tick(10 * MIN);
+  d.clock.settled.push(d.clock.t);                              // a settlement publishes
+  d.tick(30 * MIN);                                             // inside the hour after it: the room is still open
+  const inTheHour = await d.store.say("wyn", "still here?", { replyTo: 80001 });
+  assert.equal(inTheHour.spoke, true, "CONTROL: while the room is open the reply is accepted");
+  assert.deepEqual(roomsNow(d.store), { [west]: ["west opens", "still here?"] }, "and it joined the room of the say it answers");
+  d.tick(2 * H);
+  d.clock.settled.push(d.clock.t);                              // the next settlement, and then more than its hour of silence
+  d.tick(61 * MIN);
+  const late = await d.store.say("wes", "anyone?", { replyTo: 80002 });   // five metres from the say it answers: distance is not why it is refused
+  assert.equal(late.code, 422, 'WLD-242: "A reply to a say whose room has closed is refused"');
+  assert.match(late.defect, /say 80002 is not in a conversation you can hear from where you stand/);
+  assert.equal(d.penned.length, 2, "the pen never saw it: no act is written");
+  assert.equal(d.log().length, 2, "and no line in the voices log");
+  // nothing reopened the closed room: a plain say there founds a new one
+  await d.store.say("wes", "a new conversation");
+  assert.deepEqual(roomsNow(d.store), { [`t${d.clock.t}-wes`]: ["a new conversation"] }, "the closed room stays closed; the new say has its own room");
+  assert.equal(d.store.conversations().closed.find((c) => c.id === west).voice_count, 2, "and the closed room holds what it held");
+});
+
 // ═══ THE RECORD's derivation (src/rooms.mjs) ══════════════════════════════════════════════════════════════════════════════════
 const S1 = Date.parse("2026-06-01T06:00:00.000Z"), S2 = S1 + 12 * H, S3 = S2 + 12 * H;
 const v = (at, handle, x, more = {}) => ({ handle, text: `${handle} @${(at - S1) / MIN}`, at, x, y: 0, place: null, aboard: false, ...more });
@@ -206,6 +232,25 @@ test("FALSIFIER 9 · a reply with no recorded room joins its parent's room: a ci
     v(S1 + 85 * MIN, "eve", 96, { id: 4, reply_to: 2 })];         // answers eli: by the ground alone it would be named into the fused west room
   const rooms = R.roomsOf(voices, { earshotM: 60, boundaries: [S1] });
   assert.deepEqual(shape(rooms), { [`t${S1 + 60 * MIN}-wes`]: ["wes @60", "mid @80"], [`t${S1 + 65 * MIN}-eli`]: ["eli @65", "eve @85"] });
+});
+
+test("no room is ever made that holds no say: an old reply out of reach of every open group joins its parent's room, and what is said near it later sits with it", () => {
+  const voices = [v(S1 + 60 * MIN, "wes", 0, { id: 1 }),
+    v(S1 + 70 * MIN, "far", 5000, { id: 2, reply_to: 1 }),      // answers wes from 5 km off: in reach of no open group
+    v(S1 + 75 * MIN, "near", 5010)];                             // then a say beside that reply
+  const rooms = R.roomsOf(voices, { earshotM: 60, boundaries: [S1] });
+  for (const room of rooms) assert.ok(room.voices.length > 0, `room ${room.root} holds no say`);
+  assert.deepEqual(shape(rooms), { [`t${S1 + 60 * MIN}-wes`]: ["wes @60", "far @70", "near @75"] });
+});
+
+test("roomsOfInSteps is roomsOf, pausable: it yields as it goes and returns the same rooms", () => {
+  const voices = [];
+  for (let i = 0; i < 700; i++) voices.push(v(S1 + i * MIN, `h${i % 7}`, (i % 5) * 2000 + (i % 3) * 20, i % 4 === 0 ? { root: `t${S1}-h0` } : {}));
+  const steps = R.roomsOfInSteps(voices, { earshotM: 60, boundaries: [S1, S2] });
+  let pauses = 0, step = steps.next();
+  while (!step.done) { pauses += 1; step = steps.next(); }
+  assert.ok(pauses >= Math.floor(700 / R.ROOMS_STEP_SAYS), `it paused ${pauses} times over 700 says`);
+  assert.deepEqual(shape(step.value), shape(R.roomsOf(voices, { earshotM: 60, boundaries: [S1, S2] })));
 });
 
 test("the record's instant and memory's are one room: a recorded name with milliseconds joins the room the record names to the second (POS-1183), and the recorded name is its id", () => {
@@ -482,4 +527,70 @@ test("THE DOOR · a say spoken after the rooms were kept is read at once, filed 
   assert.ok(threads.some((c) => said(c).includes("o1")), 'LAW: "everything to be readable" — the unnamed say is in a room');
   assert.equal(count(p, serve.ROOMS_BUILD_SQL).length, 2, "by building the kept rooms again, once");
   assert.equal(threads.flatMap(said).filter((n) => n === "o1").length, 1);
+});
+
+// POS-1184's guarantee, for the page (the independent review of 7ba23476, block 1): no read may fetch the whole record. Until this, `?closed=`
+// took any number and a read evaluated before any settlement counted every room as open, and each reader fetched every say of every room on
+// its page in its own query.
+test("THE DOOR · a page larger than the default: `closed` has a ceiling that is SAID, the cursor reaches everything behind it, and no read fetches the whole record however it asks", async (t) => {
+  if (skip) return t.skip(skip);
+  const EXTRA = 130;                                            // more closed rooms than one page holds, each a room of its own, 500 m apart
+  for (let i = 0; i < EXTRA; i++) await insertSay(`x${i}`, S1 + 2 * H + i * 1000, `xtra${i}`, "quill/the-barn", 20_000 + i * 500);
+  const p = counting();
+  const fetched = () => count(p, serve.ROOM_VOICES_SQL).at(-1).rows;
+  const { rows: [{ n: everyVoice }] } = await pool.query("SELECT count(*)::int AS n FROM acts WHERE action = 'say'");
+  // the default page: 40 closed rooms, as the conversations page's "Show earlier" asks
+  const first = await ask(p, "");
+  assert.equal(first.body.closed.length, 40);
+  assert.equal(first.body.limits, undefined, "a page inside the ceiling says nothing about it");
+  const closedInAll = first.body.closed.length + first.body.earlier.remaining;
+  assert.ok(closedInAll > serve.CONVERSATIONS_CLOSED_MAX, `the record holds ${closedInAll} closed rooms: more than one page`);
+  // a page larger than the default, inside the ceiling
+  const sixty = await ask(p, "closed=60");
+  assert.equal(sixty.body.closed.length, 60);
+  assert.equal(sixty.body.earlier.remaining, closedInAll - 60);
+  assert.equal(sixty.body.limits, undefined);
+  // asked for the whole record: the ceiling, said plainly, and the rows this read fetched
+  const all = await ask(p, "closed=100000");
+  assert.equal(all.code, 200);
+  assert.equal(all.body.closed.length, serve.CONVERSATIONS_CLOSED_MAX, "the ceiling");
+  assert.equal(all.body.limits.closed.asked, 100000);
+  assert.equal(all.body.limits.closed.served_at_most, serve.CONVERSATIONS_CLOSED_MAX);
+  assert.match(all.body.limits.closed.note, /a page holds at most 100 closed conversations and 100000 were asked for/, "a read over the ceiling is told so, never cut silently");
+  assert.equal(all.body.earlier.remaining, closedInAll - serve.CONVERSATIONS_CLOSED_MAX, "and what is behind the page is counted");
+  const served = [...all.body.live, ...all.body.closed].reduce((n, c) => n + c.voice_count, 0);
+  assert.equal(fetched(), served, "it fetched the says of the rooms it serves");
+  assert.ok(fetched() < everyVoice, `LAW (POS-1184): it fetched ${fetched()} of the ${everyVoice} voices, not all of them`);
+  // the cursor walks to the end: every closed room once
+  const seen = new Set(all.body.closed.map((c) => c.id));
+  let cursor = all.body.earlier.before, hops = 0;
+  while (cursor && hops++ < 10) {
+    const next = await ask(p, `closed=100000&before=${encodeURIComponent(cursor)}`);
+    assert.ok(next.body.closed.length <= serve.CONVERSATIONS_CLOSED_MAX);
+    for (const c of next.body.closed) { assert.ok(!seen.has(c.id), `${c.id} twice`); seen.add(c.id); }
+    cursor = next.body.earlier.remaining ? next.body.earlier.before : null;
+  }
+  assert.equal(seen.size, closedInAll, 'LAW: "everything to be readable and findable" — the ceiling hides nothing: the cursor reaches every closed room');
+  // six readers asking for everything at once: each fetches a page, none the record, and they share one whole read between them
+  const builds = count(p, serve.ROOMS_BUILD_SQL).length;
+  const before = count(p, serve.ROOM_VOICES_SQL).length;
+  const burst = await Promise.all(Array.from({ length: 6 }, (_, i) => ask(p, i % 2 ? "closed=100000" : `closed=100000&before=${encodeURIComponent(iso(NOW + H))}`)));
+  assert.ok(burst.every((r) => r.code === 200 && r.body.closed.length === serve.CONVERSATIONS_CLOSED_MAX));
+  for (const q of count(p, serve.ROOM_VOICES_SQL).slice(before)) assert.ok(q.rows <= served && q.rows < everyVoice, `a reader fetched ${q.rows} voices of ${everyVoice}`);
+  assert.equal(count(p, serve.ROOMS_BUILD_SQL).length, builds, "and no whole read was made for them");
+  // a read evaluated before any settlement: every room counts as open, and the read still serves a bounded number, saying so
+  const early = await ask(p, "", S1 - H);
+  assert.equal(early.code, 200);
+  assert.equal(early.body.live.length, serve.CONVERSATIONS_LIVE_MAX, "the ceiling on open rooms");
+  assert.ok(early.body.limits.live.open > serve.CONVERSATIONS_LIVE_MAX);
+  assert.equal(early.body.limits.live.served, serve.CONVERSATIONS_LIVE_MAX);
+  assert.match(early.body.limits.live.note, /No settlement is known at that instant/);
+  assert.ok(fetched() < everyVoice, `it fetched ${fetched()} of the ${everyVoice} voices`);
+  // and the answers inside the ceiling are still the whole derivation's
+  const { rows } = await pool.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]);
+  const centres = talk.anchorCentres((await pool.query(talk.ANCHOR_MARKS_SQL)).rows);
+  const whole = talk.voiceRecords(rows.filter((r) => !serve.spokenInRoom(r)), { centreOf: (id) => centres.get(id) ?? null }).voices.filter((x) => x.at >= S1);
+  const want = talk.conversationsOf(whole, { now: NOW, earshotM: 60, boundaries: EDGES, fadeMs: 5 * MIN, closedMax: 60 });
+  const { what, evaluated_at, voices, eras, dials, unplaced_says, disclosed, ...got } = sixty.body;
+  assert.deepEqual(JSON.parse(JSON.stringify(got)), JSON.parse(JSON.stringify(want)), "closed=60 equals conversationsOf over every voice");
 });
