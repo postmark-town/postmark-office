@@ -1725,8 +1725,10 @@ technical settlement, 2026-11-19 05:33Z). Each call, for its one kind:
   login file and never printed. Neither value, nor the session token, nor any
   Authorization header is ever printed, written to state or put in a receipt.
 - **The calls:** `com.atproto.server.createSession`, then
-  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at the deterministic
-  rkey `crossing-<n>` or `settlement-<n>`.
+  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at a deterministic
+  **TID** (the correction below: the first real send, S187 at 2026-11-22 20:06Z,
+  was refused twice because the post's key type is `tid` and the first
+  version's `crossing-<n>` / `settlement-<n>` are not TIDs).
   - **After anything but success:** the key is asked with `com.atproto.repo.getRecord`
     before anything else is sent. A record there means delivered, and it is kept,
     never overwritten.
@@ -1745,9 +1747,11 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   carry no number.
 - **`--state <dir>` (required):** one directory both calls share, outside any
   checkout, writable by the posting unit. It holds one file per event
-  (`<rkey>.json`: the event, the payload as first composed, every attempt and its
-  outcome, the posted uri) and the event's numbered lock (`<rkey>.lock.<k>`, with
-  `<rkey>.free.<k>` added beside it on release). It is each event's whole history,
+  (`crossing-<n>.json` or `settlement-<n>.json`, the event's NAME, which is not its
+  record key: the event with its instant, the record key, the payload as first
+  composed, every attempt and its outcome, any re-arms, the posted uri) and the
+  event's numbered lock (`<name>.lock.<k>`, with `<name>.free.<k>` added beside
+  it on release). It is each event's whole history,
   and the floor: keep it, and don't remove a lock file by hand.
 - **Safe to repeat:** every call is safe on every tick and from a repeated or
   concurrent hook. A posted event is answered from its file with no network, and
@@ -1756,12 +1760,12 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   reopened while it is the highest, so neither a stale takeover nor a release can
   let a second sender in.
 - **Stdout:** one JSON line per event the call acted on, oldest first:
-  - `{event, rkey, outcome, sends, uri?, detail?}`;
+  - `{event, rkey, outcome, sends, uri?, detail?, rearmed?}`;
   - `{event, rkey, outcome: "held", detail}` for an owed event whose record can't be read;
   - `{event, outcome: "skipped", detail}` for a named event with nothing to post.
   When the call acted on none, it prints one line, `{kind, outcome: "skipped" | "unstarted", detail}`.
 - **Exit codes** come from the most urgent line:
-  - `1`: failed (both sends spent; logged; never sent again);
+  - `1`: failed (both sends spent; logged; never sent again until an operator re-arms it), or `not-rearmed`;
   - `3`: waiting, held, unconfigured or unstarted (nothing more sent; the next run asks again);
   - `0`: posted, reconciled, already, busy or skipped;
   - `2`: cannot run (usage).
@@ -1776,9 +1780,63 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   - **A late Daily:** a Daily curated at any hour is posted by the next tick
     after it is committed, however late.
 - **Reading it back, with no key:**
-  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/crossing-<n>`.
+  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/<the event's rkey>`,
+  the `rkey` its receipt line prints (the TID; also `rkey` in the event's state file).
   Confirm the account's handle and did first: `tools/ops-awareness.mjs` reads
   `postmark-town.bsky.social`, while the issue names `@postmark.town`.
+
+### The record key is a TID, and the operator's re-send (POS-904 correction, 2026-11-22)
+
+**The key.** `app.bsky.feed.post` keys are TIDs (13 characters of
+`234567abcdefghijklmnopqrstuvwxyz`, the first among `234567abcdefghij`), and the
+PDS runs that key schema before it does anything else. The publisher derives one
+TID per event from the event's **own immutable instant**, never the moment it
+publishes: the 53-bit microsecond field is the instant's milliseconds, then the
+event's number mod 1000, and the 10-bit clock id is fixed per kind (crossing 1,
+settlement 2). So one event has one key however often it is run, and at whatever
+hour; two kinds never alias; two events of a kind in one second still differ.
+- **crossing:** the crossing's sailing instant, 00:00Z or 12:00Z (`src/crossings.mjs § crossingSailsAt`).
+- **settlement:** the committer time of the commit the blessed tag `settlement/S<n>`
+  peels to (a tag never moves; a commit's time never changes).
+- An event whose source cannot give its instant is `held` with nothing sent. No
+  instant is ever guessed. The instant is bound into the state file when the event
+  is first seen (`event.at`).
+- The **state file keeps the event's name** (`settlement-187.json`), so nothing
+  already recorded is lost; the record key lives inside it (`rkey`). A state written
+  before the correction, if it is not failed, takes the TID on its next run
+  (`legacy_rkey` keeps the old one, and the first thing asked is getRecord).
+
+**The operator's re-send of ONE failed event, with a receipt.** An ordinary or scheduled
+run never re-arms a failure (the keep passes no such flag). The operator does it, once,
+by hand, naming the event and saying why:
+```sh
+node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> --settlement 187 --rearm-failed "<reason>"
+```
+It re-arms only a state that says `failed`; gives the event a fresh budget of two
+sends under its TID; keeps its whole history (the failed attempts stay, and a `rearms`
+entry records when, why, the sends spent and the key it failed under); sends the words
+first composed; and asks `getRecord` first, so a record already standing at the key is
+reconciled and never posted twice. The failed file is never deleted. Its stdout line is the
+receipt: `{event, rkey, outcome, sends, rearmed: {at, reason, prior_sends, prior_key, key}}`.
+Nothing else is carried or discovered by that call. S187 is its first use, after the
+correction is live and the switch (the env file's readability) is turned back on.
+
+**The proof against the real PDS, without publishing** (`tools/bluesky-pds-proof.mjs`; the
+credential is read by that run from the posting unit's env and never printed or put in an
+argument). As the town's account, validation on, each of two `createRecord` calls carries a
+`swapCommit` that is a valid CID and is not the repo's head, so neither can write: the PDS
+validates the key first, then compares the swap with the head, and persists nothing before that
+(`createRecord.ts`, `transactor.ts § formatCommit`). The run reads the head, the two keys and both
+absences first and **sends nothing if any of it fails**. Expected: the legacy key
+`settlement-187` answers `400 InvalidRequest` ("Invalid record key…"); the TID answers
+`400 InvalidSwap`; `getRecord` reads `RecordNotFound` for both; the head commit is unchanged.
+```sh
+# Jetto's approved operator execution: the two env names reach this one run by his route and are never printed;
+# the posting switch (the env file's readability) is not touched by it
+cd <office checkout> && node tools/bluesky-pds-proof.mjs --world <world clone> --settlement 187
+```
+The run prints one JSON report (no credential, token or header in it), and its exit is 0 only when every expected answer came. The
+three results it carries (the legacy key's refusal, the TID's `InvalidSwap`, both absent afterwards) belong in the PR.
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
