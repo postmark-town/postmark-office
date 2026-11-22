@@ -40,7 +40,7 @@ export function marksDigestOf(pairs) {
 }
 
 /** The snapshot digest over the list digest and the fold's other inputs, as the seal computes it. */
-export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null, stances = null }) {
+export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null, stances = null, held = null }) {
   // A header sealed before 064 has no register and its digest has four parts;
   // one sealed with no word read (before 069, or back-filled) has no sixth, and
   // one sealed with no recorded decision (before 072) no seventh. The number a
@@ -49,7 +49,20 @@ export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, r
   const base = `${marks_digest} ${law_sha ?? "-"} ${town_sha ?? "-"} ${world_sha ?? "-"}`;
   const withRegister = register_digest ? `${base} ${register_digest}` : base;
   const withWords = stance_through != null ? `${withRegister} ${stance_through}` : withRegister;
-  return sha256(stances != null ? `${withWords} ${stancesPart(stances)}` : withWords);
+  const withStances = stances != null ? `${withWords} ${stancesPart(stances)}` : withWords;
+  // 095's held list (POS-1025): an eighth part only when the seal holds something back
+  const h = heldPart(held);
+  return sha256(h ? `${withStances} ${h}` : withStances);
+}
+
+/**
+ * The digest's part for the seal's held list (095): "held:<slug>=<why>,…", slug order by code point, as the seal's SQL builds it
+ * (world-snapshot-seal.mjs § HEADER_SQL); null when nothing is held. PURE.
+ */
+export function heldPart(held) {
+  const v = typeof held === "string" ? JSON.parse(held) : held;
+  if (!Array.isArray(v) || !v.length) return null;
+  return `held:${[...v].map((e) => `${e.slug}=${e.held ?? "-"}`).sort((a, b) => byCodepoint(a.split("=")[0], b.split("=")[0])).join(",")}`;
 }
 
 /**

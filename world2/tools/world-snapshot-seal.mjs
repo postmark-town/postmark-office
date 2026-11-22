@@ -37,7 +37,9 @@
 //                     then " stances:<counted|not-counted>:<cutover|->:<settlement|->:<how>"
 //                     when the decision is recorded (072). The number a seal allocates (095,
 //                     `sealed_settlement`) is the decision's `settlement_inferred` (`how:
-//                     "sealed"`), so the digest already names it; it adds no part of its own
+//                     "sealed"`), so the digest already names it; it adds no part of its own;
+//                     then " held:<slug>=<why>,…" (slug order, COLLATE "C") when the seal holds anything
+//                     back (095 `held`, POS-1025): a seal that holds nothing keeps the digest it always had
 //
 // THE TOWN'S WORDS (POS-362, 069_snapshot_stance_through.sql; Darko 2026-10-08,
 // option A). The opposed half of a settlement is one more source: the seal
@@ -133,7 +135,7 @@ const HEADER_SQL = `
            (SELECT sha FROM projection_heads WHERE repo = 'town')        AS town_sha,
            (SELECT sha FROM projection_heads WHERE repo = 'world-marks') AS world_sha,
            (SELECT max(id) FROM acts WHERE class = 'stance')             AS stance_through)
-  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement)
+  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement, held)
   SELECT $1, encode(sha256(convert_to(
            list.marks_digest || ' ' || coalesce(heads.law_sha, '-') || ' ' ||
            coalesce(heads.town_sha, '-') || ' ' || coalesce(heads.world_sha, '-') || ' ' ||
@@ -141,12 +143,29 @@ const HEADER_SQL = `
            CASE WHEN $2::jsonb IS NULL THEN '' ELSE
              ' stances:' || CASE WHEN ($2::jsonb->>'counted')::boolean THEN 'counted' ELSE 'not-counted' END
              || ':' || coalesce($2::jsonb->>'cutover', '-') || ':' || coalesce($2::jsonb->>'settlement_inferred', '-')
-             || ':' || coalesce($2::jsonb->>'how', '-') END, 'UTF8')), 'hex'),
+             || ':' || coalesce($2::jsonb->>'how', '-') END ||
+           CASE WHEN $4::jsonb IS NULL THEN '' ELSE
+             ' held:' || (SELECT string_agg((e->>'slug') || '=' || coalesce(e->>'held', '-'), ',' ORDER BY (e->>'slug') COLLATE "C")
+                            FROM jsonb_array_elements($4::jsonb) e) END, 'UTF8')), 'hex'),
          list.marks_digest, list.marks, heads.law_sha, heads.town_sha, heads.world_sha, rlist.register_digest,
-         heads.stance_through, $2::jsonb, $3::int
+         heads.stance_through, $2::jsonb, $3::int, $4::jsonb
     FROM list, rlist, heads
-  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement,
+  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement, held,
             (SELECT register_rows FROM rlist) AS register_rows`;
+
+/**
+ * THE HEADER, BEFORE IT IS WRITTEN: what HEADER_SQL will seal, read with the same CTEs and nothing inserted, so the clearing can
+ * decide its held list over exactly the World it is about to seal (settlement-decides.mjs). Run after `sealPrepare`.
+ */
+const PROVISIONAL_SQL = `
+  WITH ${LIST_CTES},
+  heads AS (
+    SELECT (SELECT sha FROM projection_heads WHERE repo = 'world-law')   AS law_sha,
+           (SELECT sha FROM projection_heads WHERE repo = 'town')        AS town_sha,
+           (SELECT sha FROM projection_heads WHERE repo = 'world-marks') AS world_sha,
+           (SELECT max(id) FROM acts WHERE class = 'stance')             AS stance_through)
+  SELECT list.marks_digest, list.marks, heads.law_sha, heads.town_sha, heads.world_sha, rlist.register_digest, heads.stance_through
+    FROM list, rlist, heads`;
 
 /**
  * Seal window `windowId`'s World. Runs on the caller's connection, inside the
@@ -162,16 +181,45 @@ const HEADER_SQL = `
  *   law_sha: string|null, town_sha: string|null, world_sha: string|null, stance_through: string|null,
  *   sealed_settlement: number|null }>}
  */
-export async function sealSnapshot(q, { windowId, stances = null, settlement = null }) {
-  // The digest names the number through the decision (§ THE DIGESTS), so the two must be one number.
-  if (settlement != null && stances != null && Number(stances.settlement_inferred) !== Number(settlement))
-    throw new Error(`the seal is S${settlement} but its stance decision was made at S${stances.settlement_inferred}: one seal, one number`);
+export async function sealSnapshot(q, { windowId, stances = null, settlement = null, held = null }) {
+  const prepared = await sealPrepare(q);
+  return sealHeader(q, { windowId, stances, settlement, held, prepared });
+}
+
+/**
+ * THE SEAL IN TWO HALVES (POS-1025: the held list is decided over the World about to be sealed, and sealed with it). `sealPrepare`
+ * copies the versions and the two lists (content-addressed, so a list is the same rows whoever inserted them); `provisionalHeader`
+ * answers what the header will say, inserting nothing; `sealHeader` writes it, `held` covered by its digest. `sealSnapshot` is the
+ * two in a row with nothing between them, as before.
+ */
+export async function sealPrepare(q) {
   const versions = await q(VERSIONS_SQL);
   await q(LIST_SQL);
   const register = await q(REGISTER_VERSIONS_SQL);
   await q(REGISTER_LIST_SQL);
-  const { rows: [h] } = await q(HEADER_SQL, [windowId, stances == null ? null : JSON.stringify(stances), settlement]);
-  return { ...h, new_versions: versions.rowCount, new_register_versions: register.rowCount };
+  return { new_versions: versions.rowCount, new_register_versions: register.rowCount };
+}
+
+/** What the header will name, read after `sealPrepare` and before `sealHeader`; nothing written. */
+export async function provisionalHeader(q) {
+  const { rows: [h] } = await q(PROVISIONAL_SQL);
+  return h;
+}
+
+/**
+ * `held`: the seal's held list (095), `[{ slug, held, ... }]`, or null/empty for none. Each entry names why (`held`), and the digest
+ * names every held slug with its reason, slug order.
+ */
+export async function sealHeader(q, { windowId, stances = null, settlement = null, held = null, prepared = { new_versions: 0, new_register_versions: 0 } }) {
+  // The digest names the number through the decision (§ THE DIGESTS), so the two must be one number.
+  if (settlement != null && stances != null && Number(stances.settlement_inferred) !== Number(settlement))
+    throw new Error(`the seal is S${settlement} but its stance decision was made at S${stances.settlement_inferred}: one seal, one number`);
+  const list = Array.isArray(held) && held.length ? held : null;
+  if (list && list.some((e) => typeof e?.slug !== "string" || !e.slug || typeof e?.held !== "string" || !e.held))
+    throw new Error("a held entry names its slug and why it is held");
+  if (list && new Set(list.map((e) => e.slug)).size !== list.length) throw new Error("a slug is held once");
+  const { rows: [h] } = await q(HEADER_SQL, [windowId, stances == null ? null : JSON.stringify(stances), settlement, list ? JSON.stringify(list) : null]);
+  return { ...h, ...prepared };
 }
 
 /**

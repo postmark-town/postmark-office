@@ -137,6 +137,25 @@ export async function registryAt(q, window) {
   return new Map(rows.map((r) => [r.slug, { class: r.class, stale: r.stale, ord: Number(r.ord) }]));
 }
 
+/** The seal's held list (095 `held`) as a set of slugs: the standing marks that settlement decided not to publish. PURE. */
+export function heldSlugsOf(header) {
+  const v = typeof header?.held === "string" ? JSON.parse(header.held) : header?.held;
+  return new Set(Array.isArray(v) ? v.map((e) => String(e.slug)) : []);
+}
+
+/**
+ * WHAT THIS PRINTOUT WRITES AND REMOVES, given the two seals' held lists (095; POS-1025). PURE. The sealed delta (§ deltaOf), less
+ * every mark S holds (it is not written: the seal decided it does not publish), plus every mark P held that S does not (P's printout
+ * never wrote it, so P's sealed version is not what main holds: it is printed now, changed or not). A removal is the sealed one,
+ * whatever either held: a mark that leaves the World leaves main too, where main has it.
+ */
+export function printedDelta(pRows, sRows, { sHeld = new Set(), pHeld = new Set() } = {}) {
+  const { changed, removed } = deltaOf(pRows, sRows);
+  const inS = new Set(sRows.map((r) => r.slug));
+  const released = [...pHeld].filter((slug) => inS.has(slug) && !sHeld.has(slug));
+  return { changed: [...new Set([...changed, ...released])].filter((slug) => !sHeld.has(slug)).sort(), removed };
+}
+
 /** The delta between two sealed lists: `changed` (new or a different version) and `removed`, by slug, sorted. PURE. */
 export function deltaOf(pRows, sRows) {
   const before = new Map(pRows.map((r) => [r.slug, r.digest]));
@@ -271,7 +290,7 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   const { S, P } = await printoutPair(q, { window, sinceWindow });
 
   const [sRows, pRows] = await Promise.all([snapshotRows({ query: q }, S.marks_digest), snapshotRows({ query: q }, P.marks_digest)]);
-  const { changed, removed } = deltaOf(pRows, sRows);
+  const { changed, removed } = printedDelta(pRows, sRows, { sHeld: heldSlugsOf(S), pHeld: heldSlugsOf(P) });
   const entries = await entriesOf(q, S, sRows, changed);
 
   // the write-down's readers of main, and the world's framer over the same clone
@@ -395,6 +414,8 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     framed: plan.framed, registry: registryChange,
     // WLD-230: marks the write-down planner held because their filing is another id's published file (and their dependents): not written
     held_path_collision: plan.held, held_path_collision_count: plan.held.length,
+    // THE SEAL'S HELD LIST (095): what the settlement decided before its seal not to publish, each with why; never written here
+    sealed_held: (typeof S.held === "string" ? JSON.parse(S.held) : S.held) ?? [],
     // WLD-224: the World's own report of a parcel this printout published taking in an older foreign mark (§ parcelCapturesAfterFold);
     // absent when the World predates the check
     ...(parcelCaptureReport ? { parcel_captures: parcelCaptureReport } : {}),

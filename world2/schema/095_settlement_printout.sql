@@ -80,6 +80,8 @@
 --
 --   SELECT data_type FROM information_schema.columns
 --    WHERE table_name = 'world_snapshots' AND column_name = 'sealed_settlement';   -- integer
+--   SELECT data_type FROM information_schema.columns
+--    WHERE table_name = 'world_snapshots' AND column_name = 'held';                -- jsonb
 --   SELECT to_regclass('public.settlement_publications');                         -- settlement_publications
 --   SELECT has_function_privilege('clearing_job', 'record_printout(integer, text)', 'EXECUTE');   -- t
 
@@ -94,6 +96,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS world_snapshots_sealed_settlement
 ALTER TABLE world_snapshots ADD COLUMN IF NOT EXISTS printout_sha text
   CONSTRAINT world_snapshots_printout_sha_shape CHECK (printout_sha ~ '^[0-9a-f]{40}$');
 ALTER TABLE world_snapshots ADD COLUMN IF NOT EXISTS printed_at timestamptz;
+-- THE SEAL'S HELD LIST (POS-1025; Wright 2026-11-22 00:13Z, WLD-230: "named in the seal's held list, with whose filing it
+-- met"): the standing marks this settlement decided NOT to publish, each `{ slug, held, ... }` (`held` names why: a filing
+-- collision, a limit's return). Written once, with the header, by the clearing; NULL when nothing is held, so every seal before
+-- and every seal that holds nothing keeps the digest it would have had. The digest covers it (world-snapshot-seal.mjs § THE
+-- DIGESTS). The store rows stay standing; the printout writes none of them (settlement-printout.mjs).
+ALTER TABLE world_snapshots ADD COLUMN IF NOT EXISTS held jsonb
+  CONSTRAINT world_snapshots_held_shape CHECK (held IS NULL OR (jsonb_typeof(held) = 'array' AND jsonb_array_length(held) > 0));
 -- 072's stance record names how the seal knew its number: "row" (a settlements row) or "inferred" (the
 -- newest plus one). A seal that allocated it says "sealed". Widened, never narrowed: every existing row
 -- still satisfies the new check, and re-running this drops and re-adds the same constraint.

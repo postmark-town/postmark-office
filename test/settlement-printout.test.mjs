@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedRowsOf, seedPublications } from "../world2/tools/publications-seed.mjs";
-import { printSettlement, tagSettlement, recordPrintout, digestOfTagMessage, deltaOf } from "../world2/tools/settlement-printout.mjs";
+import { printSettlement, tagSettlement, recordPrintout, digestOfTagMessage, deltaOf, printedDelta } from "../world2/tools/settlement-printout.mjs";
 import { renderRecord } from "../world2/tools/mark-render.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -316,4 +316,15 @@ test("5 · THE GAP CARRIED: a change sealed in a window never printed reaches ma
 test("deltaOf is the sealed difference and nothing else (PURE)", () => {
   assert.deepEqual(deltaOf([{ slug: "a", digest: "1" }, { slug: "b", digest: "2" }, { slug: "c", digest: "3" }], [{ slug: "a", digest: "1" }, { slug: "b", digest: "9" }, { slug: "d", digest: "4" }]),
     { changed: ["b", "d"], removed: ["c"] });
+});
+
+test("printedDelta: a mark the seal HOLDS is never written; one its base held and it does not is printed now, changed or not; a removal is the sealed one (PURE, 095 held)", () => {
+  const P = [{ slug: "a", digest: "1" }, { slug: "b", digest: "2" }, { slug: "c", digest: "3" }, { slug: "e", digest: "5" }];
+  const S = [{ slug: "a", digest: "1" }, { slug: "b", digest: "9" }, { slug: "d", digest: "4" }, { slug: "e", digest: "5" }];
+  assert.deepEqual(printedDelta(P, S), { changed: ["b", "d"], removed: ["c"] }, "nothing held: the sealed delta");
+  assert.deepEqual(printedDelta(P, S, { sHeld: new Set(["b", "d"]) }), { changed: [], removed: ["c"] }, "held in S: not written, changed or new");
+  assert.deepEqual(printedDelta(P, S, { pHeld: new Set(["e"]) }), { changed: ["b", "d", "e"], removed: ["c"] },
+    "held in P (so never printed) and released in S: printed now, though its version did not change");
+  assert.deepEqual(printedDelta(P, S, { pHeld: new Set(["e"]), sHeld: new Set(["e"]) }), { changed: ["b", "d"], removed: ["c"] }, "still held: still not");
+  assert.deepEqual(printedDelta(P, S, { pHeld: new Set(["c"]) }), { changed: ["b", "d"], removed: ["c"] }, "a held mark that leaves the World is still a removal");
 });

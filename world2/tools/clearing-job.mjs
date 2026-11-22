@@ -796,7 +796,12 @@ try {
   //     and tags exactly this number, and a retry of its printout reuses it.
   const { rows: [{ next: settlementNumber }] } = await q(NEXT_SETTLEMENT_SQL);
   const stances = await stancesAtSeal({ query: q }, { env: process.env, number: Number(settlementNumber) });
-  const sealed = await sealSnapshot(q, { windowId, stances, settlement: Number(settlementNumber) });
+  // THE SEAL'S HELD LIST (095 `held`; POS-1025, Wright 2026-11-22 00:13Z): what this settlement decided not to publish,
+  // sealed with it and covered by its digest. The printout writes none of it.
+  const sealHeld = (decided.filing_held ?? []).map((h) => ({ slug: h.slug, held: "filing-collision", path: h.path,
+    held_by_filing_of: h.held_by_filing_of, ...(h.held_under ? { held_under: h.held_under } : {}) }));
+  const sealed = await sealSnapshot(q, { windowId, stances, settlement: Number(settlementNumber), held: sealHeld });
+  for (const h of sealHeld) console.log(`  ⚑ held: ${h.slug} — its filing ${h.path} is ${h.held_by_filing_of}'s on main (WLD-230); sealed not published, its store row kept`);
   console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}; settlement S${sealed.sealed_settlement}`);
   // And whether the law it was sealed on carries ruling B (world#171): a cutover
   // sealed on an older law returns every stance-opposed mark with its children,
