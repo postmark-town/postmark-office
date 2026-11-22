@@ -226,6 +226,25 @@ test("roomFor: only OPEN rooms are joined (CORE-97's hour), and a deck is one pl
   assert.equal(R.roomFor(v(S2 + 3 * H, "d", 0, { aboard: true }), [deck], { earshotM: 60, boundaries: edges }), deck, "two voices aboard are beside each other however far the water moved");
 });
 
+// WLD-242 (Wright's settlement with Bevel, 2026-11-22): "Same-deck voices are in reach whatever their logged positions … In the pick, sharing a deck
+// counts as distance zero, and a tie goes to the newest voice."
+test("roomFor on a deck: sharing the deck counts as distance ZERO in the pick, and a tie between two deck rooms goes to the newest voice", () => {
+  const edges = [S1];
+  const at = S1 + 5 * H;
+  // the speaker is aboard, at x 0 as logged. The deck room's one voice was logged 9 km away (the vessel has moved); a shore room's voice stands 30 m off.
+  const deck = { root: "t2-c", voices: [v(S1 + 2 * H, "c", 9000, { aboard: true })], latest: S1 + 2 * H };
+  const shore = { root: "t3-s", voices: [v(S1 + 3 * H, "s", 30)], latest: S1 + 3 * H };
+  for (const rooms of [[deck, shore], [shore, deck]])
+    assert.equal(R.roomFor(v(at, "d", 0, { aboard: true }), rooms, { earshotM: 60, boundaries: edges }), deck,
+      'WLD-242: "sharing a deck counts as distance zero" — the deck room is nearer than a shore voice 30 m away, though its logged point is 9 km off');
+  // a speaker NOT aboard is not on the deck: only the shore room is in reach
+  assert.equal(R.roomFor(v(at, "d", 0), [deck, shore], { earshotM: 60, boundaries: edges }), shore);
+  // two rooms on the one deck: both at distance zero, so the newest voice's room
+  const older = { root: "t4-o", voices: [v(S1 + 1 * H, "o", 4000, { aboard: true })], latest: S1 + 1 * H };
+  for (const rooms of [[deck, older], [older, deck]])
+    assert.equal(R.roomFor(v(at, "d", 0, { aboard: true }), rooms, { earshotM: 60, boundaries: edges }), deck, 'WLD-242: "a tie goes to the newest voice"');
+});
+
 // ═══ THE DOOR, over a real Postgres ═══════════════════════════════════════════════════════════════════════════════════════════
 let s = null, skip = false, pool = null, owner = null;
 const ID = {}; // name -> act id
