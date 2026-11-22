@@ -710,6 +710,13 @@ export const SAY_LOOKBACK_MS = 13 * 3600 * 1000;
 export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                 WHERE crossing >= $2 AND action = ANY($1) AND at >= $3::timestamptz ${talk.VOICE_ORDER_SQL}`;
 
+// POS-1184's STOPGAP IS RETIRED HERE BY POS-1185 (2026-11-22, the same day). It made the conversations read's unbounded scan of every
+// voice act single-flight: one scan at a time per pool, a reader arriving mid-scan waiting for the next. That scan no longer runs on a
+// request at all (§ THE ROOMS, KEPT, below): one whole read without the words at the first read after a start, then a small read of
+// newer acts on every read. POS-1184's law holds by that: a burst makes at most one whole read on one connection, and a resident who
+// speaks and then reads sees their say, because every read asks for the acts newer than the kept ones before it answers
+// (test/pos-1184-voice-scan-single-flight.test.mjs, rewritten for this door).
+
 /**
  * Route a GET under /world2/*. Returns null when the path is not ours
  * (server.mjs falls through), else { code, body }.
