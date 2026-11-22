@@ -10,6 +10,8 @@
 //      its registry row closed, out of the seal) and keeps the backed, the home, the stale and the held
 //   2  the owner's withdrawal retires settlement-withdraw, returns nothing, closes its row; a slug locked
 //      again in the same window waits for the next
+//   2b WLD-179: except over a same-window hold printout, which the maker's withdrawal wins (a later
+//      re-declaration still wins; the escrow is untouched; the docket all overtaken still seals the removal)
 //   3  what the store cannot answer is KEPT and named: no world checkout, no escrow read at the sha
 //   4  the registry is kept as the sweep kept its file: a new publication is admitted at its walked class,
 //      a reclass keeps its place, a hand-off is not a publication, the town's own marks are never registered
@@ -152,6 +154,65 @@ test("2 · THE OWNER'S WITHDRAWAL: retired settlement-withdraw, returned to no d
   const receipt = await receiptOf();
   assert.deepEqual(receipt.deferred, ["rei/the-shed"]);
   assert.equal((await marksBy())["rei/the-shed"], "standing", "it stands this window; the next one carries the withdrawal");
+});
+
+// ── WLD-179: THE MAKER'S WITHDRAWAL WINS A SAME-WINDOW HOLD PRINTOUT ─────────
+//
+// Darko, 2026-11-16: "Withdrawal wins is the correct short-term solution". Carried from the retired
+// withdrawal-carried.test.mjs (its fold-input half) to the step that decides now. rei takes two of sable's
+// stations; this clearing's hold write-through prints the takes (hold-through.mjs: a locked docket row in
+// sable's name with `held_by` and `_held_through`, no act of sable's), and sable withdraws both. Station one
+// stays withdrawn; station two sable leaves again afterwards, so its latest word is the re-declaration.
+const STATION = "sable/station-one", RELEFT = "sable/station-two";
+
+async function seedHeld() {
+  await owner(async (c) => {
+    await mark(c, STATION, "sable", "hh:rabbit", 9800);
+    await mark(c, RELEFT, "sable", "hh:rabbit", 9900);
+    const { rows: [{ top }] } = await c.query("SELECT coalesce(max(ord), -1) AS top FROM settlement_publications");
+    await c.query("INSERT INTO settlement_publications (slug, class, stale, ord, from_window) VALUES ($1, 'commons', false, $3, 0), ($2, 'commons', false, $4, 0)",
+      [STATION, RELEFT, Number(top) + 1, Number(top) + 2]);
+    const act = (minutes, actor, action, object, cls, payload = null) => c.query(
+      `INSERT INTO acts (at, crossing, actor, action, object, class, payload) VALUES (now() - make_interval(mins => $1), $2, $3, $4, $5, $6, $7)`,
+      [minutes, WIN, actor, action, object, cls, payload ? JSON.stringify(payload) : null]);
+    for (const [slug, base] of [[STATION, 60], [RELEFT, 50]]) {
+      await act(base + 600, "sable", "leave-mark", slug, "mark");
+      await act(base, "rei", "take", slug, "holding", { thing: slug, holder: "rei", policy: "cascade", made_by: "sable", previous_holder: null });
+      await act(base - 5, "sable", "withdraw", slug, "mark");
+    }
+    await act(10, "sable", "leave-mark", RELEFT, "mark");   // station two, left again after its withdrawal
+  });
+}
+
+test("2b · WLD-179 · THE MAKER'S WITHDRAWAL WINS A SAME-WINDOW HOLD PRINTOUT: retired settlement-withdraw, out of the seal, its history kept; a re-declared held mark stays; any other docket entry still defers", { skip }, async () => {
+  await seed();
+  await seedHeld();
+  // ALL OVERTAKEN, WITH ESCROW STANDING (the retired test's second case): this window's docket is the two printouts
+  // alone, and a stamp stands on the station the withdrawal wins. The window still clears and seals the removal;
+  // no stamp moves (the store's escrow is the town's, read and never written here).
+  await owner((c) => c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'rei', 'hh:rabbit', 'hh:rabbit', 1, 1)`, [TOWN_SHA, STATION]));
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual((await read("SELECT DISTINCT slug FROM claims WHERE window_id = $1 AND status = 'locked' ORDER BY slug", [WIN])).map((x) => x.slug), [STATION, RELEFT].sort(),
+    "the window's docket is the two hold printouts and nothing else");
+  assert.deepEqual(await read("SELECT mark, n FROM escrow_projection WHERE mark = $1", [STATION]), [{ mark: STATION, n: 1 }], "the stamp is untouched");
+  assert.match(r.out, /hold: sable\/station-one — held by rei/, "the clearing printed the take this window");
+  const receipt = await receiptOf();
+  assert.deepEqual(receipt.over_hold_printout, [STATION], `the withdrawal won the printout: ${JSON.stringify(receipt)}`);
+  assert.ok(receipt.withdrawn.includes(STATION));
+  assert.ok(!(receipt.deferred ?? []).includes(STATION), "nothing waits a settlement behind it");
+  assert.ok(!receipt.withdrawn.includes(RELEFT) && !(receipt.deferred ?? []).includes(RELEFT), "a later re-declaration still wins");
+  const m = await marksBy();
+  assert.equal(m[STATION], "settlement-withdraw");
+  assert.equal(m[RELEFT], "standing");
+  assert.equal((await read("SELECT data FROM marks WHERE slug = $1", [RELEFT]))[0].data.held_by, "rei", "the re-declared station's printout stands");
+  const sealed = await sealedSlugs();
+  assert.ok(!sealed.includes(STATION), "the seal no longer holds it: the printout removes its file, and nothing writes it too");
+  assert.ok(sealed.includes(RELEFT));
+  assert.ok(!(await live()).some(([s]) => s === STATION), "its registry row is closed");
+  assert.deepEqual(await read("SELECT slug FROM claims WHERE status = 'draft' AND slug = $1", [STATION]), [], "returned to no drafts");
+  // its whole life stays in the record: the leave, rei's take and the withdraw
+  assert.deepEqual((await read("SELECT action FROM acts WHERE object = $1 ORDER BY at", [STATION])).map((x) => x.action), ["leave-mark", "take", "withdraw"]);
 });
 
 test("3 · WHAT THE STORE CANNOT ANSWER IS KEPT, BY NAME: no world checkout, and no escrow read at the window's sha", { skip }, async () => {

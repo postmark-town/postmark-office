@@ -445,11 +445,9 @@ const STRONG_EXEMPT = new Map([
   ["tools/stamp-sandbox-script.mjs", "the stamp sandbox's script, run only by the sandbox"],
   ["src/stamp-verify-pinned.mjs", "the pinned verifier's runner: it imports only from the folder townToolArgv checked and handed it"],
 ]);
-// Known shell reaches, each named with the issue that removes it.
-const SHELL_ALLOW = [
-  { file: "deploy/settlement-auto.sh", text: "node tools/world-stake.mjs --escrow --json", why: "until #1022 rewrites settlement-auto.sh (POS-1083, the POS-994 follow-up)" },
-  { file: "deploy/settlement-shadow.sh", text: "node tools/world-stake.mjs --escrow --json", why: "until #1022 (POS-1083, the POS-994 follow-up)" },
-];
+// Known shell reaches, each named with the issue that removes it. (POS-1083's two, settlement-auto.sh's and
+// settlement-shadow.sh's `node tools/world-stake.mjs --escrow --json`, went when #1022 rewrote both scripts, POS-1025.)
+const SHELL_ALLOW = [];
 
 const LAW_NAMES = MODULES.map((m) => m.replace(/[.]/g, "\\.")).join("|");
 // A town module named inside a string: the bare filename as a whole string

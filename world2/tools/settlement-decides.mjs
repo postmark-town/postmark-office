@@ -17,7 +17,11 @@
 //   THE WITHDRAWAL (WLD-88). A standing mark whose OWNER's latest mark act is a withdraw leaves canon and
 //     retires as `settlement-withdraw`, returned to no drafts: the author let it go (fold-delta.mjs § THE
 //     THIRD TERM's predicate, the one reader both ever had). A slug locked again this window waits for the
-//     next one, as the fold input deferred it: the docket wins its own crossing.
+//     next one, as the fold input deferred it: the docket wins its own crossing. EXCEPT A HOLD PRINTOUT
+//     (WLD-179; Darko, 2026-11-16: "Withdrawal wins is the correct short-term solution"): a docket row the
+//     hold write-through printed (`isHoldPrintout`, the fold input's own scalar discriminator) is nobody's
+//     act of the maker's, so the maker's withdrawal wins it here, as it did there. A later re-declaration
+//     by the maker still wins, because the owed predicate reads the owner's LATEST mark act.
 //
 //   THE COMMONS UNPUBLISH (WLD-51). A registered commons mark with no stamps behind it at the window's town
 //     sha leaves canon and retires as `settlement-unpublish`, and goes back to its household's drafts in the
@@ -44,10 +48,15 @@
 
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+
+import { filingHolds, normalizeMark } from "../../src/store-writedown.mjs";
+import { renderedMark } from "./mark-render.mjs";
+import { publishedPathReader } from "./settlement-printout.mjs";
 
 import { retireMarks, returnToDrafts, recomputeStanding } from "./materialize.mjs";
 import { escrowPresenceAt } from "./escrow-presence.mjs";
-import { WITHDRAWN_OWED_SELECT } from "./fold-delta.mjs";
+import { WITHDRAWN_OWED_SELECT, isHoldPrintout } from "./fold-delta.mjs";
 import { recordFromRow } from "./mark-render.mjs";
 
 export const UNPUBLISH_CAUSE = "settlement-unpublish";
@@ -77,6 +86,39 @@ export async function worldRulesAt(worldRepo, lawSha) {
   } catch (e) {
     return { rules: null, reason: `the unpublish rule at the pinned law ${lawSha.slice(0, 12)} could not be read from ${worldRepo}: ${String(e?.message ?? e).slice(0, 160)}` };
   }
+}
+
+/**
+ * THE FILING HOLD, BEFORE THE SEAL (WLD-230; Wright, 2026-11-22 00:13Z: "decide the hold before the seal … the collision check
+ * belongs to settlement-decides. The held mark is never admitted as sealed-published; it's named in the seal's held list, with
+ * whose filing it met, and stays undelivered in the store for the layout fix. The printout then never meets it.").
+ *
+ * The write-down planner's own question (store-writedown.mjs § filingHolds), asked of the marks this window would admit, against
+ * the main the printout will print onto: the last PRINTED settlement's commit (world_snapshots.printout_sha), read in the clearing's
+ * world checkout by the printout's own path reader. Nothing new is judged: a mark whose planned filing is another id's published
+ * file, or whose filing was planned under one, is held, exactly as the planner would hold it after the seal.
+ *
+ * `{ held: Map(slug → hold), against, unchecked }`. When main cannot be read here (no checkout, nothing printed yet, the commit not in
+ * the checkout) nothing is held and `unchecked` says why: the mark is admitted as before, and a sealed-published row the printout
+ * then cannot file still refuses by name (settlement-printout.mjs § registryRowRefusal), so a blind decision is never a silent one.
+ */
+export async function filingHoldsBeforeSeal(q, { worldRepo, rows }) {
+  const none = (why) => ({ held: new Map(), against: null, unchecked: why });
+  if (!rows.length) return { held: new Map(), against: null, unchecked: null };
+  if (!worldRepo) return none("no --world-repo: main's filings could not be read, so no filing was checked before the seal");
+  const { rows: [last] } = await q("SELECT sealed_settlement, printout_sha FROM world_snapshots WHERE printout_sha IS NOT NULL ORDER BY sealed_settlement DESC LIMIT 1");
+  if (!last) return none("no settlement has been printed yet, so there is no printout's main to check filings against");
+  const head = String(last.printout_sha);
+  try { execFileSync("git", ["-C", worldRepo, "cat-file", "-e", `${head}^{commit}`], { stdio: "ignore" }); }
+  catch { return none(`the last printout ${head.slice(0, 12)} (S${last.sealed_settlement}) is not in ${worldRepo}, so its filings could not be read`); }
+  const canonBytesAt = (path) => {
+    try { return execFileSync("git", ["-C", worldRepo, "show", `${head}:${path}`], { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "ignore"] }); }
+    catch { return null; }
+  };
+  const marks = rows.map((row) => normalizeMark({ slug: row.slug, kind: row.kind, by: row.owner, household: row.household ?? row.owner,
+    ...renderedMark({ ...row, first_claimed: null, first_claim_submitted_at: null }) }));
+  const { holds } = filingHolds(marks, { publishedPathOf: publishedPathReader(worldRepo, head), canonBytesAt });
+  return { held: holds, against: { settlement: Number(last.sealed_settlement), printout_sha: head }, unchecked: null };
 }
 
 /** The registry as it stands now (its live rows), by slug. */
@@ -117,8 +159,18 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
 
   // ── the withdrawal: the owner let it go ──
   const { rows: owed } = await q(WITHDRAWN_OWED_SELECT);
-  const deferred = owed.filter((r) => locked.has(r.slug)).map((r) => r.slug);
-  const withdrawSlugs = owed.filter((r) => !locked.has(r.slug)).map((r) => r.slug);
+  // WLD-179: the docket rows a hold printout wrote (the window's own marks rows, as the fold input read them:
+  // `marks.locked_window` is this window), which a maker's withdrawal wins
+  const docketOwed = owed.filter((r) => locked.has(r.slug)).map((r) => r.slug);
+  const holdPrinted = new Set();
+  if (docketOwed.length) {
+    const { rows: docketRows } = await q(
+      "SELECT slug, data FROM marks WHERE status = 'standing' AND locked_window = $1 AND slug = ANY($2::text[])", [windowId, docketOwed]);
+    for (const r of docketRows) if (isHoldPrintout(r)) holdPrinted.add(r.slug);
+  }
+  const deferred = docketOwed.filter((s) => !holdPrinted.has(s));
+  const overHold = docketOwed.filter((s) => holdPrinted.has(s));
+  const withdrawSlugs = owed.filter((r) => !locked.has(r.slug) || holdPrinted.has(r.slug)).map((r) => r.slug);
   const withdrawn = await retireMarks(q, { slugs: withdrawSlugs, windowId, cause: WITHDRAW_CAUSE });
   const gone = new Set(withdrawn.retired.map((r) => r.slug));
 
@@ -158,6 +210,7 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
 
   // ── the registry, kept as the sweep kept the file ──
   const registry = { admitted: [], reclassed: [], closed: [], unchanged: 0, hand_offs: [], unchecked: rules ? null : reason };
+  let filing = { held: new Map(), against: null, unchecked: null };
   const closeRow = async (slug) => {
     const { rowCount } = await q("UPDATE settlement_publications SET to_window = $2 WHERE slug = $1 AND to_window IS NULL", [slug, windowId]);
     return rowCount > 0;
@@ -168,10 +221,14 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
     const { rows: nowRows } = await q(
       "SELECT slug, kind, owner, household, body, geometry, data FROM marks WHERE status = 'standing' AND slug = ANY($1::text[])", [slugs]);
     const prev = await previousVersions(q, windowId, slugs);
+    // WLD-230, before the seal: the window's marks planned as one batch (a dependent files under its batch parent), against the
+    // printout's main; a held mark is never admitted as sealed-published (§ filingHoldsBeforeSeal)
+    filing = await filingHoldsBeforeSeal(q, { worldRepo, rows: nowRows });
     const { rows: [{ top }] } = await q("SELECT coalesce(max(ord), -1) AS top FROM settlement_publications");
     let nextOrd = Number(top) + 1;
     for (const row of nowRows.sort((a, b) => (a.slug < b.slug ? -1 : 1))) {
       if (rules.townOwned({ by: row.owner, household: row.household })) continue;   // the town's own marks are never registered
+      if (filing.held.has(row.slug)) continue;                                        // held: not published, its store row kept
       const cls = rules.rowClassOf(row.data?.tier ?? null);
       if (!cls) continue;
       const was = before.get(row.slug) ?? null;
@@ -202,10 +259,17 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
     unpublished: unpublished.retired.map((r) => r.slug),
     drafts,
     ...(deferred.length ? { deferred } : {}),
+    // WLD-179: the hold printouts a maker's withdrawal won, each also in `withdrawn` when it retired
+    ...(overHold.length ? { over_hold_printout: overHold.filter((s) => gone.has(s)) } : {}),
     ...(unchecked.length ? { unchecked } : {}),
     rules: rules ? "read" : reason,
     escrow: escrow === null ? "unread" : "read",
     registry,
+    // WLD-230: THE SEAL'S HELD LIST, each mark not admitted with the filing it met; `filing_check` says what main it was checked
+    // against, or why it could not be (then nothing was held, and the printout's named refusal stays the backstop)
+    ...(filing.held.size ? { filing_held: [...filing.held.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([slug, h]) => ({ slug, path: h.path ?? null,
+      held_by_filing_of: h.held_by_filing_of ?? null, crossing_output: h.crossing_output ?? null, ...(h.held_under ? { held_under: h.held_under } : {}) })) } : {}),
+    ...(filing.against || filing.unchecked ? { filing_check: filing.against ? { against: filing.against } : { unchecked: filing.unchecked } } : {}),
     ...(restanding ? { restanding } : {}),
   };
 }

@@ -29,6 +29,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parcelCapturesOf } from "./parcel-captures-reading.mjs"; // WLD-224
 
 const env = (name) => {
   const v = process.env[name];
@@ -74,6 +75,9 @@ const written = printed ? ids(printout.written) : [];
 // a removal the printout found nothing on main to remove for (`path: null`) removed nothing
 const removed = printed ? ids((printout.removed ?? []).filter((g) => g?.path)) : [];
 const reframed = printed ? ids(printout.reframed) : [];
+// WLD-224: the printout's own report of a parcel it published taking in an older foreign mark (settlement-printout.mjs §
+// parcelCapturesAfterFold), mapped by the one adapter the keeper's receipt always used. A note, never a channel or a status.
+const parcelCaptures = printed ? parcelCapturesOf(printout) : null;
 
 // ── WHY A MARK WENT: THE RECORDED STAKE WITHDRAWAL (POS-937/a) ───────────────
 //
@@ -184,6 +188,10 @@ const receipt = {
             summary: printout.summary ?? null,
           })
     : { ran: false, reason: "the crossing ended before its printout" },
+
+  // WLD-224: a parcel this settlement printed took in an older mark from another household. A coordination note for the keeper,
+  // absent on an ordinary night (parcel-captures-reading.mjs): it changes no status, class or refusal and is not a channel.
+  ...(parcelCaptures ? { parcel_captures: parcelCaptures } : {}),
 
   // THE TAG: `settlement/S<n>` at the pushed printout, never moved. `refused`
   // names a tag that already stands elsewhere, or a push origin turned away.

@@ -760,7 +760,7 @@ try {
   //     input the store cannot answer keeps the mark and is named on the receipt.
   //     settlement-decides.mjs is the step.
   const decided = await settlementDecides(q, { windowId, townSha, lawSha, worldRepo });
-  for (const s of decided.withdrawn) console.log(`  ⚑ settlement: ${s} withdrawn by its owner — retired (${WITHDRAW_CAUSE})`);
+  for (const s of decided.withdrawn) console.log(`  ⚑ settlement: ${s} withdrawn by its owner — retired (${WITHDRAW_CAUSE})${(decided.over_hold_printout ?? []).includes(s) ? ", over this window's hold printout (WLD-179: withdrawal wins)" : ""}`);
   for (const s of decided.unpublished) console.log(`  ⚑ settlement: ${s} a commons mark with no stamps behind it — retired (${UNPUBLISH_CAUSE}), back to its household's drafts`);
   for (const u of decided.unchecked ?? []) console.log(`  ⚑ settlement: ${u.slug} UNCHECKED for the commons rule (kept) — ${u.why}`);
   if (decided.restanding) console.log(`  ⚑ settlement: the standing walked again after ${decided.withdrawn.length + decided.unpublished.length} retirement(s): ${decided.restanding.moved} moved`);

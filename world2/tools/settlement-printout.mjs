@@ -82,7 +82,8 @@ import { stakesFromStore } from "./fold-input.mjs";
 export const REGISTRY_REL = "WORLD/settlement-publications.json";
 export const MARKS_REL = "WORLD/marks";
 /** What the world's fold writes beside the marks (the sweep's own list). */
-export const DERIVED = Object.freeze(["WORLD/world-state.json", "WORLD/INDEX.md", "WORLD/region-outsiders.json", "WORLD/region-outsiders.md", "WORLD/containment.json"]);
+export const STATE_REL = "WORLD/world-state.json";
+export const DERIVED = Object.freeze([STATE_REL, "WORLD/INDEX.md", "WORLD/region-outsiders.json", "WORLD/region-outsiders.md", "WORLD/containment.json"]);
 export const TAG_PREFIX = "settlement/S";
 const TOWN = "the-town";
 const isTheTown = (household, by) => by === TOWN || String(household ?? "") === TOWN || String(household ?? "").endsWith(`:${TOWN}`);
@@ -233,8 +234,9 @@ function holdsAStandingMark(dir) {
   return false;
 }
 
-/** Where main files each `<by>/<name>`: a reader over one `ls-tree`, the write-down's own rule (by-line match). */
-function publishedPathReader(world, head) {
+/** Where main files each `<by>/<name>`: a reader over one `ls-tree`, the write-down's own rule (by-line match). Exported for the
+ * settlement's pre-seal filing hold (settlement-decides.mjs § filingHoldsBeforeSeal), which asks the same question of the same main. */
+export function publishedPathReader(world, head) {
   let paths = null;
   return (id) => {
     paths ??= git(world, ["ls-tree", "-r", "--name-only", head, "--", MARKS_REL]).split("\n").map((l) => l.trim()).filter((l) => l.endsWith("/mark.md"));
@@ -381,6 +383,8 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   const fold = spawnSync(process.execPath, [join(world, "tools", "marks-fold.mjs"), "--stakes", scratch], { cwd: world, encoding: "utf8", maxBuffer: 1 << 28 });
   if (fold.status !== 0)
     throw new PrintoutRefusal("fold-refused", `the world's fold could not write the derived files: ${String(fold.stderr || fold.stdout).trim().slice(0, 400)}`);
+  // WLD-224: a parcel this printout published that newly took in an older foreign mark, for the keeper. A note, never an outcome.
+  const parcelCaptureReport = await parcelCapturesAfterFold(world, { publishedIds: upserts.map((u) => u.id), beforeText: canonBytesAt(STATE_REL) });
 
   const summary = { written: upserts.length, unchanged: plan.unchanged.length, removed: gone.filter((g) => g.path).length, reframed: reframed.length };
   const receipt = {
@@ -391,6 +395,9 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     framed: plan.framed, registry: registryChange,
     // WLD-230: marks the write-down planner held because their filing is another id's published file (and their dependents): not written
     held_path_collision: plan.held, held_path_collision_count: plan.held.length,
+    // WLD-224: the World's own report of a parcel this printout published taking in an older foreign mark (§ parcelCapturesAfterFold);
+    // absent when the World predates the check
+    ...(parcelCaptureReport ? { parcel_captures: parcelCaptureReport } : {}),
     // where each mark was filed from: the seal, never the live table (sealedHouseOf, firstSealedWindows)
     filed_from: { household: "the register sealed with this settlement", locked_window: "the first seal that carried the version", register_digest: S.register_digest ?? null },
   };
@@ -407,6 +414,38 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     written: summary.written, removed: summary.removed, reframed: summary.reframed, from: P, quiet: !staged });
   git(world, ["commit", "--quiet", ...(staged ? [] : ["--allow-empty"]), "-F", "-"], { input: message });
   return { status: staged ? "printed" : "quiet", ...receipt, summary, commit: git(world, ["rev-parse", "HEAD"]).trim() };
+}
+
+/**
+ * THE KEEPER'S NOTE (WLD-224; Darko, 2026-11-20 15:48 EST: "isn't it just admit normally? and it gets flagged to the worldkeeper for
+ * coordination"). The World's own question, asked as its sweep asked it, of the fold this printout just wrote: World
+ * tools/parcel-captures.mjs § parcelCaptures, from the clone being printed, over the ids this printout published, with main's folded
+ * `placementParent` BEFORE the printout (its world-state.json at HEAD) as the prior parent, so a pair that already filed there is not
+ * new. It decides nothing: admission, containment and publication are the seal's and the fold's.
+ *
+ * ABSENT IS NOT EMPTY: null when the World predates the check (no such tool: nothing to say, as before), the World's report when it
+ * looked (`{ checked: true, parcels_checked, events }`), and `{ checked: false, why }` when the look could not be made, so a blind
+ * printout is never read as a quiet one. Never throws.
+ */
+export async function parcelCapturesAfterFold(world, { publishedIds, beforeText }) {
+  const tool = join(world, "tools", "parcel-captures.mjs");
+  if (!existsSync(tool)) return null;
+  try {
+    const { parcelCaptures } = await import(pathToFileURL(tool).href);
+    if (typeof parcelCaptures !== "function") return null;
+    let before;
+    try { before = beforeText ? JSON.parse(beforeText) : null; } catch { before = null; }
+    if (!Array.isArray(before?.marks))
+      return { checked: false, why: "main's folded world before this printout could not be read, so a new pair could not be told from one that already filed under its parcel" };
+    const prior = new Map(before.marks.map((m) => [m.id, m.placementParent ?? null]));
+    return parcelCaptures({
+      state: JSON.parse(readFileSync(join(world, STATE_REL), "utf8")),
+      publishedIds,
+      priorParentOf: (id) => prior.get(id) ?? null,
+    });
+  } catch (e) {
+    return { checked: false, why: `the folded world could not be read for parcel captures: ${String(e?.message ?? e).slice(0, 200)}` };
+  }
 }
 
 /**

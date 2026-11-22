@@ -21,7 +21,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -144,7 +144,24 @@ test("1 · PRINT, DELAYED PAST A HOUSEHOLD CHANGE: the sealed delta and nothing 
     await c.query(`INSERT INTO households (slug, ord, name, residents, since, declared_by, accounts) VALUES ('otter', 1, 'Otter', ARRAY['sable'], '2026-11-03', 'sable', '[]')`);
     await c.query("UPDATE marks SET household = 'hh:otter' WHERE slug = $1", [NEW]);
   });
-  const out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 1 }));
+  // WLD-224, THE WIRING: the pinned World predates tools/parcel-captures.mjs, so a recording stand-in of its interface sits in this
+  // World's tools/ (untracked: the printout stages WORLD/ only) and answers what the World would for no capture. The printout must ask
+  // it of the fold it just wrote, over what it published, with main's pre-print parents (settlement-printout-parcel-captures.test.mjs
+  // holds the seam and the receipt).
+  const askedPath = join(scratch, "captures-asked.json");
+  const stand = join(WORLD, "tools", "parcel-captures.mjs");
+  writeFileSync(stand, `import { writeFileSync } from "node:fs";
+export function parcelCaptures({ state, publishedIds, priorParentOf }) {
+  const ids = [...publishedIds];
+  writeFileSync(${JSON.stringify(askedPath)}, JSON.stringify({ publishedIds: ids, folded: ids.filter((id) => state.marks.some((m) => m.id === id)), prior: ids.map((id) => priorParentOf(id)) }));
+  return { checked: true, parcels_checked: 0, events: [] };
+}`);
+  let out;
+  try { out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 1 })); }
+  finally { rmSync(stand, { force: true }); }
+  assert.deepEqual(out.parcel_captures, { checked: true, parcels_checked: 0, events: [] }, "the World's report rides the printout's receipt");
+  assert.deepEqual(JSON.parse(readFileSync(askedPath, "utf8")), { publishedIds: [NEW], folded: [NEW], prior: [null] },
+    "asked over what this printout published, of the fold it just wrote, with main's parent before the print (a new mark: none)");
   assert.equal(out.filed_from?.household, "the register sealed with this settlement", "the receipt says where filing came from");
   assert.equal(out.status, "printed", JSON.stringify(out).slice(0, 600));
   assert.equal(out.settlement, S2.sealed_settlement);
