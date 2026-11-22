@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { fixtureKey, putValues, fixtureTown, drop } from "./fixture.mjs";
+import { fixtureKey, putValues, fixtureTown, drop, tempClone } from "./fixture.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -34,6 +34,9 @@ import { enqueueLetter, outboxRelPath, validateLetter } from "../src/write.mjs";
 import { DYNAMIC_SCHEMA } from "../src/dynamic-store.mjs";
 import { townClone } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+
+// POS-1165: the field policy is the town's pinned letter-fields.mjs, and a clone is held to the pin: this fixture clone carries the reviewed file
+const LF_CLONE = tempClone();
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 // The town index this file's offices read: a store seeded from each fixture
@@ -593,7 +596,7 @@ test("a row the drain cannot place is SKIPPED by name, never guessed at", () => 
 });
 
 test("the row's outbox path and the pen's own spelling are one function", () => {
-  const plan = validateLetter(ok, fixtureKey, db);
+  const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
   assert.equal(outboxRelPath(plan.from, plan.date, plan.to, plan.slug),
     `WHITE_PAGES/wright/outbox/letter-${plan.date}-to-limen-a-fine-hat.md`);
 });
@@ -644,7 +647,7 @@ test("the disclosed path survives a hyphenated recipient — it is carried, neve
 test("PRE-FLIGHT: a clone with no envelope law simply has no pre-flight — the crossing stays the gate", async () => {
   const clone = mailClone(); // tools/ exists but carries no envelope.mjs
   try {
-    const plan = validateLetter(ok, fixtureKey, db);
+    const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
     assert.equal(await preflightEnvelope(clone, plan), null,
       "a missing law must never become a door that refuses mail");
     assert.equal(await preflightEnvelope(null, plan), null);
@@ -669,7 +672,7 @@ test("PRE-FLIGHT RUNS THE CLONE'S OWN FILE — the verdict comes from the town, 
     // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
     pinsBefore = process.env.TOWN_PINS_DIR;
     process.env.TOWN_PINS_DIR = pinTown(clone);
-    const plan = validateLetter(ok, fixtureKey, db);
+    const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
     const bad = await preflightEnvelope(clone, plan);
     assert.equal(bad.defect, "MARKER-FROM-THE-CLONE",
       "the defect string is the clone's file speaking — the office never classifies an envelope itself");
@@ -691,7 +694,7 @@ test("PRE-FLIGHT: the duplicate family is a 409, the rest a 422 — the office's
     // to the clone's file; this clone is pinned to itself, so the clone's law is still what speaks.
     pinsBefore = process.env.TOWN_PINS_DIR;
     process.env.TOWN_PINS_DIR = pinTown(clone);
-    const plan = validateLetter(ok, fixtureKey, db);
+    const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
     globalThis.__pmDefect = "duplicate id";
     assert.equal((await preflightEnvelope(clone, plan)).code, 409);
     globalThis.__pmDefect = "already delivered to limen";
@@ -715,13 +718,13 @@ test("PRE-FLIGHT, THE REAL LAW: the ferry's own classify() judges the letter at 
     copyTownTools(TOWN, clone);
 
     // a well-formed letter passes the real law untouched
-    assert.equal(await preflightEnvelope(clone, validateLetter(ok, fixtureKey, db)), null,
+    assert.equal(await preflightEnvelope(clone, validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE })), null,
       "the ordinary letter the office would have accepted is still accepted");
 
     // an unregistered recipient is the law's own call, in the law's own words.
     // The office checks its `residents` INDEX; the ferry scans ADDRESS.md files.
     // Running the ferry's derivation here is what stops the two from drifting.
-    const plan = validateLetter(ok, fixtureKey, db);
+    const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
     const stranger = await preflightEnvelope(clone, { ...plan, to: "nobody-here" });
     assert.match(stranger.defect, /unknown recipient: "nobody-here" is not a registered handle/);
     assert.equal(stranger.code, 422);
@@ -746,7 +749,7 @@ test("PRE-FLIGHT, THE REAL LAW: a door bounce and a crossing bounce say the same
     copyTownTools(TOWN, clone);
     const law = await import(new URL(`file:///${join(clone, "tools", "envelope.mjs").replace(/\\/g, "/")}`));
 
-    const plan = validateLetter(ok, fixtureKey, db);
+    const plan = validateLetter(ok, fixtureKey, db, null, { clone: LF_CLONE });
     writeFileSync(join(clone, "WHITE_PAGES", "mail-ledger.md"), LEDGER + `- 2026-08-01 · ${plan.id} · wright → limen\n`);
 
     // what the FERRY would say at the crossing, from the law directly

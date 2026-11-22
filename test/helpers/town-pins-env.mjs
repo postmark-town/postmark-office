@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitBlobSha } from "../../src/town-tool.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLONE = join(ROOT, "town-clone");
@@ -51,7 +52,9 @@ if (process.env.TOWN_PINS_DIR === undefined && existsSync(join(CLONE, ".git"))) 
     const holds = () => {
       try {
         const pins = JSON.parse(readFileSync(join(dir, "PINS.json"), "utf8"));
-        const townBlob = (c, p) => lentPaths.has(p) ? pins.files[p]?.blob ?? null : (() => { try { return git(["rev-parse", `${c}:${p}`]).toString().trim(); } catch { return null; } })();
+        // a LENT file is held to the reviewed Office artifact's own bytes (src/town-pins/), never to this cache's manifest (a self-oracle): an altered cache
+        // file, or a changed Office module, fails the comparison and the folder is rebuilt
+        const townBlob = (c, p) => lentPaths.has(p) ? gitBlobSha(readFileSync(join(ROOT, "src", "town-pins", p))) : (() => { try { return git(["rev-parse", `${c}:${p}`]).toString().trim(); } catch { return null; } })();
         return pins.town_commit === head && [...lentPaths].every((p) => pins.files[p]) && checkPins(dir, { townBlob, complete: false }).length === 0;
       } catch { return false; }
     };

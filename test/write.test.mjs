@@ -21,8 +21,10 @@ const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 const ok = { from: "wright", to: "limen", title: "a fine hat", thread: "new", body: "Limen —\n\nA test letter." };
+// the clone a bounce test names holds the reviewed shared field policy (POS-1165): no letter is written, so it is never touched
+const BOUNCE_CLONE = tempClone();
 const bounce = (payload, key = fixtureKey) => {
-  try { enqueueLetter(payload, key, db, "unused"); }
+  try { enqueueLetter(payload, key, db, BOUNCE_CLONE); }
   catch (e) { return e; }
   assert.fail("expected a bounce");
 };
@@ -250,7 +252,7 @@ test("valid trio lands stake_topic/candidate/stamps in frontmatter, after thread
 // shared module's (same code, defect and hint, in the office's order), the stake block IS its formatting, no parallel policy is left in write.mjs,
 // the byte boundary is the module's, and a clone holding a different copy stops by name.
 const shared = (await import("node:module")).createRequire(import.meta.url)(join(process.env.TOWN_PINS_DIR || join(import.meta.dirname, "..", "src", "town-pins"), "tools", "letter-fields.mjs"));
-const refusal = (args, opts) => { try { validateLetter({ ...ok, ...args }, fixtureKey, db, null, opts); } catch (e) { return e; } return null; };
+const refusal = (args, opts = { clone: BOUNCE_CLONE }) => { try { validateLetter({ ...ok, ...args }, fixtureKey, db, null, opts); } catch (e) { return e; } return null; };
 
 test("POS-1165: every field refusal is the shared module's own (code, defect, hint), through the door's bounce", () => {
   for (const args of [
@@ -278,7 +280,7 @@ test("POS-1165: the optional thread default and the unseen well-shaped thread ar
   assert.equal(refusal({ thread: undefined }), null);
   assert.equal(refusal({ thread: "" }), null);
   assert.equal(refusal({ thread: "wright-2030-01-01-to-limen-never-seen" }), null, "a well-shaped unseen reply sails (the note is the door's)");
-  assert.equal(validateLetter({ ...ok, thread: "wright-2030-01-01-to-limen-never-seen" }, fixtureKey, db).threadUnseen, true);
+  assert.equal(validateLetter({ ...ok, thread: "wright-2030-01-01-to-limen-never-seen" }, fixtureKey, db, null, { clone: BOUNCE_CLONE }).threadUnseen, true);
   assert.equal(refusal({ body: "a".repeat(shared.MAX_BODY) }), null, "exactly the cap sails");
   assert.equal(refusal({ body: "a".repeat(shared.MAX_BODY + 1) }).code, 413);
   assert.equal(refusal({ body: "\u20ac".repeat(33_333) + "a" }), null, "by bytes, not characters: 99,999 + 1 sails");
@@ -287,17 +289,17 @@ test("POS-1165: the optional thread default and the unseen well-shaped thread ar
 
 test("POS-1165: the stake block is the shared module's formatting, byte for byte", () => {
   const trio = { stake_topic: "the-ballot", stake_candidate: "  Ana One ", stake_stamps: "3" };
-  const plan = validateLetter({ ...ok, ...trio }, fixtureKey, db);
+  const plan = validateLetter({ ...ok, ...trio }, fixtureKey, db, null, { clone: BOUNCE_CLONE });
   assert.equal(plan.stakeFm, shared.stakeFrontmatter(trio).fm);
   assert.equal(plan.stakeFm, "stake_topic: the-ballot\nstake_candidate: Ana One\nstake_stamps: 3\n");
-  assert.equal(validateLetter(ok, fixtureKey, db).stakeFm, "", "no trio, no stake lines");
+  assert.equal(validateLetter(ok, fixtureKey, db, null, { clone: BOUNCE_CLONE }).stakeFm, "", "no trio, no stake lines");
 });
 
 test("POS-1165: identity stays the office's: the same title, slug and id derivation, and an accepted replay identity is kept", () => {
-  const plan = validateLetter({ ...ok, thread: "new" }, fixtureKey, db);
+  const plan = validateLetter({ ...ok, thread: "new" }, fixtureKey, db, null, { clone: BOUNCE_CLONE });
   assert.match(plan.id, /^wright-\d{4}-\d{2}-\d{2}-to-limen-a-fine-hat$/);
   assert.equal(plan.slug, "a-fine-hat");
-  const replay = validateLetter(ok, fixtureKey, db, { id: "wright-2026-01-02-to-limen-a-fine-hat", file: "WHITE_PAGES/wright/outbox/letter-2026-01-02-to-limen-a-fine-hat.md" });
+  const replay = validateLetter(ok, fixtureKey, db, { id: "wright-2026-01-02-to-limen-a-fine-hat", file: "WHITE_PAGES/wright/outbox/letter-2026-01-02-to-limen-a-fine-hat.md" }, { clone: BOUNCE_CLONE });
   assert.equal(replay.id, "wright-2026-01-02-to-limen-a-fine-hat");
 });
 
@@ -309,7 +311,7 @@ test("POS-1165: no parallel policy is left in write.mjs: the grammar, the cap an
   assert.match(src, /lf\.stakeFrontmatter\(/);
 });
 
-test("POS-1165: a clone holding the SAME copy of tools/letter-fields.mjs is accepted; a different copy stops by name (503 town-pin-mismatch); no clone still judges", () => {
+test("POS-1165: a clone holding the SAME copy of tools/letter-fields.mjs is accepted; a different copy, or none, stops by name (503 town-pin-mismatch); no clone named is refused, never skipped", () => {
   const pinned = join(process.env.TOWN_PINS_DIR || join(import.meta.dirname, "..", "src", "town-pins"), "tools", "letter-fields.mjs");
   const same = tempClone();
   mkdirSync(join(same, "tools"), { recursive: true });
@@ -323,5 +325,9 @@ test("POS-1165: a clone holding the SAME copy of tools/letter-fields.mjs is acce
   assert.equal(stop.code, 503);
   assert.equal(stop.defect, "town-pin-mismatch");
   assert.ok(stop.hint);
-  assert.equal(refusal({ thread: "bad thread" }, { clone: null }).code, 422, "no clone: the pinned copy still judges, never skipped");
+  const none = tempClone();
+  rmSync(join(none, "tools"), { recursive: true, force: true });
+  assert.equal(refusal({}, { clone: none }).defect, "town-pin-mismatch", "a clone WITHOUT the file stops by name too: the pinned copy is never loaded merely because the clone lacks it");
+  // no clone named is not a way round the pin: the loader refuses it (there is no clone-less route into the policy)
+  assert.match(String(refusal({ thread: "bad thread" }, { clone: null })?.message), /no town clone was named/);
 });

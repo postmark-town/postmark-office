@@ -42,7 +42,7 @@ import { paperOnPool, paperworkPoolTypes, asPaper } from "../src/paperwork.mjs";
 import { parseOfficeKeys, staticLookup, importStaticKeys } from "../src/static-keys.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, tempClone } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -247,11 +247,11 @@ test("§ 4a write `from`: a letter cannot be sent as any resident", async () => 
   const one = await credentialFor(SCOPED);
   const letter = (from) => ({ from, to: "someone-else", title: "t", body: "b" });
   // LAW (the door): "<from> is not one of your residents" (403), before the index is asked anything
-  const e = await rejection(() => validateLetter(letter("wright"), none, null));
+  const e = await rejection(() => validateLetter(letter("wright"), none, null, null, { clone: tempClone() }));
   assert.equal(e?.code, 403, "a refusal, not a pass");
   assert.match(e.defect, /is not one of your residents/);
   // the control: the one-resident key passes the key check, so it reaches the index probe (db null -> a TypeError, not a 403)
-  const c = await rejection(() => validateLetter(letter("wright"), one, null));
+  const c = await rejection(() => validateLetter(letter("wright"), one, null, null, { clone: tempClone() }));
   assert.notEqual(c?.code, 403, "the control gets past the key check");
 });
 

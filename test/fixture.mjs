@@ -17,8 +17,9 @@
 // clones.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { TOWN_TABLES } from "../src/town-tables.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -211,12 +212,23 @@ export function fixtureTown() {
   return town;
 }
 
+// POS-1165: the write spine judges a letter's fields through the office's PINNED copy of the town's tools/letter-fields.mjs, and a clone is held to
+// that pin (src/town-tool.mjs: a clone that does not hold the file, or holds another, stops by name). So a fixture clone that stands for the town
+// carries the reviewed file, byte for byte: the pinned copy the suite is run under (the suite's pins, TOWN_PINS_DIR, else the office's own).
+const PINNED_TOOLS = () => join(process.env.TOWN_PINS_DIR || join(dirname(fileURLToPath(import.meta.url)), "..", "src", "town-pins"), "tools");
+export function seedLetterFields(dir) {
+  mkdirSync(join(dir, "tools"), { recursive: true });
+  copyFileSync(join(PINNED_TOOLS(), "letter-fields.mjs"), join(dir, "tools", "letter-fields.mjs"));
+}
+
 // a git-init'd throwaway town clone with just enough shape for the write spine
 export function tempClone() {
   const dir = tempDir("postmark-office-test-");
   mkdirSync(join(dir, "WHITE_PAGES", "wright", "outbox"), { recursive: true });
+  seedLetterFields(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q");
+  git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid",
     "commit", "-q", "--allow-empty", "-m", "fixture town");
   return dir;
@@ -238,6 +250,7 @@ export function editClone() {
     "---\nresident: wright\ntitle: the Trueing-House\nassets: [\"the-trueing-house.png\"]\n---\n\n# the Trueing-House\n\nThe original description.\n");
   writeFileSync(join(wp, "PROFILE.md"),
     "---\navatar: portrait.png\ncolor: \"#b08d57\"\ncolor_name: \"old brass\"\nbio: |-\n  An older first line.\n\n  An older second line.\nfuture_key: keep-me\n---\n\n# Notes behind the door\n\nThis body stays exactly as written.\n");
+  seedLetterFields(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
