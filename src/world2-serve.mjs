@@ -815,8 +815,12 @@ export const ROOMS_BUILD_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE actio
 export const ROOMS_TAIL_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) AND id > $2 ${talk.VOICE_ORDER_SQL}`;
 /** The says of the rooms a read serves, whole, by act number. */
 export const ROOM_VOICES_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE id = ANY($1::bigint[]) ${talk.VOICE_ORDER_SQL}`;
-/** The marks those says are anchored on (any status: a say happened where its anchor stood), and the say dials' own marks. */
-export const ROOM_ANCHORS_SQL = "SELECT slug, status, geometry, data FROM marks WHERE slug = ANY($1::text[]) OR data ? 'slot'";
+/**
+ * The marks those says are anchored on (any status: a say happened where its anchor stood), and the say class's own dial marks
+ * (its predicate children, as `talk.sayDials` reads them). $1 the anchors' slugs, $2 the say class's id.
+ */
+export const ROOM_ANCHORS_SQL = `SELECT slug, status, geometry, data FROM marks
+  WHERE slug = ANY($1::text[]) OR (data ? 'slot' AND (data->>'_parent_is_law' = $2 OR data->>'_parentMarkId' = $2))`;
 
 const keptRooms = new WeakMap(); // pool -> { index, building }
 const NAMED_ROOM_ORDER = 1e15;   // rooms first seen by a recorded name are ordered after every room the old says founded (rooms.mjs § roomsOf)
@@ -938,7 +942,7 @@ async function readRooms(p, entries) {
     ? (await p.query(ROOM_VOICES_SQL, [ids])).rows.filter((row) => roomOfAct.has(String(row.id)) && !spokenInRoom(row))
     : [];
   const anchors = [...new Set(rows.map((row) => row.at_anchor).filter((a) => a && a !== talk.WORLD_ANCHOR))];
-  const { rows: markRows } = await p.query(ROOM_ANCHORS_SQL, [anchors]);
+  const { rows: markRows } = await p.query(ROOM_ANCHORS_SQL, [anchors, `the-town/${talk.SAY_CLASS_NAME}`]);
   const derived = voicesOfRows(rows, talk.anchorCentres(markRows));
   const voicesOf = new Map();
   for (const v of derived.voices) {

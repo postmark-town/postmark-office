@@ -246,10 +246,13 @@ before(async () => {
   if (s.skip) { skip = s.skip; s = null; return; }
   owner = await s.connect("world2_owner");
   await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1, '2026-01-01', '2026-01-02', 'closed') ON CONFLICT DO NOTHING");
-  const mark = (slug, x, status = "standing") => owner.query(
+  const mark = (slug, x, status = "standing", data = {}) => owner.query(
     `INSERT INTO marks (id, slug, kind, owner, geometry, bbox, status, data, locked_window)
-     VALUES (gen_random_uuid(), $1, 'fixture', split_part($1, '/', 1), $2::jsonb, box(point(0,0), point(0,0)), $3, '{}'::jsonb, 1)`,
-    [slug, JSON.stringify({ at: { x, y: 0 }, extent: { w: 4, h: 4 } }), status]);
+     VALUES (gen_random_uuid(), $1, 'fixture', split_part($1, '/', 1), $2::jsonb, box(point(0,0), point(0,0)), $3, $4::jsonb, 1)`,
+    [slug, JSON.stringify({ at: { x, y: 0 }, extent: { w: 4, h: 4 } }), status, JSON.stringify(data)]);
+  // the say class's own dial (read by every answer), and five dials of ANOTHER class that a conversations read has no business fetching
+  await mark("the-town/earshot-m", 90_000, "standing", { slot: "earshot_m", value: "60", _parent_is_law: "the-town/say" });
+  for (let i = 0; i < 5; i++) await mark(`the-town/stride-dial-${i}`, 91_000 + i, "standing", { slot: `stride_${i}`, value: "1", _parent_is_law: "the-town/stride" });
   await mark("quill/west-bench", 0); await mark("quill/east-bench", 96); await mark("quill/the-path", 48);
   await mark("quill/the-lantern", 1000, "retired");            // a retired mark still places the says spoken at it
   await mark("quill/the-barn", 2000);
@@ -403,7 +406,8 @@ test("FALSIFIER 10 · N concurrent named reads do not each read the store: ONE w
   const fetched = count(p, serve.ROOM_VOICES_SQL);
   assert.equal(fetched.length, N);
   assert.deepEqual(fetched.map((q) => q.rows).sort((a, b) => a - b), [1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4], "each read fetched its own room's says and nothing else");
-  for (const q of count(p, serve.ROOM_ANCHORS_SQL)) assert.ok(q.rows >= 1 && q.rows <= 3, `a named read fetched ${q.rows} marks: its room's anchors, never the 45 the store holds`);
+  for (const q of count(p, serve.ROOM_ANCHORS_SQL)) assert.ok(q.rows >= 2 && q.rows <= 4, `a named read fetched ${q.rows} marks: its room's anchors (one to three) and the say class's one dial, never the 51 the store holds nor another class's dials`);
+  assert.deepEqual(answers[0].body.dials.earshot_m, { value: 60, source: "record" }, "and the say dial it fetched is the one the answer stands on");
   // and the next reads make no whole read at all
   const beforeN = p.seen.length;
   await ask(p, `room=${encodeURIComponent(WEST)}`); await ask(p, `circle=${ID.n1}`);
