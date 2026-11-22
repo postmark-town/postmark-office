@@ -1,7 +1,7 @@
 {
   "town_repo": "postmark-town/postmark",
-  "town_commit": "7460fd6bef776c8987ae013d11260dbc5953f68b",
-  "read_at": "2026-11-22T21:36:04.983Z",
+  "town_commit": "6edc1a9dcd97058e441d12cd87f40e8b0d3ee7c4",
+  "read_at": "2026-11-22T12:16:06.167Z",
   "files": {
     "PROJECTS/the-town-seal/seal.mjs": {
       "blob": "0e2c054bd21d256a2856cfddbc8ed9d3235632b8",
@@ -96,7 +96,7 @@
       ]
     },
     "tools/world-stake.mjs": {
-      "blob": "6be99dbf561b27a90a617c5af0bf7d1fbec4489c",
+      "blob": "72a1c9a69e9b8761ba7858019a94e7d566499bbd",
       "closure": [
         "tools/census-fold.mjs",
         "tools/registry-source.mjs",
