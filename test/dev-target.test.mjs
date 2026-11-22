@@ -16,10 +16,10 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { withTownPins } from "./helpers/dev-target.mjs";
+import { withTownPins, carryLetterFields } from "./helpers/dev-target.mjs";
 import { townTool, TownPinMismatch } from "../src/town-tool.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -95,4 +95,50 @@ test("5 · a second target's pin folder is its own root: the first target's mani
   const path = await withTownPins(other, () => townTool(clone, TOOL));
   assert.equal(path, join(other, "tools", TOOL));
   await withTownPins(pins, () => assert.throws(() => townTool(clone, TOOL), TownPinMismatch));
+});
+
+// ── POS-1165: the stand-in's scratch town carries the reviewed letter-field policy, from ANY source town ────────────────────────────────────
+// carryLetterFields makes ONE harness commit when the source predates tools/letter-fields.mjs or holds another copy of it, and NO commit when the source
+// already holds exactly the reviewed bytes (a newer or already-seeded town: `git commit` would exit 1 and abort localDevTarget). In every case the
+// seed tag (taken first, at the source's HEAD) keeps pointing at the source's own commit.
+const REVIEWED = () => readFileSync(join(process.env.TOWN_PINS_DIR || join(OFFICE, "src", "town-pins"), "tools", "letter-fields.mjs"));
+function sourceTown(label, letterFields = null) {
+  const town = join(tempDir(`pos1165-${label}-`), "town");
+  mkdirSync(join(town, "tools"), { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main", town]);
+  g(town, "config", "user.name", "pos1165-test"); g(town, "config", "user.email", "t@postmark.invalid");
+  writeFileSync(join(town, "tools", "stamp-mint.mjs"), "// a town module\n");
+  if (letterFields !== null) writeFileSync(join(town, "tools", "letter-fields.mjs"), letterFields);
+  g(town, "add", "-A"); g(town, "commit", "-qm", "the source town");
+  g(town, "tag", "-f", "sandbox/seed", "HEAD"); // taken first, as localDevTarget takes it
+  return town;
+}
+
+test("POS-1165: a source town that predates the module gets it as one harness commit AFTER the seed tag", () => {
+  const town = sourceTown("old");
+  const seed = g(town, "rev-parse", "HEAD");
+  assert.equal(carryLetterFields(town), true);
+  assert.deepEqual(readFileSync(join(town, "tools", "letter-fields.mjs")), REVIEWED(), "the reviewed bytes");
+  assert.notEqual(g(town, "rev-parse", "HEAD"), seed, "one commit on top");
+  assert.equal(g(town, "rev-parse", "refs/tags/sandbox/seed^{commit}"), seed, "the seed is still the source's own commit");
+  assert.equal(g(town, "rev-list", "--count", `${seed}..HEAD`), "1");
+  assert.equal(g(town, "status", "--porcelain"), "", "a clean clone: nothing left uncommitted");
+});
+
+test("POS-1165: a source town that ALREADY holds the same reviewed file bootstraps without a commit or an abort, the seed its HEAD", () => {
+  const town = sourceTown("seeded", REVIEWED());
+  const head = g(town, "rev-parse", "HEAD");
+  assert.equal(carryLetterFields(town), false, "nothing to commit");
+  assert.equal(g(town, "rev-parse", "HEAD"), head, "no empty commit");
+  assert.equal(g(town, "rev-parse", "refs/tags/sandbox/seed^{commit}"), head);
+  assert.equal(g(town, "status", "--porcelain"), "");
+  assert.equal(carryLetterFields(town), false, "and again: idempotent");
+});
+
+test("POS-1165: a source holding ANOTHER copy of the file is brought to the reviewed one, the seed unmoved", () => {
+  const town = sourceTown("other", "// an older reviewed copy\n");
+  const seed = g(town, "rev-parse", "HEAD");
+  assert.equal(carryLetterFields(town), true);
+  assert.deepEqual(readFileSync(join(town, "tools", "letter-fields.mjs")), REVIEWED());
+  assert.equal(g(town, "rev-parse", "refs/tags/sandbox/seed^{commit}"), seed);
 });

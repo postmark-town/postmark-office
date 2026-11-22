@@ -42,8 +42,9 @@ if (process.env.TOWN_PINS_DIR === undefined && existsSync(join(CLONE, ".git"))) 
     const dir = join(tmpdir(), "office-town-pins", head);
     const { MODULES, checkPins, collect, manifest } = await import("../../tools/town-pins.mjs");
     // A MODULE THE SUITE'S TOWN CLONE PREDATES (POS-1165: tools/letter-fields.mjs, which test/clone-pins.json's town does not hold yet) is LENT from the
-    // office's own reviewed pins (src/town-pins/), so the suite's pins hold every module the office's code reaches. The clone does not hold the file,
-    // so a caller handed that clone runs the pinned copy (src/write.mjs § letterFields); nothing here moves test/clone-pins.json.
+    // office's own reviewed pins (src/town-pins/), so the suite's pins hold every module the office's code reaches. Lending pins does NOT let a named
+    // clone omit the file: the loader still holds a clone to the pin, so a fixture clone that stands for the town carries the reviewed file
+    // (test/fixture.mjs § seedLetterFields) and a clone without it stops 503 town-pin-mismatch. Nothing here moves test/clone-pins.json.
     const inClone = (m) => { try { git(["cat-file", "-e", `${git(["rev-parse", "HEAD"]).toString().trim()}:tools/${m}`]); return true; } catch { return false; } };
     const lent = MODULES.filter((m) => !inClone(m) && existsSync(join(ROOT, "src", "town-pins", "tools", m)) && m === "letter-fields.mjs");
     const lentPaths = new Set(lent.map((m) => `tools/${m}`));
