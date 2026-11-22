@@ -1607,7 +1607,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     // the window's edge is hearable too. The 13 h bound still cuts what it cuts: a carried room can reach behind it, so a read that carried
     // one says so in read_bound_disclosed, and hearable_since names the earliest row actually returned (`conversations` keeps the published edge).
     const sounds = live.emissionsOfClass(rows);
-    const edges = publishedEdges({ settlements, hearingWindow: () => win, ms: at.ms }); // the window already read: one ask per instant
+    const edges = publishedEdges({ settlements, hearingWindow: () => win, ms: at.ms }).filter((m) => m <= at.ms); // the window already read: one ask per instant; hearing at an instant knows only the settlements up to it
     const carried = new Set();
     let maybeCarried = false;
     if (since != null && edges.length) {
