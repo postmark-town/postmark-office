@@ -519,8 +519,9 @@ keep_settle_unlanded() {
   # Darko, 2026-11-22: "for the ballot, why doesn't it automatically appear?" / "yes pleae". Still under the town lock and
   # AFTER the mint, the sparks and every other write to the clone have landed: each merged design on the town's main (a folder of
   # PROJECTS/household-hearths with a hearth.html, its author bound to a resident) that is not yet a candidate of the Hearth ballot
-  # joins it, while the ballot's join window is open, through the ballot's own amend act (the office's hand, in the act log), in
-  # one amend and one town commit. Then the Hearth quest's pass is PLANNED, never run (POS-632: Wright reads every owed entry and
+  # joins it through the ballot's own amend act (the office's hand, in the act log), in one amend and one town commit, but only
+  # while the ballot's join window allows: the design's merge day (New York) on or before its join-through day AND the run day on
+  # or before join-through + 1 day (a day's grace for a merge late on the last day); after that nothing joins. Then the Hearth quest's pass is PLANNED, never run (POS-632: Wright reads every owed entry and
   # applies by hand; tools/quest-pay-plan.mjs refuses the tick by design): what it finds owed is raised as ONE row for the
   # operator, a file beside the receipt log with the entries, the households and the digest, and the receipt says
   # `ok owed:hearth_entry`. Exit 0 nothing owed · 4 owed, row raised (still ok) · anything else refused. Non-fatal: the next tick asks again.

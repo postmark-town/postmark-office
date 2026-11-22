@@ -228,12 +228,19 @@ test("3 · an author bound to no resident, or a design that names none, is skipp
 
 // ── 4 · no join after the window closes ─────────────────────────────────────
 
-test("4 · a design merged after the window closes never joins; one merged inside it joins on a late tick; a closed ballot takes none", async () => {
+test("4 · a design joins only if merged by the last join day AND run by the day after it; a closed ballot takes none", async () => {
   // Sun 6 Dec 2026 is the last join day (New York): 2026-12-07T04:59Z is still that Sunday night, 05:00Z is Monday
   const dir = await town({ entries: [E("on-time", "ada", "2026-12-07T04:59:00Z"), E("too-late", "ben", "2026-12-07T05:00:00Z")] });
-  const r = await doRun(dir, { today: "2026-12-09" });
-  assert.deepEqual(fileOf(dir).candidates, ["default", "on-time"], "merged by the Sunday night: in, though the tick came on the Wednesday");
+  const r = await doRun(dir, { today: "2026-12-07" });
+  assert.deepEqual(fileOf(dir).candidates, ["default", "on-time"], "merged late on the Sunday, added by the Monday's tick (the day's grace)");
   assert.match(r.l.all(), /not joining too-late: merged 2026-12-07, after the join window closed on 2026-12-06/);
+  // the run-day edge: a design merged 12-01 (inside the window) joins on a 12-07 tick, not on a 12-08 tick or a 12-12 one
+  const edge = async (today) => { const d = await town({ entries: [E("early", "ada", "2026-12-01T15:00:00Z")] }); const x = await doRun(d, { today }); return [fileOf(d).candidates, x.l.all()]; };
+  assert.deepEqual((await edge("2026-12-07"))[0], ["default", "early"], "the day after the last join day: still in");
+  const [c8, l8] = await edge("2026-12-08");
+  assert.deepEqual(c8, ["default"], "the second day after: nothing joins, whatever its merge day");
+  assert.match(l8, /not joining early: the run day 2026-12-08 is past the join window \(through 2026-12-06/);
+  assert.deepEqual((await edge("2026-12-12"))[0], ["default"], "a tick of the staking week adds nothing to a ballot being staked");
   const closed = await town({ status: "closed", entries: [E("ember", "ada", "2026-11-20T15:00:00Z")] });
   const c = await doRun(closed);
   assert.deepEqual(fileOf(closed).candidates, ["default"], "a closed ballot is the record of its vote");
