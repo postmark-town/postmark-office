@@ -710,6 +710,28 @@ export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_
                 WHERE crossing >= $2 AND action = ANY($1) AND at >= $3::timestamptz ${talk.VOICE_ORDER_SQL}`;
 
 /**
+ * THE UNBOUNDED VOICE SCAN IS SINGLE-FLIGHT (POS-1184). `conversationsFromRecord` reads every voice act the store holds, with the same SQL and
+ * the same parameters for a bare read, `?before=`, `?room=` and `?circle=`. Three of them at once held all three `serve` connections for
+ * 1.2 to 2.1 s each (once 10.4 s), and every other world-door read queued behind them and timed out. So while one scan is in flight, a caller
+ * that needs it awaits that scan instead of opening its own connection; when it settles the next caller starts a fresh one. Nothing is kept
+ * after it settles (no TTL, no cache): a caller that arrives after the scan ends reads the store as it is then. A scan that rejects rejects
+ * every caller waiting on it, and the next call starts clean. The flight is per pool object, so two pools never share one.
+ * The rows are shared by the callers that joined, and read, never changed, by each of them (the test freezes them).
+ */
+export const ALL_VOICES_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`;
+const voiceScans = new WeakMap(); // pool -> the scan in flight (a promise), absent when none is
+function allVoicesOnce(p) {
+  const flying = voiceScans.get(p);
+  if (flying) return flying;
+  const scan = Promise.resolve().then(() => p.query(ALL_VOICES_SQL, [talk.VOICE_ACTIONS]));
+  voiceScans.set(p, scan);
+  const landed = () => { if (voiceScans.get(p) === scan) voiceScans.delete(p); };
+  scan.then(landed, landed);
+  return scan;
+}
+
+/**
  * Route a GET under /world2/*. Returns null when the path is not ours
  * (server.mjs falls through), else { code, body }.
  *
@@ -811,8 +833,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
   const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
   const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
-    p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
+    allVoicesOnce(p), // POS-1184: one scan at a time per pool, shared by every caller that arrives while it runs
     p.query(talk.ANCHOR_MARKS_SQL),
   ]);
   const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
