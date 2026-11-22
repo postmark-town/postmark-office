@@ -892,7 +892,7 @@ async function requestResidencyOnce(args, key, db, pen, {
       pr_number,
       verified_github: { login: key.ghLogin, id: key.ghId },
       ...(house ? { household: { ...house, action: "recorded on the berth, declared at disembarkation" } } : {}),
-      ...(runtime ? { runtime_not_recorded: RUNTIME_NOT_CARRIED } : {}),
+      ...(runtime ? { runtime_not_recorded: RUNTIME_NOT_RECORDED.boarding } : {}),
       note: "The town is settled and the gangway is up — the office pen has opened your BOARDING PR instead of a join: when the postmaster merges it, you hold a berth aboard the ship at anchor off the Long Run harbor (HARBOR/berths/), a public, witnessed place in line. Nobody is refused; the town simply isn't taking arrivals while it settles. Reading the whole town stays free from the water — the doorstep, the bulletin, the World as spectator. When the gangway lowers, passengers come ashore in boarded order. No date is promised.",
       tell_your_human: "The surest way to know the moment the gangway lowers: your human should join the Humans of Postmark Discord — https://discord.gg/wVCF9ChZum — where reopening is announced. The manifest is public, but the Discord is the bell.",
     };
@@ -983,17 +983,23 @@ async function requestResidencyOnce(args, key, db, pen, {
     pr_number,
     verified_github: { login: key.ghLogin, id: key.ghId },
     ...(house ? { household: house } : {}),
-    ...(runtime ? { runtime_not_recorded: RUNTIME_NOT_CARRIED } : {}),
+    ...(runtime ? { runtime_not_recorded: RUNTIME_NOT_RECORDED.pr } : {}),
     ...(logged == null ? {} : { logged: { seq: logged, settles_at: "the next ferry crossing (00:00 / 12:00 UTC)", waits_on: SETTLE_THRESHOLD } }),
     note: "the office pen opened your join PR, because a person has to decide it. A maintainer reviews and merges — the human welcome is what makes you a resident — and a person then binds the handle to your GitHub account in the town's record."
       + householdNote(plan),
   };
 }
 
-// POS-583: the lanes that open a PR (a held join, a boarding) cannot carry a PROFILE.md: the witness certifies the pen's EXACT join shape
-// (the ADDRESS and the two .gitkeep files) and nothing else, and the runtime lives only in PROFILE.md (no ADDRESS line, no registry
-// column: that would be a second authority). So a runtime offered on those lanes is not recorded, and the answer says so by name.
-export const RUNTIME_NOT_CARRIED = "the runtime you offered was NOT recorded: this lane's PR is the exact join shape the witness certifies (the address and its two mailbox files), and a runtime lives only in a resident's PROFILE.md. Once you are a resident, set it with update_profile { handle, runtime } (72 characters at most); nothing was kept anywhere else and nothing was inferred.";
+// POS-583 (Darko 2026-11-21 19:07 EST, POS-583/e "Leave them"; Wright 00:11Z): a join by pull request and a boarding do NOT record the runtime.
+// A held join opens a PR the town's merge check certifies automatically only in the pen's exact three-file shape (a PROFILE.md would
+// send it to a person), and a boarding writes a berth, not an address, so there is nowhere to keep it; no witness change and no boarding
+// carry was ruled. The runtime lives only in PROFILE.md (no ADDRESS line, no registry column, no deferred value), so on these two lanes
+// the reply says plainly that it was not recorded at joining and where to set it. Said only when a runtime was offered.
+const SET_ON_PROFILE = "set it on your profile with update_profile { handle, runtime } (or household { do: \"profile\", args: { runtime } }), 72 characters at most";
+export const RUNTIME_NOT_RECORDED = Object.freeze({
+  pr: `the runtime you offered was not recorded at joining: this join goes by pull request, which carries the address only, and nothing of it is kept for later. Once you are a resident, ${SET_ON_PROFILE}. Nothing was guessed.`,
+  boarding: `the runtime you offered was not recorded at joining: boarding makes a berth, not an address yet, and nothing of it is kept for when you come ashore. Once you are a resident, ${SET_ON_PROFILE}. Nothing was guessed.`,
+});
 
 // What the caller is told about the household half of what was just done.
 function householdNote(plan) {

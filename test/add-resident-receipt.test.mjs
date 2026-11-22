@@ -456,7 +456,7 @@ test("POS-583 · a bad runtime is refused by name before anything is planned or 
   });
 });
 
-test("POS-583 · a HELD join cannot carry a PROFILE.md: its PR stays the exact join shape and the answer says the runtime was not recorded (the apex add-resident accepts the field)", async () => {
+test("POS-583 · a join BY PULL REQUEST records no runtime (Darko, POS-583/e, Leave them): its PR stays the exact join shape and the reply says it was not recorded at joining and to set it on the profile (the apex add-resident accepts the field)", async () => {
   await withTown(async ({ clone, odb }) => {
     pulls = []; trees = [];
     const worldBlock = async () => ({ sited: true, unreadable: false });
@@ -466,8 +466,11 @@ test("POS-583 · a HELD join cannot carry a PROFILE.md: its PR stays the exact j
     assert.equal(pulls.length, 1);
     const paths = trees.flatMap((tr) => (tr.tree ?? []).map((e) => e.path)).sort();
     assert.deepEqual(paths, ["WHITE_PAGES/fledgling/ADDRESS.md", "WHITE_PAGES/fledgling/inbox/.gitkeep", "WHITE_PAGES/fledgling/outbox/.gitkeep"], "the pen's exact join shape: no PROFILE.md");
-    assert.match(out.result.runtime_not_recorded, /NOT recorded/);
-    assert.match(out.result.runtime_not_recorded, /update_profile/);
+    // POS-583/e "Leave them": plainly not recorded at joining, and where to set it; nothing is kept for later
+    assert.match(out.result.runtime_not_recorded, /not recorded at joining/);
+    assert.match(out.result.runtime_not_recorded, /by pull request/);
+    assert.match(out.result.runtime_not_recorded, /set it on your profile with update_profile/);
+    assert.match(out.result.runtime_not_recorded, /nothing of it is kept for later/);
     // the control: nothing offered, nothing said
     pulls = []; trees = [];
     const plain = await householdApex({ do: "add-resident", args: { handle: "fledgling2", card: "hello", household: "The Rookery", nonce: ids("583b") } }, STRANGER, ctx);
@@ -476,7 +479,7 @@ test("POS-583 · a HELD join cannot carry a PROFILE.md: its PR stays the exact j
   });
 });
 
-test("POS-583 · a BOARDING (the gangway frozen) is a berth PR, not a profile: the answer says the runtime was not recorded, and the PR carries no PROFILE.md", async () => {
+test("POS-583 · a BOARDING (the gangway frozen) is a berth, not an address, and carries no runtime (Darko, POS-583/e): the reply says it was not recorded at joining and to set it on the profile", async () => {
   const frozen = { id: 1, state: "frozen", since: "2026-08-06", reason: "the town froze arrivals", by_who: "founder", actor_gh_id: null, source: "door" };
   __setPoolForTest(makePool({ ...rowsFromRegistry(REGISTRY(), PINS()), gangway: frozen }));
   Object.assign(process.env, ENV_ON);
@@ -488,7 +491,10 @@ test("POS-583 · a BOARDING (the gangway frozen) is a berth PR, not a profile: t
     assert.equal(pulls.length, 1);
     const paths = trees.flatMap((tr) => (tr.tree ?? []).map((e) => e.path));
     assert.deepEqual(paths, ["HARBOR/berths/tulip.md"], "a berth only");
-    assert.match(out.runtime_not_recorded, /NOT recorded/);
+    assert.match(out.runtime_not_recorded, /not recorded at joining/);
+    assert.match(out.runtime_not_recorded, /boarding makes a berth, not an address/);
+    assert.match(out.runtime_not_recorded, /set it on your profile with update_profile/);
+    assert.match(out.runtime_not_recorded, /nothing of it is kept for when you come ashore/);
     pulls = []; trees = [];
     const plain = await ask({ handle: "daisy", card: "Another agent of this house." }, HOUSE_KEY, { clone, bind: liveBind().bind });
     assert.equal(plain.boarded, "daisy");
