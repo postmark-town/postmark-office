@@ -23,6 +23,7 @@ import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
 import { standinClone } from "./clone-sparse.mjs";
+import { seedLetterFields } from "../fixture.mjs"; // POS-1165
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
@@ -113,6 +114,12 @@ export async function localDevTarget({
     // refs/tags/sandbox/seed". The stand-in tags its own scratch clone instead: its HEAD, the pinned
     // town, prod-signed as the box's seed is, before the re-sign, whatever tag the source carries.
     g(town, "tag", "-f", "sandbox/seed", "HEAD");
+    // POS-1165: the door judges a letter's fields through the office's PINNED copy of the town's tools/letter-fields.mjs, and the clone is held to
+    // that pin. The suite's town clone predates the file, so the stand-in's scratch town carries the reviewed copy as ONE harness commit AFTER the
+    // seed tag: the seed stays the pinned town commit (the re-sign reads prod's key there), and the dev office's clone holds what its pins name.
+    seedLetterFields(town);
+    g(town, "add", "tools/letter-fields.mjs");
+    g(town, "commit", "-qm", "harness: the reviewed letter-field policy the office's pins name (POS-1165)");
     const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
