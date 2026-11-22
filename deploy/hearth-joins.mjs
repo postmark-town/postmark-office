@@ -15,8 +15,7 @@
 //
 // The registered entries are the quest pass's own (tools/quest-pay-plan.mjs § hearthEntries, the rule the site's sync-hearths.mjs
 // reads too): a folder of PROJECTS/household-hearths on the town clone's main holding a hearth.html, not named in capitals. Each
-// whose name is not yet a candidate of the ballot, whose merge fell inside the ballot's join window (read from the ballot's
-// own `window` words: "New designs join through Sun 6 Dec; …") and whose hearth.md names an author bound to a resident (the
+// whose name is not yet a candidate of the ballot, and whose hearth.md names an author bound to a resident (the
 // quest pass's own binding, housesFromRoll), joins at the END of the ballot, all in one amend act:
 //
 //   ballotActInStore("amend", { post: "postmark-pen/ballot-hearth-default", choices: [{ name, credit, link, note }] })
@@ -25,7 +24,11 @@
 // hand, MACHINE_HANDS[0], which only this call may name (src/ballots.mjs). The act writes the ballot file and the post together
 // and lands the town commit, so the act log, the file and the post are one truth. Nothing here writes the JSON. A name already a
 // candidate is untouched (its words are never replaced), and nothing is ever removed or moved. A design whose author is bound to
-// no resident (the town's own, or a typo) is skipped and named; a ballot that is closed, or whose window has passed, takes none.
+// no resident (the town's own, or a typo) is skipped and named; a ballot that is closed takes none. THE WINDOW (the ballot's own
+// words, "New designs join through Sun 6 Dec; …", STAR-237: "only while new designs may join"): a design joins only if (a) its merge
+// day (New York) is on or before the join-through day AND (b) the run day (New York) is on or before join-through + 1 day, the one
+// day's grace so a merge late on the last day is still added by the first ticks after it. From the day after that nothing joins,
+// whatever its merge day.
 //
 //   credit  the author line of hearth.md as written (a resident's handle, or the household's slug), the words today's by-hand
 //           additions carried; the BINDING decides whether the design joins at all
@@ -86,6 +89,9 @@ export function joinThrough(window, floor) {
   return ymd(t);
 }
 
+/** The day after a YYYY-MM-DD day. PURE. */
+export const dayAfter = (day) => { const d = new Date(`${day}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1); return ymd(d); };
+
 /** A design's one line for the ballot: control characters out, whitespace collapsed, cut to NOTE_MAX (at a word, with an ellipsis, when it is longer). PURE. */
 export function noteOf(line) {
   // eslint-disable-next-line no-control-regex
@@ -122,6 +128,7 @@ export function planJoins({ ballot, entries, houseOf, today }) {
     if (have.has(name)) continue; // already a candidate: untouched, and not worth a line every tick
     if (e.problem) { out.skipped.push({ name, why: e.problem }); continue; }
     if (out.through && e.date > out.through) { out.skipped.push({ name, why: `merged ${e.date}, after the join window closed on ${out.through}` }); continue; }
+    if (out.through && today > dayAfter(out.through)) { out.skipped.push({ name, why: `the run day ${today} is past the join window (through ${out.through}, with one day's grace for a late merge)` }); continue; }
     const house = houseOf({ author: e.author });
     if (!house) { out.skipped.push({ name, why: e.author ? `its author "${e.author}" is bound to no resident here` : "its hearth.md names no author" }); continue; }
     if (house.refuse) { out.skipped.push({ name, why: house.refuse }); continue; }
