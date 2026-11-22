@@ -149,13 +149,15 @@ test("FALSIFIER 5 · two residents opening in the same breath found ONE room: a 
 });
 
 test("FALSIFIER 6 · a listener between two rooms is shown ONE conversation, the one a say from there would join, and still hears both", async () => {
-  const d = door(GREEN);
+  const d = door({ ...GREEN, nea: { x: 58, y: 0 } });           // 58 m from wes, 42 m from eli: within earshot of both, nearer the east room
   const say = async (h, t) => { await d.store.say(h, t); d.tick(); };
   await say("wes", "west opens"); await say("eli", "east opens");
-  const heard = await d.store.hear("mid");
+  const heard = await d.store.hear("nea");
   assert.deepEqual(heard.voices.map((v) => v.said), ["west opens", "east opens"]);
-  assert.equal(heard.conversation.voice_count, 1, "the room here is the west room (its voice is nearer), not both");
-  assert.deepEqual(heard.conversation.participants, ["wes"]);
+  assert.equal(heard.conversation.voice_count, 1, "one room, not both");
+  assert.deepEqual(heard.conversation.participants, ["eli"], "the room here is the east room: its voice is the nearer, though the west room began first");
+  const west = await d.store.hear("mid");                       // 45 m from wes, 55 m from eli
+  assert.deepEqual(west.conversation.participants, ["wes"], "and from nearer the west room, the west room");
 });
 
 // ═══ THE RECORD's derivation (src/rooms.mjs) ══════════════════════════════════════════════════════════════════════════════════
