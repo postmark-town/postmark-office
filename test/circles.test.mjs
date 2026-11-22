@@ -190,6 +190,29 @@ test("reply_to resolution: by id, by handle plus time, by a name in the words â€
   assert.match(C.resolveReplyTo(twice, { replyTo: { handle: "seth", at: at(3) } }).refused.defect, /has 2 says at exactly/, "two at one instant is refused, never guessed");
 });
 
+test("POS-1183: ?room= finds a live room whose record id is rounded to the second; a different room still answers unavailable", () => {
+  // the record's `at` is whole seconds, the page's live room id carries milliseconds (prod: t1795343232206-wren-porter vs t1795343232000-wren-porter)
+  const SEC = 1_795_343_232_000;
+  const rounded = [{ id: 70001, handle: "wren-porter", at: SEC, text: "first", x: 0, y: 0 }, { id: 70002, handle: "pica", at: SEC + 5_000, text: "second", x: 0, y: 0, reply_to: 70001 }];
+  const clusters = [{ voices: rounded, latest: SEC + 5_000 }];
+  const thread = (c) => ({ id: `t${c.voices[0].at}-${c.voices[0].handle}`, voice_count: c.voices.length, voices: C.sayLines(c.voices) });
+  const ask = (room) => C.findConversation(clusters, { room }, { thread, source: "record" });
+  const live = ask("t1795343232206-wren-porter");
+  assert.equal(live.history, "complete", "the live ms-precise id reaches the room the record holds to the second");
+  assert.equal(live.room.id, "t1795343232000-wren-porter", "the record's own id is the one the office hands out, unchanged");
+  assert.equal(live.room.voice_count, 2);
+  assert.equal(ask("t1795343232000-wren-porter").history, "complete", "the exact record id still works");
+  assert.equal(ask("t1795343232999-wren-porter").history, "complete", "the last millisecond of that second");
+  // controls: only the sub-second precision is forgiven
+  assert.equal(ask("t1795343232206-pica").history, "unavailable", "another handle is another room");
+  assert.equal(ask("t1795343233206-wren-porter").history, "unavailable", "a start a second away is another room");
+  assert.equal(ask("t1795343231999-wren-porter").history, "unavailable", "a start a millisecond before the second is another room");
+  assert.equal(ask("t1795343232206-wren").history, "unavailable", "a handle that only begins the same is another room");
+  assert.equal(ask("not-a-room-id").history, "unavailable");
+  // ?circle= is not loosened: a say id still has to be a say in the room
+  assert.equal(C.findConversation(clusters, { circle: "70099" }, { thread, source: "record" }).history, "unavailable");
+});
+
 test("named history past the first page: ?circle= finds a circle in any cluster, ?room= a thread, each saying complete, folded or unavailable", () => {
   const other = [{ voices: room([[60001, "rei", 1, null, "another room"]]), latest: at(1) }];
   const clusters = [...other, { voices: room(), latest: at(14) }];
