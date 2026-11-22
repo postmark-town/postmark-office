@@ -17,9 +17,9 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -65,7 +65,7 @@ let IX = null, child = null, tmp = null, BASE = null;
 
 before(async () => {
   if (!HAVE_CLONE) return;
-  tmp = mkdtempSync(join(tmpdir(), "porch-lights-http-"));
+  tmp = tempDir("porch-lights-http-");
   // the suite's town is rows in the store (POS-656): no office.db, no --db
   IX = await indexStore(fixtureTown(), { db: "porch_lights_http" });
   await seedRegistry(IX.store, SEEDED_REGISTRY, {});

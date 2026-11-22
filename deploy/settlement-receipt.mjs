@@ -48,6 +48,7 @@ import { surveyedReading } from "./surveyed-reading.mjs";
 // not her mark, her cap, or her number. Pure and separate because a line
 // composed in a script is watched by nothing — the lesson `escrowLines` paid for.
 import { refusedMarks } from "./refused-marks.mjs";
+import { parcelCapturesOf } from "./parcel-captures-reading.mjs"; // WLD-224
 
 const env = (name) => {
   const v = process.env[name];
@@ -127,6 +128,7 @@ const STATE_LOG_MODE = env("SETTLEMENT_STATE_LOG_MODE") || null;
 // Read once, from both places the fold's sentence reaches this side — the
 // quarantined rows' `detail` and a fold refusal's `cause`. See `refused` below.
 const refused = refusedMarks(sweep, refusal);
+const parcelCaptures = parcelCapturesOf(sweep);
 
 // ── WHY A MARK WENT: THE RECORDED STAKE WITHDRAWAL (POS-937/a) ───────────────
 //
@@ -208,7 +210,8 @@ if (sweep) {
   // reconcile, not an outcome channel — naming it here would put a permanent
   // "channels_unnamed" line on every receipt and teach the reader to skip the
   // field, which is the opposite of what it is for.
-  const NOT_A_CHANNEL = new Set(["findings", "eol_boundary"]);
+  // `parcel_captures` (WLD-224) is a note for the keeper, mapped below (parcel-captures-reading.mjs), not an outcome channel.
+  const NOT_A_CHANNEL = new Set(["findings", "eol_boundary", "parcel_captures"]);
   const extra = Object.keys(sweep).filter((k) => Array.isArray(sweep[k]) && !CHANNELS.includes(k) && !NOT_A_CHANNEL.has(k));
   if (extra.length) unnamed = Object.fromEntries(extra.map((k) => [k, sweep[k].length]));
 }
@@ -312,7 +315,14 @@ const receipt = {
             households: (drain.households ?? []).filter((h) => h.changed).map((h) => h.household),
             state_commit: drain.state_commit ?? null,
           })
-    : { ran: false, reason: "the drain step did not run for this crossing" },
+    // No drain report. When THIS crossing's store write-down did run (its report is present: that is the fact,
+    // not a `ran` field on it and not a positive write count, so a store crossing that wrote nothing still ran),
+    // the absence is by design, not a miss: the store's write-down replaced the journal drain at G1 and the drain
+    // has no caller at settlement (POS-1127: a reader took the old wording as a fault and went looking for a drain
+    // to run). `ran: false` stays; it says what replaced it. Neither report is the real miss and keeps its words.
+    : store
+      ? { ran: false, superseded_by: "store", reason: "the store's write-down replaces the journal drain since G1" }
+      : { ran: false, reason: "the drain step did not run for this crossing" },
 
   // ── THE STORE'S WRITE-DOWN (G1 lane 3) ─────────────────────────────────────
   //
@@ -643,6 +653,9 @@ const receipt = {
   // no such answer on a crossing that refused nothing. `channels.quarantined`
   // already carries the empty count, so nothing goes unsaid.
   ...(refused ? { refused } : {}),
+  // WLD-224: a parcel this crossing published took in an older mark from another household. A coordination note for the keeper, absent
+  // on an ordinary night (parcel-captures-reading.mjs): it changes no status, class or refusal and is not a channel.
+  ...(parcelCaptures ? { parcel_captures: parcelCaptures } : {}),
   isolated: isolate
     ? {
         attributed: true,

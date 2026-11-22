@@ -46,6 +46,24 @@ function scratchClone(which, source, dest) {
   return dest;
 }
 
+/**
+ * Run `fn` with this target's own pins named as TOWN_PINS_DIR, and put the variable back as it was (set, or absent) on every path out.
+ *
+ * WHY (POS-686). The stand-in's children (`asFreshen` below) are handed the generated pin folder, but the seed's IN-PROCESS steps (the index's derivation, the stamp lines'
+ * sync) load the town's pinned tools through src/town-tool.mjs, which reads TOWN_PINS_DIR at each call. With none set they read the office's committed pins (the town
+ * commit the office ships with), a different town from this stand-in's re-signed clone, and stopped with TownPinMismatch (the refusal is right and stays: the pinned code
+ * and the clone it is checked against must be one town). Naming the target's pins here makes the in-process steps check the clone they actually read, the same check the
+ * children make. Nothing leaks into another round: the manifest is cached per pin ROOT and the pinned modules load by their own path, so a second target's folder is a
+ * second root, and the variable is restored before any later work in this process.
+ */
+export async function withTownPins(pinsDir, fn) {
+  const had = Object.hasOwn(process.env, "TOWN_PINS_DIR");
+  const was = process.env.TOWN_PINS_DIR;
+  process.env.TOWN_PINS_DIR = pinsDir;
+  try { return await fn(); }
+  finally { if (had) process.env.TOWN_PINS_DIR = was; else delete process.env.TOWN_PINS_DIR; }
+}
+
 /** The world's law into the store at the world clone's HEAD (world2/tools/law-ingest.mjs, its main run). */
 export async function ingestLaw(store, world) {
   const { deriveLaw, writeLaw, lossyRefusal } = await import("../../world2/tools/law-ingest.mjs");
@@ -88,6 +106,13 @@ export async function localDevTarget({
     const store = givenStore ?? await startStore({ db });
     if (!givenStore) cleanups.push(() => store.stop());
     const town = scratchClone("town", townSource, join(dir, "town-clone"));
+    // THE STAND-IN'S OWN SEED (POS-940; POS-354, Darko 2026-10-10 14:26:41Z's class fix): the re-sign
+    // reads prod's public key at refs/tags/sandbox/seed (tools/dev-ledger-resign.mjs § SEED_REF). Taken
+    // from the source clone, that tag was the BOX's, which moves, and CI fetches only the tags reachable
+    // at the office's town pin, so a cache miss reddened every run with "the clone has no
+    // refs/tags/sandbox/seed". The stand-in tags its own scratch clone instead: its HEAD, the pinned
+    // town, prod-signed as the box's seed is, before the re-sign, whatever tag the source carries.
+    g(town, "tag", "-f", "sandbox/seed", "HEAD");
     const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
@@ -134,15 +159,29 @@ export async function localDevTarget({
     // the tool must refuse, and the same tool. Real residents' outboxes are then
     // set aside so only the rehearsal's letters cross.
     const { generateKeyPairSync } = await import("node:crypto");
-    const { resignDevTown } = await import("../../tools/dev-ledger-resign.mjs");
     const pemOf = () => generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
     const keyPem = pemOf();
     const stampKey = join(dir, "stamp-key.pem");
     writeFileSync(stampKey, keyPem);
     const prodKey = join(dir, "prod-stamp-key.pem");
     writeFileSync(prodKey, pemOf());
-    const moved = await resignDevTown({ town, keyPem, notKeyPem: readFileSync(prodKey, "utf8") });
-    if (moved.status !== "resigned") throw new Error(`the stand-in's re-sign: ${moved.status} ${moved.why ?? ""}`);
+    // DEV PINS ITS OWN RE-SIGNED TOWN (POS-994; Wright, 2026-11-16), as the box's freshen does
+    // (deploy/postmark-dev-freshen.sh): its own commands, each its own process, in its order:
+    // pin the seed (the engine the re-sign loads), re-sign, pin the re-signed town, into a
+    // folder outside the clone that the dev office and the rehearsal name (the dev units'
+    // TOWN_PINS_DIR). Each is a CHILD, as on the box: a process that has read a pin folder
+    // keeps that manifest (the dev office restarts after a re-pin), so this harness reads
+    // none of it itself before the rehearsal does.
+    const pinsDir = join(dir, "town-pins-dev");
+    const asFreshen = (rel, args) => execFileSync(process.execPath, [join(OFFICE, rel), ...args], {
+      encoding: "utf8", env: { ...process.env, TOWN_PINS_DIR: pinsDir }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const pin = () => asFreshen("tools/town-pins.mjs", ["--write", "--town", town, "--ref", "HEAD", "--out", pinsDir]);
+    pin();
+    try { asFreshen("tools/dev-ledger-resign.mjs", ["--town", town, "--key", stampKey, "--not-key", prodKey]); }
+    catch (e) { throw new Error(`the stand-in's re-sign: ${String(e.stderr ?? e.stdout ?? e.message).trim().split("\n").slice(-2).join(" | ")}`); }
+    pin();
+    log(`pins: dev's own, from the re-signed town, at ${pinsDir}`);
     const wp = join(town, "WHITE_PAGES");
     for (const room of readdirSync(wp, { withFileTypes: true })) {
       const ob = join(wp, room.name, "outbox");
@@ -167,15 +206,20 @@ export async function localDevTarget({
     // for the same rows)
     const t0 = Date.now();
     const { deriveTownIndex, TOWN_TABLES } = await import("../../src/town-index.mjs");
-    const { tables } = await deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } });
+    const { tables } = await withTownPins(pinsDir, () => deriveTownIndex(town, { log: { log() {}, warn() {}, error() {} } }));
     const rows = Object.fromEntries(Object.entries(TOWN_TABLES).map(([name, { cols }]) =>
       [name, (tables[name] ?? []).map((r) => Object.fromEntries(cols.map((c, i) => [c, r[i]])))]));
     const { seedTownIndex } = await import("./index-to-store.mjs");
     const { HEAD_KEY } = await import("../../world2/tools/town-index-ingest.mjs");
+    const { writeMintInputs } = await import("../../src/mint-inputs.mjs");
     const w = await store.connect("law_ingester");
     try {
       await w.query("BEGIN");
       await seedTownIndex(w, rows);
+      // and the mint's inputs, town_rooms and town_mail_lines, as the box's seed writes them in the index's
+      // own transaction (town-index-ingest.mjs § seed → mintInputs, DEPLOY.md § The dev rehearsal, step 7):
+      // the preflight's stamp-mint-parity reads them (POS-940), and an empty pair is a seed the box never has
+      await writeMintInputs(w, town);
       await w.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ($1, $2, now()) ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha, ingested_at = now()", [HEAD_KEY, g(town, "rev-parse", "HEAD")]);
       await w.query("COMMIT");
     } finally { await w.end(); }
@@ -188,7 +232,7 @@ export async function localDevTarget({
     const pen = await store.connect("office_api");
     try {
       await pen.query("BEGIN");
-      const synced = await syncStampLinesVia(pen, town);
+      const synced = await withTownPins(pinsDir, () => syncStampLinesVia(pen, town));
       await pen.query("COMMIT");
       log(`store: stamp_lines holds the clone's ${synced.inserted} ledger lines`);
     } catch (e) { await pen.query("ROLLBACK").catch(() => {}); throw e; }
@@ -220,6 +264,7 @@ export async function localDevTarget({
       WORLD2_PG_URL: store.url("office_api"), WORLD2_STANCE_URL: store.url("stance_reader"),
       W2_PEN: "stance,hold,say,walk,frame,mark", W2_GUARDS: "1", WORLD_POSITIONS: "1",
       OFFICE_READ_WORKERS: "0", STAMP_KEY: stampKey, STAMP_LINES: "store",
+      TOWN_PINS_DIR: pinsDir, // the dev units' line (deploy/postmark-office-dev.service-dropin-town-pins.conf)
       STATE_LOG_SOURCE: "store", OFFICE_PAPERWORK_STORE: "1",
       ...envOverrides,
     };
@@ -248,6 +293,6 @@ export async function localDevTarget({
       office = { child, stderr: () => errText };
       log(`office: listening on :${officePort}`);
     }
-    return { dir, store, town, world, envFile, rolesFile, prodKey, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
+    return { dir, store, town, world, envFile, rolesFile, prodKey, pinsDir, officeBase: `http://127.0.0.1:${officePort}`, ghPort, office, stop };
   } catch (e) { await stop(); throw e; }
 }

@@ -16,7 +16,16 @@ import { installActsPen, uninstallActsPen } from "./acts-pen-stub.mjs";
 import {
   hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs, announceAtOffice,
   postAtTown, amendAtTown, closeAtTown, advanceAtTown,
+  stakeExecutorForTests, postStakedEvent, closeStakedEvent, nextEventId,
 } from "../src/events-store.mjs";
+
+// POS-1035: every new event stakes 20 through the executor, which holds the town lock and signs the ledger. These are the post
+// machine's own tests on a stub pen (no town, no store), so the stake is taken in-process here, its ledger landing a no-op: the
+// money itself is proved on a real town and store in event-sparks.test.mjs. The row and receipt carry the stake as they would.
+stakeExecutorForTests(async (p, env) => (p.mode === "post"
+  ? postStakedEvent(p.handle, p.input, { now: p.now, env, door: p.door,
+    stake: { id: await nextEventId(p.handle, p.input?.title, { now: p.now, env }), n: 20, by: p.handle, land: async () => ({}) } })
+  : closeStakedEvent(p.handle, p.id, { now: p.now, env, door: p.door, stakeReturn: { n: 20, to: p.handle, land: async () => ({}) } })));
 import { phaseAt, calendarFrom, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
 import { compareRebuild, dryRun, NEVER_TOUCHED_LINE } from "../world2/tools/events-rebuild.mjs";
 
@@ -805,7 +814,8 @@ test("post machine · town { do: \"post\", class: \"event\" } writes a `post` ac
   assert.deepEqual([act.class, act.action, act.object], ["event", "post", "wright/office-hours"]);
   const p = JSON.parse(act.payload);
   assert.deepEqual(Object.keys(p).sort(), ["body", "class", "ends", "fields", "place", "post", "starts", "title"]);
-  assert.deepEqual(p.fields, { doors_open: iso(now + 0.5 * H) }, "doors_open is the event class's own field");
+  // POS-1035: every new event carries its hosting stake (the poster's own 20) beside its doors
+  assert.deepEqual(p.fields, { doors_open: iso(now + 0.5 * H), stake: { n: 20, by: "wright" } }, "doors_open is the event class's own field, and the stake rides beside it");
   const row = posts.get("wright/office-hours");
   assert.equal(row.class, "event"); assert.equal(row.state, "announced"); assert.equal(row.author, "wright");
   const { event } = await calendarAtOffice({ post: "wright/office-hours" }, { now });
@@ -852,7 +862,8 @@ test("post machine · close: an event closes as cancelled — on the calendar as
   await postAtTown(TOWN_EVENT(now), WRIGHT, { now });
   const c = await closeAtTown({ post: "wright/office-hours" }, WRIGHT, { now });
   assert.equal(c.state, "cancelled"); assert.equal(c.post.cancelled, true); assert.equal(c.post.state, "cancelled");
-  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: "wright/office-hours", state: "cancelled" });
+  // POS-1035: the whole stake comes home in the cancellation's own act
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: "wright/office-hours", state: "cancelled", stake_returned: { n: 20, to: "wright" } });
   assert.equal(pen.rows().at(-1).action, "close");
   await refusedWith(closeAtTown({ post: "wright/office-hours" }, WRIGHT, { now }), 409, /already cancelled/);
   await refusedWith(cancelAtOffice({ event: "wright/office-hours" }, WRIGHT, { now }), 409, /already cancelled/);

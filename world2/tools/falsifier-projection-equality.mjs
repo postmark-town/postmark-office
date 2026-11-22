@@ -58,13 +58,15 @@
 //
 // EXIT CODES:  0 equal (green) · 1 drift (RED) · 2 cannot run (caller/setup)
 
-import { realpathSync } from "node:fs";
+import { realpathSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { deriveLaw, headSha, LAW_REPO_KEY } from "./law-ingest.mjs";
 import { deriveStamps, TOWN_REPO_KEY } from "./stamp-ingest.mjs";
 import { deriveRoll } from "./roll-ingest.mjs";
 import { liveHouseOfVia } from "../../src/household-deriver.mjs";
+import { readPins } from "../../src/household-logins.mjs";
 
 // Canonical JSON: keys sorted at every depth, so two structurally equal values
 // have one spelling. Both sides are JS values by the time they get here — `pg`
@@ -192,8 +194,10 @@ async function checkStamps(client, townRepo) {
 
   // ── THE INVARIANT: identities ⊆ town_roll ─────────────────────────────────
   //
-  // EVERY WORLD IDENTITY IS A TOWN RESIDENT. `identities` is the world repo's
-  // `households.json`, projected; `town_roll` is who the town's own WHITE_PAGES
+  // EVERY WORLD IDENTITY IS A TOWN RESIDENT. `identities` has been a VIEW over the
+  // household registry since 055 (`households` + `household_pins`, live in the store),
+  // read here AS OF THE HEAD through this town checkout's own registry files (see
+  // `checkIdentities`); `town_roll` is who the town's own WHITE_PAGES
   // admits. A handle in the first and not the second is a world that has granted
   // standing to somebody the town has never heard of — which is what the
   // `dylan-android-husband` alias was until it was stripped from world main at
@@ -202,10 +206,31 @@ async function checkStamps(client, townRepo) {
   // no world household is simply someone who has not been grouped yet.
   //
   // One line, because it is one sentence of law and it can fail: put any handle
-  // into households.json that WHITE_PAGES does not carry and this reds.
+  // into the head's households.json (or github-ids.json) that WHITE_PAGES does not
+  // carry and this reds.
+  //
+  // A CANONICAL RENAME IS THE SAME RESIDENT (POS-975). The registry keeps a renamed
+  // resident's old key on purpose, retired, with `renamed_to` and the same GitHub
+  // id as the new one (055 keeps a retired handle in its house; town `880390274`,
+  // "old handle kept"), so `identities` still names it and WHITE_PAGES does not.
+  // Such a handle is let through only on the town's own pins, read from THIS
+  // checkout (the sha the roll was derived at), and only when the new handle is
+  // in the roll: see `identitiesOutsideTheRoll`.
+  //
+  // LIKE WITH LIKE (POS-975, part 2). `identities` is a view over the LIVE registry
+  // (055): a resident admitted after the last settlement is in it at once, while the
+  // roll is read at the town head, which moves only at a settlement. So the identities
+  // are taken AS OF THE HEAD: only those this same checkout's registry files name
+  // (see `checkIdentities`). The rest are said in a note, never a finding. A store
+  // identity those files never got (a drain that did not land) is, by the same rule,
+  // `registry-drain --check`'s to catch and not this check's: it cannot be told here
+  // from a late admission.
   const rollHandles = new Set(rollDerived.map((r) => r.handle));
-  const orphans = (await client.query("SELECT handle FROM identities ORDER BY handle")).rows
-    .map((r) => r.handle).filter((h) => !rollHandles.has(h));
+  const idv = await checkIdentities(client, rollHandles, townRepo);
+  if (idv.unreadable) {
+    return { lane: TOWN_REPO_KEY, status: "cannot-run", findings: [idv.unreadable] };
+  }
+  const { orphans, renamed, postdate } = idv;
   if (orphans.length) {
     findings.push(`identities ⊄ town_roll: ${orphans.length} world identit${orphans.length === 1 ? "y is" : "ies are"} not in the town's roll ` +
       `(${orphans.join(", ")}) — every world identity is a town resident; the world cannot grant standing to a handle WHITE_PAGES does not carry`);
@@ -213,7 +238,75 @@ async function checkStamps(client, townRepo) {
 
   return { lane: TOWN_REPO_KEY, status: findings.length ? "drift" : "equal", sha: head.sha,
     counts: { derived: derived.length, db: db.length, roll_derived: rollDerived.length, roll_db: rollDb.length,
-              identities_outside_the_roll: orphans.length }, findings };
+              identities_outside_the_roll: orphans.length, identities_renamed_in_the_roll: renamed.length,
+              identities_after_the_head: postdate.length },
+    findings, notes: [
+      ...renamed.map((r) => `renamed: ${r.handle} → ${r.renamed_to} (one GitHub id, ${r.id}; retired ${r.retired}), per this town checkout's tools/github-ids.json`),
+      ...(postdate.length ? [`${postdate.length} identit${postdate.length === 1 ? "y" : "ies"} postdate the town head or were never drained: ${postdate.join(", ")} (this checkout's registry files do not name ${postdate.length === 1 ? "it" : "them"}; not a finding)`] : []),
+    ] };
+}
+
+/**
+ * The world identities of the STORE, taken as of the town head, held to the roll (POS-975).
+ * Reads `identities` (the registry view, live) from `client`, and the registry AS OF THE
+ * HEAD from `townRepo`, the checkout `checkStamps` has already proved is at the recorded
+ * sha: `tools/households.json` residents and `tools/github-ids.json` keys. A store identity
+ * that neither file names is `postdate` (admitted after the head, or never drained), and
+ * is not judged; the rest go through `identitiesOutsideTheRoll`. Either file unreadable
+ * answers `unreadable`, never an empty set, so a checkout that cannot say what the head
+ * held cannot turn every identity into a quiet `postdate`.
+ */
+export async function checkIdentities(client, rollHandles, townRepo) {
+  const named = registryNamesAtHead(townRepo);
+  if (named.unreadable) return { orphans: [], renamed: [], postdate: [], unreadable: named.unreadable };
+  const handles = (await client.query("SELECT handle FROM identities ORDER BY handle")).rows.map((r) => r.handle);
+  const asOfTheHead = handles.filter((h) => named.set.has(h));
+  const postdate = handles.filter((h) => !named.set.has(h));
+  return { ...identitiesOutsideTheRoll(asOfTheHead, rollHandles, readPins(townRepo)), postdate, unreadable: null };
+}
+
+/** Every handle the town checkout's own registry files name: households.json residents plus github-ids.json keys. */
+function registryNamesAtHead(townRepo) {
+  const set = new Set();
+  let houses, pins;
+  try { houses = JSON.parse(readFileSync(join(townRepo, "tools", "households.json"), "utf8")).households; }
+  catch (e) { return { unreadable: `checkout ${townRepo} has no readable tools/households.json (${e.code ?? e.message}): cannot say which identities the town head held` }; }
+  try { pins = JSON.parse(readFileSync(join(townRepo, "tools", "github-ids.json"), "utf8")); }
+  catch (e) { return { unreadable: `checkout ${townRepo} has no readable tools/github-ids.json (${e.code ?? e.message}): cannot say which identities the town head held` }; }
+  if (!houses || typeof houses !== "object" || !pins || typeof pins !== "object") {
+    return { unreadable: `checkout ${townRepo}: tools/households.json or tools/github-ids.json is not the expected shape` };
+  }
+  for (const h of Object.values(houses)) for (const r of Array.isArray(h?.residents) ? h.residents : []) set.add(r);
+  for (const k of Object.keys(pins)) set.add(k);
+  return { set };
+}
+
+/**
+ * The world identities the town's roll does not carry, with the canonical renames
+ * set apart (POS-975). PURE: `handles` are `identities.handle`, `rollHandles` the
+ * roll derived at the town head, `pins` that SAME checkout's tools/github-ids.json.
+ *
+ * A handle outside the roll is a rename, not an orphan, only when the pins say so
+ * in full: its own entry is `retired` with a `renamed_to`; that new handle's entry
+ * is not retired and carries the same GitHub `id`; and the new handle is in the
+ * roll. Anything less (no pins, a retirement with no successor, a successor that
+ * is missing, retired, another account or not in the roll) stays an orphan, RED.
+ * One hop only: a rename of a rename is not followed, so it reads RED, not green.
+ */
+export function identitiesOutsideTheRoll(handles, rollHandles, pins) {
+  const pinOf = (h) => (pins && typeof pins === "object" && Object.hasOwn(pins, h) && pins[h] && typeof pins[h] === "object" ? pins[h] : null);
+  const orphans = [], renamed = [];
+  for (const handle of handles) {
+    if (rollHandles.has(handle)) continue;
+    const old = pinOf(handle);
+    const to = typeof old?.renamed_to === "string" ? old.renamed_to : null;
+    const next = to ? pinOf(to) : null;
+    const sameAccount = next && old.id != null && next.id === old.id;
+    if (old?.retired && next && !next.retired && sameAccount && rollHandles.has(to)) {
+      renamed.push({ handle, renamed_to: to, id: old.id, retired: old.retired });
+    } else orphans.push(handle);
+  }
+  return { orphans, renamed };
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -252,6 +345,8 @@ async function main() {
       console.log(`CANNOT RUN · ${r.lane}`);
       for (const f of r.findings) console.log(`  - ${f}`);
     }
+    // what was let through is said, green or red, so nobody has to trust a quiet pass
+    for (const n of r.notes ?? []) console.log(`  · ${n}`);
   }
 
   // A falsifier that could not compare anything must not report green. Silence

@@ -39,6 +39,7 @@
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS-994: the town modules are the office pinned copies, checked against the clone
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf, takesKeyBase } from "../../src/mint-inputs.mjs";
 
@@ -159,8 +160,8 @@ function arg(name, fallback = null) { const i = process.argv.indexOf(`--${name}`
 async function main() {
   const clone = resolve(arg("clone", process.env.TOWN_CLONE ?? resolve(HERE, "..", "..", "town-clone")));
   if (!existsSync(join(clone, "tools", "stamp-mint.mjs"))) { console.error(`no town clone with tools/stamp-mint.mjs at ${clone}`); return 2; }
-  const engine = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
-  const { verifyStampLedger } = await import(pathToFileURL(join(clone, "tools", "stamp-verify.mjs")).href);
+  const engine = await importTownTool(clone, "stamp-mint.mjs");
+  const { verifyStampLedger } = await importTownTool(clone, "stamp-verify.mjs");
   const { officeRead } = await import("../../src/world2-pen.mjs");
   const { stampLinesVia } = await import("../../src/stamp-lines.mjs");
   let store;
@@ -168,9 +169,10 @@ async function main() {
     store = await officeRead(async (q) => ({ ...(await mintInputsVia(q)), entries: await stampLinesVia(q) }));
   } catch (e) { console.error(`the store could not be read: ${e.message}`); return 2; }
   if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 067 first"); return 2; }
-  const quests = existsSync(join(clone, "tools", "quest-progress.mjs")) ? await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")).href) : null;
+  const quests = existsSync(join(clone, "tools", "quest-progress.mjs")) ? await importTownTool(clone, "quest-progress.mjs") : null;
   const report = parityOf(engine, clone, store, { quests });
-  const control = verifyStampLedger(clone);
+  // POS-994: the verifier answers to the PINNED public key, the trust root
+  const control = verifyStampLedger(clone, { pubkeyPem: readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8") });
   report.control = { ok: control.ok, problems: control.problems.slice(0, 5) };
   report.ok = report.ok && control.ok;
   if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));

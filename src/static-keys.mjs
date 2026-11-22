@@ -5,7 +5,12 @@
 // and the keys the Meeps Come Home moves will add. Until this file they lived
 // in one env var, `OFFICE_KEYS`, which the office parsed at boot:
 //
-//   <key>=<household>[#<gh_id>]:<handle>[,<handle>...][;<key>=...]
+//   <key>=<household>[#<gh_id>]:[<handle>[,<handle>...]][;<key>=...]
+//
+// The handle list may be empty (`<key>=<household>:`, POS-1041): a key that reads
+// and acts for its household but names no resident (handles []). Every door that
+// stands a caller as a resident refuses it by its own words ("no residents on this
+// key"); test/static-keys-no-residents.test.mjs pins each refusal.
 //
 // RULED (Darko, 2026-10-06, 2a): static office keys become a `static` kind
 // with an explicit handles column and an explicit household column, imported
@@ -79,7 +84,10 @@ export const RETIRED_KIND = "retired";
  * parse server.mjs ran until POS-352): entries split on `;`, each trimmed and
  * matched as `<key>=<household>[#<gh_id>]:<handles>`; a malformed entry is
  * skipped; a later entry for the same key replaces an earlier one; handles are
- * split on `,` and trimmed, in their written order. A `#` with no numeric id
+ * split on `,` and trimmed, in their written order. An EMPTY handle list
+ * (`<key>=<household>:`, POS-1041) is a key that acts for no resident: `handles: []`.
+ * The colon is what says "none on purpose": an entry with no colon at all is still
+ * malformed and skipped, and so is one with an empty piece in its list (`:,`, `:wright,`). A `#` with no numeric id
  * after it pins nothing (the row holds no roles), and is named in `warnings`.
  * `skipped` counts the malformed entries the boot parse passed over silently.
  */
@@ -88,7 +96,9 @@ export function parseOfficeKeys(spec) {
   const warnings = [];
   let skipped = 0;
   for (const entry of String(spec ?? "").split(";").filter(Boolean)) {
-    const m = /^([^=]+)=([^:]+):(.+)$/.exec(entry.trim());
+    // `(.*)`, not `(.+)` (POS-1041): the colon is still required, but what follows it may be
+    // nothing. `<key>=<household>:` is a key that acts for NO resident (handles []).
+    const m = /^([^=]+)=([^:]+):(.*)$/.exec(entry.trim());
     if (!m) { skipped += 1; continue; }
     const [, token, householdField, handleList] = m;
     const hash = householdField.lastIndexOf("#");
@@ -97,7 +107,11 @@ export function parseOfficeKeys(spec) {
     const ghId = /^[1-9][0-9]*$/.test(idPart) ? Number(idPart) : null;
     if (hash !== -1 && ghId === null)
       warnings.push(`the entry for "${household}" has a "#" but no numeric gh_id after it, so it holds no roles`);
-    keys.set(token, { household, handles: handleList.split(",").map((s) => s.trim()), ghId });
+    // An empty list is "no residents"; a list with an EMPTY PIECE (`:,`, `: ,`, `:wright,`, `:a,,b`) is a typo,
+    // never a resident named "" (that would read as one resident at every gate that counts handles). Skipped and counted.
+    const pieces = handleList.trim() === "" ? [] : handleList.split(",").map((s) => s.trim());
+    if (pieces.includes("")) { skipped += 1; continue; }
+    keys.set(token, { household, handles: pieces, ghId });
   }
   return { keys, warnings, skipped };
 }

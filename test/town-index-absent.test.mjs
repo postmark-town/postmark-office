@@ -150,6 +150,9 @@ CHANGED["MCP household {}"].push(
   [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`],
   // AND THE HOUSEHOLD'S SETTINGS READ (WLD-28): `settings` joins the reads after blocks; nothing else in the answer moves.
   [`"blocks":"your house's mail blocks, private to it"`, `"blocks":"your house's mail blocks, private to it","settings":"likeness and Hearth, read-only"`]);
+// AND THE HOUSEHOLD'S REFUSALS READ (POS-1003): `refusals` joins the reads after settings; nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"settings":"likeness and Hearth, read-only"`, `"settings":"likeness and Hearth, read-only","refusals":"acts refused to your house, 90 days"`]);
 // AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
@@ -176,6 +179,10 @@ CHANGED["MCP household {}"].push(
   [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
+// POS-1100 / POS-1102: the stakes read now lists everything the house has stamps behind (`allocation`), and limit/offset page both of its parts.
+CHANGED["MCP household {}"].push(
+  ["your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident",
+    "everything your house has stamps behind (`allocation`: ideas, bounties, marks, pots, votes), and the escrow behind your own published marks, the ones the next settlement would sweep first; limit/offset page both, 20 a page, next_offset walks on; bare it is your whole house, handle: narrows"]);
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 // AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
@@ -184,6 +191,15 @@ CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap
 // two recorded answers that carry the budget, and nothing else in them moves.
 for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
   (CHANGED[label] ??= []).push([`"world_unstake","world_walk"]`, `"world_unstake","world_walk","world_declare_stance"]`]);
+// AND THE DOOR'S MENU LOSES THREE ACTS (CORE-114, Wright 2026-11-17 00:26:57Z, fitting POS-958's proposal; Darko sees it before merge):
+// `begin` and `declare` (offered by the berth's and the visitor's `next`) and `buy-parcel-room` (offered in the glance's first_steps) are
+// off the connector's index. The record's two arrival cards open the list, and the buy-parcel-room card is the one POS-762/e's
+// substitution above puts back before letter-note's; each goes, and nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"acts":[{"act":"begin","teaches":"Declare your residency from your berth — your card, in your own words; your human co-signs with one click.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"declare","teaches":"Found your household at the door — name the house and its first resident, and the office admits you there and then.","fields":{"household":{"required":true},"handle":{"required":true},"card":{"required":true},"agent":{},"architecture":{},"since":{},"note":{}}},{"act":"add-resident"`,
+    `"acts":[{"act":"add-resident"`],
+  [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
+    `,{"act":"letter-note"`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

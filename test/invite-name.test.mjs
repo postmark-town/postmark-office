@@ -23,8 +23,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
+import { beforeEach as beforeEachPins } from "node:test";
+// POS-994: a test that pins a fixture town names it in TOWN_PINS_DIR; every test
+// starts from the suite's own pins again, so one test's stand-in never judges the next one's town.
+const SUITE_PINS = process.env.TOWN_PINS_DIR;
+beforeEachPins(() => { if (SUITE_PINS === undefined) delete process.env.TOWN_PINS_DIR; else process.env.TOWN_PINS_DIR = SUITE_PINS; });
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -187,11 +194,12 @@ function sealedLedger(lines) {
   return "# the stamp ledger\n\n" + lines.map((l, i) => `${l} · sig: ${sign(null, Buffer.from(seals[i], "utf8"), LAW_KEYS.privateKey).toString("base64url")}`).join("\n") + "\n";
 }
 function townClone({ law = true, registry = REGISTRY() } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-invite-name-"));
+  const dir = tempDir("pm-invite-name-");
   dirs.push(dir);
   mkdirSync(join(dir, "tools"), { recursive: true });
   if (law) {
-    copyFileSync(join(TOWN_CLONE, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+    copyTownModule(TOWN_CLONE, dir, "stamp-mint.mjs"); // POS-994: with its closure, which the loader checks
+    process.env.TOWN_PINS_DIR = pinTown(dir);
     writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), LAW_KEYS.publicKey.export({ type: "spki", format: "pem" }));
     mkdirSync(join(dir, "WHITE_PAGES"), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), sealedLedger([
@@ -321,7 +329,7 @@ test("N5 · WHOLE OR NOTHING: a drain that refuses, or a commit that cannot land
 // ── N6 the door ─────────────────────────────────────────────────────────────
 
 test("N6 · A ONE-OFF (POS-947/c): off the permanent menu; callable by do:, its full card readable, its schema its own", async () => {
-  assert.deepEqual(HOUSEHOLD_OFFERED, ["invited-by"]);
+  assert.deepEqual(HOUSEHOLD_OFFERED, ["begin", "declare", "buy-parcel-room", "invited-by"]); // CORE-114 moved three beside it
   assert.equal(HOUSEHOLD_DISPATCHABLE.includes("invited-by"), false, "not on the permanent menu");
   assert.equal(capabilityIndex().some((c) => c.act === "invited-by"), false, "nor on the connector's index");
   assert.ok(HOUSEHOLD_TOOL.inputSchema.properties.do.enum.includes("invited-by"), "a strict client can still call it");
@@ -410,4 +418,98 @@ test("N7 · OFFERED IN first_steps to the house that names nobody, and only it; 
   const twice = await householdApex({ do: "invited-by", args: { invited_by: "wick" } }, FERN, { clone, canWrite: true });
   assert.equal(twice.code, 409, "and the act refuses a second naming");
   assert.equal((await householdApex({ read: "invited-by" }, FERN, REST())).read, "invited-by", "its card stays readable after");
+});
+
+// ── N8 CORE-114: begin and declare are OFFERED by next, buy-parcel-room by first_steps; none is on a menu ──────────────────
+// The buy-parcel-room offer asks the quote's own DATE and ROOM rules (parcel-room.mjs § THE TWO STAGE RULES) of the caller's own house;
+// the purse is not asked. The town engine is the real one, at the pin; the ledger's lines are the store's `stamp_lines`.
+
+const roomOffer = (glance) => (glance?.house?.first_steps ?? []).filter((s) => s.startsWith("buy-parcel-room: "));
+const NEWHALL = { household: "new-hall", handles: new Set(["nova"]), ghId: 9407, ghLogin: "nw-gh" };
+const withNewHall = () => ({
+  registry: { ...REGISTRY(), households: { ...REGISTRY().households,
+    "new-hall": { name: "New Hall", accounts: [{ login: "nw-gh", id: 9407 }], residents: ["nova"], since: "2026-11-05", declared_by: "fixture" } } },
+  pins: { ...PINS(), nova: { login: "nw-gh", id: 9407, pinned: "2026-11-05" } },
+});
+
+test("N8 · buy-parcel-room is OFFERED in first_steps while the house may buy room, by the date and the room alone; never in can or on a menu", async () => {
+  const { registry, pins } = withNewHall();
+  await seedRegistry(IX.store, registry, pins);
+  const clone = townClone();
+  const owner = await IX.store.connect("world2_owner");
+  const burn = (seq, nth) => owner.query("INSERT INTO stamp_lines (seq, canonical, sig, seal, written_at) VALUES ($1, $2, 'sig', $3, now())",
+    [seq, `- 2026-11-06 · nova → BURN · ${50 * (nth - 1)} · for: parcel:${nth}/hh:new-hall`, String(seq).padStart(64, "0")]);
+  try {
+    await owner.query("DELETE FROM stamp_lines WHERE canonical LIKE '% for: parcel:%'");
+
+    // a house declared after the cutoff, no room bought: offered, with the quote's own words and a placeholder payer, never a resident's name
+    const open = await householdApex(V2, NEWHALL, SLIM({ clone }));
+    assert.equal(open.error, undefined, JSON.stringify(open).slice(0, 300));
+    assert.deepEqual(roomOffer(open), ['buy-parcel-room: household { do: "buy-parcel-room", args: { from: "<who pays>", preview: true } }: room for one more parcel; the quote first, writes nothing']);
+    assert.match(open.house.first_steps_note, /buy-parcel-room is the exception: its price is never returned/);
+    assert.ok(!JSON.stringify(open.can).includes("buy-parcel-room"), "never in can");
+    assert.ok(JSON.stringify(open, null, 1).length <= 4096, `the offer fits the glance's 4K bound: ${JSON.stringify(open, null, 1).length}`);
+    const legacy = await householdApex({}, NEWHALL, REST({ clone }));
+    const legacySlim = await householdApex({}, NEWHALL, SLIM({ clone }));
+    for (const menu of [legacy, legacySlim]) assert.equal(JSON.stringify(menu.acts ?? []).includes('"buy-parcel-room"'), false, "nor on the older shapes' act menus");
+
+    // room two bought: still offered (it repeats within its finite stage); room three bought: gone
+    await burn(1, 2);
+    assert.equal(roomOffer(await householdApex(V2, NEWHALL, SLIM({ clone }))).length, 1, "one room bought: the second is still offered");
+    await burn(2, 3);
+    const spent = await householdApex(V2, NEWHALL, SLIM({ clone }));
+    assert.deepEqual(roomOffer(spent), [], "room three bought: the offer is gone");
+
+    // NOT OFFERED: a house declared on or before 10-31 keeps three for good (the date alone closes it, no ledger read); a harbor house
+    const early = await householdApex(V2, FERN, SLIM({ clone }));
+    assert.deepEqual(roomOffer(early), [], "declared 2026-10-01: none to buy, and not said unread either");
+    await owner.query("DELETE FROM stamp_lines WHERE canonical LIKE '% for: parcel:%'");
+    assert.deepEqual(roomOffer(await householdApex(V2, { ...NEWHALL, harbor: true }, SLIM({ clone }))), [], "at the harbor the act would bounce, so it is not offered");
+
+    // NO TOWN ENGINE CONFIGURED is the quote's "not-yet-open": nothing to buy on, so nothing is offered (and nothing is said unread)
+    assert.deepEqual(roomOffer(await householdApex(V2, NEWHALL, SLIM())), [], "no clone, no engine: not offered");
+
+    // A READ THAT FAILS IS SAID, NEVER GUESSED: the ledger's lines cannot be read (the role loses its SELECT), so neither offered nor hidden
+    await owner.query("REVOKE SELECT ON stamp_lines FROM office_api");
+    try {
+      const blind = await householdApex(V2, NEWHALL, SLIM({ clone }));
+      assert.equal(blind.error, undefined, JSON.stringify(blind).slice(0, 300));
+      assert.deepEqual(roomOffer(blind), ["buy-parcel-room: not readable just now, so not offered"]);
+      assert.doesNotMatch(blind.house.first_steps_note ?? "", /exception/, "and its note does not describe an offer that was not made");
+      assert.deepEqual(roomOffer(await householdApex(V2, FERN, SLIM({ clone }))), [], "a house the date closes reads no ledger, so it is not told the ledger is unreadable");
+    } finally { await owner.query("GRANT SELECT ON stamp_lines TO office_api"); }
+  } finally {
+    await owner.query("DELETE FROM stamp_lines WHERE canonical LIKE '% for: parcel:%'").catch(() => {});
+    await owner.end();
+    await seedRegistry(IX.store, REGISTRY(), PINS());
+  }
+});
+
+test("N9 · begin and declare: off every menu, offered by the tier's next, and still callable, readable and in the schema", async () => {
+  const BERTH = { berth: true, slug: "ash-berth", mintedAt: 1 };
+  const VISITOR = { visitor: true, ghLogin: "walker", ghId: 7001, handles: new Set() };
+  for (const act of ["begin", "declare"]) {
+    for (const readShape of [undefined, "h1", "h2"]) {
+      for (const [who, key] of [["berth", BERTH], ["visitor", VISITOR]]) {
+        const ans = await householdApex({}, key, REST({ readShape }));
+        assert.equal(JSON.stringify(ans.acts ?? []).includes(`"${act}"`), false, `${who}, shape ${readShape ?? "h0"}: ${act} is not on the act menu`);
+      }
+    }
+    assert.ok(HOUSEHOLD_TOOL.inputSchema.properties.do.enum.includes(act), `${act} stays in the schema's do enum: a strict client can still call it`);
+    assert.equal(HOUSEHOLD_DISPATCHABLE.includes(act), false, `${act} is not a permanent act`);
+    assert.ok(HOUSEHOLD_OFFERED.includes(act), `${act} is an offered act`);
+    assert.doesNotMatch(HOUSEHOLD_TOOL.inputSchema.properties.do.description, new RegExp(`(?<![-\\w])${act}(?![-\\w])`), "and the do: prose names the menu only (declare-stance-on is another act)");
+    const card = await householdApex({ read: act }, BERTH, REST());
+    assert.equal(card.read, act, `${act}'s full card is still read by name`);
+    assert.ok(card.card.fields.household && card.card.fields.card, `${act}'s card carries its fields`);
+  }
+  // the tier's own next is where each is offered, with the exact call
+  const berth = await householdApex({}, BERTH, REST());
+  assert.match(berth.next[0], /household \{ do: "begin", args: \{ household: "…", card: "…" \} \}/);
+  const visitor = await householdApex({}, VISITOR, REST());
+  assert.match(visitor.next[0], /household \{ do: "declare", args: \{ household: "…", handle: "…", card: "…" \} \}/);
+  // and the acts still dispatch, by the same gates: a household that stands is told so by begin
+  const stands = await householdApex({ do: "begin", args: { household: "x", card: "y" } }, FERN, REST());
+  assert.equal(stands.code, 409, JSON.stringify(stands).slice(0, 200));
+  assert.match(stands.defect, /you already live here/);
 });

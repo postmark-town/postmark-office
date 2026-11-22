@@ -94,6 +94,11 @@ const questBoardFor = (src, meta, handle, clone, opts) => questBoardWith(src, me
 
 // ── (a) THE BARE READ — the case that tripped ────────────────────────────────
 
+// POS-994: the office runs its pinned copies of town code, checked against the
+// clone; this fixture town's own files get pins of their own (beside it), so the
+// fixture is what runs, as before.
+process.env.TOWN_PINS_DIR = await (await import("./helpers/pinned-town.mjs")).pinTown(CLONE);
+
 test("a bare town quest read answers the board and never keys a query on a handle", async () => {
   const db = recordingDb();
   const board = await questBoardFor(db, META, undefined, CLONE);

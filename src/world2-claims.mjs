@@ -1296,6 +1296,47 @@ export async function claimRowsSince(since, { claimants = [], slugs = [], key = 
 }
 
 /**
+ * THE WITHDRAWN RETIREMENTS, for a named set of owners (POS-731) — the backlog's
+ * other half, beside `claimRowsSince`.
+ *
+ * A published mark its author withdrew leaves canon only by the settlement's
+ * sweep, and the store records that as a fact about the MARK, not about a claim:
+ * `marks.status = 'retired'`, `retired_cause = 'settlement-withdraw'` (the
+ * constant `claim-effects.mjs § WITHDRAW_RETIRE_CAUSE`, the writer's own
+ * `retire-unpublished.mjs § WITHDRAW_CAUSE`) and `retired_window`, the window the
+ * retire step ran in. No instant is recorded. So this hands back the window's
+ * opening (`opens_at`) beside each row, and `claim-effects.mjs` dates the
+ * retirement by the settlement that window opened for.
+ *
+ * SCOPE IS THE MARK'S OWNER, the store's own column, and nothing else: not the
+ * slug's prefix, not custody, not the ground the mark stood on. `marks` is a
+ * public record (no row policy: `002_grants.sql` lets the office role read it
+ * whole), so no household key rides here; the owners named are the scope.
+ *
+ * BOUNDED by the window, not by a row count: rows whose window opened a day
+ * before `since` or later, oldest settlements first, none dropped (as
+ * `claimRowsSince` beside it drops none). A day of margin because the settlement
+ * a window names is the NEXT one (up to twelve hours after the opening); the
+ * caller filters by crossing again, and over-reading is the safe direction. A
+ * retirement whose window is not in the store (the foreign key makes that a
+ * defect, not a state) comes back with `opens_at: null` and is NOT filtered out:
+ * the caller says it could not be placed.
+ */
+export async function withdrawnRetirementsSince(since, { owners = [], env = process.env, p: injected = null } = {}) {
+  if (!owners.length) return [];
+  const p = injected ?? await pool(env);
+  const { rows } = await p.query(
+    `SELECT m.slug, m.owner, m.household, m.retired_window, m.retired_cause, w.opens_at
+       FROM marks m LEFT JOIN windows w ON w.id = m.retired_window
+      WHERE m.status = 'retired' AND m.retired_cause = $1
+        AND m.owner = ANY($2::text[])
+        AND (w.opens_at IS NULL OR w.opens_at >= $3::timestamptz - interval '1 day')
+      ORDER BY w.opens_at ASC NULLS FIRST, m.slug COLLATE "C" ASC`,
+    ["settlement-withdraw", owners, since]);
+  return rows;
+}
+
+/**
  * The resident's newest PARCEL claim still in transit — `draft`, `pending` or
  * `locked` — or null (#2817, the settling-in line).
  *

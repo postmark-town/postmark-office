@@ -110,6 +110,14 @@ const inRecordForm = async (text) => {
   let v;
   try { v = text.includes('"stakes"') ? JSON.parse(text) : null; } catch { v = null; }
   if (v == null) return text;
+  // POS-1100 / POS-1102: a key that holds the handle now gets the house's `allocation` on the doorstep's stakes segment (read from the town ledger, which the
+  // record never had), and, when it has more, the top level's one paging contract. The twins' record predates both; their own claims are
+  // pos1100-house-stakes*.test.mjs. Strip them here, and only them: the marks part, and every other byte, still bind to the record.
+  if (v.stakes && typeof v.stakes === "object" && "allocation" in v.stakes) {
+    delete v.stakes.allocation;
+    if (v.stakes.args && v.stakes.args.limit === 10) delete v.stakes.args.limit;   // the pointer names the page the allocation is (POS-1100 review fix 6)
+    if (!("shown" in v.stakes)) for (const k of ["limit", "offset", "complete", "next_offset", "more_note"]) delete v.stakes[k];
+  }
   const { stakeKindsInOldForm, worldKinds } = await import("./helpers/kind-forms.mjs");
   const { worldClone } = await import("./fixture-paths.mjs");
   return JSON.stringify(await stakeKindsInOldForm(v, () => worldKinds(worldClone())));

@@ -58,7 +58,8 @@ const AS_OF_B = "bbbbbbbbbbbb0000000000000000000000000002";
 const POLL_MS = 200;
 const PEN_T0 = "postmark-office:pen:t0";
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
-const kindOf = (sql) => (/json::jsonb/.test(sql) ? "probe" : /^SELECT handle, json FROM town_residents/.test(sql.trim()) ? "roll" : "other");
+// The probe's statement names the casts (`json::jsonb`) or, once 100 landed, the two stored columns it reads in their place (`github_top`, POS-1095): the same read, either way.
+const kindOf = (sql) => (/json::jsonb|github_top/.test(sql) ? "probe" : /^SELECT handle, json FROM town_residents/.test(sql.trim()) ? "roll" : "other");
 
 test("POS-815 · the index refresh reads the probe, then the roll, one pen connection at boot and on every tick, each failing alone", { timeout: 90_000 }, async (t) => {
   const store = await startStore({ db: "refresh_serial" });

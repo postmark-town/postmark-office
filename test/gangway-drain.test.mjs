@@ -24,13 +24,13 @@
 // landed in, so a held join would have been reported as waiting and then walked
 // past forever. G4 is that falsifier, and it fails on the reporting half alone.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -55,7 +55,7 @@ delete process.env.TOWN_PUSH; // nothing here may leave the machine
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 const trash = [];
-const tmp = (tag) => { const d = mkdtempSync(join(tmpdir(), `pm-${tag}-`)); trash.push(d); return d; };
+const tmp = (tag) => { const d = tempDir(`pm-${tag}-`); trash.push(d); return d; };
 const dropAll = () => {
   for (const d of trash.splice(0)) {
     // A leftover temp directory is not a failing falsifier. On Windows a sqlite
@@ -78,6 +78,7 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q");
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

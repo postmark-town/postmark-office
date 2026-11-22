@@ -93,11 +93,12 @@ import { STATE_KEYS as LIKENESS_STATE_KEYS } from "./household-likeness-state.mj
 // reaches the PRIVATE render, and the public printout and GET /households
 // carry it only once src/registry-public.mjs names it (POS-726).
 //
-// THE TAIL OF THIS TEMPLATE IS SIX COLUMNS, and they are appended in the order
+// THE TAIL OF THIS TEMPLATE IS EIGHT COLUMNS, and they are appended in the order
 // their migrations landed so that no standing key ever moves: `formerly`
 // (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
-// migration 021) after that, then `home_images`, `likeness`, `invited_by` and
-// `likeness_state` (each described beside NESTED_KEYS below). The first two usually render
+// migration 021) after that, then `home_images`, `likeness`, `invited_by`,
+// `likeness_state`, `hearth` and `human_profile` (each described beside
+// NESTED_KEYS below, `hearth` in migration 093). The first two usually render
 // nothing: 0/118 live rows carried either — measured on the town's own files,
 // twice, a day apart, when they landed.
 //
@@ -108,9 +109,11 @@ import { STATE_KEYS as LIKENESS_STATE_KEYS } from "./household-likeness-state.mj
 // ("this house has no former key"); so are a `false` and an absent
 // `provisional` ("this house's key was chosen"). Both render as no key at all,
 // exactly as a NULL `name` does — see the two narrow predicates below.
+// `human_profile` (POS-721, migration 101) is the eighth tail column, appended
+// last so no standing key moves (described beside NESTED_KEYS below).
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth",
+  "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth", "human_profile",
 ]);
 // `likeness_official` (POS-726 slice B) is the one key a PRINTED file may carry that is no column of its own: the public official-use
 // projection of `likeness_state.official` (src/registry-public.mjs § publicHouse prints it, and only while the answer is yes). It is folded
@@ -149,8 +152,8 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. Five columns carry them (NESTED_KEYS below):
-// `accounts`, `home_images`, `likeness`, `invited_by` and `likeness_state`. `residents` and
+// objects are ordered by. Six columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness`, `invited_by`, `likeness_state` and `human_profile`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
 // column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
@@ -181,7 +184,15 @@ export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 // beside its answer (src/household-likeness-state.mjs). One object with a FIXED top level (request, official, history), NULL
 // until a household asks, and a NULL renders as no key at all, so nothing moves on the first crossing after the column lands. It is the
 // PRIVATE column: the public print carries only its official-use projection, `likeness_official` (src/registry-public.mjs).
-const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS, likeness_state: LIKENESS_STATE_KEYS });
+//
+// `human_profile` (migration 101, POS-721) is the sixth: one object with a FIXED
+// set of keys (the one writer, src/human-profile.mjs, builds it), the town name
+// first, each key present only while its field is set. NULL when nothing is
+// set, and a NULL renders as no key at all, so nothing moves on the first
+// crossing after the column lands. It is PUBLIC by design (a town name, a line
+// and pronouns the human chose to show), so src/registry-public.mjs names it.
+export const HUMAN_PROFILE_KEYS = Object.freeze(["town_name", "short_line", "pronouns"]);
+const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS, likeness_state: LIKENESS_STATE_KEYS, human_profile: HUMAN_PROFILE_KEYS });
 
 // A pin's column names are the file's key names except one: `id` is a reserved
 // enough word in SQL company that the column is `gh_id`, and this is the single
@@ -317,6 +328,8 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       likeness_state: rec?.likeness_state ?? (isAbsent(rec?.likeness_official) ? null : { official: rec.likeness_official }),
       // And `hearth` (093, POS-962): no key folds to NULL, "the household chose nothing": the default Hearth.
       hearth: rec?.hearth ?? null,
+      // And `human_profile` (101, POS-721): no key folds to NULL, "nothing set".
+      human_profile: rec?.human_profile ?? null,
     });
   }
 

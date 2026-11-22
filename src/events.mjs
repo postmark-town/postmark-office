@@ -46,6 +46,9 @@ export const ACT_ANNOUNCE = "announce";
 export const ACT_POST = "post";
 export const ACT_AMEND_POST = "amend";
 export const ACT_CLOSE = "close";
+// POS-1035: the town's INTERNAL completion of a staked event (the keep tick's, never a resident's door act): the event's spark made
+// and its stake come home in one act. The stored state stays as it was; "ended" is still the clock's (Rivet's seam response (3)).
+export const ACT_COMPLETE = "complete";
 // The bug class's one move along its lifecycle (Posts phase 2): the state it
 // moves to, and the class's own fields that stage sets.
 export const ACT_ADVANCE = "advance";
@@ -471,6 +474,25 @@ export function applyPostAct(state, act) {
   if (act.action === ACT_CANCEL || act.action === ACT_CLOSE) {
     if (!prev) return null;
     const row = { ...prev, state: act.action === ACT_CANCEL ? STATE_CANCELLED : (p.state ?? STATE_CANCELLED), last_act: actId };
+    // POS-1035 (Darko 11:00 EST: "All 20 come home, no spark"): a staked event's whole stake returns IN the cancellation's own
+    // act, and the fold carries that it did — so a second cancellation, or a completion, can see it was paid and never pays twice
+    if (p.stake_returned && prev.fields?.stake)
+      row.fields = { ...prev.fields, stake: { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) } } };
+    state.posts.set(id, row);
+    return row;
+  }
+  // THE COMPLETION (POS-1035; call 22): `fields.completed { act, sparks, at }` — the identities of the sparks it made, one per room
+  // in their order, recorded ONCE — and the stake's whole return with the backing it now gives them (1 each). A FREE event's
+  // completion is `{ act, at, free: true }` and nothing more: its sparks are its host's private drafts, never named on the row.
+  // Nothing else about the row moves.
+  if (act.action === ACT_COMPLETE) {
+    if (!prev) return null;
+    const sparks = Array.isArray(p.sparks) ? p.sparks.map(String) : [];
+    const fields = { ...prev.fields, completed: p.free === true ? { act: actId, at: String(p.at), free: true } : { act: actId, sparks, at: String(p.at) } };
+    if (p.stake_returned && prev.fields?.stake)
+      fields.stake = { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) },
+        backing: { sparks, n: Number(p.backing ?? 0) } };
+    const row = { ...prev, fields, last_act: actId };
     state.posts.set(id, row);
     return row;
   }

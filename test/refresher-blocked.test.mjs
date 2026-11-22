@@ -31,9 +31,9 @@ import assert from "node:assert/strict";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { blessed, draftRefForHousehold, mainRef, publishedState, readAtRef } from "../src/world-branches.mjs";
 import { startWorldRefresher, worldRefresher } from "../src/world-refresher.mjs";
@@ -50,8 +50,8 @@ const LIMIT_MS = 100;
 const OVER_SHARE = 0.01;
 const CEILING_MS = HOLD_MS / 6;
 
-const repo = mkdtempSync(join(tmpdir(), "postmark-refresher-blocked-"));
-const scratch = mkdtempSync(join(tmpdir(), "postmark-refresher-hold-"));
+const repo = tempDir("postmark-refresher-blocked-");
+const scratch = tempDir("postmark-refresher-hold-");
 after(() => {
   worldRefresher(repo)?.stop();
   rmSync(repo, { recursive: true, force: true });

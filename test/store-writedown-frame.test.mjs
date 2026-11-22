@@ -58,9 +58,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 import { fileFramer } from "../src/world-drain.mjs";
@@ -123,7 +123,7 @@ const rec = (fields, body) => `---\n${fields.join("\n")}\n---\n\n${body}\n`;
  * state, exactly as the settlement clone's main carries it.
  */
 function liveShapedWorld(t) {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-storewd-frame-"));
+  const repo = tempDir("postmark-storewd-frame-");
   t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch { /* litter */ } });
   const put = (p, text) => { mkdirSync(join(repo, dirname(p)), { recursive: true }); writeFileSync(join(repo, p), text); };
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -167,7 +167,7 @@ function liveShapedWorld(t) {
  * run `marks-fold.mjs`, read what it placed.
  */
 function foldAt({ repo, git }, ref) {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-storewd-fold-"));
+  const dir = tempDir("postmark-storewd-fold-");
   try {
     cpSync(join(WORLD, "tools"), join(dir, "tools"), { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "world-fixture", type: "module" }));

@@ -24,7 +24,8 @@ import { tendingBefore, TENDING_DEFECT } from "./clone-fresh.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
+import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
 import { publishedState } from "./world-branches.mjs";
 import { guardedDraftsForKey } from "./world2-guards.mjs"; // the §1c delta, over the sketchbook and the journal both (POS-5 slice 1); the journal half is answered from the store, unconditionally since G1
 import { forecastForMark, nextSettlement } from "./world-forecast.mjs";
@@ -40,12 +41,13 @@ const WORLD_CLONE = process.env.WORLD_CLONE ?? resolve(HERE, "..", "world-clone"
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
-// The town clone's own stake engine, imported live; null when that clone carries none.
-// Each caller says what a missing engine means at its own door.
+// The town clone's stake engine, as the office's pinned copy checked against
+// the clone (POS-994); null when that clone carries none. Each caller says what
+// a missing engine means at its own door; a pin stop is not "none", it throws
+// TownPinMismatch by name.
 async function townStakeEngine(clone = TOWN_CLONE) {
-  const enginePath = join(clone, "tools", "world-stake.mjs");
-  if (!existsSync(enginePath)) return null;
-  return import(pathToFileURL(enginePath));
+  if (!existsSync(join(clone, "tools", "world-stake.mjs"))) return null;
+  return importTownTool(clone, "world-stake.mjs");
 }
 
 /**

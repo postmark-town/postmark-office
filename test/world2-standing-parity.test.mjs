@@ -28,8 +28,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join } from "node:path";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
@@ -50,7 +50,7 @@ const temps = [];
 after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 function sharedCheckout(repo, sha, label) {
-  const dir = mkdtempSync(join(tmpdir(), `standing-parity-${label}-`));
+  const dir = tempDir(`standing-parity-${label}-`);
   temps.push(dir);
   execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", repo, join(dir, "w")], { stdio: "ignore" });
   git(join(dir, "w"), ["-c", "advice.detachedHead=false", "checkout", "-q", sha]);

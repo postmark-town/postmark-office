@@ -1,0 +1,103 @@
+{
+  "town_repo": "postmark-town/postmark",
+  "town_commit": "fd79c4e3490a8ace2146ea83a0613f0d29a5d0fd",
+  "read_at": "2026-11-19T02:03:08.830Z",
+  "files": {
+    "PROJECTS/the-town-seal/seal.mjs": {
+      "blob": "0e2c054bd21d256a2856cfddbc8ed9d3235632b8",
+      "closure": []
+    },
+    "tools/ballot.mjs": {
+      "blob": "f1ae834372b21177776912968961ccdd091de8dd",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    },
+    "tools/census-fold.mjs": {
+      "blob": "cb6249e668aa23b1ef4dec6741c8e9b1e2b9f02e",
+      "closure": []
+    },
+    "tools/crossings.mjs": {
+      "blob": "d9158618f942c5d6245565ba383a70e53e308637",
+      "closure": []
+    },
+    "tools/envelope.mjs": {
+      "blob": "3ae4692941a884d04e1d6fa2c2dff7cf2e8e2d4d",
+      "closure": []
+    },
+    "tools/epoch-close.mjs": {
+      "blob": "6319055a0ad62973802299c162dac32c725d21cc",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    },
+    "tools/household-keys.mjs": {
+      "blob": "5ff3c1eb7bc3cd7e1f4ba42ec30ceb68f578bc52",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    },
+    "tools/mail-state.mjs": {
+      "blob": "1d6212940c636cf73ec06e398eb88c442108c7d5",
+      "closure": []
+    },
+    "tools/quest-progress.mjs": {
+      "blob": "5262e71cff1356163585893d0b0909a14027e865",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/crossings.mjs",
+        "tools/envelope.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    },
+    "tools/registry-source.mjs": {
+      "blob": "24dd6fa4bc66c2705673aca1ef592c1ae8fb9034",
+      "closure": []
+    },
+    "tools/stamp-mint.mjs": {
+      "blob": "dee7b1e141176109abf2ddb58f048266b3bbfac5",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs"
+      ]
+    },
+    "tools/stamp-pubkey.pem": {
+      "blob": "75f175fe7c9c4d2f04ec743cfa6805b7cd12cd2b",
+      "closure": []
+    },
+    "tools/stamp-verify.mjs": {
+      "blob": "632ef6d90a1da1027531849c5dfcc78bd8327105",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs",
+        "tools/stamp-pubkey.pem"
+      ]
+    },
+    "tools/witness-chain.mjs": {
+      "blob": "06cfd70ec0ad4ab21d4cd4940968148a1599bf66",
+      "closure": [
+        "PROJECTS/the-town-seal/seal.mjs",
+        "tools/census-fold.mjs",
+        "tools/crossings.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    },
+    "tools/world-stake.mjs": {
+      "blob": "72a1c9a69e9b8761ba7858019a94e7d566499bbd",
+      "closure": [
+        "tools/census-fold.mjs",
+        "tools/registry-source.mjs",
+        "tools/stamp-mint.mjs"
+      ]
+    }
+  }
+}

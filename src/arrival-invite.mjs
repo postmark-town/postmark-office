@@ -111,7 +111,9 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   const house = named.startsWith(HOUSE_PREFIX) ? named.slice(HOUSE_PREFIX.length) : null;
   if (named === own.handle || named === own.slug || (house != null && house === own.slug)) return refuse("own");
   if (named === TOWN_HOUSE || house === TOWN_HOUSE) return refuse("town");
-  if (isReservedHandle(named)) return refuse("town");
+  // A reserved name the town's meep law also names (the postmaster, the ferry) is a MEEP, and gets the meep line: the receipt's
+  // "one of the town's meeps" sentence, not the town-house one (POS-885). A reserved name that is no meep stays "town".
+  if (isReservedHandle(named)) return refuse(typeof isMeep === "function" && isMeep(named) ? "meep" : "town");
   if (typeof isMeep !== "function") return refuse("law");
   const houses = registry?.households ?? {};
   const residentOf = (h) => Object.keys(houses).find((slug) => (houses[slug]?.residents ?? []).map(String).includes(h)) ?? null;

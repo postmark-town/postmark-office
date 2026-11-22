@@ -51,14 +51,16 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // review-593 c: the world snapshot (POS-268 5b) is a soft step, after hhkeys_log.
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
 // 29 since POS-816: the invite pass, right after the welcome pass.
-test("the step list is the script's: 29 steps, 5 fatal and 24 soft, no step twice", () => {
-  assert.equal(STEPS.length, 29);
-  assert.equal(new Set(STEPS).size, 29);
+// 31 since POS-904: the Bluesky publisher, after the world step.
+test("the step list is the script's: 31 steps, 5 fatal and 26 soft, no step twice", () => {
+  assert.equal(STEPS.length, 31);
+  assert.equal(new Set(STEPS).size, 31);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[17], "snapshot", "after the fourteen locked soft steps (the invite pass among them since POS-816)");
-  assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
+  assert.equal(STEPS[18], "snapshot", "after the fifteen locked soft steps (the invite pass among them since POS-816, the event-sparks pass since POS-1035)");
+  assert.equal(STEPS[17], "sparks", "the event-sparks pass runs under the lock after the mint's commit, before the snapshot");
+  assert.deepEqual(STEPS.slice(-4), ["hhkeys_log", "world", "bluesky", "publish"]);
 });
 
 test("N-1 refused scheduled ticks are quiet; the Nth alarms; a skip, a notrun or a missing status never resets", () => {
@@ -306,7 +308,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 24 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 26 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line

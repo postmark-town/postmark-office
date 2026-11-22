@@ -27,8 +27,24 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ideasTank } from "./world-classes.mjs";
 import { signedRegistryLines } from "./ledger-pen.mjs";
+import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 
 export const FIRST_IDEA_WINDOW_END = "2026-09-30";
+
+/**
+ * The sweep's candidates: every published idea, as `[{ by, id, … }]`. Ideas are POSTS now (POS-854), and an idea
+ * that was a Think Tank mark is its author's post with the mark's provenance on it, so the candidates are the idea
+ * posts' authors beside any idea marks still standing; a household is paid once whichever stood first, by the ledger's
+ * own already-paid set. After the window closes there is nothing to read and nothing is. A post store that cannot be
+ * read THROWS (the crossing records the sweep as not run and sails: its caller's catch), never "no ideas".
+ * `posts` and `marks` are injectable for a suite.
+ */
+export async function firstIdeaCandidates(date, { env = process.env, posts = null, marks = () => ideasTank().ideas } = {}) {
+  if (date > FIRST_IDEA_WINDOW_END) return [];
+  const read = posts ?? (async () => (await import("./idea-store.mjs")).standingIdeaPosts({ env }));
+  const fromPosts = (await read()).map((p) => ({ by: p.by, id: p.id }));
+  return [...marks(), ...fromPosts];
+}
 
 /**
  * Plan the crossing's first-idea mints. `ideas` defaults to the world store's
@@ -42,7 +58,7 @@ export function planFirstIdeaSweep(clone, { date, ideas = null, windowEnd = FIRS
   const tank = ideas ?? ideasTank().ideas;
   if (!tank.length) return { mints: [], skipped: [] };
 
-  const engineDir = process.env.STAMP_ENGINE_DIR ?? join(clone, "tools");
+  const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs"]); // POS-994: the pinned copy, checked against the clone
   // The whole town-law half of the plan runs INSIDE the clone's own engine —
   // candidates in, lawful first-per-household lines out. Everything quoted
   // from stamp-mint: classifyEntry (already-paid), householdKeys + registry

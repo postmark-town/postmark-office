@@ -8,8 +8,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { join, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -42,7 +43,7 @@ function ledger(rows) {
 const row = (db, household, s) => db.prepare("SELECT * FROM media WHERE household = ? AND sha = ?").get(household, s);
 
 function repo(files, { branches = {} } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "media-sweep-repo-"));
+  const dir = tempDir("media-sweep-repo-");
   dirs.push(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { stdio: ["ignore", "pipe", "pipe"] });
   const write = (fs) => { for (const [p, body] of Object.entries(fs)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), body); } };
@@ -280,8 +281,8 @@ test("every office door that hangs a media URL is named, and so is the source th
 });
 
 test("WLD-83: the office's own likeness gallery is a source, so a picture it hangs is never freed", async () => {
-  const { writeFileSync: wf, mkdtempSync: md } = await import("node:fs");
-  const file = join(md(join(tmpdir(), "gallery-src-")), "likeness-gallery.json");
+  const { writeFileSync: wf } = await import("node:fs");
+  const file = join(tempDir("gallery-src-"), "likeness-gallery.json");
   wf(file, JSON.stringify({ household: "starforge", entries: [{ handle: "rei", url: LOOSE }] }));
   const r = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], officeFiles: [file] });
   assert.equal(r.ok, true, JSON.stringify(r.sources));

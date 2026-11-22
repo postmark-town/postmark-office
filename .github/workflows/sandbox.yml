@@ -23,9 +23,13 @@ name: Stamp sandbox (on demand, advisory)
 # cache keys, so a PR that has run the suite restores both in seconds:
 #   · node_modules from `npm ci` (the sandbox's store is the embedded-postgres
 #     devDependency, test/helpers/embedded-store.mjs);
-#   · the town checkout at test/clone-pins.json's sha: the sandbox clones it
-#     locally with its remotes removed, re-signs the real ledger's history
-#     under a fresh ed25519 key, and runs the town's own engines from it.
+#   · the town checkout at the commit the office pins (src/town-pins/PINS.json's
+#     town_commit), fetched into the suite's town clone: the sandbox clones it
+#     locally with its remotes removed, re-signs the real ledger's history under
+#     a fresh ed25519 key, pins its own re-signed copy (tools/town-pins.mjs
+#     --write --out, under TOWN_PINS_DIR, as the dev office does; POS-1161) and
+#     runs the town's own engines from it. A dispatch's town_ref swaps in a
+#     paired town PR's commit instead (--at HEAD).
 # No secret: the key is made for the run and the store is thrown away with it.
 #
 # ── THE VERDICT ──────────────────────────────────────────────────────────────
@@ -41,7 +45,7 @@ on:
   workflow_dispatch:
     inputs:
       town_ref:
-        description: "a town branch or sha to run against (blank = test/clone-pins.json's pin)"
+        description: "a town branch or sha to run against (blank = the town commit src/town-pins/PINS.json pins)"
         required: false
         type: string
 
@@ -100,6 +104,14 @@ jobs:
 
       - run: bash .github/scripts/suite-clones.sh --check
 
+      - name: The town commit the office pins
+        run: |
+          pin=$(node -p "require('./src/town-pins/PINS.json').town_commit")
+          [[ "$pin" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::src/town-pins/PINS.json's town_commit is not a 40-hex commit: $pin"; exit 1; }
+          git -C town-clone fetch -q --no-tags origin "$pin"
+          git -C town-clone cat-file -e "$pin^{commit}"
+          echo "town-clone holds $pin, the commit the office pins; the sandbox runs it"
+
       - name: The town at town_ref
         if: github.event_name == 'workflow_dispatch' && inputs.town_ref != ''
         env:
@@ -117,9 +129,13 @@ jobs:
 
       - name: The sandbox
         id: run
+        env:
+          TOWN_REF: ${{ inputs.town_ref }}
         run: |
           set +e
-          node tools/stamp-sandbox.mjs --report "$RUNNER_TEMP/stamp-sandbox.md"
+          args=(--report "$RUNNER_TEMP/stamp-sandbox.md")
+          [ -n "$TOWN_REF" ] && args+=(--at HEAD)
+          node tools/stamp-sandbox.mjs "${args[@]}"
           code=$?
           set -e
           echo "code=$code" >> "$GITHUB_OUTPUT"

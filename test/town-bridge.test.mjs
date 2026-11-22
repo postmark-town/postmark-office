@@ -11,17 +11,17 @@
 // test; a suite that only kept testing those halves would go on being green
 // while the record never moved.
 
-import "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen
+import { stageEngine } from "./helpers/drain-pen.mjs"; // #2040: fixtures get a real ledger pen; POS-994: and the pinned stand-in engine
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -123,7 +123,7 @@ test.after(async () => { await IX_IN_RESTORE(); await IX_IN.stop(); });
  */
 const odbHomes = [];
 function liveShapeOdb() {
-  const dir = mkdtempSync(join(tmpdir(), "pm-odb-home-"));
+  const dir = tempDir("pm-odb-home-");
   odbHomes.push(dir);
   return openOauthDb(join(dir, "oauth.db"));
 }
@@ -131,7 +131,7 @@ const dropOdbHomes = () => { for (const d of odbHomes.splice(0)) rmSync(d, { rec
 
 /** A town clone with the rooms the doors write into, under git so the pen can commit. */
 function townClone({ handles = ["wright", "limen"] } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "pm-bridge-"));
+  const dir = tempDir("pm-bridge-");
   for (const h of handles) {
     mkdirSync(join(dir, "WHITE_PAGES", h, "outbox"), { recursive: true });
     mkdirSync(join(dir, "WHITE_PAGES", h, "inbox"), { recursive: true });
@@ -143,6 +143,7 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+  stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
   git("init", "-q");
   // the bytes a door writes are the bytes the clone holds: a Windows checkout
   // must not turn the batch's fast-forward into a CRLF rewrite (the box never does)
@@ -563,7 +564,7 @@ test("F5b · townLockHeld cannot guess: no flock, no answer", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test("F6 · THE LIVE LOG HAS NO `meta` UNTIL THE LOG MAKES ONE", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "pm-odb-"));
+  const dir = tempDir("pm-odb-");
   try {
     // THE PREMISE, and it is what made this a live bug rather than a tidy-up:
     // the town log lives in the office's oauth.db, and openOauthDb builds FIVE
@@ -621,9 +622,10 @@ test("F8 · the unit runs the drain AFTER the crash recovery and BEFORE the swee
   const unit = readFileSync(join(ROOT, "deploy", "postmark-ferry.service"), "utf8");
   const at = (needle) => { const i = unit.indexOf(needle); assert.notEqual(i, -1, `the unit no longer contains: ${needle}`); return i; };
 
-  const clean = at('clean -fdq -- WHITE_PAGES');
+  const clean = at('clean -fdxq -- WHITE_PAGES TOWN_BULLETIN');
   const drain = at("tools/town-drain-run.mjs");
-  const sweep = at("node tools/ferry.mjs");
+  // POS-994: the sweep is the town's ferry.mjs, run through the town-tool sandbox
+  const sweep = at("town-tool-sandbox.mjs ferry");
 
   assert.ok(clean < drain,
     "AFTER the reset/clean pair, which would otherwise throw away everything the drain just wrote");
@@ -714,7 +716,7 @@ test("F11 · PARITY: the same fixture, both skins, deep-equal", async () => {
   says("src/doorstep-bundle.mjs", BOTH_SKINS_LAW,
     "the law this falsifier enforces is written where the block lives");
 
-  const tmp = mkdtempSync(join(tmpdir(), "pm-parity-"));
+  const tmp = tempDir("pm-parity-");
   const clone = townClone();
   let child;
   try {
@@ -948,7 +950,7 @@ test("F15 · A BATCH THAT CANNOT COMMIT IS PUT BACK WHOLE AND HELD, and the next
   const clone = townClone();
   const o = liveShapeOdb();
   const { bare, g, origin, pushes } = originFor(clone);
-  const hooks = mkdtempSync(join(tmpdir(), "pm-hooks-"));
+  const hooks = tempDir("pm-hooks-");
   try {
     await pushingOn(() => flagOn(async () => {
       const before = g("rev-parse", "HEAD");
