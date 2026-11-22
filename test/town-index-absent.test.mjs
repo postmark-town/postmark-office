@@ -200,6 +200,11 @@ CHANGED["MCP household {}"].push(
     `"acts":[{"act":"add-resident"`],
   [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
     `,{"act":"letter-note"`]);
+// AND A HOUSEHOLD DELETES ITS OWN UPLOAD THAT NOTHING USES (POS-737/c, Darko 2026-11-21 21:18 EST, "Yes, both"): the act joins the
+// index at the roster's end, after letter-note; nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`{"act":"letter-note","teaches":"Note a letter.","fields":{"letter":{"required":true},"state":{"required":true},"on":{}}}]`,
+    `{"act":"letter-note","teaches":"Note a letter.","fields":{"letter":{"required":true},"state":{"required":true},"on":{}}},{"act":"delete-media","teaches":"Delete an upload of yours that nothing uses.","fields":{"url":{"required":true}}}]`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };
