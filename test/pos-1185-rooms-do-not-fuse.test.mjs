@@ -120,6 +120,7 @@ test("FALSIFIER 3 · a reply joins its parent's room even when another room's vo
   const refused = await say("far", "from across town", { replyTo: 80002 });
   assert.equal(refused.code, 422);
   assert.match(refused.defect, /say 80002 is not in a conversation you can hear from where you stand/);
+  assert.match(refused.hint, /walk back within earshot of it/, "the conversation is still open, only out of reach: walking back is what helps");
   assert.equal(d.penned.length, 3, "the pen never saw the refused say");
 });
 
@@ -178,7 +179,12 @@ test("WLD-242 · a reply to a say whose room has closed is refused 422 and write
   d.tick(61 * MIN);
   const late = await d.store.say("wes", "anyone?", { replyTo: 80002 });   // five metres from the say it answers: distance is not why it is refused
   assert.equal(late.code, 422, 'WLD-242: "A reply to a say whose room has closed is refused"');
-  assert.match(late.defect, /say 80002 is not in a conversation you can hear from where you stand/);
+  assert.equal(late.defect, "say 80002 is in a conversation that has closed", "a closed conversation is refused in its own words, not as one out of reach");
+  assert.equal(late.hint, "that conversation has closed, and a reply cannot reopen it. Say it fresh, with no reply_to, and it starts or joins a conversation where you are. The closed one is still there to read: say { circle: 80002 }");
+  // by who and when, the same refusal; and a say this office does not hold at all keeps the plain one
+  const byHandle = await d.store.say("wes", "anyone?", { replyTo: { handle: "wyn", at: T + 40 * MIN } });
+  assert.equal(byHandle.defect, "say 80002 is in a conversation that has closed");
+  assert.match((await d.store.say("wes", "anyone?", { replyTo: 99999 })).defect, /say 99999 is not in a conversation you can hear from where you stand/);
   assert.equal(d.penned.length, 2, "the pen never saw it: no act is written");
   assert.equal(d.log().length, 2, "and no line in the voices log");
   // nothing reopened the closed room: a plain say there founds a new one

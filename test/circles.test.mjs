@@ -431,7 +431,10 @@ test("CORE-97: past the hour of grace the room has closed — a reply to it is r
   tick(61 * 60_000);                          // silence through the whole hour after the settlement: the room closed at the hour
   const r = await store.say("seth", "Is the lemon one sour?", { replyTo: 70001 });
   assert.equal(r.code, 422);
-  assert.match(r.defect, /say 70001 is not in a conversation you can hear from where you stand/);
+  // POS-1185: a closed conversation has its own words. Until then this was the out-of-reach refusal, whose hint ("walk back within earshot") cannot help once the room has closed.
+  assert.equal(r.defect, "say 70001 is in a conversation that has closed");
+  assert.match(r.hint, /^that conversation has closed, and a reply cannot reopen it\. Say it fresh, with no reply_to, and it starts or joins a conversation where you are\./);
+  assert.doesNotMatch(r.hint, /walk back/);
   assert.equal(written.length, 1, "nothing written for the refused say");
 });
 
