@@ -38,8 +38,19 @@ process.env.GITHUB_API_URL = "http://127.0.0.1:9";   // closed: an own-post adva
 const { postAtTown, amendAtTown, advanceAtTown } = await import("../src/events-store.mjs");
 const { ownPostEvidenceOf } = await import("../src/bug-credit.mjs");
 const { judgeEarnedLink, earnedRef } = await import("../src/bugs.mjs");
+const { currentCrossing, nextCrossingAt } = await import("../src/crossings.mjs");
 
-const NOW = Date.now();
+// THE FIXTURE'S CLOCK (POS-1171). Every write below stamps its act with currentCrossing(its own `now`), while the pen's closed-window guard
+// (POS-940, world2-pen.mjs § lateCrossingGuard) compares that crossing with the town's open window at the WALL clock. The cases advance
+// `now` by as much as SPAN past NOW, so a run in the last SPAN before a 00:00Z/12:00Z crossing stamped the not-yet-open next window and the
+// guard refused it, correctly (the old `NOW = Date.now()` was red from 23:00Z to 00:00Z and from 11:00Z to 12:00Z: the longest case, the
+// steps-only edit, writes at +48, +50, +55, +60 and +70 min, so it was the first to cross, at 70 min out). The base is therefore the wall clock
+// held back, when it must be, to leave SPAN (and a minute) before the open window closes: the acts stay in the open window, at distinct times.
+const MIN = 60_000;
+const SPAN = 70 * MIN;                                   // the longest advance below (the steps-only case's +70)
+const wall = Date.now();
+const NOW = Math.min(wall, Date.parse(nextCrossingAt(wall)) - SPAN - MIN);
+assert.equal(currentCrossing(NOW + SPAN), currentCrossing(wall), "the fixture's writes stay in the window that is open now");
 const WRIGHT = { household: "starforge", handles: new Set(["wright"]) };
 const ERRANT = { household: "the-harbor", handles: new Set(["errant"]) };
 const FINN = { household: "finn", handles: new Set(["finn"]) };
@@ -118,7 +129,6 @@ async function reproduced(key = ERRANT, extra = {}) {
 }
 
 const iso = (a) => new Date(a.at).toISOString();
-const MIN = 60_000;
 
 test("the own post earns diagnosed: the reporter credited, the link kept on the stage record, each field dated by the act that wrote it; no GitHub read", async () => {
   const { pen, posts } = setup();
