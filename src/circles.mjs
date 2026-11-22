@@ -494,7 +494,13 @@ export function findConversation(clusters, { circle = null, room = null, after =
   // a room's id is the page's: its recorded root (CORE-97, memory: the room keeps its name when its front leaves memory or it
   // carries across a settlement), else its first say (the record, which holds the room whole)
   const roomOf = (c) => c.root ?? `t${c.voices[0].at}-${c.voices[0].handle}`;
-  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id)) : clusters.find((c) => roomOf(c) === String(room));
+  // POS-1183: the record rounds a say's `at` to the second, while the page's live room id carries milliseconds
+  // (t1795343232206-wren-porter vs the record's t1795343232000-wren-porter). An exact id wins; failing that, the same handle
+  // starting in the same second is the same room. No id the office hands out changes, and ?circle= is not loosened.
+  const roomKey = (rid) => { const m = /^t(\d+)-(.+)$/.exec(String(rid)); return m ? `${Math.floor(Number(m[1]) / 1000)}-${m[2]}` : null; };
+  const askedKey = id == null ? roomKey(room) : null;
+  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id))
+    : clusters.find((c) => roomOf(c) === String(room)) ?? (askedKey == null ? undefined : clusters.find((c) => roomKey(roomOf(c)) === askedKey));
   const asked = id != null ? { circle: id } : { room: String(room) };
   if (!hit)
     return { ...asked, history: "unavailable", source,
