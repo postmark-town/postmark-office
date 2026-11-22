@@ -1804,7 +1804,14 @@ TID per event from the event's **own immutable instant**, never the moment it
 publishes: the 53-bit microsecond field is the instant's milliseconds, then the
 event's number mod 1000, and the 10-bit clock id is fixed per kind (crossing 1,
 settlement 2). So one event has one key however often it is run, and at whatever
-hour; two kinds never alias; two events of a kind in one second still differ.
+hour; two kinds never alias; two events of a kind in one second still differ (the number
+is in the key). Two events of a kind can share a key only if they share an instant to the
+millisecond **and** their numbers differ by a multiple of 1000; the current S1-S187 keys are
+all distinct. The publisher refuses such a pair **sequentially**: the second, finding the first
+already recorded with that key, is `held` and nothing is sent. It does **not** serialize two
+such events running **at the same moment** (the check reads the state directory under each
+event's own lock, not under one lock for the kind), so that concurrent alias risk is open and
+tracked as POS-1190, not closed by this correction.
 - **crossing:** the crossing's sailing instant, 00:00Z or 12:00Z (`src/crossings.mjs § crossingSailsAt`).
 - **settlement:** the committer time of the commit the blessed tag `settlement/S<n>`
   peels to (a tag never moves; a commit's time never changes).
