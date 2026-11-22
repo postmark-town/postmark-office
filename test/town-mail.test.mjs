@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { fixtureKey, putValues, fixtureTown, drop, tempClone } from "./fixture.mjs";
+import { fixtureKey, putValues, fixtureTown, drop, tempClone, seedLetterFields } from "./fixture.mjs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
@@ -86,6 +86,7 @@ function mailClone() {
   }
   mkdirSync(join(dir, "tools"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), LEDGER);
+  seedLetterFields(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q");
   git("add", "-A");
