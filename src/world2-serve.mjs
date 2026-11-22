@@ -99,7 +99,7 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, settlementsRecorded, heldPlaced } from "./world.mjs";
 import { hearable, roomOpen, ROOM_GRACE_MS } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
@@ -971,7 +971,7 @@ async function readRooms(p, entries) {
  * to a point needs the anchor mark's centre, retired marks too: a say happened where its anchor stood at the time. A say whose
  * anchor is in no row at all is left out and disclosed by count; it never fails the read (#351).
  */
-async function conversationsFromRecord(p, searchParams, { settlements = settlementsKnown, hearingWindow = hearingWindowAt } = {}) {
+async function conversationsFromRecord(p, searchParams, { settlements = settlementsRecorded, hearingWindow = hearingWindowAt } = {}) {
   const at = clockOf(searchParams);
   if (at.error) return at.error;
   const n = (k, d) => { const v = Number(searchParams?.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -1654,7 +1654,11 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       heard: live.earshotAt(emissions, near, { radiusM, mode }).sort((a, b) => a.distance_m - b.distance_m) } };
   }
 
-  if (path === "/world2/conversations") { await speakerBook(); /* POS-1132: the book the line shapers read */ return conversationsFromRecord(p, searchParams, { settlements, hearingWindow }); }
+  if (path === "/world2/conversations") { await speakerBook(); /* POS-1132: the book the line shapers read */ 
+    // POS-1185: the record reads EVERY published settlement (hearing-window § recorded), so no room is too old to open; hearing's
+    // own list (the newest sixty, `settlementsKnown`) is the say read's. A caller that hands in its own list (a test) is heard.
+    return conversationsFromRecord(p, searchParams, { settlements: settlements === settlementsKnown ? settlementsRecorded : settlements, hearingWindow });
+  }
 
   if (path === "/world2/occupancy") {
     // The containment stack, folded from the crossings. P-036's door: the

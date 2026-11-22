@@ -2141,6 +2141,8 @@ hearing.refresh().catch(() => {});
 export const hearingWindowAt = (at) => hearing.read(at);
 /** Every published settlement this office keeps in memory (ms, ascending): where a conversation splits (POS-779). */
 export const settlementsKnown = () => hearing.settlements();
+/** Every published settlement world main holds (ms, ascending), for the conversations RECORD's reads (POS-1185): no room is too old to open. */
+export const settlementsRecorded = () => hearing.recorded();
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
