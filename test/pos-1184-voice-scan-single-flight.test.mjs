@@ -187,9 +187,8 @@ test("FALSIFIER 6: a say recorded after scan 1 began is in the answer of a reade
   acts.push(C3);
   const spoke = ask(`circle=${C3.id}`, p); // the resident who just spoke opens their say
   await untilArrived(p, 2);
+  p.release(2); // scan 2's gate is opened ahead, so a version that never opens a scan 2 fails on the say below, not on waiting for it
   p.release(1);
-  await untilScans(p, 2);
-  p.release(2);
   assert.equal((await first).code, 200);
   const r = await spoke;
   assert.equal(r.body.find.history, "complete", "the say is there: this reader's rows came from a scan that began after they asked");
