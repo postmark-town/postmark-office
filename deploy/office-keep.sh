@@ -515,6 +515,24 @@ keep_settle_unlanded() {
     *) keep_step sparks refused "exit:$sparks_rc"
        echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
   esac
+  # ── a merged Hearth design joins the Hearth ballot, and its entry pay is queued (STAR-237) ──
+  # Darko, 2026-11-22: "for the ballot, why doesn't it automatically appear?" / "yes pleae". Still under the town lock and
+  # AFTER the mint, the sparks and every other write to the clone have landed: each merged design on the town's main (a folder of
+  # PROJECTS/household-hearths with a hearth.html, its author bound to a resident) that is not yet a candidate of the Hearth ballot
+  # joins it, while the ballot's join window is open, through the ballot's own amend act (the office's hand, in the act log), in
+  # one amend and one town commit. Then the Hearth quest's pass is PLANNED, never run (POS-632: Wright reads every owed entry and
+  # applies by hand; tools/quest-pay-plan.mjs refuses the tick by design): what it finds owed is raised as ONE row for the
+  # operator, a file beside the receipt log with the entries, the households and the digest, and the receipt says
+  # `ok owed:hearth_entry`. Exit 0 nothing owed · 4 owed, row raised (still ok) · anything else refused. Non-fatal: the next tick asks again.
+  hj_rc=0
+  node /srv/postmark-office/deploy/hearth-joins.mjs --town "$TOWN_CLONE" --owed "$(dirname "$KEEP_LOG")/hearth-entry-owed.json" || hj_rc=$?
+  case "$hj_rc" in
+    0) keep_step hearth_joins ok ;;
+    4) keep_step hearth_joins ok owed:hearth_entry
+       echo "[office-keep] the Hearth entry pay is OWED — the row and its digest are in $(dirname "$KEEP_LOG")/hearth-entry-owed.json; Wright reads each entry and applies by hand (POS-632)" >&2 ;;
+    *) keep_step hearth_joins refused "exit:$hj_rc"
+       echo "[office-keep] hearth joins had refusals (non-fatal) — the lines above name each one; the next tick asks again" >&2 ;;
+  esac
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town" || { keep_rc=$?; keep_step snapshot refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step snapshot ok
 ) 9>>"$LOCK"
