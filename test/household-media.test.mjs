@@ -598,3 +598,95 @@ test("a ledger that fits inside the bound reports itself complete", async () => 
   assert.equal(r.complete, true);
   assert.equal(r.more_note, undefined, "an empty shelf and a cut one must not look alike");
 });
+
+// ── the door that deletes: household { do: "delete-media" } (POS-737/c) ─────
+//
+// LAW (Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both"): "give a household a
+// delete for its own pictures that nothing uses, with a receipt. Deletion is
+// permanent; a picture still in use can't be deleted." The decision is the
+// sweep's (test/media-sweep.test.mjs § the household's own delete); these hold
+// the door: who may ask, what it says, and that the household verb reaches it.
+
+const { deleteMediaAtOffice, DELETE_TEACH, SOURCE_WORDS } = await import("../src/household-media.mjs");
+const { STORE_SOURCES } = await import("../src/media-sweep.mjs");
+
+/** A fixture clone: one commit on main holding these files. */
+function cloneWith(files) {
+  const dir = tempDir("pm-media-del-");
+  for (const [p, body] of Object.entries(files)) {
+    mkdirSync(join(dir, p, ".."), { recursive: true });
+    writeFileSync(join(dir, p), body);
+  }
+  execFileSync("git", ["-C", dir, "init", "-q", "-b", "main"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"], { stdio: "ignore" });
+  return dir;
+}
+const ELSEWHERE = `https://media.postmark.town/media/someone/${"9".repeat(64)}.png`; // a picture the fixture town hangs, so its sources answer
+const sourcesHanging = (...urls) => ({
+  worldClone: cloneWith({ "WORLD/marks/a/mark.md": `image: ${ELSEWHERE}\n${urls.map((u) => `image: ${u}`).join("\n")}` }),
+  townClone: cloneWith({ "WHITE_PAGES/a/PROFILE.md": `avatar_url: ${ELSEWHERE}` }),
+  pool: null, storeSources: [], officeFiles: [],
+});
+
+test("delete-media: the callers the media read refuses, a resident the key does not hold, several residents naming none, and no url, each refused with nothing touched", async () => {
+  const db = odb();
+  const up = await upload(PNG, key(), db);
+  const ask = (k, f) => deleteMediaAtOffice({ url: up.url, ...f }, k, { odb: db, sources: sourcesHanging() });
+  const berth = await ask({ berth: true, slug: "wanderer" }, {});
+  assert.deepEqual([berth.code, berth.defect], [403, "a berth holds no media"]);
+  assert.deepEqual([(await ask({ handles: new Set() }, {})).code, (await ask({ handles: new Set() }, {})).defect], [403, "media is your household's own"]);
+  const stranger = await ask(key(), { handle: "someone-else" });
+  assert.deepEqual([stranger.code, stranger.defect], [403, "\"someone-else\" is not one of your residents"]);
+  const two = await ask(key({ handles: new Set(["tester", "other"]) }), {});
+  assert.deepEqual([two.code, two.defect, two.your_residents], [422, "which of your residents?", ["tester", "other"]]);
+  const nourl = await deleteMediaAtOffice({}, key(), { odb: db });
+  assert.deepEqual([nourl.code, nourl.defect], [422, "which upload?"]);
+  assert.equal((await mediaLedgerRows(db, "testers")).length, 1, "the upload stands");
+});
+
+test("delete-media: an own upload nothing uses is deleted, with the receipt, the wall after and the note; one in use is refused, naming where in a resident's words", async () => {
+  const db = odb();
+  const free = await upload(PNG, key(), db);
+  const hung = await upload(svg("hung"), key(), db);
+  const sources = sourcesHanging(hung.url);
+  const before = await mediaQuota(db, "testers");
+  const deleted = [];
+  const r = await deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources, del: async (k) => { deleted.push(k); } });
+  assert.equal(r.error, undefined, JSON.stringify(r));
+  assert.deepEqual([r.deleted, r.purged, r.freed_bytes], [true, true, free.bytes]);
+  assert.deepEqual(r.receipt.objects, deleted);
+  assert.deepEqual([r.receipt.url, r.receipt.cause, r.receipt.deleted_by, r.receipt.uploaded_by], [free.url, "household", "tester", "tester"]);
+  assert.deepEqual(r.quota, { ceiling: before.ceiling, used: before.used - free.bytes, remaining: before.remaining + free.bytes },
+    "LAW: \"The bytes leave the household's 200 MB wall at once.\"");
+  assert.match(r.note, /^Deleted for good: /);
+
+  const refused = await deleteMediaAtOffice({ url: hung.url }, key(), { odb: db, sources, del: async (k) => { deleted.push(k); } });
+  assert.deepEqual([refused.error, refused.code, refused.defect], ["bounce", 409, "that file is still in use"]);
+  assert.deepEqual(refused.in_use, ["a mark in the world"]);
+  assert.equal(deleted.length, 3, "only the free file's objects were deleted");
+  assert.deepEqual((await mediaLedgerRows(db, "testers")).map((u) => u.url), [hung.url]);
+});
+
+test("delete-media: every source the sweep reads has a resident's words for `in_use`", () => {
+  const names = ["world", "drafts", "town", "office:likeness-gallery.json", ...STORE_SOURCES.map((s) => `store:${s.table}`)];
+  assert.deepEqual(names.filter((n) => !(n in SOURCE_WORDS)), [], "a new source names its words here");
+});
+
+test("delete-media through the household verb: on the menu, its card readable by name, dispatched to the door, and the media read names it", async () => {
+  const db = odb();
+  await upload(PNG, key(), db);
+  const bare = await householdApex({}, key(), { odb: db, slim: true });
+  assert.ok(bare.acts?.some((a) => a.act === "delete-media"), "the household's bare answer lists the act");
+  const card = await householdApex({ read: "delete-media" }, key(), { odb: db, slim: true });
+  assert.equal(card.card?.act, "delete-media", JSON.stringify(card));
+  assert.deepEqual(Object.keys(card.card.fields), ["url"]);
+  assert.equal(card.card.fields.url.required, true);
+  // another household's upload: refused by the door, through the verb, with the verb's envelope
+  const theirs = await upload(svg("theirs"), key({ household: "others", handles: new Set(["other"]) }), db);
+  const r = await householdApex({ do: "delete-media", args: { url: theirs.url } }, key(), { odb: db });
+  assert.deepEqual([r.error, r.code, r.defect, r.did], ["bounce", 403, "that file is another household's", "delete-media"], JSON.stringify(r));
+  assert.equal((await mediaLedgerRows(db, "others")).length, 1, "their file stands");
+  const media = await mediaRead(key(), { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
+  assert.equal(media.delete, DELETE_TEACH);
+});
