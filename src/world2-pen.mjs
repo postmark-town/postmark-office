@@ -201,7 +201,10 @@ async function pool(env = process.env) {
       // POS-370: the acquire timeout and the server's idle-transaction limit ride
       // every connection (store-pool.mjs § storePoolOptions), and an idle
       // connection's failure is logged, never an unheard 'error' event.
-      state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 3 })), "pen");
+      // POS-1095: six connections, not three (Darko, 2026-11-16 22:43 EST), after the
+      // cluster's max_connections went 100 to 150; the per-thread sum is docs/BOX.md's
+      // connection math (postmark-internal), and any pool change redoes it.
+      state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 6 })), "pen");
       return state.pool;
     } finally { state.starting = null; }
   })();
