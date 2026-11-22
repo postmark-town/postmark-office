@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { openOauthDb, mintBerth, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN } from "../src/oauth.mjs";
+import { openOauthDb, mintBerth, berthLookup, berthTaken, berthLapse, berthSunset, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN } from "../src/oauth.mjs";
 import { isReservedHandle } from "../src/residency.mjs";
 import { __setPoolForTest as setActsPool } from "../src/world2-acts.mjs";
 import { holdStoreProbe } from "../src/index-probe.mjs";
@@ -251,4 +251,56 @@ test("POS-761: the rules acknowledgement and the co-sign write land on THIS bert
   const r = odb.prepare(sql).run(4242, "old-human", 1, "pinned-name", old.token_hash);
   assert.equal(Number(r.changes), 0, "the old berth's co-sign wrote onto the stranger's row");
   assert.equal(odb.prepare("SELECT cosigned_gh_id FROM berths WHERE slug = 'pinned-name'").get().cosigned_gh_id, null);
+});
+
+// ── POS-1189: A CO-SIGNED BERTH KEY KEEPS WORKING (Darko 2026-11-22 18:41 EST, "keep working") ─────────────────────────────
+// "A row with `cosigned_gh_id` must not be turned away for its date. The seven-day clock stays for a berth nobody has co-signed."
+// The door half (REST, MCP, media) is test/berth-expiry.test.mjs.
+
+test("POS-1189 · a co-signed berth PAST its date still upgrades in place as its household; the same key, no new credential", async () => {
+  const key = await cosignedBerth("past-heir", 4545, "past-human");
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'past-heir'").run();
+  await withStore({ pins: [{ handle: "past-heir", login: "past-human", gh_id: 4545 }], residents: ["past-heir"] }, async () => {
+    const k = await berthLookup(odb, null, null, key);
+    assert.equal(k?.keyKind, "berth-upgraded", "the date does not turn a co-signed key away");
+    assert.ok(k.handles.has("past-heir"));
+    assert.equal(k.household, "past-human");
+  });
+  // a co-signed berth whose human the registry does not know yet: still the co-signed berth, past its date too
+  const lone = await cosignedBerth("past-lone", 4646, "unknown-human");
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'past-lone'").run();
+  await withStore({ pins: [] }, async () => {
+    const k = await berthLookup(odb, null, null, lone);
+    assert.deepEqual([k?.berth, k?.slug, k?.cosigned], [true, "past-lone", true]);
+  });
+});
+
+test("POS-1189 · a co-signed berth never sunsets, so its name stays held: a re-board under it is refused, and the berth is not archived", async () => {
+  await cosignedBerth("held-heir", 4747, "held-human");
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'held-heir'").run();
+  assert.ok(await berthTaken(odb, "held-heir"), "the co-signed berth holds its name past its date");
+  await assert.rejects(() => mintBerth(odb, "held-heir"), (e) => e.code === 409);
+  assert.equal(odb.prepare("SELECT COUNT(*) AS n FROM berths WHERE slug LIKE 'held-heir~%'").get().n, 0, "never archived");
+  assert.equal(odb.prepare("SELECT cosigned_gh_id FROM berths WHERE slug = 'held-heir'").get().cosigned_gh_id, 4747);
+});
+
+test("POS-1189 · berthLapse names ONLY a berth key nobody co-signed whose date has passed; the sunset's words carry the one-POST way back", async () => {
+  const { key: gone } = await mintBerth(odb, "gone-wanderer");
+  odb.prepare("UPDATE berths SET expires = 1700000000 WHERE slug = 'gone-wanderer'").run();
+  assert.deepEqual(await berthLapse(odb, gone), { slug: "gone-wanderer", expired_at: "2023-11-14T22:13:20.000Z" });
+  assert.equal(await berthLookup(odb, null, null, gone), null, "and it is still no key");
+  const { key: live } = await mintBerth(odb, "live-wanderer");
+  assert.equal(await berthLapse(odb, live), null, "a live berth has not sunset");
+  const cos = await cosignedBerth("cos-wanderer", 4848, "cos-human");
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'cos-wanderer'").run();
+  assert.equal(await berthLapse(odb, cos), null, "a co-signed berth never sunsets");
+  for (const other of ["pmb_unknown", "pmk_household-key", "nonsense", undefined]) assert.equal(await berthLapse(odb, other), null, String(other));
+  // a re-boarded name: the sunset key is still that name's
+  await mintBerth(odb, "gone-wanderer");
+  assert.equal((await berthLapse(odb, gone))?.slug, "gone-wanderer");
+  const s = berthSunset({ slug: "gone-wanderer", expired_at: "2023-11-14T22:13:20.000Z" });
+  assert.equal(s.code, 401);
+  assert.equal(s.defect, 'your berth key has sunset — "gone-wanderer" lapsed at 2023-11-14T22:13:20.000Z');
+  assert.match(s.hint, /fourteen crossings \(seven days\)\. Re-boarding is one POST: POST \/berth \{"slug": "gone-wanderer"\}/);
+  // (a store that cannot answer is the door's outage, 503, never a sunset: test/berth-expiry.test.mjs E3)
 });
