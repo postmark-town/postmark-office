@@ -801,8 +801,9 @@ function publishedEdges({ settlements, hearingWindow, ms }) {
 // It no longer can (src/rooms.mjs): a say's room is decided once. So WHICH SAYS ARE IN WHICH ROOM is kept, per pool, for the life
 // of the process, and a read fetches only the rooms it serves:
 //   · built ONCE, single-flight, at the first read after a start: one read of every voice act WITHOUT its words (the grouping
-//     needs who, when and where, never what was said) and one of the marks, for the says that carry no recorded room (every act
-//     from before POS-1185). Those says are named as they were when spoken, once; no later say can move them;
+//     needs who, when and where, never what was said), a page of act numbers at a time, and one of the marks, for the says that
+//     carry no recorded room (every act from before POS-1185). Those says are named as they were when spoken, once; no later say
+//     can move them;
 //   · kept current by a small read of the acts NEWER than the kept ones (by act number, so an act that arrives late is still
 //     seen). Each new say carries its room on its own act (`payload.conversation`), so it is filed by name, with no geometry;
 //   · served by reading the rooms asked for by their act numbers (the primary key), and only their anchor marks.
@@ -810,14 +811,42 @@ function publishedEdges({ settlements, hearingWindow, ms }) {
 // older code wrote it after this one started) makes it build again; so does a settlement appearing among the old says' own.
 //
 // THE SETTLED MARK. An act number is given out before its transaction commits, so two says can become visible out of order. The
-// newer-acts read therefore starts after the newest act number whose row has been in the store ten minutes, and every row newer
-// than that is asked for again each time (a handful); filing is by act number and happens once.
+// newer-acts read therefore starts after the newest act number whose row's transaction began ten minutes ago or more, and every row
+// newer than that is asked for again each time (a handful); filing is by act number and happens once. Why that is enough: act
+// numbers are given out in order, so an act still unseen with a LOWER number than the mark would have to be in a transaction that
+// has been open since before the marked one took its number, which is most of ten minutes. A say's transaction is one insert, awaited
+// by the say's own request; this holds while one lives under five minutes.
+//
+// THE THREAD (POS-1185, after w48.3: the stopgap moved the load from the pool to the office's main thread, and reads queued behind
+// each other's grouping for seconds). `/world/conversations?room=|circle=|before=` is answered on the main thread, so this door
+// never holds it long: the one whole build names the old says a step at a time, letting the event loop turn between steps
+// (rooms.mjs § roomsOfInSteps), and each read's own work (its room's says into lines) takes its OWN turn of the loop, one read per
+// turn, so timers and every other request run between two reads of a burst.
+//
+// THE CEILINGS. A page holds at most CONVERSATIONS_CLOSED_MAX closed conversations and CONVERSATIONS_LIVE_MAX open ones, so no one
+// read can fetch the whole record (`?closed=100000`, or a read evaluated before any settlement, where every room counts as open).
+// The site's "Show earlier" asks for 40. A read that asked for more is told so in `limits`, never cut silently.
 export const ROOMS_SETTLE_MINUTES = 10;
+/** The most closed conversations one page holds. The conversations page's "Show earlier" asks for 40; this leaves two and a half times that. */
+export const CONVERSATIONS_CLOSED_MAX = 100;
+/** The most open conversations one read serves (the newest by their latest say). The town's busiest record has held a few dozen open at once. */
+export const CONVERSATIONS_LIVE_MAX = 100;
+/** How long the kept rooms' build works before it lets the event loop turn. */
+const TURN_BUDGET_MS = 10;
+const loopTurn = () => new Promise((ok) => setImmediate(ok));
+let lastOwnTurn = Promise.resolve();
+/** One read's own turn of the event loop: each caller's turn comes after the last caller's, one per turn of the loop. */
+function ownTurn() { const mine = lastOwnTurn.then(loopTurn); lastOwnTurn = mine; return mine; }
 const LIGHT_VOICE_COLS = `id, at, actor, action, at_anchor, at_dx, at_dy,
   CASE WHEN jsonb_typeof(payload) = 'object' THEN (payload - 'text') #- '{payload,text}' ELSE payload END AS payload,
   (inserted_at <= now() - interval '${ROOMS_SETTLE_MINUTES} minutes') AS settled`;
-/** Every voice act, without its words: the kept rooms' one whole read. $1 the voice actions. */
-export const ROOMS_BUILD_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`;
+/** How many voice acts one page of the whole read brings: the driver parses a page's rows in one piece, so a page is one short hold of the thread. */
+export const ROOMS_BUILD_PAGE = 2000;
+/**
+ * Every voice act, without its words: the kept rooms' one whole read, a page at a time by act number (the primary key), so the
+ * thread is never held for the parse of every row at once. $1 the voice actions, $2 the act number to read after (0 to begin).
+ */
+export const ROOMS_BUILD_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) AND id > $2 ORDER BY id LIMIT ${ROOMS_BUILD_PAGE}`;
 /** The voice acts newer than the settled mark, without their words. $1 the voice actions, $2 the act number to read after. */
 export const ROOMS_TAIL_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) AND id > $2 ${talk.VOICE_ORDER_SQL}`;
 /** The says of the rooms a read serves, whole, by act number. */
@@ -842,16 +871,42 @@ function voicesOfRows(rows, centres) {
   catch (e) { throw Object.assign(e, { unknownVoiceEra: true }); }
 }
 
+/** The settled mark after reading `rows`: the newest act number among the rows whose transaction began ten minutes ago or more. */
 function settledMark(rows, prev, now = Date.now()) {
-  let mark = prev, hold = Infinity;
+  let mark = prev;
   for (const r of rows) {
     const id = Number(r.id);
     if (!Number.isFinite(id)) continue;
     // a pool that hands back no `settled` (a test's canned rows) is judged by the say's own instant
     const settled = r.settled === true || (r.settled == null && Date.parse(r.at) <= now - ROOMS_SETTLE_MINUTES * 60_000);
-    if (settled) { if (id > mark) mark = id; } else if (id < hold) hold = id;
+    if (settled && id > mark) mark = id;
   }
-  return Math.max(prev, Math.min(mark, hold - 1));
+  return mark;
+}
+
+/** `voicesOfRows` over many rows, a slice at a time, letting the event loop turn when a slice has run past the budget. */
+async function voicesOfRowsInTurns(rows, centres) {
+  const all = { voices: [], eras: { crystallized: 0, live: 0 }, refusals: [], unplaced: [], non_sound_emissions: 0 };
+  let since = performance.now();
+  for (let i = 0; i < rows.length; i += 500) {
+    const part = voicesOfRows(rows.slice(i, i + 500), centres);
+    for (const v of part.voices) all.voices.push(v);
+    all.eras.crystallized += part.eras.crystallized; all.eras.live += part.eras.live;
+    all.unplaced.push(...part.unplaced); all.non_sound_emissions += part.non_sound_emissions;
+    if (performance.now() - since > TURN_BUDGET_MS) { await loopTurn(); since = performance.now(); }
+  }
+  return all;
+}
+
+/** Run a pausable derivation (rooms.mjs § roomsOfInSteps) to its end, letting the event loop turn whenever it has worked past the budget. */
+async function inTurns(steps) {
+  let since = performance.now();
+  let step = steps.next();
+  while (!step.done) {
+    if (performance.now() - since > TURN_BUDGET_MS) { await loopTurn(); since = performance.now(); }
+    step = steps.next();
+  }
+  return step.value;
 }
 
 /** File a say under the room its act recorded: rooms.mjs § roomsOf's own rule for a named say, one act at a time. */
@@ -872,13 +927,40 @@ function fileNamedSay(ix, row) {
   ix.named += 1;
 }
 
+/** A row's instant in ms, as the store ordered it (a pool's Date, or a test's ISO string). */
+const instantOf = (row) => (row.at instanceof Date ? row.at.getTime() : Date.parse(row.at));
+
+/** The whole read: every voice act without its words, page after page by act number, then put in the record's order (instant, then act number). */
+async function readEveryVoiceAct(p) {
+  const rows = [];
+  const got = new Set();
+  for (let after = 0; ;) {
+    const from = after;
+    const page = (await p.query(ROOMS_BUILD_SQL, [talk.VOICE_ACTIONS, after])).rows;
+    let fresh = 0;
+    for (const row of page) {
+      const id = Number(row.id);
+      if (Number.isFinite(id)) { if (got.has(id)) continue; got.add(id); if (id > after) after = id; }
+      rows.push(row); fresh += 1;
+    }
+    // the end: a short page, or a page that brought nothing new (a pool that hands back more than it was asked for: a test's)
+    if (page.length < ROOMS_BUILD_PAGE || !fresh || after === from) break;
+  }
+  await loopTurn();
+  return rows.sort((a, b) => instantOf(a) - instantOf(b) || Number(a.id) - Number(b.id));
+}
+
 async function buildRooms(p, edges, cut) {
-  const { rows } = await p.query(ROOMS_BUILD_SQL, [talk.VOICE_ACTIONS]);
+  const rows = await readEveryVoiceAct(p);
   const { rows: markRows } = await p.query(talk.ANCHOR_MARKS_SQL);
+  // THE THREAD: everything from here is this thread's own work over every voice act, so it is done a piece at a time with the
+  // event loop turning between pieces (§ THE THREAD above). No piece below runs longer than a few milliseconds past TURN_BUDGET_MS.
+  await loopTurn();
   const open = rows.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is on no keyless read, and in no room of one
   const centres = talk.anchorCentres(markRows);
   const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
-  const derived = voicesOfRows(open.filter((row) => recordedRoomOf(row) == null), centres);
+  await loopTurn();
+  const derived = await voicesOfRowsInTurns(open.filter((row) => recordedRoomOf(row) == null), centres);
   // a voice older than the oldest published settlement (`cut`) sits in an epoch whose start is unknown: it is left out and said, never grouped
   const grouped = cut == null ? derived.voices : derived.voices.filter((v) => v.at >= cut);
   const lastAt = derived.voices.reduce((m, v) => Math.max(m, v.at), -Infinity);
@@ -887,17 +969,24 @@ async function buildRooms(p, edges, cut) {
     unnamed: { voices: derived.voices.length, eras: derived.eras, unplaced: derived.unplaced, ungrouped: derived.voices.length - grouped.length, lastAt },
     edgesKey: unnamedEdgesKey(edges, lastAt),
   };
+  await loopTurn();
   const position = new Map([...grouped].sort((a, b) => a.at - b.at).map((v, i) => [v, i]));
-  const founded = talk.roomsOf(grouped, { earshotM: dials.earshot_m.value, boundaries: edges })
+  await loopTurn();
+  const rooms = await inTurns(talk.roomsOfInSteps(grouped, { earshotM: dials.earshot_m.value, boundaries: edges }));
+  await loopTurn();
+  const founded = rooms
     .map((c) => ({ root: c.root, ids: c.voices.map((v) => Number(v.act_id)), latest: c.latest, order: position.get(c.voices[0]), named: false, says: c.voices.filter((v) => v.id != null) }))
     .sort((a, b) => a.order - b.order);
+  await loopTurn();
   for (const { says, ...room } of founded) {
     ix.rooms.push(room);
     if (!ix.byId.has(room.root)) ix.byId.set(room.root, room);
     if (!ix.byKey.has(roomKeyOf(room.root))) ix.byKey.set(roomKeyOf(room.root), room);
     for (const v of says) ix.roomOfSay.set(v.act_id, room);
   }
+  await loopTurn();
   for (const row of open) if (recordedRoomOf(row) != null) fileNamedSay(ix, row);
+  await loopTurn();
   for (const row of rows) ix.seen.add(String(row.id));
   ix.watermark = settledMark(rows, 0);
   return ix;
@@ -950,6 +1039,9 @@ async function readRooms(p, entries) {
     : [];
   const anchors = [...new Set(rows.map((row) => row.at_anchor).filter((a) => a && a !== talk.WORLD_ANCHOR))];
   const { rows: markRows } = await p.query(ROOM_ANCHORS_SQL, [anchors, `the-town/${talk.SAY_CLASS_NAME}`]);
+  // THE THREAD: from here to the answer is this read's own work (its says into voices, lines and circles). It takes its own turn of
+  // the event loop, one read per turn, so a burst of reads never runs back to back on the office's main thread (§ THE THREAD above).
+  await ownTurn();
   const derived = voicesOfRows(rows, talk.anchorCentres(markRows));
   const voicesOf = new Map();
   for (const v of derived.voices) {
@@ -970,7 +1062,8 @@ async function readRooms(p, entries) {
  *
  * `?closed=` and `?voices=` are the caller's two dials (page size, lines per thread); `?before=<ISO or ms>` is the cursor (the
  * `earlier.before` of the page before), and a page behind it carries no live threads. `?at=` evaluates the answer at an instant:
- * which rooms are open then. It never moves a say to another room.
+ * which rooms are open then. It never moves a say to another room. A page holds at most CONVERSATIONS_CLOSED_MAX closed rooms and a
+ * read at most CONVERSATIONS_LIVE_MAX open ones; a read that asked for more is told so in `limits`, and the cursor reaches the rest.
  *
  * WHAT A READ FETCHES (POS-1185): the acts newer than the kept rooms hold, then only the rooms it serves — one named room, or the
  * live rooms and one page of closed ones — by act number, and the marks those says are anchored on. § THE ROOMS, KEPT, above.
@@ -1000,6 +1093,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   const find = findOf(searchParams); // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
   const voiceCap = n("voices", 80);
   let ix, read, body;
+  const limits = {};
   try {
     ix = await roomsKept(p, known, edges.length ? edges[0] : null);
     if (find) {
@@ -1012,10 +1106,20 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
       read = await readRooms(p, entry ? [entry] : []);
       body = talk.conversationFound([...read.rooms.values()], find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap });
     } else {
-      const page = talk.conversationsPage(roomsInOrder(ix), { now: at.ms, boundaries: edges, closedMax: n("closed", 40), before });
-      read = await readRooms(p, [...page.live, ...page.closed]);
+      // THE CEILINGS (§ above): a page's closed rooms and a read's open rooms are bounded, so no read fetches the whole record
+      const askedClosed = n("closed", 40);
+      const page = talk.conversationsPage(roomsInOrder(ix), { now: at.ms, boundaries: edges, closedMax: Math.min(askedClosed, CONVERSATIONS_CLOSED_MAX), before });
+      const live = page.live.slice(0, CONVERSATIONS_LIVE_MAX); // newest first, so the open rooms with the newest says
+      if (askedClosed > CONVERSATIONS_CLOSED_MAX)
+        limits.closed = { asked: askedClosed, served_at_most: CONVERSATIONS_CLOSED_MAX,
+          note: `a page holds at most ${CONVERSATIONS_CLOSED_MAX} closed conversations and ${askedClosed} were asked for, so this page holds the newest ${CONVERSATIONS_CLOSED_MAX} behind its cursor. \`earlier.remaining\` says how many are behind it and \`earlier.before\` is the cursor for the next page (?before=)` };
+      if (page.live.length > live.length)
+        limits.live = { open: page.live.length, served: live.length,
+          note: `${page.live.length} conversations are open at the instant asked and one read serves the ${CONVERSATIONS_LIVE_MAX} with the newest says. The others are not on this answer; each still opens by its id (?room=<id>)`
+            + (edges.length ? "" : ". No settlement is known at that instant, so every conversation in the record counts as open: ask at an instant after a settlement and the closed ones are paged by ?before=") };
+      read = await readRooms(p, [...live, ...page.closed]);
       const held = (list) => list.filter((e) => read.rooms.has(e)); // a room whose every say is unplaced has nothing to show
-      body = talk.conversationsBody({ live: held(page.live), closed: held(page.closed), remaining: page.remaining },
+      body = talk.conversationsBody({ live: held(live), closed: held(page.closed), remaining: page.remaining },
         { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap, fadeMs: read.dials.fade_min.ms, voicesBefore, roomOf: (e) => read.rooms.get(e) });
     }
   } catch (e) {
@@ -1042,6 +1146,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     voices, eras: { crystallized: ix.unnamed.eras.crystallized, live: ix.unnamed.eras.live + ix.named },
     dials: Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }])),
     ...body,
+    ...(Object.keys(limits).length ? { limits } : {}), // POS-1185: a read that asked for more than a page holds is told so, here
     ...(unplacedLine ? { unplaced_says: { count: unplaced.length,
       example: { act_id: unplaced[0].act_id, anchor: unplaced[0].anchor } } } : {}),
     disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,

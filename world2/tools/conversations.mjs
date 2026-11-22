@@ -70,8 +70,8 @@
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
 import { markIdOf, sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
 import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
-import { roomsOf, roomIdOf, roomKeyOf, isRoomId } from "../../src/rooms.mjs"; // POS-1185: which room a say is in, decided once — shared with voices.mjs, never a second copy
-export { roomsOf }; // the record's rooms, for every reader of this module (the door's kept rooms, an event's rooms)
+import { roomsOf, roomsOfInSteps, roomIdOf, roomKeyOf, isRoomId } from "../../src/rooms.mjs"; // POS-1185: which room a say is in, decided once — shared with voices.mjs, never a second copy
+export { roomsOf, roomsOfInSteps }; // the record's rooms, for every reader of this module (the door's kept rooms, an event's rooms)
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
