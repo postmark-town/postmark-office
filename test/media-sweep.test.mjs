@@ -377,7 +377,9 @@ test("POS-737/c: STORAGE that refuses leaves the file claimed and off the wall (
   const up = await uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG });
   const failed = await own(db, "eve", up.url, { del: async () => { throw new Error("storage answered 503 to DELETE x"); } });
   assert.deepEqual([failed.deleted, failed.purged, failed.freed_bytes], [true, false, PNG.length]);
-  assert.match(failed.storage_failed, /503/);
+  const { FAULT_LOGGED } = await import("../src/fault-words.mjs");
+  assert.equal(failed.storage_failed, FAULT_LOGGED, "the resident reads the office's sentence; storage's own words go to the log (POS-578)");
+  assert.doesNotMatch(failed.storage_failed, /503|DELETE/);
   assert.equal((await mediaQuota(db, "eve")).used, 0, "its bytes left the wall at the claim");
   await assert.rejects(uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG }),
     (e) => e.code === 409 && /your household deleted it and storage has not confirmed yet/.test(e.hint));

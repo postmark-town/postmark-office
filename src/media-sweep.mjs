@@ -104,6 +104,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { asPaper } from "./paperwork.mjs";
+import { faultLogged } from "./fault-words.mjs"; // a storage refusal's own words go to the log; the resident reads the office's (POS-578)
 import { blessed, freshestMainRef } from "./world-branches.mjs";
 import {
   MEDIA_BASE, MEDIA_GRACE_DAYS, MEDIA_HOUSEHOLD_CAUSE, ensureMediaTable, mediaLedgerHasStates, mediaObjectKeysOf, mediaUrlFor, mediaUrlParts, r2Delete,
@@ -427,7 +428,6 @@ export async function takedown({ odb, url, reason, by, apply = false, now = Date
 export const HOUSEHOLD_DELETE_REASON = "deleted by its household: nothing in the town used it";
 const ROW_COLUMNS = "household, sha, ext, bytes, by_handle, unreferenced_since, deleted_at, deleted_cause, deleted_by, purged_at";
 const refusal = (code, defect, hint, extra = {}) => ({ refused: { code, defect, hint, ...extra } });
-const storageWords = (e) => String(e?.message ?? e).slice(0, 200);
 
 /** The receipt a row carries: the file, who uploaded it, and how it was freed. Who freed it is named only
  *  when its household did: a takedown's operator and reason stay the operator's receipt (`takedown`). */
@@ -533,8 +533,8 @@ export async function deleteOwnUpload({
   const receipt = receiptOf({ ...row, deleted_by: by, deleted_cause: MEDIA_HOUSEHOLD_CAUSE }, { at: new Date(now).toISOString() });
   try { await deleteObjects(row, del); }
   catch (e) {
-    log(`[media] delete-media ${household}/${by} ${p.sha.slice(0, 12)}: claimed, storage refused: ${storageWords(e)}`);
-    return { deleted: true, purged: false, freed_bytes: Number(row.bytes), receipt, storage_failed: storageWords(e) };
+    return { deleted: true, purged: false, freed_bytes: Number(row.bytes), receipt,
+      storage_failed: faultLogged(`delete-media ${household}/${by} ${p.sha.slice(0, 12)}: claimed, storage refused`, e) };
   }
   await paper.run(`UPDATE media SET purged_at = ? WHERE ${KEY_WHERE} AND deleted_at IS NOT NULL AND purged_at IS NULL`, now, ...keyArgs(row));
   log(`[media] delete-media ${household}/${by} ${p.sha.slice(0, 12)}.${p.ext} ${row.bytes}B freed`);
@@ -547,8 +547,8 @@ async function finishClaimed(paper, row, { now, del, log }) {
   if (row.purged_at != null) return { already: true, purged: true, freed_bytes: 0, receipt };
   try { await deleteObjects(row, del); }
   catch (e) {
-    log(`[media] delete-media retry ${row.household} ${String(row.sha).slice(0, 12)}: storage refused again: ${storageWords(e)}`);
-    return { deleted: true, purged: false, freed_bytes: 0, receipt, storage_failed: storageWords(e) };
+    return { deleted: true, purged: false, freed_bytes: 0, receipt,
+      storage_failed: faultLogged(`delete-media retry ${row.household} ${String(row.sha).slice(0, 12)}: storage refused again`, e) };
   }
   await paper.run(`UPDATE media SET purged_at = ? WHERE ${KEY_WHERE} AND deleted_at IS NOT NULL AND purged_at IS NULL`, now, ...keyArgs(row));
   return { deleted: true, purged: true, freed_bytes: 0, retried: true, receipt };
