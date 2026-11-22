@@ -73,6 +73,25 @@ test("the reader: the whole list is asked once, a later sweep reaches it through
   assert.equal(wholeAsks, 2, "one trip, one answer, and never again");
 });
 
+// The independent review of 7ba23476, finding 5: the whole-history ask was awaited BEFORE the ask that opens the ear's window, so at a start
+// hearing had no settlement edge until it answered. Hearing comes first: its window and its 60 are set while the whole ask is still out.
+test("the reader: the ear has its window and its own list BEFORE the record's whole list has answered", async () => {
+  let release = null, asked = false;
+  const newest = [sweepAt(5), sweepAt(4)];
+  const h = createHearingWindow({ repo: "unused",
+    published: async () => newest[0], blessed: async () => null, history: async () => [...newest],
+    everything: () => { asked = true; return new Promise((ok) => { release = () => ok([sweepAt(5), sweepAt(4), sweepAt(3)]); }); } });
+  const refreshed = h.refresh();
+  for (let i = 0; i < 50 && !asked; i++) await new Promise((ok) => setImmediate(ok));   // wait on the event: the whole ask has been made
+  assert.equal(asked, true, "the whole list has been asked for, and has not answered");
+  assert.equal(h.read()?.since, sweepAt(5), "the ear's window is already open: hearing never waits on the record's list");
+  assert.deepEqual(h.settlements(), [sweepAt(4), sweepAt(5)], "and hearing has its own list");
+  assert.deepEqual(h.recorded(), [sweepAt(4), sweepAt(5)], "the record has what hearing has until its own list answers");
+  release();
+  await refreshed;
+  assert.deepEqual(h.recorded(), [sweepAt(3), sweepAt(4), sweepAt(5)]);
+});
+
 // ── THE WIRING: a spawned office, a real Postgres, the invented world ──
 let s = null, skip = false, office = null, api = null;
 const OLD = sweepAt(1) + 2 * H;          // a say in the second epoch: older than the 60 newest sweeps
