@@ -232,6 +232,10 @@ lawful AS (
     -- window stays readable. No DELETE.
     ('clearing_job', 'settlement_publications', 'INSERT'),
     ('clearing_job', 'settlement_publications', 'UPDATE'),
+    -- 095 § 4 (POS-1025/d, "Save first, then pay"): the clearing saves each window's decision once,
+    -- and the settlement crossing seals it by copying it into world_snapshots. INSERT only: a saved
+    -- decision is never changed or deleted.
+    ('clearing_job', 'settlement_decisions',    'INSERT'),
     ('law_ingester', 'law_projection',   'INSERT'),
     ('law_ingester', 'law_projection',   'DELETE'),
     ('law_ingester', 'stamp_projection', 'INSERT'),

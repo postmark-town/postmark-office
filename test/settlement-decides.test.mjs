@@ -96,12 +96,15 @@ async function seed({ escrow = true } = {}) {
   });
 }
 
+// The clearing saves its decision and the settlement crossing seals it (POS-1025/d), as on the box: each clearing here is followed
+// by the crossing's seal step through its window (nothing these tests decide pays a town return).
+const SEAL = join(ROOT, "world2", "tools", "settlement-seal.mjs");
 function clear(win = WIN, { worldRepo = WORLD } = {}) {
-  const r = spawnSync(process.execPath, [JOB, "--window", String(win), ...(worldRepo ? ["--world-repo", worldRepo] : [])], {
-    cwd: ROOT, encoding: "utf8",
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
-  });
-  return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") };
+  const r = spawnSync(process.execPath, [JOB, "--window", String(win), ...(worldRepo ? ["--world-repo", worldRepo] : [])], { cwd: ROOT, encoding: "utf8", env });
+  if (r.status !== 0) return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
+  const s = spawnSync(process.execPath, [SEAL, "--through", String(win)], { cwd: ROOT, encoding: "utf8", env });
+  return { code: s.status, out: `${r.stdout}\n${r.stderr}\n${s.stdout}\n${s.stderr}` };
 }
 const marksBy = async () => Object.fromEntries((await read("SELECT slug, status, retired_cause FROM marks ORDER BY slug")).map((r) => [r.slug, r.status === "standing" ? "standing" : r.retired_cause]));
 const live = async () => (await read("SELECT slug, class, stale, ord, from_window FROM settlement_publications WHERE to_window IS NULL ORDER BY ord")).map((r) => [r.slug, r.class, Number(r.ord)]);

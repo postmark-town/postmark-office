@@ -108,6 +108,7 @@ test("G4 · the dry leg withholds every act that leaves the run, in the order th
   const run = cross(b, { SETTLEMENT_DRY: "1" });
   assert.equal(run.res.status, 0, why(run));
   assert.deepEqual(run.receipt.withheld.map((l) => l.replace(/[:(].*$/, "").replace(/ settlement\/S\d+ at [0-9a-f]+, and its push$/, "").trim()), [
+    "the town's returns and the seals of the saved decisions through window 213",   // POS-1025/d: a dry crossing pays and seals nothing
     "the photograph's commit and push",
     "world main's push",
     "the tag",

@@ -174,6 +174,10 @@ export function isHarmWarning(receipt) {
 export function isTagWarning(receipt) {
   return LANDED.has(receipt?.status) && (receipt?.tag?.status === "refused" || receipt?.record?.status === "refused");
 }
+/** A BLOCKED settlement (POS-1025/d; Wright 2026-11-22 03:26Z: "A held seal is a blocked settlement, and it alarms like one"). */
+export function isSealBlocked(receipt) {
+  return receipt?.status === "refused" && receipt?.seal?.status === "blocked" && receipt?.seal?.blocked != null;
+}
 
 /**
  * The suite's own reds, out of its log. NOT a summary and not a tail: the `not
@@ -267,6 +271,14 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
       + "position, a stale replay, a seal with no number or no base). The next crossing measures from the last "
       + "printout that succeeded and composes the same refusal until the record is repaired; once it is, `sudo "
       + "systemctl start postmark-settlement-by-hand.service` prints the newest unprinted settlement under its own number.",
+    "seal-blocked":
+      "A BLOCKED SETTLEMENT, TOP PRIORITY (SHIPPING § 9; Wright 2026-11-22 03:26Z: \"A held seal is a blocked "
+      + "settlement, and it alarms like one\"). The clearing saved this settlement's decision and its removal; the "
+      + "crossing paid the town's return, but the gate (POS-1138) holds it: a mark it takes still carries stamps, or "
+      + "the ledger could not be read. Its seal waits, every later saved decision waits behind it in number order, and "
+      + "nothing prints until it clears. The decision is never changed and its return is never paid twice (the town's "
+      + "once-only id). The blocked removal, each held mark with its stakers, and the reason are below. Once the reason "
+      + "is repaired, `sudo systemctl start postmark-settlement-by-hand.service` retries the SAME decision.",
     "harm-warning":
       "THE TOWN IS PUBLISHED, AND THE HARM GATE NAMED HARM OVER IT (POS-1025/c: after the seal the checks only "
       + "raise alarms). The gate compared the printed tree with the one it started from and found a resident's mark "
@@ -294,6 +306,7 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
     "harm-warning": `**${klass}** — the settlement${S} PUBLISHED at \`${receipt?.at ?? at}\` and the harm gate named harm over its printout.`,
     tag: `**${klass}** — the settlement${S} PUBLISHED at \`${receipt?.at ?? at}\` and is not recorded as printed.`,
     printout: `**${klass}** — the settlement${S} is sealed and its printout refused at \`${receipt?.at ?? at}\`.`,
+    "seal-blocked": `**${klass}** — S${receipt?.seal?.blocked?.settlement ?? "?"} is BLOCKED at \`${receipt?.at ?? at}\`: its town return is held, so it and every later settlement wait unsealed.`,
   };
   const lines = [
     FIRST[klass] ?? `**${klass}** — the settlement refused at \`${receipt?.at ?? at}\` and cannot clear itself.`,
@@ -306,6 +319,17 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
 
   // THE PRINTOUT'S OWN WORDS (POS-1025): why it refused, or which of the tag and
   // the record did, above the receipt.
+  if (klass === "seal-blocked") {
+    const b = receipt?.seal?.blocked ?? {};
+    lines.push("### The blocked return", "", `- removal: \`${b.removal ?? "?"}\` (window ${b.window ?? "?"}, day ${b.day ?? "?"})`, `- reason: ${b.reason ?? "(none carried)"}`);
+    for (const h of b.held ?? []) {
+      const who = Object.entries(h.stakers ?? {}).flatMap(([m, xs]) => xs.map((x) => `${x.handle} ${x.n}✦ on ${m}`));
+      lines.push(`- held: \`${h.mark}\` — ${h.open ? Object.entries(h.open).map(([m, n]) => `${m} ${n}✦ open`).join(", ") : "open stamps unknown"}${who.length ? `; stakers: ${who.join(", ")}` : ""}`);
+    }
+    const waiting = receipt?.seal?.waiting ?? [];
+    if (waiting.length) lines.push(`- waiting behind it: ${waiting.map((w) => `S${w.settlement} (window ${w.window})`).join(", ")}`);
+    lines.push("");
+  }
   if (klass === "printout") {
     const p = receipt?.printout ?? {};
     lines.push("### The printout's refusal", "", "```", `${p.refused ?? "(no reason carried)"}: ${p.detail ?? ""}`, "```", "");
@@ -436,6 +460,7 @@ export async function escalate({
     printout: [isPrintoutRefusal, "a refused printout"],
     "harm-warning": [isHarmWarning, "a published crossing whose harm gate named harm or could not gate"],
     tag: [isTagWarning, "a published crossing whose tag or record refused"],
+    "seal-blocked": [isSealBlocked, "a blocked settlement"],
   };
   if (PRINTOUT_GATES[klass] && !PRINTOUT_GATES[klass][0](receipt)) {
     log(`[settlement-escalate] NOT FILED — \`--class ${klass}\` was asked over a receipt that is not ${PRINTOUT_GATES[klass][1]} `

@@ -490,7 +490,7 @@ export function stanceReturnsWhole(inputs, state) {
  * Without it nothing is written and the gate alone decides. `town_returns`
  * says what was returned, what waits and why.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null, decide = false }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
   // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
@@ -507,7 +507,11 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
-  const town = await townReturnsAt(header, gate, state, { townRepo, townReturns });
+  // `decide` (POS-1025/d, "Save first, then pay"): the clearing asks BEFORE its seal, and saves the answer. Every town return the
+  // engine names is then part of the decided removal, with its targets handed back for the settlement crossing to pay; nothing is
+  // written or read of the ledger here. The gate is asked after the payment, and a return it holds blocks the seal (Wright
+  // 2026-11-22 03:26Z), never changes this removal.
+  const town = decide ? null : await townReturnsAt(header, gate, state, { townRepo, townReturns });
   const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
@@ -540,6 +544,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
     ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
     ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
     ...(town ? { town_returns: town } : {}),
+    ...(decide ? { town_targets: (await import("./town-return.mjs")).townReturnTargets(state), limit_parcels: [...new Set(limitParcels)].sort() } : {}),
   };
 }
 

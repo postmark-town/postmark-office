@@ -139,3 +139,50 @@ test("a quiet or already-printed settlement runs neither the harm gate nor the s
     assert.equal(run.escalations, null, `${says}: a red suite fixture it never ran tells nobody`);
   }
 });
+
+// ── THE SEALS (POS-1025/d; Wright 2026-11-22 03:26Z) ──────────────────────────────────────────────────────────
+
+test("the crossing PAYS AND SEALS the saved decisions through its docket before anything prints, and pays only on a real crossing: --town-returns with SETTLEMENT_DRY unset, never under any SETTLEMENT_DRY", { skip }, () => {
+  const b = bottle({ suiteRed: false });
+  const real = cross(b, { SEAL_PAID: "1" });
+  assert.equal(real.res.status, 0, why(real));
+  const [seal] = real.stubs.filter((l) => l.startsWith("settlement-seal "));
+  assert.match(seal, /^settlement-seal --through 213 --town-clone \S+ --town-returns$/);
+  assert.ok(real.stubs.indexOf(seal) < real.stubs.findIndex((l) => l.startsWith("settlement-printout print")), "sealed before it prints");
+  assert.deepEqual(real.receipt.seal.sealed.map((s) => [s.window, s.settlement, s.town_return?.id]), [[213, 214, "town-return:S214"]], "the receipt names what it paid, under the town's once-only id");
+  assert.match(real.res.stderr, /\[settlement-auto\] seal: S214 \(paid 2✦\)/);
+  const zero = cross(b, { SETTLEMENT_DRY: "0" });
+  assert.match(zero.stubs.find((l) => l.startsWith("settlement-seal ")), /^settlement-seal --through 213 --town-clone \S+$/, "SETTLEMENT_DRY=0: no writer, the gate alone decides");
+  const dry = cross(b, { SETTLEMENT_DRY: "1" });
+  assert.match(dry.stubs.find((l) => l.startsWith("settlement-seal ")), /^settlement-seal --through 213 --town-clone \S+ --dry-run$/, "DRY: nothing paid or sealed");
+  assert.equal(dry.receipt.seal.status, "dry");
+});
+
+test("A BLOCKED SETTLEMENT ALARMS LIKE ONE: nothing sealed past it, printed or pushed; the receipt names its removal, its stakers and the reason; class seal-blocked, and a person is told", { skip }, () => {
+  const b = bottle({ suiteRed: false });
+  const run = cross(b, { SEAL_SAYS: "blocked" });
+  assert.equal(run.res.status, 1, why(run));
+  assert.equal(run.after, run.before, "origin is as it was");
+  assert.equal(calls(run, "print").length + calls(run, "tag").length + calls(run, "record").length, 0, "nothing printed, tagged or recorded");
+  assert.equal(run.receipt.status, "refused");
+  assert.equal(run.receipt.class, "seal-blocked");
+  const blocked = run.receipt.seal.blocked;
+  assert.deepEqual([blocked.settlement, blocked.window, blocked.removal, blocked.day], [214, 213, "S214", "2026-10-01"]);
+  assert.deepEqual(blocked.held[0].stakers, { "alpha/old-hall": [{ handle: "bo", n: 2 }] }, "its stakers, by name");
+  assert.match(blocked.reason, /stamps still stand on alpha\/old-hall \(2✦\)/);
+  assert.deepEqual(run.receipt.seal.waiting, [{ window: 214, settlement: 215 }], "and the settlements waiting behind it");
+  assert.match(run.receipt.detail, /^the settlement is BLOCKED: S214 \(window 213\) cannot be sealed until its town return clears: stamps still stand/);
+  assert.match(run.res.stderr, /SETTLEMENT BLOCKED — its town return is held; nothing is sealed past it and nothing is printed \(TOP PRIORITY: SHIPPING § 9\)/);
+  assert.match(run.escalations ?? "", /FILED seal-blocked/);
+  assert.equal(historyLines(run)[0].class, "seal-blocked");
+});
+
+test("a seal that REFUSES (out of order, a store that went away) prints nothing and says so by name", { skip }, () => {
+  const b = bottle({ suiteRed: false });
+  const run = cross(b, { SEAL_SAYS: "refused" });
+  assert.equal(run.res.status, 1, why(run));
+  assert.equal(calls(run, "print").length, 0);
+  assert.equal(run.receipt.status, "refused");
+  assert.equal(run.receipt.seal.status, "refused");
+  assert.match(run.receipt.detail, /^the saved decisions could not be sealed: out-of-order — S214 waits for S213$/);
+});

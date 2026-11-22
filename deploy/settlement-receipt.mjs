@@ -54,6 +54,7 @@ const withheldLines = (() => {
 })();
 
 const docket = readJson(env("SETTLEMENT_DOCKET_JSON"));
+const seal = readJson(env("SETTLEMENT_SEAL_JSON"));
 const printout = readJson(env("SETTLEMENT_PRINTOUT_JSON"));
 const tag = readJson(env("SETTLEMENT_TAG_JSON"));
 const record = readJson(env("SETTLEMENT_RECORD_JSON"));
@@ -301,10 +302,31 @@ const receipt = {
       }
     : null,
 
+  // ── THE SEALS (POS-1025/d) ─────────────────────────────────────────────────
+  //
+  // The saved decisions this crossing paid and sealed, in number order, each
+  // with its town return when it had one (the once-only id, and the first
+  // return when this one was a repeat). A BLOCKED settlement (Wright
+  // 2026-11-22 03:26Z: "A held seal is a blocked settlement, and it alarms like
+  // one") names its removal, each held mark with its stakers, and the reason,
+  // with the later decisions that wait behind it. Null when the crossing
+  // refused before it reached the seals.
+  seal: seal
+    ? {
+        status: seal.status ?? null,
+        sealed: seal.sealed ?? [],
+        ...(seal.would ? { would: seal.would } : {}),
+        ...(seal.blocked ? { blocked: seal.blocked, waiting: seal.waiting ?? [] } : {}),
+        ...(seal.status === "refused" ? { refused: seal.refused ?? null, detail: seal.detail ?? null } : {}),
+      }
+    : null,
+
   // WHOSE NIGHT IS THIS: a refused printout is the record's or the machinery's
   // to repair (a rerun prints the same refusal), so it carries a class the
-  // history and the roll-call count; anything else is null.
-  class: printout && (printout.status === "refused" || printout.refused) ? "printout-refused" : null,
+  // history and the roll-call count; a blocked settlement is ours to unblock,
+  // TOP PRIORITY (SHIPPING § 9); anything else is null.
+  class: seal?.status === "blocked" ? "seal-blocked"
+    : printout && (printout.status === "refused" || printout.refused) ? "printout-refused" : null,
 
   detail: DRY ? `DRY RUN, nothing written — ${env("SETTLEMENT_DETAIL") ?? ""}` : (env("SETTLEMENT_DETAIL") ?? ""),
 };

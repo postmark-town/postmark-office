@@ -56,6 +56,20 @@ const STUBS = {
 logArgs("await-clearing");
 process.stdout.write(JSON.stringify({ window: ${WINDOW}, cleared_at: "2026-10-01T05:45:44Z", waited_s: 0 }) + "\\n");
 `,
+  // THE SEAL (POS-1025/d): its shell contract. Seals the docket's decision (S214, paid when SEAL_PAID is set); BLOCKED on
+  // SEAL_SAYS=blocked, with the removal, a held mark and its staker named; refused on SEAL_SAYS=refused; dry under --dry-run.
+  "world2/tools/settlement-seal.mjs": `${LOGGER}
+logArgs("settlement-seal");
+const say = (o, code = 0) => { process.stdout.write(JSON.stringify(o) + "\\n"); process.exit(code); };
+if (flag("--dry-run")) say({ status: "dry", sealed: [], would: [{ window: ${WINDOW}, settlement: ${SETTLEMENT}, day: "2026-10-01", digest: "${"d".repeat(64)}" }] });
+if (process.env.SEAL_SAYS === "blocked") say({ status: "blocked", sealed: [], blocked: { settlement: ${SETTLEMENT}, window: ${WINDOW}, removal: "S${SETTLEMENT}", day: "2026-10-01",
+  held: [{ mark: "alpha/old-hall", leaving: ["alpha/old-hall"], open: { "alpha/old-hall": 2 }, stakers: { "alpha/old-hall": [{ handle: "bo", n: 2 }] } }],
+  reason: "stamps still stand on alpha/old-hall (2✦), so the mark cannot leave yet (POS-1138) after the return", source: "live" },
+  waiting: [{ window: ${WINDOW + 1}, settlement: ${SETTLEMENT + 1} }] }, 1);
+if (process.env.SEAL_SAYS === "refused") say({ status: "refused", refused: "out-of-order", detail: "S${SETTLEMENT} waits for S${SETTLEMENT - 1}" }, 1);
+say({ status: "sealed", sealed: [{ window: ${WINDOW}, settlement: ${SETTLEMENT}, digest: "${"d".repeat(64)}", snapshot: 7, sealed_now: true,
+  ...(process.env.SEAL_PAID ? { town_return: { removal: "S${SETTLEMENT}", date: "2026-10-01", source: "live", id: "town-return:S${SETTLEMENT}", already_returned: false, returned: [{ mark: "alpha/old-hall", handle: "bo", n: 2 }], total: 2 } } : {}) }] });
+`,
   // The REAL writer, over a register that answers STATE_LOG_ACTS: the real
   // writeJournalWindow merges by seq, and the real penCommit pushes when the
   // env says TOWN_PUSH=1. Only the store is a stub.
@@ -162,8 +176,8 @@ process.stdout.write(JSON.stringify({ changed: was !== now, commit_message: "reg
 `,
 };
 
-// The real files the crossing composes its receipt and its history with.
-const REAL = ["deploy/settlement-auto.sh", "deploy/settlement-receipt.mjs", "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
+// The real files the crossing composes its receipt and its history with (and the receipt's own import: WLD-224's reading).
+const REAL = ["deploy/settlement-auto.sh", "deploy/settlement-receipt.mjs", "deploy/parcel-captures-reading.mjs", "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
 
 let seq = 0;
 

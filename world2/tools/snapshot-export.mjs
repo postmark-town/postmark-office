@@ -608,6 +608,18 @@ export async function derive(client, { now = Date.now() } = {}) {
   // the newest window's seal: its settlement number and digest (095), or nothing before 095
   const { rows: [seal = null] } = await client.query(
     "SELECT sealed_settlement, digest FROM world_snapshots WHERE window_id = $1", [latest.id]);
+  // A WINDOW DECIDED AND NOT SEALED YET (095 § 4; POS-1025/d): the clearing saved its decision and the settlement crossing seals it
+  // after paying its town returns, in number order. Certified now, it would carry no settlement pair and read as a window sealed
+  // before 095, frozen under a tag the next run must then refuse. So the certification WAITS FOR ITS SEAL (Rivet 2026-11-22
+  // 03:47Z), by name, as it waits for a ferry; nothing is certified and every earlier certification and tag stands as it was.
+  if (!seal) {
+    const { rows: [has] } = await client.query("SELECT to_regclass('public.settlement_decisions') IS NOT NULL AS ok");
+    const { rows: [decided = null] } = has?.ok
+      ? await client.query("SELECT settlement FROM settlement_decisions WHERE window_id = $1", [latest.id])
+      : { rows: [] };
+    if (decided)
+      throw new Cannot(`window ${latest.id} is decided as S${decided.settlement} and not sealed yet (the settlement crossing seals it after its town returns, in number order): its certification waits for its seal, and nothing was certified`);
+  }
 
   return {
     windows, held, latest, cursors, archives, rendered, marksDigest, heldBack, seal,

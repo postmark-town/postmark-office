@@ -165,7 +165,7 @@ report() { # status detail
   SETTLEMENT_AT="$STAMP" SETTLEMENT_TOWN_SHA="${TOWN_SHA:-}" \
   SETTLEMENT_WORLD_FROM="${WORLD_FROM:-}" SETTLEMENT_WORLD_TO="${WORLD_TO:-}" \
   SETTLEMENT_TOWN_SNAPSHOT="$([ -d "$WORK/town/.git" ] && printf %s "$WORK/town" || true)" \
-  SETTLEMENT_DOCKET_JSON="${DOCKET_JSON:-}" SETTLEMENT_PRINTOUT_JSON="${PRINTOUT_JSON:-}" \
+  SETTLEMENT_DOCKET_JSON="${DOCKET_JSON:-}" SETTLEMENT_SEAL_JSON="${SEAL_JSON:-}" SETTLEMENT_PRINTOUT_JSON="${PRINTOUT_JSON:-}" \
   SETTLEMENT_TAG_JSON="${TAG_JSON:-}" SETTLEMENT_RECORD_JSON="${RECORD_JSON:-}" \
   SETTLEMENT_HARM_JSON="${HARM_JSON:-}" SETTLEMENT_SUITE_JSON="${SUITE_JSON:-}" \
   SETTLEMENT_STATE_LOG_JSON="${STATE_LOG_JSON:-}" SETTLEMENT_STATE_LOG_MODE="${STATE_LOG_MODE:-}" \
@@ -347,6 +347,48 @@ if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/await-clearing.mjs" \
 fi
 echo "[settlement-auto] docket: window $(node -e 'const d=require(process.argv[1]);process.stdout.write(String(d.window)+" locked at "+String(d.cleared_at)+(d.by_hand?" (TAKEN BY HAND — the newest unfolded window)":" (waited "+String(d.waited_s)+"s)"))' "$DOCKET_JSON")" >&2
 DOCKET_WINDOW="$(node -e 'const d=require(process.argv[1]);process.stdout.write(String(d.window))' "$DOCKET_JSON")"
+
+# ── PAY, THEN SEAL, THE SAVED DECISIONS IN NUMBER ORDER (POS-1025/d) ─────────
+#
+# Darko 2026-11-21, POS-1025/d: "Save first, then pay." The candle SAVED what it
+# decided for each window it closed (095 § 4); this crossing pays each saved
+# removal's town returns through POS-1138's writer, under the town's once-only
+# id for the saved `S<n>` and day, then seals exactly the saved header, lowest
+# number first, through the docket's window (world2/tools/settlement-seal.mjs).
+# Wright 2026-11-22 03:26Z: "the office seals the saved decisions in number
+# order, so a blocked return holds the later seals until it clears", and "a held
+# seal is a blocked settlement, and it alarms like one": a return the gate holds
+# seals nothing for it or after it, the receipt names its removal, its stakers
+# and the reason, a person is told, and the next crossing retries the same
+# decision. Nothing is printed this crossing.
+#
+# THE TOWN'S RETURN IS THIS PATH'S TO WRITE, AND ONLY ON A REAL CROSSING
+# (POS-1138; Wright, 2026-11-19 00:35Z, A: "only on a real, non-dry crossing:
+# it checks that SETTLEMENT_DRY is unset and passes an explicit write flag
+# from the real path"). `--town-returns` goes only when SETTLEMENT_DRY is
+# absent from the environment, not merely 0, and settlement-seal checks the
+# same again before the office pen writes. settlement-shadow.sh never passes it.
+# A DRY crossing pays and seals nothing; its printout rehearses the saved header.
+SEAL_JSON="$WORK/seal.json"
+TOWN_RETURNS=""
+if [ -z "${SETTLEMENT_DRY+set}" ]; then TOWN_RETURNS="--town-returns"; fi
+SEAL_DRY_FLAG=""
+if [ "$DRY" = "1" ]; then SEAL_DRY_FLAG="--dry-run"; withheld "the town's returns and the seals of the saved decisions through window $DOCKET_WINDOW: named, not paid or sealed"; fi
+if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/settlement-seal.mjs" \
+      --through "$DOCKET_WINDOW" --town-clone "$TOWN" $SEAL_DRY_FLAG $TOWN_RETURNS) > "$SEAL_JSON" 2>"$WORK/seal.err"; then
+  if [ "$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.status))' "$SEAL_JSON" 2>/dev/null)" = "blocked" ]; then
+    report refused "the settlement is BLOCKED: $(node -e 'const r=require(process.argv[1]);const b=r.blocked;process.stdout.write("S"+b.settlement+" (window "+b.window+") cannot be sealed until its town return clears: "+b.reason)' "$SEAL_JSON")"
+    echo "[settlement-auto] SETTLEMENT BLOCKED — its town return is held; nothing is sealed past it and nothing is printed (TOP PRIORITY: SHIPPING § 9)" >&2
+    cat "$SEAL_JSON" >&2
+    escalate --class seal-blocked --receipt "$OUT"
+  else
+    report refused "the saved decisions could not be sealed: $(refusal_of "$SEAL_JSON" "$WORK/seal.err")"
+    echo "[settlement-auto] SEAL REFUSED — nothing is printed" >&2
+    cat "$SEAL_JSON" >&2 2>/dev/null || true; cat "$WORK/seal.err" >&2
+  fi
+  recurring_check; exit 1
+fi
+echo "[settlement-auto] seal: $(node -e 'const r=require(process.argv[1]);const s=r.sealed||[];process.stdout.write(r.status==="dry"?"dry — "+(r.would||[]).length+" saved decision(s) would be sealed":s.length?s.map((x)=>"S"+x.settlement+(x.town_return?" (paid "+x.town_return.total+"✦"+(x.town_return.already_returned?", already returned":"")+")":"")).join(", "):"nothing to seal")' "$SEAL_JSON")" >&2
 
 # ── THE ARCHIVE'S EVENT LOG, WRITTEN FROM THE STORE (POS-155) ────────────────
 #

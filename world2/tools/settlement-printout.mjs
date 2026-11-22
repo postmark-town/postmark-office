@@ -97,8 +97,10 @@ export class PrintoutRefusal extends Error {
 // ── the store half ──────────────────────────────────────────────────────────
 
 /** S, the snapshot this window sealed, and P, the last one printed before it (or the cutover's named base). */
-export async function printoutPair(q, { window, sinceWindow = null }) {
-  const S = await snapshotHeader({ query: q }, { window });
+export async function printoutPair(q, { window, sinceWindow = null, dryRun = false }) {
+  // A DRY crossing pays nothing, so it seals nothing (settlement-seal.mjs): it rehearses over the header the window's decision saved
+  // (095 § 4), which is exactly what the seal will copy. A real printout prints only a seal.
+  const S = await snapshotHeader({ query: q }, { window }) ?? (dryRun ? await savedHeaderOf(q, window) : null);
   if (!S) throw new PrintoutRefusal("no-seal", `window ${window} has no sealed snapshot`);
   if (S.sealed_settlement == null)
     throw new PrintoutRefusal("sealed-before-095", `window ${window} was sealed with no settlement number (before 095): the settlement does not print it`);
@@ -127,6 +129,15 @@ export async function printoutPair(q, { window, sinceWindow = null }) {
       `nothing has been printed before S${S.sealed_settlement}: the first printout measures from the snapshot the last sweep crossed (the cutover names it, --since-window)`);
   }
   return { S, P };
+}
+
+/** A window's saved decision (095 § 4) in a header's shape, `saved: true` and no id: what its seal will say, for a dry rehearsal. */
+async function savedHeaderOf(q, window) {
+  const { rows: [d] } = await q("SELECT window_id, settlement, header, decided_at FROM settlement_decisions WHERE window_id = $1", [window]);
+  if (!d) return null;
+  const h = typeof d.header === "string" ? JSON.parse(d.header) : d.header;
+  return { ...h, id: null, window_id: Number(d.window_id), sealed_settlement: Number(d.settlement), taken_at: d.decided_at,
+    stance_through: h.stance_through == null ? null : String(h.stance_through), printout_sha: null, saved: true };
 }
 
 /** The registry AS SEALED at window W (095): every row holding at W, by slug. */
@@ -287,7 +298,7 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   const onMain = sealed?.sealed_settlement != null ? printoutOnMain(world, sealed.sealed_settlement) : null;
   if (onMain)
     return { status: "already-on-main", settlement: sealed.sealed_settlement, window, commit: onMain, snapshot: { id: sealed.id, digest: sealed.digest } };
-  const { S, P } = await printoutPair(q, { window, sinceWindow });
+  const { S, P } = await printoutPair(q, { window, sinceWindow, dryRun });
 
   const [sRows, pRows] = await Promise.all([snapshotRows({ query: q }, S.marks_digest), snapshotRows({ query: q }, P.marks_digest)]);
   const { changed, removed } = printedDelta(pRows, sRows, { sHeld: heldSlugsOf(S), pHeld: heldSlugsOf(P) });
@@ -514,7 +525,7 @@ export const digestOfTagMessage = (text) => /^digest: ([0-9a-f]{64})$/m.exec(Str
  * naming the same digest is done; any other existing tag is REFUSED (old tags are never rewritten).
  */
 export async function tagSettlement(q, { world, window, commit, dryRun = false }) {
-  const S = await snapshotHeader({ query: q }, { window });
+  const S = await snapshotHeader({ query: q }, { window }) ?? (dryRun ? await savedHeaderOf(q, window) : null);
   if (!S || S.sealed_settlement == null) throw new PrintoutRefusal("no-seal", `window ${window} has no numbered seal`);
   const tag = `${TAG_PREFIX}${S.sealed_settlement}`;
   const full = git(world, ["rev-parse", `${commit}^{commit}`]).trim();

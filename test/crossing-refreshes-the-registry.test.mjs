@@ -74,7 +74,8 @@ after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch {
 // the stub sweep's was before the printout.
 const UNDER_TEST = (() => {
   const root = join(scratch, "office-under-test");
-  const STUBBED = new Set(["await-clearing.mjs", "settlement-printout.mjs"]);
+  // the seal step (POS-1025/d) is the store's too: it seals the docket's saved decision, paying nothing
+  const STUBBED = new Set(["await-clearing.mjs", "settlement-seal.mjs", "settlement-printout.mjs"]);
   for (const top of readdirSync(OFFICE)) {
     if (top === ".git" || top === "world2") continue;
     mkdirSync(root, { recursive: true });
@@ -85,6 +86,8 @@ const UNDER_TEST = (() => {
   for (const t of readdirSync(join(OFFICE, "world2", "tools"))) if (!STUBBED.has(t)) symlinkSync(join(OFFICE, "world2", "tools", t), join(root, "world2", "tools", t));
   writeFileSync(join(root, "world2", "tools", "await-clearing.mjs"),
     'process.stdout.write(JSON.stringify({ window: 213, cleared_at: "2026-09-08T05:45:44Z", waited_s: 0 }) + "\\n");\n');
+  writeFileSync(join(root, "world2", "tools", "settlement-seal.mjs"),
+    'process.stdout.write(JSON.stringify(process.argv.includes("--dry-run") ? { status: "dry", sealed: [], would: [] } : { status: "sealed", sealed: [{ window: 213, settlement: 214, digest: "d".repeat(64), snapshot: 1, sealed_now: true }] }) + "\\n");\n');
   writeFileSync(join(root, "world2", "tools", "settlement-printout.mjs"), `
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";

@@ -215,6 +215,8 @@ function store({ acts }) {
     if (sql.includes("FROM acts")) return { rows: acts.filter((a) => Number(a.crossing) <= Number(params[0])) };
     if (sql.includes("FROM marks")) return { rows: [] };
     if (sql.includes("FROM world_snapshots")) return { rows: [] };
+    // 095 § 4: window 201 was never a saved decision either (a store without the table answers false, as this one does)
+    if (sql.includes("to_regclass('public.settlement_decisions')")) return { rows: [{ ok: false }] };
     throw new Error(`unexpected: ${sql}`);
   } };
 }

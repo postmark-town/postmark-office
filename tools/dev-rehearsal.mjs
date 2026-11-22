@@ -776,7 +776,12 @@ export function plan() {
         // is cleared now as the base, the clock compressed as the clearing step compresses it. Its seal is
         // numbered and never printed: the ruled gap (POS-1025/a).
         await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [open.id]);
-        const cleared = await ctx.clearing(Number(open.id));
+        // the clearing SAVES its decision and the settlement crossing seals it (POS-1025/d): the base is sealed here, by the seal step
+        let cleared = await ctx.clearing(Number(open.id));
+        if (cleared.code === 0) {
+          const sealed = await ctx.seal(Number(open.id));
+          cleared = { code: sealed.code, out: `${cleared.out ?? ""}\n${sealed.out ?? ""}` };
+        }
         if (cleared.code === 0) ctx.sinceWindow = Number(open.id);
         const [sealed] = cleared.code === 0 ? await ctx.s.q("clearing_job", "SELECT sealed_settlement FROM world_snapshots WHERE window_id = $1", [open.id]) : [];
         return { printed, base: Number(open.id), seal: sealed?.sealed_settlement ?? null, cleared };
@@ -1439,6 +1444,15 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
       return ctx.job("world2/tools/clearing-job.mjs", ["--window", String(windowId), "--town-repo", t.townClone, ...(t.worldClone ? ["--world-repo", t.worldClone] : []), ...extra],
         // the first step (stamp-ingest) dials PG*, as the box's clearing unit env file supplies them for law_ingester
         { extraEnv: { ...pgEnv(t.urls.law_ingester), WORLD2_CLEARING_URL: t.urls.clearing_job, WORLD2_INGEST_URL: t.urls.law_ingester } });
+    },
+    /**
+     * The settlement crossing's seal step alone (POS-1025/d): the saved decisions through `windowId`, sealed in number order. No
+     * --town-returns, so nothing is paid: a decision with a town return is sealed only if the gate reads its stamps home, and
+     * otherwise answers blocked, by name.
+     */
+    seal(windowId) {
+      return ctx.job("world2/tools/settlement-seal.mjs", ["--through", String(windowId), "--town-clone", t.townClone],
+        { extraEnv: { WORLD2_CLEARING_URL: t.urls.clearing_job } });
     },
     /**
      * The settlement, as postmark-settlement(-by-hand).service runs it, with

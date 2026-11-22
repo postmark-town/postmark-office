@@ -69,11 +69,15 @@ async function asClearing(fn) {
 }
 const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + ext.w / 2},${at.y + ext.h / 2}))`;
 const EXT = { w: 4, h: 4 };
-function clear(win) {
-  const r = spawnSync(process.execPath, [JOB, "--window", String(win), "--world-repo", PINNED], {
-    cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
-  });
-  return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
+// The clearing saves its decision, and the settlement crossing seals it before it prints (POS-1025/d): each clearing here is
+// followed by the crossing's seal step through its window, as on the box. Nothing these windows decide pays a town return.
+const SEAL = join(ROOT, "world2", "tools", "settlement-seal.mjs");
+function clear(win, { worldRepo = PINNED } = {}) {
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") };
+  const r = spawnSync(process.execPath, [JOB, "--window", String(win), "--world-repo", worldRepo], { cwd: ROOT, encoding: "utf8", env });
+  if (r.status !== 0) return { code: r.status, out: `${r.stdout}\n${r.stderr}` };
+  const s = spawnSync(process.execPath, [SEAL, "--through", String(win)], { cwd: ROOT, encoding: "utf8", env });
+  return { code: s.status, out: `${r.stdout}\n${r.stderr}\n${s.stdout}\n${s.stderr}` };
 }
 
 const NEW = "sable/the-new-well";
@@ -311,6 +315,62 @@ test("5 · THE GAP CARRIED: a change sealed in a window never printed reaches ma
   }
   const registry = JSON.parse(readFileSync(join(WORLD, "WORLD/settlement-publications.json"), "utf8")).published;
   assert.ok(GAP in registry && NEXT in registry, "and both join the registry as sealed");
+});
+
+// WLD-230, DECIDED BEFORE THE SEAL (POS-1025 scope 4). A predicate files at `<parent>/<slug>/mark.md` without its author, so sable's
+// same-leaf predicate under a real published parent of the pinned world plans ANOTHER author's published file. The clearing holds it
+// before the seal and names it, with the filing it met, in the seal's held list; the registry never admits it; its store row stands;
+// and the printout prints the rest of the window around it, the other author's bytes untouched.
+const BELL = "sable/the-third-bell";
+test("6 · WLD-230 BEFORE THE SEAL: a colliding predicate is held in the seal's held list, never admitted, its store row kept, and the printout prints the rest", { skip, timeout: 240000 }, async () => {
+  // S5 (test 5) is recorded, so its commit is the main this window's filings are checked against
+  const s5 = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 4 }));
+  assert.equal(s5.status, "already-on-main");
+  await asClearing((q) => recordPrintout(q, { window: WIN + 4, commit: s5.commit }));
+  const main = JSON.parse(readFileSync(join(WORLD, "WORLD/settlement-publications.json"), "utf8")).published;
+  const byPath = new Map(Object.entries(main).map(([id, r]) => [r.path, id]));
+  // a real nested filing on main, under a parent of another author, both filed where their rows say
+  const [occupant, occRow] = Object.entries(main).find(([id, r]) => {
+    const parentPath = r.path.replace(/\/[^/]+\/mark\.md$/, "/mark.md");
+    return parentPath !== r.path && byPath.has(parentPath) && id.split("/")[0] !== "sable" && existsSync(join(WORLD, r.path)) && existsSync(join(WORLD, parentPath));
+  }) ?? [];
+  assert.ok(occupant, "the pinned world files a mark under another's parent");
+  const parent = byPath.get(occRow.path.replace(/\/[^/]+\/mark\.md$/, "/mark.md"));
+  const leaf = occRow.path.split("/").at(-2);
+  const CLASH = `sable/${leaf}`;
+  const occBytes = readFileSync(join(WORLD, occRow.path), "utf8");
+
+  await owner(async (c) => {
+    await c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+       VALUES ($1, 'predicated', 'sable', 'hh:otter', 'pending', 'Sable signs it too.', NULL, NULL, 1, $2, $3)`,
+      [WIN + 5, JSON.stringify({ by: "sable", date: "2026-11-05", slot: "sign", value: "Sable", parent_id: parent }), CLASH]);
+    await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'sable', 'hh:otter', 'hh:otter', 1, 1)`, [TOWN_SHA2, CLASH]);
+  });
+  await putForward(WIN + 5, BELL, { x: -94000, y: -94000 }, "A bell, printed around the hold.");
+  // the clearing's world checkout holds the printouts (as the box's does once it fetches main), so it reads S5's main
+  const r = clear(WIN + 5, { worldRepo: WORLD });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, new RegExp(`⚑ held: ${CLASH} — its filing ${occRow.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is ${occupant}'s on main`), r.out);
+
+  const [S6] = await read("SELECT sealed_settlement, held FROM world_snapshots WHERE window_id = $1", [WIN + 5]);
+  assert.deepEqual(S6.held, [{ slug: CLASH, held: "filing-collision", path: occRow.path, held_by_filing_of: occupant }],
+    "the seal names the held mark and whose filing it met");
+  assert.deepEqual(await read("SELECT slug FROM settlement_publications WHERE slug = $1 AND to_window IS NULL", [CLASH]), [], "never admitted as sealed-published");
+  assert.equal((await read("SELECT status FROM marks WHERE slug = $1", [CLASH]))[0]?.status, "standing", "its undelivered store row is kept");
+
+  const before = git(WORLD, "rev-parse", "HEAD").trim();
+  const out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 5 }));
+  assert.equal(out.status, "printed", JSON.stringify(out).slice(0, 600));
+  assert.equal(out.settlement, S6.sealed_settlement);
+  assert.deepEqual(out.written.map((w) => w.id), [BELL], "the rest of the window is printed");
+  assert.deepEqual(out.sealed_held.map((h) => h.slug), [CLASH], "and the receipt carries the seal's held list");
+  const touched = git(WORLD, "diff", "--name-only", `${before}..HEAD`).split("\n").filter(Boolean);
+  assert.ok(!touched.includes(occRow.path), `the other author's filing is not touched: ${touched.join(", ")}`);
+  assert.equal(readFileSync(join(WORLD, occRow.path), "utf8"), occBytes, `${occupant}'s bytes, as they were`);
+  const registry = JSON.parse(readFileSync(join(WORLD, "WORLD/settlement-publications.json"), "utf8")).published;
+  assert.ok(BELL in registry && !(CLASH in registry), "the bell joins the registry; the held predicate does not");
+  assert.equal(registry[occupant].path, occRow.path, "and the occupant keeps its row");
 });
 
 test("deltaOf is the sealed difference and nothing else (PURE)", () => {

@@ -7,8 +7,9 @@
 //
 // WHAT THIS PINS, and what it does not decide:
 //   · the refusal that row gets names the hold and whose filing it met (instead of the generic "unprintable" words), and still refuses:
-//     a refused printout publishes nothing and alarms. WHETHER a sealed-published mark whose file would overwrite another's should instead
-//     print around the hold is a publication decision, not made here;
+//     a refused printout publishes nothing and alarms. Since Wright's 2026-11-22 00:13Z return (WLD-230/a, "the collision check belongs to
+//     settlement-decides") the hold is decided BEFORE the seal and the rest prints around it (settlement-printout.test.mjs case 6), so a
+//     sealed-published row the printout still cannot file is a real fault, and this refusal is its backstop;
 //   · the planner's hold is carried onto the printout's report and the settlement receipt (held_path_collision and its count), with the
 //     receipt's null convention;
 //   · the printout commit says its window in a `Window: <id>` trailer (POS-940 fix c, carried from the retired sweep's name_window).

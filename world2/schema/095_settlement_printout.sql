@@ -61,6 +61,27 @@
 --                                  or the maximum is read), so two overlapping records for different windows
 --                                  cannot both read themselves as the highest.
 --
+-- ── 4 · THE SAVED DECISION, BEFORE ANY STAMPS MOVE ──────────────────────────
+--
+-- RULED (Darko, 2026-11-21 21:17 EST, POS-1025/d): "Save first, then pay." Wright 02:20Z: "Before any stamps
+-- move, the settlement durably records what it decided, so a retry repeats the same removals." Wright 03:26Z:
+-- "Windows keep closing (the candle stays independent), and the office seals the saved decisions in number
+-- order, so a blocked return holds the later seals until it clears."
+--
+--   settlement_decisions   one row per cleared window, written by the clearing in the transaction that closes
+--                          the window, in place of the header it used to insert:
+--     window_id     the window (one decision per window, as one seal per window)
+--     settlement    the number the seal will be (§ 1's rule, counting the saved decisions too)
+--     day           the removal's day in town time: the date every town return of this settlement names
+--     header        the header EXACTLY as it will be sealed (digest, lists, pins, stances, held): the office
+--                   copies it into world_snapshots and reads nothing live (world-snapshot-seal.mjs § sealDecision)
+--     town_returns  the removal's town returns, `[{ mark, leaving }]`, or NULL when it takes none away
+--     decided_at    when it was decided: the sealed header's taken_at
+--   Never updated or deleted. The office's settlement crossing pays the returns (POS-1138's writer, under the
+--   town's once-only id for `S<settlement>` on `day`) and then seals: a world_snapshots row copied from this
+--   one, in number order. A decision with no header yet is a settlement not yet sealed; one whose return the
+--   gate holds is a BLOCKED settlement, and the receipt names it.
+--
 -- ── COMPATIBILITY: APPLY BEFORE THE CODE ────────────────────────────────────
 --
 -- The new clearing writes sealed_settlement and settlement_publications, so it must not run on a store
@@ -84,6 +105,8 @@
 --    WHERE table_name = 'world_snapshots' AND column_name = 'held';                -- jsonb
 --   SELECT to_regclass('public.settlement_publications');                         -- settlement_publications
 --   SELECT has_function_privilege('clearing_job', 'record_printout(integer, text)', 'EXECUTE');   -- t
+--   SELECT has_table_privilege('clearing_job', 'settlement_decisions', 'INSERT'),
+--          has_table_privilege('clearing_job', 'settlement_decisions', 'UPDATE');                 -- t | f
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -171,9 +194,23 @@ END $$;
 REVOKE ALL ON FUNCTION record_printout(integer, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION record_printout(integer, text) TO clearing_job;
 
+-- 4 · the saved decision (POS-1025/d): written once by the clearing, copied once into its seal, never changed
+CREATE TABLE IF NOT EXISTS settlement_decisions (
+  window_id     integer PRIMARY KEY REFERENCES windows(id),
+  settlement    integer NOT NULL UNIQUE CHECK (settlement > 0),
+  day           date    NOT NULL,
+  header        jsonb   NOT NULL CHECK (jsonb_typeof(header) = 'object' AND header ? 'digest' AND header ? 'marks_digest'),
+  town_returns  jsonb   CHECK (town_returns IS NULL OR (jsonb_typeof(town_returns) = 'array' AND jsonb_array_length(town_returns) > 0)),
+  decided_at    timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT ON settlement_decisions TO office_api, clearing_job, snapshot_reader;
+GRANT INSERT ON settlement_decisions TO clearing_job;
+
 INSERT INTO registry (object, kind, owner_pen, consumers, ruling) VALUES
   ('settlement_publications', 'source', 'clearing_job', '{office_api,snapshot_reader}',
-   'Darko 2026-11-13 (POS-365/a, POS-1025/c): the settlement decides publication before the seal, so the sweep''s publications registry is the store''s; seeded once at the cutover, then written by the clearing')
+   'Darko 2026-11-13 (POS-365/a, POS-1025/c): the settlement decides publication before the seal, so the sweep''s publications registry is the store''s; seeded once at the cutover, then written by the clearing'),
+  ('settlement_decisions', 'source', 'clearing_job', '{office_api,snapshot_reader}',
+   'Darko 2026-11-21 (POS-1025/d "Save first, then pay"); Wright 2026-11-22 03:26Z: the clearing saves what it decided, and the settlement crossing pays and seals the saved decisions in number order')
 ON CONFLICT (object) DO NOTHING;
 
 COMMIT;

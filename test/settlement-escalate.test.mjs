@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 
 import {
   escalate, titleFor, bodyFor, tokenFrom, DEFAULT_REPO, isSuiteRedRefusal, notOkLines,
-  isPrintoutRefusal, isHarmWarning, isTagWarning,
+  isPrintoutRefusal, isHarmWarning, isTagWarning, isSealBlocked,
 } from "../deploy/settlement-escalate.mjs";
 
 const REPO = "postmark-town/postmark";
@@ -417,6 +417,38 @@ test("POS-1025 · a receipt that is not what the class says FILES NOTHING, and t
   assert.equal(isTagWarning(UNTAGGED), true);
   assert.equal(isTagWarning(PRINTED({ record: { status: "refused", refused: "record-tripped" } })), true);
   assert.equal(isPrintoutRefusal(PRINT_REFUSED), true);
+});
+
+// POS-1025/d (Wright 2026-11-22 03:26Z): "A held seal is a blocked settlement, and it alarms like one." The receipt and the alarm
+// name the blocked return: its removal, its staker and the reason.
+const SEAL_BLOCKED = {
+  at: "2026-11-22T06:00:00Z", status: "refused", settlement: null, class: "seal-blocked",
+  seal: { status: "blocked", sealed: [], waiting: [{ window: 214, settlement: 215 }, { window: 215, settlement: 216 }],
+    blocked: { settlement: 214, window: 213, removal: "S214", day: "2026-11-22", source: "live",
+      held: [{ mark: "bo/shed", leaving: ["bo/shed", "bo/shed-name"], open: { "bo/shed": 4 }, stakers: { "bo/shed": [{ handle: "ann", n: 3 }, { handle: "bo", n: 1 }] } }],
+      reason: "stamps still stand on bo/shed (4✦), so the mark cannot leave yet (POS-1138) after the return" } },
+  detail: "the settlement is BLOCKED: …",
+};
+
+test("POS-1025/d · A BLOCKED SETTLEMENT files TOP PRIORITY, naming its removal, each held mark with its stakers, the reason and who waits behind it; any other receipt files nothing", async () => {
+  const { calls, fetchStub } = stubGithub({ issues: [] });
+  const r = await withFetch(fetchStub, () => escalate({ klass: "seal-blocked", receipt: SEAL_BLOCKED, token: "t", repo: REPO, log: quiet }));
+  assert.equal(r.filed, true);
+  const body = calls.find((c) => c.method === "POST").body.body;
+  assert.match(body, /S214 is BLOCKED at `2026-11-22T06:00:00Z`/);
+  assert.match(body, /TOP PRIORITY \(SHIPPING § 9/);
+  assert.match(body, /- removal: `S214` \(window 213, day 2026-11-22\)/);
+  assert.match(body, /- reason: stamps still stand on bo\/shed \(4✦\)/);
+  assert.match(body, /- held: `bo\/shed` — bo\/shed 4✦ open; stakers: ann 3✦ on bo\/shed, bo 1✦ on bo\/shed/);
+  assert.match(body, /- waiting behind it: S215 \(window 214\), S216 \(window 215\)/);
+  assert.equal(titleFor("seal-blocked"), "settlement refusal: seal-blocked");
+  for (const [receipt, what] of [[PRINTED(), "a publication"], [PRINT_REFUSED, "a refused printout"], [{ ...SEAL_BLOCKED, seal: { status: "sealed", sealed: [] } }, "a crossing that sealed"]]) {
+    const s = stubGithub({ issues: [] });
+    const no = await withFetch(s.fetchStub, () => escalate({ klass: "seal-blocked", receipt, token: "t", repo: REPO, log: quiet }));
+    assert.equal(no.filed, false, `seal-blocked over ${what} filed an issue`);
+    assert.deepEqual(s.calls, []);
+  }
+  assert.equal(isSealBlocked(SEAL_BLOCKED), true);
 });
 
 test("POS-1025 · the two warnings are titled as warnings, and every class has its own standing issue", () => {

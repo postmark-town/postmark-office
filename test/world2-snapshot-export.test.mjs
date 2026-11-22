@@ -279,6 +279,24 @@ test("derive reads the NEWEST certified window's seal, and only that one", async
   assert.equal(cert.snapshot_digest, "d".repeat(64));
 });
 
+test("A WINDOW DECIDED AND NOT SEALED YET (POS-1025/d): its certification waits for its seal, by name; never a legacy-looking one without the pair", async () => {
+  const windows = [
+    { id: 150, status: "closed", opens_at: new Date("2026-08-26T00:00:00Z"), closes_at: new Date("2026-08-26T05:45:00Z"), cleared_at: new Date("2026-08-26T05:45:16Z"), law_sha: "aa", town_sha: "bb" },
+  ];
+  const at = { now: Date.parse("2026-09-30T00:00:00Z") };
+  await assert.rejects(derive(fakeClient({ windows, acts: [], seals: [], decisions: [{ window_id: 150, settlement: 8 }] }), at),
+    (e) => e instanceof Cannot && /window 150 is decided as S8 and not sealed yet .* its certification waits for its seal, and nothing was certified/.test(e.message));
+  // sealed: the pair, as ever
+  const sealed = await derive(fakeClient({ windows, acts: [], seals: [{ window_id: 150, sealed_settlement: 8, digest: "d".repeat(64) }], decisions: [{ window_id: 150, settlement: 8 }] }), at);
+  assert.equal(certification({ ...sealed, exportedAt: "x" }).settlement, 8);
+  // a window with no decision and no seal (before 095), on a store with or without the table: certified exactly as before
+  for (const decisions of [[], null]) {
+    const legacy = await derive(fakeClient({ windows, acts: [], seals: [], decisions }), at);
+    assert.equal(legacy.seal, null);
+    assert.equal("settlement" in certification({ ...legacy, exportedAt: "x" }), false);
+  }
+});
+
 test("the certification binds the archives' CONTENT, not only the log's length", () => {
   // The acts cursor alone would notice an act appended and miss an act
   // rewritten — and the sentence this pen exists to make true is "the office
@@ -533,10 +551,13 @@ test("the boundary is the sailing instant itself, not a moment either side of it
 // shapes `pg` hands them over (bigint and numeric as TEXT), and nothing else —
 // an unexpected statement throws rather than returning an obliging empty set.
 
-function fakeClient({ windows, acts, marks = [], seals = [] }) {
+function fakeClient({ windows, acts, marks = [], seals = [], decisions = null }) {
   return {
     async query(sql, params = []) {
       if (sql.includes("FROM world_snapshots")) return { rows: seals.filter((s) => Number(s.window_id) === Number(params[0])) };
+      // 095 § 4: a store with the saved decisions answers them; `decisions: null` is a store without the table
+      if (sql.includes("to_regclass('public.settlement_decisions')")) return { rows: [{ ok: decisions !== null }] };
+      if (sql.includes("FROM settlement_decisions")) return { rows: (decisions ?? []).filter((d) => Number(d.window_id) === Number(params[0])) };
       if (sql.includes("acts_cursor")) {
         const ids = acts.map((a) => Number(a.id));
         return { rows: [{

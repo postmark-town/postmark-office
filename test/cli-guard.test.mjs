@@ -347,6 +347,8 @@ const ROSTER = {
   "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
   // POS-1025: the printout refuses a missing mode before it reads a seal or opens a store.
   "world2/tools/settlement-printout.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-printout.mjs print" },
+  // POS-1025/d: the seal step refuses with no --through before it pays anything, reads a decision or opens a store.
+  "world2/tools/settlement-seal.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-seal.mjs --through <window>" },
   // POS-1025: the cutover's one copy of the registry refuses with no --world-repo before it reads a file or a store.
   "world2/tools/publications-seed.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: publications-seed.mjs --world-repo" },
 };

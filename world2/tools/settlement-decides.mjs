@@ -130,27 +130,92 @@ async function liveRegistry(q) {
 /** A version row (054) or a marks row, as the record the world's hand-off rule compares. */
 const recordOf = (row) => (row ? { ...recordFromRow({ ...row, first_claimed: null, first_claim_submitted_at: null }), held_by: row.data?.held_by ?? undefined } : null);
 
-/** Each slug's version in the window's previous snapshot, as its row (054's canonical jsonb), or nothing. */
+/**
+ * Each slug's version in the window's previous settlement, as its row (054's canonical jsonb), or nothing. The previous settlement
+ * is the newest window before this one that was sealed OR decided and saved, not sealed yet (095 § 4; Wright 2026-11-22 03:26Z:
+ * "previous-state reads include the saved decisions"): a decision's lists are in the store from its clearing on, and its seal will
+ * name exactly them.
+ */
+export const PREVIOUS_LIST_SQL = `
+  WITH decided AS (
+    SELECT window_id, marks_digest FROM world_snapshots WHERE window_id IS NOT NULL
+    UNION ALL
+    SELECT d.window_id, d.header->>'marks_digest' FROM settlement_decisions d
+     WHERE NOT EXISTS (SELECT 1 FROM world_snapshots s WHERE s.window_id = d.window_id))
+  SELECT sm.slug, v.row
+    FROM decided p
+    JOIN world_snapshot_marks sm ON sm.marks_digest = p.marks_digest
+    JOIN mark_versions v ON v.digest = sm.digest
+   WHERE p.window_id = (SELECT max(window_id) FROM decided WHERE window_id < $1)
+     AND sm.slug = ANY($2::text[])`;
 async function previousVersions(q, windowId, slugs) {
   if (!slugs.length) return new Map();
-  const { rows } = await q(
-    `SELECT sm.slug, v.row
-       FROM world_snapshots s
-       JOIN world_snapshot_marks sm ON sm.marks_digest = s.marks_digest
-       JOIN mark_versions v ON v.digest = sm.digest
-      WHERE s.id = (SELECT id FROM world_snapshots WHERE window_id < $1 ORDER BY window_id DESC LIMIT 1)
-        AND sm.slug = ANY($2::text[])`, [windowId, slugs]);
+  const { rows } = await q(PREVIOUS_LIST_SQL, [windowId, slugs]);
   return new Map(rows.map((r) => [r.slug, typeof r.row === "string" ? JSON.parse(r.row) : r.row]));
+}
+
+/**
+ * THE EXISTING TAKEAWAYS, AS THE SEAL'S HELD LIST (POS-1025 port 5; Rivet 2026-11-22 01:11Z, "carry existing town/R11 removal
+ * outcomes before seal; no new eligibility"). On w48 the crossing folded the sealed settlement with its words and limits
+ * (world-settlement.mjs § settlementTakesAway) and withheld what that fold took away from git; the store rows stood. Before the
+ * seal, the same fold over the World about to be sealed names the same marks, and each standing one is held: never written by the
+ * printout, never admitted to the registry, its store row kept. `t` is that fold's answer (`decide: true`: every town return is
+ * part of the decided removal, its targets saved for the settlement crossing to pay), or null with `unread` when it could not run,
+ * when w48's fallback holds (fold-input-cli.mjs § FORECAST_STANDING_SQL): the clearings' over-limit forecasts still standing, with
+ * their own ground. → `{ held: Map(slug → entry), townReturns: [{ mark, leaving }], account }`.
+ */
+export async function takeawaysBeforeSeal(q, t, { unread = null } = {}) {
+  const held = new Map();
+  const standing = async (slugs) => {
+    if (!slugs.length) return new Set();
+    const { rows } = await q("SELECT slug FROM marks WHERE status = 'standing' AND slug = ANY($1::text[])", [slugs]);
+    return new Set(rows.map((r) => r.slug));
+  };
+  if (!t) {
+    const { FORECAST_STANDING_SQL, STANDING_GROUND_SQL } = await import("./fold-input-cli.mjs");
+    const { ownGroundOf } = await import("../../src/world-settlement.mjs");
+    const { rows } = await q(FORECAST_STANDING_SQL);
+    const forecast = [...new Set(rows.map((r) => String(r.slug)))].sort();
+    const { rows: ground } = await q(STANDING_GROUND_SQL);
+    const away = new Set(forecast);
+    for (const sl of ownGroundOf(forecast, ground.map((r) => ({ slug: r.slug, household: r.household, at: r.geometry?.at, extent: r.geometry?.extent, parent: r.parent_slug })))) away.add(sl);
+    for (const sl of [...away].sort()) held.set(sl, { slug: sl, held: "limit-forecast" });
+    return { held, townReturns: [], account: { unread, withheld_by_forecast: forecast } };
+  }
+  const townReturns = (t.town_targets ?? []).map((r) => ({ mark: String(r.mark), leaving: [...r.leaving].map(String).sort() }));
+  const townOf = new Map();
+  for (const r of townReturns) for (const s of r.leaving) if (!townOf.has(s)) townOf.set(s, r.mark);
+  const limits = new Set([...(t.limit_parcels ?? []), ...(t.vetoes?.limits_unread ?? []).map((l) => String(l.mark))]);
+  const slugs = [...new Set([...t.slugs].map(String))].sort();
+  const live = await standing(slugs);
+  for (const sl of slugs) {
+    if (!live.has(sl)) continue;
+    held.set(sl, townOf.has(sl) ? { slug: sl, held: "town-return", mark: townOf.get(sl) }
+      : limits.has(sl) ? { slug: sl, held: "limit" } : { slug: sl, held: "taken-away" });
+  }
+  return {
+    held, townReturns,
+    account: {
+      ...(t.stances ? { stances: t.stances } : {}),
+      ...(t.stances_not_counted ? { stances_not_counted: t.stances_not_counted } : {}),
+      ...(t.stance_returns_whole ? { stance_returns_whole: t.stance_returns_whole } : {}),
+      limits: t.vetoes?.limits ?? [],
+      ...(t.vetoes?.limits_unread ? { limits_unread: t.vetoes.limits_unread } : {}),
+    },
+  };
 }
 
 /**
  * THE STEP (clearing-job.mjs § 7.5). Runs inside the clearing's transaction, after step 7. Writes the two
  * doors' retirements, the drafts, and the registry; walks the standing again if anything left.
  *
+ * `takeAway`: the clearing's question of what the settlement's words and limits take away (port 5, § takeawaysBeforeSeal), asked
+ * after the retirements and before the registry, over the World about to be sealed; its held marks are never admitted.
+ *
  * @returns the window receipt's `settlement` account: `{ withdrawn, unpublished, drafts, deferred,
- *   unchecked, rules, registry: { admitted, reclassed, closed, unchanged }, restanding }`
+ *   unchecked, rules, registry: { admitted, reclassed, closed, unchanged }, restanding, taken_away?, town_returns? }`
  */
-export async function settlementDecides(q, { windowId, townSha, lawSha, worldRepo, recompute = recomputeStanding }) {
+export async function settlementDecides(q, { windowId, townSha, lawSha, worldRepo, recompute = recomputeStanding, takeAway = null }) {
   const { rules, reason } = await worldRulesAt(worldRepo, lawSha);
   const { rows: lockedRows } = await q(
     "SELECT DISTINCT slug FROM claims WHERE window_id = $1 AND status = 'locked' AND slug IS NOT NULL", [windowId]);
@@ -208,6 +273,9 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
     restanding = { recomputed: again.standing.length, moved: again.moved.length, moves: again.moved.slice(0, 25), ...(again.notes?.length ? { notes: again.notes } : {}) };
   }
 
+  // ── what the settlement's words and limits take away (port 5): held, never admitted, its store row kept ──
+  const taken = takeAway ? await takeAway() : { held: new Map(), townReturns: [], account: null };
+
   // ── the registry, kept as the sweep kept the file ──
   const registry = { admitted: [], reclassed: [], closed: [], unchanged: 0, hand_offs: [], unchecked: rules ? null : reason };
   let filing = { held: new Map(), against: null, unchecked: null };
@@ -217,7 +285,7 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
   };
   for (const slug of [...gone].sort()) if (await closeRow(slug)) registry.closed.push(slug);
   if (rules && locked.size) {
-    const slugs = [...locked].filter((s) => !gone.has(s)).sort();
+    const slugs = [...locked].filter((s) => !gone.has(s) && !taken.held.has(s)).sort();
     const { rows: nowRows } = await q(
       "SELECT slug, kind, owner, household, body, geometry, data FROM marks WHERE status = 'standing' AND slug = ANY($1::text[])", [slugs]);
     const prev = await previousVersions(q, windowId, slugs);
@@ -270,6 +338,10 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
     ...(filing.held.size ? { filing_held: [...filing.held.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([slug, h]) => ({ slug, path: h.path ?? null,
       held_by_filing_of: h.held_by_filing_of ?? null, crossing_output: h.crossing_output ?? null, ...(h.held_under ? { held_under: h.held_under } : {}) })) } : {}),
     ...(filing.against || filing.unchecked ? { filing_check: filing.against ? { against: filing.against } : { unchecked: filing.unchecked } } : {}),
+    // PORT 5: the marks the settlement's words and limits take away, held by the seal, and the town returns its removal pays
+    ...(taken.held.size ? { taken_away: [...taken.held.values()].sort((a, b) => (a.slug < b.slug ? -1 : 1)) } : {}),
+    ...(taken.townReturns.length ? { town_returns: taken.townReturns } : {}),
+    ...(taken.account ? { takeaway: taken.account } : {}),
     ...(restanding ? { restanding } : {}),
   };
 }
