@@ -75,7 +75,7 @@ export { roomsOf }; // the record's rooms, for every reader of this module (the 
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "7abfd7077d06eaa39b1264199b7ab0bd0b8ffd6f", at: "dd12b6d1ea52d27082ce3ec65ff2fc23bc2f7e1c" }, // POS-1132: voices.mjs carries stood_with and the speaker line; the vendored threadOf is unchanged (the equality tests hold). POS-1152: the start-place mark rides the same functions
+            blob: "c0f130002b9e2fadc060a4c0fe6e735811300170", at: "af65552c945342f939ce849a4670fda105018b32" }, // POS-1185: voices.mjs names a say's room before its act is penned and its rooms are src/rooms.mjs's (imported by both, not vendored); the vendored clusterVoices is unchanged, and threadOf and rootPlaceOf take the room's own name in both copies (the equality tests hold)
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
