@@ -88,7 +88,7 @@ import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
 import { speakerBook } from "./speaker-line.mjs"; // POS-1132
-import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
+import { findOf, sayIdOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
 import { acceptedSparksOfCircle } from "./event-sparks.mjs"; // POS-1035: the accepted sparks under a circle
 import * as apex from "../world2/tools/apex-reads.mjs";
 import * as stakeRead from "../world2/tools/stake-reads.mjs";
@@ -709,6 +709,9 @@ export const SAY_LOOKBACK_MS = 13 * 3600 * 1000;
 export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                 WHERE crossing >= $2 AND action = ANY($1) AND at >= $3::timestamptz ${talk.VOICE_ORDER_SQL}`;
 
+/** POS-1184: the instant of one say act, by its id (the primary key), so a circle read can find the epoch its room sits in. */
+export const SAY_AT_SQL = `SELECT at FROM acts WHERE id = $1 AND action = 'say'`;
+
 /**
  * Route a GET under /world2/*. Returns null when the path is not ours
  * (server.mjs falls through), else { code, body }.
@@ -810,18 +813,40 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   const rawVoicesBefore = searchParams?.get("voices_before");
   const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
   const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
-  const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
-    p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
-    p.query(talk.ANCHOR_MARKS_SQL),
-  ]);
+  const edges = publishedEdges({ settlements, hearingWindow, ms: at.ms });
+  const find = findOf(searchParams);
+  // POS-1184: a NAMED room or circle reads only the voices from the start of the settlement epoch it sits in (the same index the say read
+  // uses), never every voice the store holds. `idx` is that epoch's edge, or null for a read that stays whole (a page, a bare read,
+  // or a record with no settlement known). A room's id names its start; a circle's say is looked up by id to find its.
+  const epochIdx = (ms) => { let i = 0; for (let k = 0; k < edges.length; k++) if (edges[k] <= ms) i = k; return i; };
+  let idx = null;
+  if (find && edges.length) {
+    let anchorMs = at.ms;
+    if (find.circle != null) {
+      const id = sayIdOf(find.circle);
+      if (id != null) {
+        const { rows: [found] } = await p.query(SAY_AT_SQL, [id]);
+        const ms = found ? new Date(found.at).getTime() : NaN;
+        if (Number.isFinite(ms)) anchorMs = ms;
+      }
+    } else if (find.room != null) {
+      const m = /^t(\d+)-/.exec(String(find.room));
+      if (m) anchorMs = Math.floor(Number(m[1]) / 1000) * 1000; // the record rounds a say's instant to the second (POS-1183)
+    }
+    idx = epochIdx(anchorMs);
+  }
+  const readVoices = (i) => (i == null
+    ? p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS])
+    : p.query(SAY_READ_SQL, [talk.VOICE_ACTIONS, currentCrossing(edges[i]) - 1, new Date(edges[i]).toISOString()]));
+  const [firstRead, { rows: markRows }] = await Promise.all([readVoices(idx), p.query(talk.ANCHOR_MARKS_SQL)]);
+  const answerOf = async (allVoices) => {
   const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
   const centres = talk.anchorCentres(markRows);
   const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
   let derived;
   try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
   catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
-  const edges = publishedEdges({ settlements, hearingWindow, ms: at.ms });
   // a voice older than the oldest published settlement sits in an epoch whose start is unknown: it is left out and said, never grouped
   const grouped = edges.length ? derived.voices.filter((v) => v.at >= edges[0]) : derived.voices;
   const ungrouped = derived.voices.length - grouped.length;
@@ -832,7 +857,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     fadeMs: dials.fade_min.ms,
     closedMax: n("closed", 40), voiceCap: n("voices", 80),
     before, voicesBefore,
-    find: findOf(searchParams), // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
+    find, // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
   });
   if (body.find?.refused) return { code: 422, body: { error: "bounce", ...body.find.refused } };
   // POS-1035 (CORE-82): a circle read carries the ACCEPTED sparks under it — standing marks only, by the spine (on it / below it)
@@ -856,6 +881,20 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
       ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : []), ...(ungroupedLine ? [ungroupedLine] : [])],
   } };
+  };
+  // POS-1184 × CORE-97: a room can be carried INTO this epoch from the one before (a say in the hour after the edge belongs to it), and then its
+  // root, its id and its earlier voices are in that earlier epoch. A found room whose first voice in this window falls inside the grace hour
+  // after the window's edge may be such a room, so the read steps back one epoch and asks again; a room first heard later than that was
+  // founded here. A room's id names its start, so it normally answers on the first read; a circle's room is found by its say.
+  let voicesRead = firstRead.rows;
+  for (;;) {
+    const out = await answerOf(voicesRead);
+    if (idx == null || idx === 0 || out.code !== 200) return out;
+    const startMs = Number(/^t(\d+)-/.exec(String(out.body?.find?.room?.id ?? ""))?.[1]);
+    if (!(startMs <= edges[idx] + ROOM_GRACE_MS)) return out;
+    idx -= 1;
+    voicesRead = (await readVoices(idx)).rows;
+  }
 }
 
 export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, settlements = settlementsKnown, eng: injectedEngine = null } = {}) {
