@@ -88,7 +88,8 @@ import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 import { isGroundlessDefault, atOrigin } from "./groundless.mjs";
 import * as talk from "../world2/tools/conversations.mjs";
 import { speakerBook } from "./speaker-line.mjs"; // POS-1132
-import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
+import { findOf, sayIdOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
+import { isRoomId, roomKeyOf } from "./rooms.mjs"; // POS-1185: a say's recorded room, and the key two spellings of one room id share
 import { acceptedSparksOfCircle } from "./event-sparks.mjs"; // POS-1035: the accepted sparks under a circle
 import * as apex from "../world2/tools/apex-reads.mjs";
 import * as stakeRead from "../world2/tools/stake-reads.mjs";
@@ -771,31 +772,204 @@ const interiorBounce = (hint) => ({ code: 503, body: { error: "bounce", defect: 
 
 /**
  * WHERE A CONVERSATION SPLITS (POS-779): the settlements the box PUBLISHED (hearing-window.mjs: the crossing's sweep commit on
- * world main), ascending, at or before `ms`: the reader's kept history plus the window open at that instant. Never the 06:00/18:00Z
- * heartbeat (a refused crossing publishes nothing) and never only the blessed tags (they lag the sweep).
+ * world main), ascending: the reader's kept history plus the window open at the asked instant. Never the 06:00/18:00Z heartbeat
+ * (a refused crossing publishes nothing) and never only the blessed tags (they lag the sweep). EVERY one known, whatever instant
+ * is asked (POS-1185): which room a say is in was decided when it was spoken, so it does not move with the instant a read is
+ * evaluated at; the caller cuts the list at its own instant only to say which rooms are still open then.
  */
 function publishedEdges({ settlements, hearingWindow, ms }) {
   let list = [];
   try { list = settlements() ?? []; } catch { list = []; }
   let since = null;
   try { since = hearingWindow(ms)?.since ?? null; } catch { since = null; }
-  return [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => Number.isFinite(m) && m <= ms).sort((a, b) => a - b);
+  return [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter(Number.isFinite).sort((a, b) => a - b);
+}
+
+// ── THE ROOMS, KEPT (POS-1185) ───────────────────────────────────────────────
+//
+// WHY. Until POS-1185 every ?room=, ?circle=, ?before= and bare read fetched EVERY voice act and every mark the store holds
+// (23,937 voice rows and 2,949 marks on 2026-11-22) and grouped them again, 1.2 to 10.4 s each; three at once filled this door's
+// pool and every other world read timed out (POS-1184). It had to: a later say could change which room earlier says were in.
+//
+// It no longer can (src/rooms.mjs): a say's room is decided once. So WHICH SAYS ARE IN WHICH ROOM is kept, per pool, for the life
+// of the process, and a read fetches only the rooms it serves:
+//   · built ONCE, single-flight, at the first read after a start: one read of every voice act WITHOUT its words (the grouping
+//     needs who, when and where, never what was said) and one of the marks, for the says that carry no recorded room (every act
+//     from before POS-1185). Those says are named as they were when spoken, once; no later say can move them;
+//   · kept current by a small read of the acts NEWER than the kept ones (by act number, so an act that arrives late is still
+//     seen). Each new say carries its room on its own act (`payload.conversation`), so it is filed by name, with no geometry;
+//   · served by reading the rooms asked for by their act numbers (the primary key), and only their anchor marks.
+// What is kept is act numbers and instants, never words. A say with no recorded room that this index has not folded (an office on
+// older code wrote it after this one started) makes it build again; so does a settlement appearing among the old says' own.
+//
+// THE SETTLED MARK. An act number is given out before its transaction commits, so two says can become visible out of order. The
+// newer-acts read therefore starts after the newest act number whose row has been in the store ten minutes, and every row newer
+// than that is asked for again each time (a handful); filing is by act number and happens once.
+export const ROOMS_SETTLE_MINUTES = 10;
+const LIGHT_VOICE_COLS = `id, at, actor, action, at_anchor, at_dx, at_dy,
+  CASE WHEN jsonb_typeof(payload) = 'object' THEN (payload - 'text') #- '{payload,text}' ELSE payload END AS payload,
+  (inserted_at <= now() - interval '${ROOMS_SETTLE_MINUTES} minutes') AS settled`;
+/** Every voice act, without its words: the kept rooms' one whole read. $1 the voice actions. */
+export const ROOMS_BUILD_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`;
+/** The voice acts newer than the settled mark, without their words. $1 the voice actions, $2 the act number to read after. */
+export const ROOMS_TAIL_SQL = `SELECT ${LIGHT_VOICE_COLS} FROM acts WHERE action = ANY($1) AND id > $2 ${talk.VOICE_ORDER_SQL}`;
+/** The says of the rooms a read serves, whole, by act number. */
+export const ROOM_VOICES_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE id = ANY($1::bigint[]) ${talk.VOICE_ORDER_SQL}`;
+/** The marks those says are anchored on (any status: a say happened where its anchor stood), and the say dials' own marks. */
+export const ROOM_ANCHORS_SQL = "SELECT slug, status, geometry, data FROM marks WHERE slug = ANY($1::text[]) OR data ? 'slot'";
+
+const keptRooms = new WeakMap(); // pool -> { index, building }
+const NAMED_ROOM_ORDER = 1e15;   // rooms first seen by a recorded name are ordered after every room the old says founded (rooms.mjs § roomsOf)
+
+/** The room an act recorded for its say (`payload.conversation`), or null: an older act, or not a say. */
+const recordedRoomOf = (row) => (row?.action === "say" && isRoomId(row?.payload?.conversation) ? row.payload.conversation : null);
+/** The settlements that could have split the unnamed says: the only ones their naming depends on. */
+const unnamedEdgesKey = (edges, lastAt) => edges.filter((m) => m <= lastAt).join(",");
+
+function voicesOfRows(rows, centres) {
+  try { return talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
+  catch (e) { throw Object.assign(e, { unknownVoiceEra: true }); }
+}
+
+function settledMark(rows, prev, now = Date.now()) {
+  let mark = prev, hold = Infinity;
+  for (const r of rows) {
+    const id = Number(r.id);
+    if (!Number.isFinite(id)) continue;
+    // a pool that hands back no `settled` (a test's canned rows) is judged by the say's own instant
+    const settled = r.settled === true || (r.settled == null && Date.parse(r.at) <= now - ROOMS_SETTLE_MINUTES * 60_000);
+    if (settled) { if (id > mark) mark = id; } else if (id < hold) hold = id;
+  }
+  return Math.max(prev, Math.min(mark, hold - 1));
+}
+
+/** File a say under the room its act recorded: rooms.mjs § roomsOf's own rule for a named say, one act at a time. */
+function fileNamedSay(ix, row) {
+  const name = recordedRoomOf(row);
+  const at = Date.parse(row.at);
+  if (!Number.isFinite(at)) return;
+  let room = ix.byId.get(name) ?? ix.byKey.get(roomKeyOf(name));
+  if (!room) {
+    room = { root: name, ids: [], latest: at, order: NAMED_ROOM_ORDER + ix.rooms.length, named: true };
+    ix.rooms.push(room);
+    ix.byKey.set(roomKeyOf(name), room);
+  } else if (!room.named) { room.root = name; room.named = true; }
+  ix.byId.set(name, room);
+  room.ids.push(Number(row.id));
+  if (at > room.latest) room.latest = at;
+  ix.roomOfSay.set(String(row.id), room);
+  ix.named += 1;
+}
+
+async function buildRooms(p, edges, cut) {
+  const { rows } = await p.query(ROOMS_BUILD_SQL, [talk.VOICE_ACTIONS]);
+  const { rows: markRows } = await p.query(talk.ANCHOR_MARKS_SQL);
+  const open = rows.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is on no keyless read, and in no room of one
+  const centres = talk.anchorCentres(markRows);
+  const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
+  const derived = voicesOfRows(open.filter((row) => recordedRoomOf(row) == null), centres);
+  // a voice older than the oldest published settlement (`cut`) sits in an epoch whose start is unknown: it is left out and said, never grouped
+  const grouped = cut == null ? derived.voices : derived.voices.filter((v) => v.at >= cut);
+  const lastAt = derived.voices.reduce((m, v) => Math.max(m, v.at), -Infinity);
+  const ix = {
+    rooms: [], byId: new Map(), byKey: new Map(), roomOfSay: new Map(), seen: new Set(), named: 0, watermark: 0,
+    unnamed: { voices: derived.voices.length, eras: derived.eras, unplaced: derived.unplaced, ungrouped: derived.voices.length - grouped.length, lastAt },
+    edgesKey: unnamedEdgesKey(edges, lastAt),
+  };
+  const position = new Map([...grouped].sort((a, b) => a.at - b.at).map((v, i) => [v, i]));
+  const founded = talk.roomsOf(grouped, { earshotM: dials.earshot_m.value, boundaries: edges })
+    .map((c) => ({ root: c.root, ids: c.voices.map((v) => Number(v.act_id)), latest: c.latest, order: position.get(c.voices[0]), named: false, says: c.voices.filter((v) => v.id != null) }))
+    .sort((a, b) => a.order - b.order);
+  for (const { says, ...room } of founded) {
+    ix.rooms.push(room);
+    if (!ix.byId.has(room.root)) ix.byId.set(room.root, room);
+    if (!ix.byKey.has(roomKeyOf(room.root))) ix.byKey.set(roomKeyOf(room.root), room);
+    for (const v of says) ix.roomOfSay.set(v.act_id, room);
+  }
+  for (const row of open) if (recordedRoomOf(row) != null) fileNamedSay(ix, row);
+  for (const row of rows) ix.seen.add(String(row.id));
+  ix.watermark = settledMark(rows, 0);
+  return ix;
+}
+
+/** Bring the kept rooms up to the newest act. False when an unnamed voice act it never folded has appeared: the caller builds again. */
+async function readNewerActs(p, ix) {
+  const { rows } = await p.query(ROOMS_TAIL_SQL, [talk.VOICE_ACTIONS, ix.watermark]);
+  for (const row of rows) {
+    const id = String(row.id);
+    if (ix.seen.has(id)) continue;
+    if (recordedRoomOf(row) == null) return false;
+    ix.seen.add(id);
+    if (!spokenInRoom(row)) fileNamedSay(ix, row);
+  }
+  ix.watermark = settledMark(rows, ix.watermark);
+  return true;
 }
 
 /**
- * The conversations page's read, from the record (`acts`): one thread per place per settlement, a thread splitting only at a
- * published settlement. `/world2/conversations` serves it whole; `/world/conversations?before=` serves the page of closed threads
- * behind a cursor (the page's "show earlier"), so the reader can reach history the office's memory no longer holds.
+ * The kept rooms for this pool, current to the newest act: built once (single-flight), then topped up by each read. `cut` is the
+ * oldest published settlement at the instant asked, before which a voice is not grouped, or null when the read is evaluated before
+ * every settlement known (`?at=`): the only two things a read's instant can ask of the old says, so at most two are ever kept.
+ */
+async function roomsKept(p, edges, cut) {
+  let state = keptRooms.get(p);
+  if (!state) keptRooms.set(p, (state = { kept: new Map(), building: new Map() }));
+  const slot = String(cut);
+  for (let builds = 0; ; builds++) {
+    const ix = state.kept.get(slot);
+    if (ix && ix.edgesKey === unnamedEdgesKey(edges, ix.unnamed.lastAt) && await readNewerActs(p, ix)) return ix;
+    if (builds >= 2) throw new Error("the conversations' kept rooms did not settle after two builds");
+    if (!state.building.has(slot)) state.building.set(slot, buildRooms(p, edges, cut).finally(() => { state.building.delete(slot); }));
+    state.kept.set(slot, await state.building.get(slot));
+    // a cut no read can ask for any more (the oldest settlement this office keeps moved on) is let go
+    for (const k of state.kept.keys()) if (k !== slot && k !== "null" && k !== String(edges[0] ?? null)) state.kept.delete(k);
+  }
+}
+
+/** The rooms as the page orders them: by their newest say, and for a tie in the order they began (rooms.mjs § roomsOf's own order). */
+const roomsInOrder = (ix) => [...ix.rooms].sort((a, b) => a.latest - b.latest || a.order - b.order);
+
+/** Read `entries` (kept rooms) whole: their says by act number, the marks those says stand on, and the say dials. */
+async function readRooms(p, entries) {
+  const roomOfAct = new Map();
+  for (const e of entries) for (const id of e.ids) roomOfAct.set(String(id), e);
+  const ids = [...roomOfAct.keys()];
+  const rows = ids.length
+    ? (await p.query(ROOM_VOICES_SQL, [ids])).rows.filter((row) => roomOfAct.has(String(row.id)) && !spokenInRoom(row))
+    : [];
+  const anchors = [...new Set(rows.map((row) => row.at_anchor).filter((a) => a && a !== talk.WORLD_ANCHOR))];
+  const { rows: markRows } = await p.query(ROOM_ANCHORS_SQL, [anchors]);
+  const derived = voicesOfRows(rows, talk.anchorCentres(markRows));
+  const voicesOf = new Map();
+  for (const v of derived.voices) {
+    const e = roomOfAct.get(v.act_id);
+    if (!voicesOf.has(e)) voicesOf.set(e, []);
+    voicesOf.get(e).push(v);
+  }
+  const rooms = new Map();
+  for (const [e, voices] of voicesOf) rooms.set(e, { root: e.root, voices: voices.sort((a, b) => a.at - b.at), latest: voices.reduce((m, v) => Math.max(m, v.at), -Infinity) });
+  return { rooms, dials: talk.sayDials(markRows.filter((m) => m.status === "standing")), unplaced: derived.unplaced };
+}
+
+/**
+ * The conversations page's read, from the record (`acts`): a room is the says that name it (POS-1185, src/rooms.mjs), carried across
+ * a published settlement while it is still talking (CORE-97). `/world2/conversations` serves the page; `/world/conversations?before=`
+ * serves the page of closed threads behind a cursor (the page's "show earlier"), and `?room=` / `?circle=` one named conversation, so
+ * the reader can reach history the office's memory no longer holds.
  *
  * `?closed=` and `?voices=` are the caller's two dials (page size, lines per thread); `?before=<ISO or ms>` is the cursor (the
- * `earlier.before` of the page before), and a page behind it carries no live threads. `?at=` evaluates the answer at an instant.
+ * `earlier.before` of the page before), and a page behind it carries no live threads. `?at=` evaluates the answer at an instant:
+ * which rooms are open then. It never moves a say to another room.
  *
- * ELIGIBILITY COMES FIRST: a say spoken inside a dungeon room (`spokenInRoom`, WLD-74) is dropped from the raw rows before anything
- * is grouped, counted or paged, so a private voice can neither bridge two public circles nor displace a public thread.
+ * WHAT A READ FETCHES (POS-1185): the acts newer than the kept rooms hold, then only the rooms it serves — one named room, or the
+ * live rooms and one page of closed ones — by act number, and the marks those says are anchored on. § THE ROOMS, KEPT, above.
+ *
+ * ELIGIBILITY COMES FIRST: a say spoken inside a dungeon room (`spokenInRoom`, WLD-74) is dropped before anything is grouped, counted
+ * or paged, so a private voice can neither join a public room nor displace a public thread.
  *
  * THE MARKS READ IS FOR THE ANCHORS, not for the marks. A live say stores the witnessed line (anchor + offset), so composing it back
- * to a point needs the anchor mark's centre. Every mark the store holds, retired ones too: a say happened where its anchor stood at
- * the time. A say whose anchor is in no row at all is left out and disclosed by count; it never fails the read (#351).
+ * to a point needs the anchor mark's centre, retired marks too: a say happened where its anchor stood at the time. A say whose
+ * anchor is in no row at all is left out and disclosed by count; it never fails the read (#351).
  */
 async function conversationsFromRecord(p, searchParams, { settlements = settlementsKnown, hearingWindow = hearingWindowAt } = {}) {
   const at = clockOf(searchParams);
@@ -810,49 +984,55 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   const rawVoicesBefore = searchParams?.get("voices_before");
   const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
   const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
-  const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
-    p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
-    p.query(talk.ANCHOR_MARKS_SQL),
-  ]);
-  const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
-  const centres = talk.anchorCentres(markRows);
-  const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
-  let derived;
-  try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
-  catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
-  const edges = publishedEdges({ settlements, hearingWindow, ms: at.ms });
-  // a voice older than the oldest published settlement sits in an epoch whose start is unknown: it is left out and said, never grouped
-  const grouped = edges.length ? derived.voices.filter((v) => v.at >= edges[0]) : derived.voices;
-  const ungrouped = derived.voices.length - grouped.length;
-  const body = talk.conversationsOf(grouped, {
-    now: at.ms,
-    earshotM: dials.earshot_m.value,
-    boundaries: edges,
-    fadeMs: dials.fade_min.ms,
-    closedMax: n("closed", 40), voiceCap: n("voices", 80),
-    before, voicesBefore,
-    find: findOf(searchParams), // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
-  });
+  const known = publishedEdges({ settlements, hearingWindow, ms: at.ms });
+  const edges = known.filter((m) => m <= at.ms);
+  const find = findOf(searchParams); // POS-1035: ?circle= / ?room= finds a named conversation anywhere in the record
+  const voiceCap = n("voices", 80);
+  let ix, read, body;
+  try {
+    ix = await roomsKept(p, known, edges.length ? edges[0] : null);
+    if (find) {
+      // the one room asked for: by its id (an exact id first, then the same handle in the same second, POS-1183), or the room holding the say
+      const say = sayIdOf(find.circle);
+      const ordered = find.circle == null ? roomsInOrder(ix) : [];
+      const entry = find.circle != null
+        ? (say == null ? null : ix.roomOfSay.get(String(say)) ?? null)
+        : ordered.find((r) => r.root === String(find.room)) ?? (roomKeyOf(find.room) == null ? null : ordered.find((r) => roomKeyOf(r.root) === roomKeyOf(find.room))) ?? null;
+      read = await readRooms(p, entry ? [entry] : []);
+      body = talk.conversationFound([...read.rooms.values()], find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap });
+    } else {
+      const page = talk.conversationsPage(roomsInOrder(ix), { now: at.ms, boundaries: edges, closedMax: n("closed", 40), before });
+      read = await readRooms(p, [...page.live, ...page.closed]);
+      const held = (list) => list.filter((e) => read.rooms.has(e)); // a room whose every say is unplaced has nothing to show
+      body = talk.conversationsBody({ live: held(page.live), closed: held(page.closed), remaining: page.remaining },
+        { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap, fadeMs: read.dials.fade_min.ms, voicesBefore, roomOf: (e) => read.rooms.get(e) });
+    }
+  } catch (e) {
+    if (!e?.unknownVoiceEra) throw e;
+    return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } };
+  }
   if (body.find?.refused) return { code: 422, body: { error: "bounce", ...body.find.refused } };
   // POS-1035 (CORE-82): a circle read carries the ACCEPTED sparks under it — standing marks only, by the spine (on it / below it)
   if (body.find?.circle_read) {
     try { body.find.sparks = await acceptedSparksOfCircle(p, body.find.circle); }
     catch { body.find.sparks = null; body.find.sparks_note = "the sparks under this circle could not be read just now; this is not a circle with none"; }
   }
-  const ungroupedLine = ungrouped
-    ? `${ungrouped} of the ${derived.voices.length} voices come before the oldest settlement this office has read (${new Date(edges[0]).toISOString()}), so their settlement is unknown and they are not grouped`
+  const dials = read.dials;
+  const voices = ix.unnamed.voices + ix.named;
+  const unplaced = [...ix.unnamed.unplaced, ...read.unplaced];
+  const ungroupedLine = ix.unnamed.ungrouped
+    ? `${ix.unnamed.ungrouped} of the ${voices} voices come before the oldest settlement this office has read (${new Date(edges[0]).toISOString()}), so their settlement is unknown and they are not grouped`
     : null;
   const fellBack = talk.sayDialsDisclosure(dials);
-  const unplacedLine = talk.unplacedDisclosure(derived.unplaced);
+  const unplacedLine = talk.unplacedDisclosure(unplaced);
   return { code: 200, body: {
     what: "every conversation in the world, live ones first — a thread is a derivation over the record, not an object",
     evaluated_at: new Date(at.ms).toISOString(),
-    voices: derived.voices.length, eras: derived.eras,
+    voices, eras: { crystallized: ix.unnamed.eras.crystallized, live: ix.unnamed.eras.live + ix.named },
     dials: Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }])),
     ...body,
-    ...(unplacedLine ? { unplaced_says: { count: derived.unplaced.length,
-      example: { act_id: derived.unplaced[0].act_id, anchor: derived.unplaced[0].anchor } } } : {}),
+    ...(unplacedLine ? { unplaced_says: { count: unplaced.length,
+      example: { act_id: unplaced[0].act_id, anchor: unplaced[0].anchor } } } : {}),
     disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
       ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : []), ...(ungroupedLine ? [ungroupedLine] : [])],
   } };

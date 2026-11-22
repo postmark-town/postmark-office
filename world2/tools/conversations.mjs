@@ -70,6 +70,8 @@
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
 import { markIdOf, sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
 import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
+import { roomsOf, roomIdOf, roomKeyOf, isRoomId } from "../../src/rooms.mjs"; // POS-1185: which room a say is in, decided once — shared with voices.mjs, never a second copy
+export { roomsOf }; // the record's rooms, for every reader of this module (the door's kept rooms, an event's rooms)
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
@@ -158,6 +160,9 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
  *
  * The `fadeMs` lull path is kept for the one caller that is not the say record
  * (the sound class's `thread_close_min`); `boundaries` absent means it.
+ *
+ * NOT THE SAY RECORD'S ROOMS ANY MORE (POS-1185): this still fuses two groups when one voice hears both. The record's rooms
+ * are `roomsOf` (src/rooms.mjs, imported above): a say's room is decided once, and a later say fuses nothing.
  */
 export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
@@ -190,7 +195,9 @@ export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}
 function rootPlaceOf(cluster) {
   const voices = cluster.voices;
   const root = cluster.root ?? `t${voices[0].at}-${voices[0].handle}`;
-  const founder = voices.find((v) => `t${v.at}-${v.handle}` === root && v.reply_to == null && markIdOf(v.place_mark));
+  // POS-1185: the founder is the say whose own id is the room's, to the second (the record reads an instant to the second; a recorded name keeps milliseconds)
+  const key = roomKeyOf(root);
+  const founder = voices.find((v) => roomKeyOf(roomIdOf(v)) === key && v.reply_to == null && markIdOf(v.place_mark));
   return founder?.place_mark ?? voices.find((v) => v.root === root && markIdOf(v.root_place_mark))?.root_place_mark ?? null;
 }
 
@@ -214,7 +221,7 @@ export function threadOf(cluster, { live, voiceCap }) {
     if (v.y > y1) y1 = v.y;
   }
   return {
-    id: `t${first.at}-${first.handle}`,
+    id: cluster.root ?? `t${first.at}-${first.handle}`, // POS-1185: the room's own name (rooms.mjs § roomsOf); a bare list of voices is named by its first
     ...(placeMark ? { place_mark: placeMark } : {}), // POS-1152: where the conversation STARTED (its root), never where it is now (`place`, `at` stay the latest voice's)
     live,
     place: last.place ?? null,
@@ -356,6 +363,9 @@ export function voiceOf(row, centreOf = null) {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,
       place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
       ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+      // POS-1185: the conversation this say joined, as its act recorded it when it was spoken (`payload.conversation`, a room id). An act
+      // written before that has none; rooms.mjs names it as it was when spoken, and nothing here makes one up.
+      ...(isRoomId(p?.conversation) ? { root: p.conversation } : {}),
       // POS-1152: the start-place mark recorded on a ROOT say's act (no reply_to, not spoken in a dungeon room); anything else on a reply or a room say is not read
       ...(replyTo == null && !p?.room && markIdOf(p?.place_mark) ? { place_mark: p.place_mark } : {}),
       // POS-1132: the shoulder this say was spoken on, as the act recorded it (payload.stood_with); an old say has none, and none is made up
@@ -474,6 +484,11 @@ export function unplacedDisclosure(unplaced = []) {
  *  from the LOG, not the ear's window (Keemin: 'let's not auto-delete, so we can
  *  look back at them')."
  *
+ * A ROOM IS THE SAYS THAT NAME IT (POS-1185, Darko 2026-11-22: "we simply dont merge separate conversations just because there
+ * is a geometric linker later on"). Until then this grouped every voice by earshot on every read, and a say within earshot of
+ * two rooms fused them, so the younger room's id stopped opening anything. Now each say's room is decided once, when it is
+ * spoken (src/rooms.mjs § roomsOf): a recorded name where the act carries one, else the room it joined when it was spoken.
+ *
  * ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24): the same
  * earshot grouping, the time-lull split gone. `boundaries` are the settlements
  * (ms) at or before `now`; LIVE is the newest settlement's threads, CLOSED the
@@ -487,29 +502,43 @@ export function unplacedDisclosure(unplaced = []) {
  * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
 export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null, find = null }) {
-  const t = now;
-  const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
-  const since = marks.length ? marks[marks.length - 1] : -Infinity;
-  const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
+  const marks = edgesAt(boundaries, now);
+  // POS-1185: the rooms are the says that name them (src/rooms.mjs § roomsOf, the derivation voices.mjs's memory uses too): a say's
+  // room was decided when it was spoken, so a later say within earshot of two rooms fuses nothing and no room's id stops opening it.
+  const clusters = roomsOf(voices, { earshotM, boundaries: marks });
   // POS-1035: a named room or circle, found among every thread the record holds — voices.mjs `conversations` finds the same way
-  if (find) {
-    return {
-      now: new Date(t).toISOString(),
-      earshot_m: earshotM,
-      settlement_since: marks.length ? new Date(since).toISOString() : null,
-      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, marks), voiceCap }), source: "record" }),
-    };
-  }
+  if (find) return conversationFound(clusters, find, { now, earshotM, boundaries: marks, voiceCap });
+  return conversationsBody(conversationsPage(clusters, { now, boundaries: marks, closedMax, before }), { now, earshotM, boundaries: marks, voiceCap, fadeMs, voicesBefore });
+}
+
+/** The published settlements at or before `now`, ascending. */
+const edgesAt = (boundaries, now) => boundaries.filter((m) => Number.isFinite(m) && m <= now).sort((a, b) => a - b);
+
+/**
+ * WHICH ROOMS A PAGE HOLDS (POS-1185), decided from each room's newest instant alone (`latest`), so it can be decided before any
+ * room's voices are read: the live rooms (none behind a cursor), one page of closed rooms newest first — widened to keep every room
+ * tied on the page's last instant — and how many closed rooms are behind it. `rooms` is anything carrying `latest`, in the rooms'
+ * own order (rooms.mjs § roomsOf): whole rooms, or the door's kept index of them.
+ */
+export function conversationsPage(rooms, { now, boundaries = [], closedMax = 40, before = null }) {
+  const marks = edgesAt(boundaries, now);
   const live = [];
   const closed = [];
-  for (const c of clusters) (roomOpen(c.latest, t, marks) ? live : closed).push(c);
+  for (const c of rooms) (roomOpen(c.latest, now, marks) ? live : closed).push(c);
   const paged = Number.isFinite(before);
   const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
   let cut = Math.min(closedMax, older.length);
   while (cut < older.length && older[cut].latest === older[cut - 1].latest) cut += 1;
   const page = older.slice(0, cut);
+  return { live: paged ? [] : live.sort((a, b) => b.latest - a.latest), closed: page, remaining: older.length - page.length };
+}
+
+/** A page's answer. `roomOf(entry)` hands back the room (its voices) for an entry of the page; whole rooms are their own. */
+export function conversationsBody(page, { now, earshotM, boundaries = [], voiceCap = 80, fadeMs, voicesBefore = null, roomOf = (c) => c }) {
+  const marks = edgesAt(boundaries, now);
+  const since = marks.length ? marks[marks.length - 1] : -Infinity;
   return {
-    now: new Date(t).toISOString(),
+    now: new Date(now).toISOString(),
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
     close_minutes: null,
@@ -518,9 +547,21 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
     place_note: PLACE_NOTE,
     voices_note: voicesNote(voiceCap),
-    live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => pagedThread(c, { live: true, voiceCap, voicesBefore })),
-    closed: page.map((c) => pagedThread(c, { live: false, voiceCap, voicesBefore })),
-    earlier: { source: "record", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null },
+    live: page.live.map((c) => pagedThread(roomOf(c), { live: true, voiceCap, voicesBefore })),
+    closed: page.closed.map((c) => pagedThread(roomOf(c), { live: false, voiceCap, voicesBefore })),
+    earlier: { source: "record", remaining: page.remaining, before: page.closed.length ? new Date(page.closed[page.closed.length - 1].latest).toISOString() : null },
+  };
+}
+
+/** A named room or circle's answer, found among `clusters` (every room of the record, or the one room the door read for it). */
+export function conversationFound(clusters, find, { now, earshotM, boundaries = [], voiceCap = 80 }) {
+  const marks = edgesAt(boundaries, now);
+  const since = marks.length ? marks[marks.length - 1] : -Infinity;
+  return {
+    now: new Date(now).toISOString(),
+    earshot_m: earshotM,
+    settlement_since: marks.length ? new Date(since).toISOString() : null,
+    find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, now, marks), voiceCap }), source: "record" }),
   };
 }
 
@@ -552,7 +593,10 @@ export const DISCLOSURES = Object.freeze({
   // and clusters over all of it. The bound is a RAM fact about a running office,
   // not a law about the page — so it is not reproduced. It bites the day the
   // record passes 2,000 voices, and until then the two answers are identical.
-  no_window: "no look-back bound: 1.0 clusters the last 2,000 voices it holds in memory; this clusters every " +
-             "voice the store holds. The bound is a property of a running process, not of the record, so a " +
-             "read that derives from the store has nothing to reproduce.",
+  // POS-1185: still no look-back bound, and now said as it is read. The door no longer groups every voice on every read: a say's
+  // room is recorded on its act, the older says were named once (as they were when spoken), and a read fetches the rooms it serves.
+  no_window: "no look-back bound: 1.0 holds the last 2,000 voices in memory; this answers from every voice the store " +
+             "holds. A say's conversation is recorded on its own act when it is spoken; a say from before that was " +
+             "recorded is in the conversation it joined when it was spoken, worked out once and kept. So a read " +
+             "fetches only the conversations it shows, and no later say moves an earlier one.",
 });
