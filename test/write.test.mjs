@@ -5,11 +5,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, rmSync, readFileSync, readdirSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
-import { enqueueLetter, nextCrossing } from "../src/write.mjs";
+import { enqueueLetter, nextCrossing, validateLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH; // belt and braces: the spine must stay local
@@ -242,4 +242,86 @@ test("valid trio lands stake_topic/candidate/stamps in frontmatter, after thread
     // the trio sits directly after thread:, count coerced to a bare integer
     assert.match(text, /thread: new\nstake_topic: the-name\nstake_candidate: Waystation\nstake_stamps: 3\n---\n/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+// ── POS-1165: the letter-field policy is the town's ONE pinned implementation (Darko 2026-11-14 "Same check at merge") ─────────────────────────
+// validateLetter judges the thread, the body size and the stake trio through the town's tools/letter-fields.mjs (the office's pinned copy), the same
+// file the town's witness applies at merge, and keeps its own identity, ownership and id derivation. These hold that: the door's refusals ARE the
+// shared module's (same code, defect and hint, in the office's order), the stake block IS its formatting, no parallel policy is left in write.mjs,
+// the byte boundary is the module's, and a clone holding a different copy stops by name.
+const shared = (await import("node:module")).createRequire(import.meta.url)(join(process.env.TOWN_PINS_DIR || join(import.meta.dirname, "..", "src", "town-pins"), "tools", "letter-fields.mjs"));
+const refusal = (args, opts) => { try { validateLetter({ ...ok, ...args }, fixtureKey, db, null, opts); } catch (e) { return e; } return null; };
+
+test("POS-1165: every field refusal is the shared module's own (code, defect, hint), through the door's bounce", () => {
+  for (const args of [
+    { thread: "has a space" }, { thread: "a/b" }, { thread: 42 }, { thread: "x".repeat(256) },
+    { body: "a".repeat(100_001) },
+    { stake_topic: "the-ballot" }, { stake_topic: "Not A Slug", stake_candidate: "Ana", stake_stamps: "2" },
+    { stake_topic: "the-ballot", stake_candidate: "Ana", stake_stamps: "0" }, { stake_topic: "the-ballot", stake_candidate: "two\nlines", stake_stamps: "2" },
+  ]) {
+    const want = shared.checkLetterFields({ ...ok, ...args });
+    const got = refusal(args);
+    assert.ok(want && got, JSON.stringify(args).slice(0, 60));
+    assert.deepEqual([got.code, got.defect, got.hint], [want.code, want.defect, want.hint], JSON.stringify(args).slice(0, 60));
+  }
+});
+
+test("POS-1165: the office's own order stands: required and types, then ownership, then the recipient, then the shared policy", () => {
+  assert.equal(refusal({ from: "limen", thread: "bad thread" }).code, 403, "ownership is judged before the thread");
+  assert.equal(refusal({ to: "nobody-here", thread: "bad thread" }).code, 422);
+  assert.match(refusal({ to: "nobody-here", thread: "bad thread" }).defect, /^no resident/, "the recipient before the thread");
+  assert.equal(refusal({ thread: "bad thread", body: "a".repeat(100_001) }).code, 422, "thread before size");
+  assert.equal(refusal({ body: "a".repeat(100_001), stake_topic: "only-one" }).code, 413, "size before the stake trio");
+});
+
+test("POS-1165: the optional thread default and the unseen well-shaped thread are never refusals; the exact byte boundary is the module's", () => {
+  assert.equal(refusal({ thread: undefined }), null);
+  assert.equal(refusal({ thread: "" }), null);
+  assert.equal(refusal({ thread: "wright-2030-01-01-to-limen-never-seen" }), null, "a well-shaped unseen reply sails (the note is the door's)");
+  assert.equal(validateLetter({ ...ok, thread: "wright-2030-01-01-to-limen-never-seen" }, fixtureKey, db).threadUnseen, true);
+  assert.equal(refusal({ body: "a".repeat(shared.MAX_BODY) }), null, "exactly the cap sails");
+  assert.equal(refusal({ body: "a".repeat(shared.MAX_BODY + 1) }).code, 413);
+  assert.equal(refusal({ body: "\u20ac".repeat(33_333) + "a" }), null, "by bytes, not characters: 99,999 + 1 sails");
+  assert.equal(refusal({ body: "\u20ac".repeat(33_334) }).code, 413);
+});
+
+test("POS-1165: the stake block is the shared module's formatting, byte for byte", () => {
+  const trio = { stake_topic: "the-ballot", stake_candidate: "  Ana One ", stake_stamps: "3" };
+  const plan = validateLetter({ ...ok, ...trio }, fixtureKey, db);
+  assert.equal(plan.stakeFm, shared.stakeFrontmatter(trio).fm);
+  assert.equal(plan.stakeFm, "stake_topic: the-ballot\nstake_candidate: Ana One\nstake_stamps: 3\n");
+  assert.equal(validateLetter(ok, fixtureKey, db).stakeFm, "", "no trio, no stake lines");
+});
+
+test("POS-1165: identity stays the office's: the same title, slug and id derivation, and an accepted replay identity is kept", () => {
+  const plan = validateLetter({ ...ok, thread: "new" }, fixtureKey, db);
+  assert.match(plan.id, /^wright-\d{4}-\d{2}-\d{2}-to-limen-a-fine-hat$/);
+  assert.equal(plan.slug, "a-fine-hat");
+  const replay = validateLetter(ok, fixtureKey, db, { id: "wright-2026-01-02-to-limen-a-fine-hat", file: "WHITE_PAGES/wright/outbox/letter-2026-01-02-to-limen-a-fine-hat.md" });
+  assert.equal(replay.id, "wright-2026-01-02-to-limen-a-fine-hat");
+});
+
+test("POS-1165: no parallel policy is left in write.mjs: the grammar, the cap and the stake formatter come from the pinned module", () => {
+  const src = readFileSync(join(import.meta.dirname, "..", "src", "write.mjs"), "utf8");
+  for (const gone of ["THREAD_RE", "MAX_BODY", "buildStakeFm", "STAKE_CANDIDATE_MAX", "[A-Za-z0-9][A-Za-z0-9._-]{0,254}"])
+    assert.equal(src.includes(gone), false, `write.mjs still holds ${gone}`);
+  assert.match(src, /lf\.checkLetterFields\(/);
+  assert.match(src, /lf\.stakeFrontmatter\(/);
+});
+
+test("POS-1165: a clone holding the SAME copy of tools/letter-fields.mjs is accepted; a different copy stops by name (503 town-pin-mismatch); no clone still judges", () => {
+  const pinned = join(process.env.TOWN_PINS_DIR || join(import.meta.dirname, "..", "src", "town-pins"), "tools", "letter-fields.mjs");
+  const same = tempClone();
+  mkdirSync(join(same, "tools"), { recursive: true });
+  copyFileSync(pinned, join(same, "tools", "letter-fields.mjs"));
+  assert.equal(refusal({}, { clone: same }), null, "the same bytes: the pinned copy judges");
+  assert.equal(refusal({ thread: "bad thread" }, { clone: same }).code, 422);
+  const other = tempClone();
+  mkdirSync(join(other, "tools"), { recursive: true });
+  writeFileSync(join(other, "tools", "letter-fields.mjs"), readFileSync(pinned, "utf8") + "\n// the town moved ahead of the review\n");
+  const stop = refusal({}, { clone: other });
+  assert.equal(stop.code, 503);
+  assert.equal(stop.defect, "town-pin-mismatch");
+  assert.ok(stop.hint);
+  assert.equal(refusal({ thread: "bad thread" }, { clone: null }).code, 422, "no clone: the pinned copy still judges, never skipped");
 });
