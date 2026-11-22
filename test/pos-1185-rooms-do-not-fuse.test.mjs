@@ -112,7 +112,8 @@ test("FALSIFIER 3 · a reply joins its parent's room even when another room's vo
   await say("eli", "east opens");                              // 80002
   const west = `t${T}-wes`, east = `t${T + 20_000}-eli`;
   const r = await say("mid", "answering the east room from nearer the west", { replyTo: 80002 });   // mid is 45 m from wes and 55 m from eli
-  assert.equal(r.said.reply_to, 80002);
+  assert.equal(r.spoke, true, `a reply may answer a say in any open room within earshot, not only the nearest room: ${r.defect ?? ""}`);
+  assert.equal(r.said?.reply_to, 80002);
   assert.deepEqual(roomsNow(d.store), { [west]: ["west opens"], [east]: ["east opens", "answering the east room from nearer the west"] },
     "a reply joins the room of the say it answers, not the nearest voice's");
   assert.equal(d.penned.at(-1).root, east, "and the pen is handed that room");
@@ -440,4 +441,25 @@ test("THE DOOR · a say spoken after the rooms were kept is read at once, filed 
   assert.ok(threads.some((c) => said(c).includes("o1")), 'LAW: "everything to be readable" — the unnamed say is in a room');
   assert.equal(count(p, serve.ROOMS_BUILD_SQL).length, 2, "by building the kept rooms again, once");
   assert.equal(threads.flatMap(said).filter((n) => n === "o1").length, 1);
+});
+
+test("THE DOOR · a say whose act number was given out earlier but lands later is still read: the kept rooms never skip past an act newer than ten minutes", async (t) => {
+  if (skip) return t.skip(skip);
+  const p = counting();
+  await ask(p, `room=${encodeURIComponent(PAX)}`);
+  // an act number taken by a say whose transaction has not committed yet…
+  const { rows: [{ gap }] } = await owner.query("SELECT nextval(pg_get_serial_sequence('acts', 'id')) AS gap");
+  // …while a later say, with the next number, commits and is read first
+  const KIT = `t${S3 + 51 * MIN}-kit`, LAG = `t${S3 + 50 * MIN}-lag`;
+  await insertSay("kit1", S3 + 51 * MIN, "kit", "quill/the-barn", 300, { conversation: KIT }, { settled: false });
+  assert.ok(ID.kit1 > Number(gap));
+  assert.equal((await ask(p, `room=${encodeURIComponent(KIT)}`)).body.find.room.voice_count, 1, "the later act number is read");
+  // now the earlier number lands
+  await owner.query(`INSERT INTO acts (id, at, crossing, actor, action, at_anchor, at_dx, at_dy, class, payload) OVERRIDING SYSTEM VALUE
+    VALUES ($1, $2::timestamptz, 1, 'lag', 'say', 'quill/the-barn', 400, 0, 'voice', $3::jsonb)`,
+    [gap, iso(S3 + 50 * MIN), JSON.stringify({ text: "lag1: lag speaks", place: "the green", conversation: LAG })]);
+  const late = await ask(p, `room=${encodeURIComponent(LAG)}`);
+  assert.equal(late.body.find.history, "complete", 'LAW: "everything to be readable" — an act that became visible after a later-numbered one is not skipped');
+  assert.equal(late.body.find.room.voice_count, 1);
+  assert.equal(count(p, serve.ROOMS_BUILD_SQL).length, 1, "and it was read by the small read of newer acts, not by building again");
 });
