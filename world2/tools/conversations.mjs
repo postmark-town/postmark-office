@@ -68,12 +68,12 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
-import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { markIdOf, sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
 import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "55a9ae3b59ace489d15f321f5857ab4b45bf0558", at: "98b54d96fcdf10c8dd3136cca62c4ea864028eeb" },
+            blob: "7abfd7077d06eaa39b1264199b7ab0bd0b8ffd6f", at: "dd12b6d1ea52d27082ce3ec65ff2fc23bc2f7e1c" }, // POS-1132: voices.mjs carries stood_with and the speaker line; the vendored threadOf is unchanged (the equality tests hold). POS-1152: the start-place mark rides the same functions
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -186,10 +186,19 @@ export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}
   return [...closed, ...open].sort((a, b) => a.latest - b.latest);
 }
 
+/** voices.mjs `rootPlaceOf`, verbatim (POS-1152): the mark a room's root started at, as recorded; unknown stays absent. */
+function rootPlaceOf(cluster) {
+  const voices = cluster.voices;
+  const root = cluster.root ?? `t${voices[0].at}-${voices[0].handle}`;
+  const founder = voices.find((v) => `t${v.at}-${v.handle}` === root && v.reply_to == null && markIdOf(v.place_mark));
+  return founder?.place_mark ?? voices.find((v) => v.root === root && markIdOf(v.root_place_mark))?.root_place_mark ?? null;
+}
+
 /** voices.mjs `threadOf`, verbatim. */
 export function threadOf(cluster, { live, voiceCap }) {
   const voices = cluster.voices;
   const first = voices[0];
+  const placeMark = rootPlaceOf(cluster);
   const last = voices[voices.length - 1];
   const participants = [];
   for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
@@ -206,6 +215,7 @@ export function threadOf(cluster, { live, voiceCap }) {
   }
   return {
     id: `t${first.at}-${first.handle}`,
+    ...(placeMark ? { place_mark: placeMark } : {}), // POS-1152: where the conversation STARTED (its root), never where it is now (`place`, `at` stay the latest voice's)
     live,
     place: last.place ?? null,
     at: { x: Math.round(last.x), y: Math.round(last.y) },
@@ -219,15 +229,9 @@ export function threadOf(cluster, { live, voiceCap }) {
     latest: new Date(last.at).toISOString(),
     participants,
     voice_count: voices.length,
-    voices: shown.map((v) => ({
-      handle: v.handle,
-      standing: standingOf(v.handle),
-      said: v.text,
-      at: new Date(v.at).toISOString(),
-      at_ms: v.at,
-      x: Math.round(v.x),
-      y: Math.round(v.y),
-    })),
+    // THE FLAT LINE, EXTENDED ADDITIVELY (POS-1035, call 24): `handle, standing, said, at, at_ms, x, y` as ever, plus optional
+    // `id`, `reply_to` and `circle` (circles.mjs § sayLine). The circle is resolved over the WHOLE room, not the shown page.
+    voices: sayLines(shown, circleIndex(voices)),
   };
 }
 
@@ -345,9 +349,17 @@ export function voiceOf(row, centreOf = null) {
         `(anchor ${JSON.stringify(row.at_anchor)}, offset ${row.at_dx},${row.at_dy}) — ` +
         `a voice with no place cannot be clustered, and {0,0} is the Origin, a real place somebody could be standing` };
     }
+    // POS-1035: a live say's act number IS its say id, and `payload.reply_to` is its one stored edge. A crystallized voice's
+    // act is the crossing save's emission, not a say, so it carries no say id: old talk stays a timeline (call 13).
+    const id = sayIdOf(row.id), replyTo = sayIdOf(p?.reply_to);
     return { era: "live", voice: {
       handle, text: String(p?.text ?? ""), at, x: point.x, y: point.y,
-      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id) } };
+      place: p?.place ?? null, aboard: Boolean(p?.aboard), act_id: String(row.id),
+      ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+      // POS-1152: the start-place mark recorded on a ROOT say's act (no reply_to, not spoken in a dungeon room); anything else on a reply or a room say is not read
+      ...(replyTo == null && !p?.room && markIdOf(p?.place_mark) ? { place_mark: p.place_mark } : {}),
+      // POS-1132: the shoulder this say was spoken on, as the act recorded it (payload.stood_with); an old say has none, and none is made up
+      ...(typeof p?.stood_with === "string" && p.stood_with ? { stood_with: p.stood_with } : {}) } };
   }
 
   return { refused: true, reason: `act ${row?.id} (${action}) matches no known voice era` };
@@ -474,11 +486,20 @@ export function unplacedDisclosure(unplaced = []) {
  * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
  * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null, voicesBefore = null, find = null }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
   const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
+  // POS-1035: a named room or circle, found among every thread the record holds — voices.mjs `conversations` finds the same way
+  if (find) {
+    return {
+      now: new Date(t).toISOString(),
+      earshot_m: earshotM,
+      settlement_since: marks.length ? new Date(since).toISOString() : null,
+      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, marks), voiceCap }), source: "record" }),
+    };
+  }
   const live = [];
   const closed = [];
   for (const c of clusters) (roomOpen(c.latest, t, marks) ? live : closed).push(c);

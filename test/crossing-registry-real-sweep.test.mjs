@@ -40,9 +40,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { fileURLToPath } from "node:url";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -71,7 +71,7 @@ const WHY_SKIP = WORLD ? false : "no world checkout found (set POSTMARK_WORLD_CL
 
 /** A world the real sweep will accept: its own tools, one mark, one registry. */
 function worldWith(t, registry) {
-  const repo = mkdtempSync(join(tmpdir(), "postmark-real-sweep-"));
+  const repo = tempDir("postmark-real-sweep-");
   t.after(() => { try { rmSync(repo, { recursive: true, force: true }); } catch { /* litter */ } });
 
   cpSync(join(WORLD, "tools"), join(repo, "tools"), { recursive: true });

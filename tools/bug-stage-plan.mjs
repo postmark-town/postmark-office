@@ -82,6 +82,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { importTownTool, townToolArgv } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy, checked against the clone
 
 import { BUG_CLASS, BUG_LADDER, CONFIRMED_CAP, SKIPPED_RECREDIT_STAGES, STATE_CONFIRMED, stageAmount } from "../src/bugs.mjs";
 import { ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP } from "../src/events.mjs";
@@ -340,9 +341,8 @@ export function parseRecreditPlan(text, { recorded }) {
 
 /** The town's classifier and meep law, imported from the clone — or a refusal naming what is missing. */
 export async function townEngine(town) {
-  const tool = join(town, "tools", "stamp-mint.mjs");
-  if (!existsSync(tool)) throw new Error(`bug-stage-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
-  const engine = await import(pathToFileURL(tool).href);
+  if (!existsSync(join(town, "tools", "stamp-mint.mjs"))) throw new Error(`bug-stage-plan: no tools/stamp-mint.mjs in ${town} — --town names the town clone`);
+  const engine = await importTownTool(town, "stamp-mint.mjs"); // POS-994: the office's pinned copy, checked against the clone
   if (typeof engine.stageMintLine !== "function" || !engine.STAGE_LADDER)
     throw new Error("bug-stage-plan: this town's stamp-mint.mjs has no stage grammar (post:<id>/<stage>), so the plan cannot see what is already paid — the town must carry --stage-mint first");
   const ledgerFile = join(town, "WHITE_PAGES", "stamp-ledger.md");
@@ -397,19 +397,19 @@ export async function storeFacts({ env = process.env } = {}) {
   }, { env });
 }
 
-/** The town's own verb, by absolute path, handed --repo explicitly (welcome-pass.mjs § mintArgv, for the same reasons). */
-export const stageMintArgv = (town, r, { date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
-  "--stage-mint", r.handle, "--post", r.post, "--stage", r.stage, "--amount", String(r.n), "--date", date, "--key", keyPath, "--repo", town];
+/** The town's own verb (the office's pinned copy, POS-994), handed --repo explicitly (welcome-pass.mjs § mintArgv, for the same reasons). */
+export const stageMintArgv = (town, r, { date, keyPath }) => townToolArgv(town, "stamp-mint.mjs", [
+  "--stage-mint", r.handle, "--post", r.post, "--stage", r.stage, "--amount", String(r.n), "--date", date, "--key", keyPath, "--repo", town]);
 
 /**
  * The town's correction verb (POS-649): both lines or neither, with the plan's amount and wrong recipient as binds.
  * A skipped stage's credit (POS-931/a) is the same verb with --skipped: one line, nothing burned, refused by the
  * town when its ledger holds a line for the stage.
  */
-export const stageRecreditArgv = (town, r, { date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
+export const stageRecreditArgv = (town, r, { date, keyPath }) => townToolArgv(town, "stamp-mint.mjs", [
   "--stage-recredit", r.to, "--post", r.post, "--stage", r.stage, "--by", r.hand, "--amount", String(r.n),
   ...(r.skipped ? ["--skipped"] : ["--from", r.from]),
-  "--date", date, "--key", keyPath, "--repo", town];
+  "--date", date, "--key", keyPath, "--repo", town]);
 
 const run = (town, argv) => spawnSync(process.execPath, argv, { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 

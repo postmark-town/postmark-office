@@ -193,16 +193,16 @@ function runRehearsalBlock(rolesDir, liveDb, { inStore = "", inStoreRoles = "" }
   writeFileSync(harness, [
     "set -uo pipefail",
     "say() { printf '%s\\n' \"$*\"; }",
-    "bad=0; drift_lines=''; FROM_REMOTE=false; FROM_S3=false; TMPCLONE=''",
+    "bad=0; NOTRUN=''; drift_lines=''; FROM_REMOTE=false; FROM_S3=false; TMPCLONE=''",
     // what the table loop leaves behind: "<restored> <live>" for the two in-store tables, or empty when the
     // restore had no such table (an old dump)
     `RS_AUDIT='${inStore}'; RS_ROLES='${inStoreRoles}'`,
     `W2_ROLES_DB="${liveDb}"; WORLD2_LAB="${rolesDir}"; WORLD2_OFFICE="${liveDb}"`,
     block,
-    'echo "BAD=$bad"', 'echo "RA=${RA_COPY:-}/${RA_LIVE:-}"',
+    'echo "BAD=$bad"', 'echo "RA=${RA_COPY:-}/${RA_LIVE:-}"', 'echo "NOTRUN=[$NOTRUN]"',
   ].join("\n"));
   const out = execFileSync("bash", [harness], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  return { out, bad: Number(out.match(/BAD=(\d+)/)[1]) };
+  return { out, bad: Number(out.match(/BAD=(\d+)/)[1]), notrun: out.match(/NOTRUN=\[([^\]]*)\]/)[1].trim() };
 }
 
 function auditDb(path, n) {
@@ -241,11 +241,14 @@ test("the restore rehearsal COMPARES the roles copy — and only the impossible 
   r = runRehearsalBlock(empty, live);
   assert.match(r.out, /NOT-RUN: no roles-\*\.db/);
   assert.equal(r.bad, 0, "an absent copy reddened — a box that never granted a role has nothing to ship");
+  // POS-1121: not a finding, but not a pass either: the rehearsal's verdict counts it as a check that did not run.
+  assert.equal(r.notrun, "roles", "the roles NOT-RUN was not recorded in NOTRUN, so the rehearsal could end PASS");
 
   // D · the rescue box: a copy in hand and no live registry to compare against.
   r = runRehearsalBlock(dir, join(dir, "nonesuch.db"));
   assert.match(r.out, /live registry absent — nothing to compare against/);
   assert.equal(r.bad, 0, "a missing live registry reddened — that is the restore case, not a fault");
+  assert.equal(r.notrun, "", "a comparison that ran was recorded as not-run");
 
   // E · IN THE STORE (STAR-118, 11-12): no roles-*.db shipped because the roles ride the dump, and the table
   // loop already counted office_roles and office_role_audit. Named as the roles check, carried into the receipt,

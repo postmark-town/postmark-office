@@ -17,10 +17,11 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -36,7 +37,7 @@ const NAMED = "the office's town copy needs tending; nothing was written";
 
 const homes = [];
 function town() {
-  const dir = mkdtempSync(join(tmpdir(), "clone-fresh-"));
+  const dir = tempDir("clone-fresh-");
   homes.push(dir);
   const origin = join(dir, "origin.git");
   const clone = join(dir, "clone");
@@ -255,14 +256,16 @@ test("5 · THROUGH THE REAL WRITE PATH: a letter on the dirtied clone is the nam
 });
 
 // the execs, as the child the door spawns: one JSON line out, exit 0
-const KEYFILE = join(mkdtempSync(join(tmpdir(), "clone-fresh-key-")), "stamp-key.pem");
+const KEYFILE = join(tempDir("clone-fresh-key-"), "stamp-key.pem");
 writeFileSync(KEYFILE, "not a real key: the refusal comes before it is read\n");
 after(() => rmSync(dirname(KEYFILE), { recursive: true, force: true }));
 function runExec(name, clone, payload, { seed = () => {} } = {}) {
   seed(clone);
   return spawnSync(process.execPath, [join(ROOT, "src", name), JSON.stringify(payload)], {
     encoding: "utf8", timeout: 60_000,
-    env: { ...process.env, TOWN_CLONE: clone, TOWN_PUSH: "1", STAMP_KEY: KEYFILE, TOWN_CLEAN_WAIT_MS: "0" },
+    // POS-994: the exec checks the town's mint against the office's pins before it
+    // writes; this clone's stub is pinned to itself, so the freshness answer is what speaks.
+    env: { ...process.env, TOWN_PINS_DIR: pinTown(clone), TOWN_CLONE: clone, TOWN_PUSH: "1", STAMP_KEY: KEYFILE, TOWN_CLEAN_WAIT_MS: "0" },
   });
 }
 const lastJson = (out) => JSON.parse(String(out).trim().split("\n").at(-1));

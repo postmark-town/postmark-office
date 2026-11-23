@@ -1716,13 +1716,15 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
  */
 export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null, pre = null } = {}) {
   try {
-    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+    // POS-994: the town's code is checked first, so a pin stop is said the same
+    // whether or not the store answers (the office path and the store path agree)
     // THE THREE QUEST READS, ALREADY READ (POS-1129): the doorstep reads the registry, the quest standing and the board's rows in its one
     // town-index lease and hands them here as `{ v }` / `{ e }` (town-index-store.mjs § doorstepPageFromRows). A failed one throws here, where its
     // own lease's failure threw, and the block is null as before. With no `pre` (the house read), each is its own read, as it always was.
     const took = (r) => { if (r.e) throw r.e; return r.v; };
     const tools = await questTools(clone);
     if (typeof tools.composeNextSteps !== "function") return null; // older checkout
+    ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
     const { paperGapRows, worldSitedFor } = await import("./household-apex.mjs");
     // ONE world read, shared by the paper gaps and the onboarding row — the
     // block is not free, and two reads could in principle disagree.
@@ -1844,7 +1846,16 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
         ? "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) + the office's household-apex paper gaps — one derivation, two surfaces"
         : "the town's own tools/quest-progress.mjs (onboarding rows + daily quests) — the same derivation the public doorstep bundle publishes",
     };
-  } catch { return null; }
+  } catch (e) {
+    // POS-994 (Truey's review of #1065): a pin stop is said, never a silent absence.
+    // One case is a true absence, not a stop: a town with no tools/quest-progress.mjs
+    // at all has no quests to step through (as an older checkout without
+    // composeNextSteps, above). A changed file, a missing piece of its closure, or
+    // pins that hold no quest-progress while the town does (TownToolUnpinned), is a stop.
+    const { isPinStop, pinStopHint } = await import("./town-tool.mjs");
+    if (isPinStop(e) && !(e.code === "TOWN_PIN_MISMATCH" && e.found == null && e.file === "tools/quest-progress.mjs")) return { steps: [], unavailable: { defect: "town-pin-mismatch", hint: pinStopHint(e) } };
+    return null;
+  }
 }
 
 /** /stamps's page around its balances. Called by the store's stampsRoster (town-index-store.mjs). */
@@ -2145,12 +2156,12 @@ export function potBoardOf(rows, extraInvalid = []) {
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
 // since the last ingest, we serve a clean zero board (the daily reset) until the
 // next ingest recomputes. Async: the tool import is awaited (then cached).
-let _questTools = null;
+// POS-994: the office's pinned copy, checked against the clone on EVERY call
+// (the blob check is cached on the file's size and mtime, and node caches the
+// import), so a town change after the first load still stops the board by name.
 async function questTools(clone) {
-  if (_questTools) return _questTools;
-  const { pathToFileURL } = await import("node:url");
-  _questTools = await import(pathToFileURL(join(clone, "tools", "quest-progress.mjs")));
-  return _questTools;
+  const { importTownTool } = await import("./town-tool.mjs");
+  return importTownTool(clone, "quest-progress.mjs");
 }
 /**
  * THE FACTS THE OFFICE CAN SETTLE for the board's uncounted rows.
@@ -2214,8 +2225,14 @@ export function injectedComplete(handle, { house = null } = {}) {
  * say "you have not published an idea" on the strength of a hydration blip,
  * and it is the row that PAYS.
  */
-export function firstIdeaStanding(handle, { house = null } = {}) {
+export function firstIdeaStanding(handle, { house = null, posts } = {}) {
   try {
+    // THE IDEAS ARE POSTS NOW (POS-854): `posts` is the household's idea posts as `[{ by, date }]`, read at the
+    // caller's async edge (idea-store.mjs § ideaPostDatesBy), because this function is synchronous. A post that
+    // was a mark carries the mark's own date, so converting a mark never moves the day the quest was met.
+    // `false` is "the posts could not be read": null, never a quiet "you have not published an idea" on the strength
+    // of a hiccup, which is the failure the paragraph above exists to refuse. `undefined` is a caller that did not ask.
+    if (posts === false) return null;
     const tank = ideasTank();
     if (tank.source !== "store") return null;
     // `house` is the household's residents, which the caller reads from the
@@ -2227,7 +2244,10 @@ export function firstIdeaStanding(handle, { house = null } = {}) {
     // with `[handle]` left the suite green. A branch a mutation can delete
     // silently is a branch nothing was testing.
     const residents = house ?? [handle];
-    const ours = tank.ideas.filter((i) => residents.includes(i.by));
+    // marks then posts, each ordered by date (a missing date first, as the tank orders it), merged the same way
+    const dated = (a, b) => String(a.date ?? "").localeCompare(String(b.date ?? ""));
+    const ours = [...tank.ideas.filter((i) => residents.includes(i.by)),
+      ...(posts ?? []).filter((p) => residents.includes(p.by))].sort(dated);
     // `ideasTank` orders by the mark's own date then id, so the first match is
     // the household's earliest — the quest is "once per household, ever", so
     // the day it was met is the day the FIRST one stood, not the newest.
@@ -2443,6 +2463,24 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
     if (worldSited == null) return { note: STANDING_NOTES.world_elsewhere };
     return { progress: worldSited ? 1 : 0, complete: worldSited, since: null };
   }
+  // ── A QUEST THE TOWN PAYS ONCE PER HOUSEHOLD (POS-976) ───────────────────────
+  //
+  // `read-v2-feedback` (and any row `tools/stamp-mint.mjs` § QUEST_PAY names) is a
+  // hand-reviewed quest: no fold on this board can COUNT it, so its row read
+  // `complete: null`, "this surface did not look", even after the town signed its
+  // payment. The payment IS the fact: a signed `quest:<id>/<household-key>` mint by the
+  // town, which the registry's own derivation sentence names as the row's completion.
+  // The ingest folds the household's qualifying receipts into the standing row
+  // (`paid_quests`: quest id -> the paid day; src/quest-standing.mjs § questPaidFrom),
+  // and this joins them: a paid row is counted and complete, dated by the payment.
+  //
+  // ONLY EVER A YES. No receipt is "not known to be paid", not "unpaid" (a house may
+  // have written in and be waiting for a hand to read it), so an absent key leaves the
+  // row exactly as it was, unknown: `complete: null`, `progress: null`. The earned-once
+  // completion does not depend on the daily snapshot, so it survives a new day.
+  const paidOn = standing?.paid_quests;
+  if (paidOn && typeof paidOn === "object" && Object.hasOwn(paidOn, q.id) && typeof paidOn[q.id] === "string")
+    return { progress: 1, complete: true, since: paidOn[q.id] };
   return null;
 }
 
@@ -2605,7 +2643,10 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   // boolean and the standing join wants the date beside it.
   // The household's residents from the store's registry (POS-342), read here at
   // the async edge and handed down: `firstIdeaStanding` is synchronous.
-  const idea = firstIdeaStanding(handle, { house: (await householdOf(handle))?.residents ?? null });
+  const ideaHouse = (await householdOf(handle))?.residents ?? null;
+  // the household's idea POSTS (POS-854), `false` when the store cannot say
+  const ideaPosts = await import("./idea-store.mjs").then((m) => m.ideaPostDatesBy(ideaHouse ?? [handle])).catch(() => false);
+  const idea = firstIdeaStanding(handle, { house: ideaHouse, posts: ideaPosts });
   // ── AND ONE WORLD READ FOR THE `walk-the-world` ROW (#2773) ───────────────
   //
   // `worldSitedFor` is the three-way the disclosure guard asks for — true,

@@ -21,9 +21,9 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { SCHEMA } from "../src/world-store.mjs";
 import { clearWorld, publishWorld } from "./helpers/world-rows.mjs";
@@ -222,7 +222,7 @@ export const ledgerLine = (d) =>
 
 /** A world clone carrying the whole miniature engine — enough for orient, eyes and place words. */
 export function fixtureWorldCloneWithEngine({ label = "presence", marks = [], parcels = [], departures = [] } = {}) {
-  const repo = mkdtempSync(join(tmpdir(), `postmark-${label}-world-`));
+  const repo = tempDir(`postmark-${label}-world-`);
   const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
   put("tools/walk.mjs", WALK_MJS);
   put("tools/world-engine.mjs", ENGINE_MJS);
@@ -243,7 +243,7 @@ export function fixtureWorldCloneWithEngine({ label = "presence", marks = [], pa
 
 /** A world clone with the physics on `main`. Returns its path. */
 export function fixtureWorldClone({ label = "dyn" } = {}) {
-  const repo = mkdtempSync(join(tmpdir(), `postmark-${label}-world-`));
+  const repo = tempDir(`postmark-${label}-world-`);
   const put = (p, t) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
   put("tools/walk.mjs", WALK_MJS);
   put("WORLD/walk-ledger.md", "# Walk ledger\n");
@@ -325,4 +325,4 @@ export function fixtureWorldDb(path, {
 }
 
 /** A throwaway directory, for a dynamic.db / STATE tree that nothing else shares. */
-export const scratchDir = (label = "dyn") => mkdtempSync(join(tmpdir(), `postmark-${label}-`));
+export const scratchDir = (label = "dyn") => tempDir(`postmark-${label}-`);

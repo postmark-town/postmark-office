@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { copyTownModule, pinTown } from "./helpers/pinned-town.mjs"; // POS-994: fixture towns pinned to themselves
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -86,6 +87,12 @@ function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3
   mkdirSync(join(tree, "town-clone", "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(tree, "world-clone"), { recursive: true });
   writeFileSync(join(tree, "town-clone", "tools", "stamp-mint.mjs"), STAMP_MINT);
+  // POS-994: the chain comparison loads the town's mint through the dev tree's own
+  // loader, against dev's own pins (the freshen writes them at <dev tree>/town-pins-dev);
+  // the stand-in tree carries the loader, with pins of its stand-in clone there.
+  mkdirSync(join(tree, "src"), { recursive: true });
+  copyFileSync(join(ROOT, "src", "town-tool.mjs"), join(tree, "src", "town-tool.mjs"));
+  pinTown(join(tree, "town-clone"), join(tree, "town-pins-dev"));
   if (ledger) writeFileSync(join(tree, "town-clone", "WHITE_PAGES", "stamp-ledger.md"), ledgerOf(ledger));
   const sigs = join(dir, "store-sigs.txt");
   writeFileSync(sigs, store.length ? `${store.join("\n")}\n` : "");
@@ -442,3 +449,32 @@ for (const [what, setup, how] of [
     assert.deepEqual(actsIn(r.calls), ["the freshen", "the registry clear", "the registry seed", "the registry check"], "the freshen and the registry ran, and nothing after them");
   });
 }
+
+// ── DEPLOY'S DEV SWITCH GATE RUNS AS THE DEV OFFICE (POS-940 review, MEDIUM) ──
+// DEPLOY.md § The dev rehearsal, step 8 runs stamp-mint-parity before STAMP_LINES=store. Dev's town pins are not
+// in the env file: the dev units take TOWN_PINS_DIR from their drop-in, and this script's as_dev_office passes it.
+// A gate run without it checks dev's re-signed clone against the office's own pins, stops on a TownPinMismatch,
+// exits 1 like a DIFFERENCE, and was pointed at a registry refresh that cannot help. So the documented command is
+// held to as_dev_office's own binding, read from this script, and to the drop-in's pins.
+test("DEPLOY's dev step 8 runs its parity gate with as_dev_office's binding: meepo, the dev env file, dev's own pins, the dev tree", () => {
+  const sh = readFileSync(SCRIPT, "utf8");
+  const val = (name) => new RegExp(`^${name}=(\\S+)$`, "m").exec(sh)?.[1];
+  const tree = val("DEV_TREE"), env = val("OFFICE_ENV");
+  const fn = /^as_dev_office\(\) \{\n[\s\S]*?\n\}$/m.exec(sh)?.[0];
+  assert.ok(tree && env && fn, "the script names its tree, its env file and as_dev_office");
+  const binding = /sudo -n systemd-run (.*) "\$@"/.exec(fn)[1]
+    .replaceAll('"$OFFICE_ENV"', env).replaceAll('"$D/town-pins-dev"', `${tree}/town-pins-dev`).replaceAll('"$D"', tree);
+  assert.equal(binding, `--uid=meepo -p EnvironmentFile=${env} -p Environment=TOWN_PINS_DIR=${tree}/town-pins-dev -p WorkingDirectory=${tree} --pipe --wait`);
+  const dropin = readFileSync(join(ROOT, "deploy", "postmark-office-dev.service-dropin-town-pins.conf"), "utf8");
+  assert.ok(dropin.split("\n").includes(`Environment=TOWN_PINS_DIR=${tree}/town-pins-dev`), "the dev units name the same pins");
+
+  const deploy = readFileSync(join(ROOT, "deploy", "DEPLOY.md"), "utf8");
+  const step = /^\*\*8\. The switch, behind the mint's gate\.\*\*[\s\S]*?(?=^\*\*9\. )/m.exec(deploy)?.[0];
+  assert.ok(step, "DEPLOY.md § The dev rehearsal has step 8");
+  const cmd = /```sh\n([\s\S]*?)\n```/.exec(step)[1].split("\n").filter((l) => !l.trim().startsWith("#")).join(" ").replace(/\\\s+/g, " ").replace(/\s+/g, " ").trim();
+  assert.equal(cmd, `sudo systemd-run ${binding} node world2/tools/stamp-mint-parity.mjs --clone ${tree}/town-clone`);
+  assert.doesNotMatch(step, /--env-file/, "never the env file alone: it carries no TOWN_PINS_DIR");
+  // and its diagnosis: a pin mismatch is the pins (the freshen), a key-base difference is the registry (step 3)
+  assert.match(step, /A `TownPinMismatch`[\s\S]*the remedy is the freshen[\s\S]*never the\s+registry/);
+  assert.match(step, /A key-base difference is a registry that lags the clone[\s\S]*§ The dev seed advance, step 3/);
+});

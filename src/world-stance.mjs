@@ -1641,7 +1641,30 @@ const storeQuery = async (text, params) => (await import("./world2-acts.mjs")).a
  * `townDeps` stands in for the store reads in a falsifier: `versionsQuery`,
  * `lawQuery`, `lawSha`, `lawMarks`, `hands`.
  */
-async function declareTownStance(repo, args, key, { dbPath = null, crossing = null, townDeps = {} } = {}) {
+/**
+ * WHAT THE TOWN'S OPPOSED MEANS (POS-1136; Darko, 2026-11-18 14:53 EST: "the town declaring opposed to something should remove it,
+ * even parcels"; Wright 20:38Z: "stamps staked on a town-opposed mark go back to each staker when it leaves, the owner included.
+ * Nobody loses stamps because the town removed a mark."). The sentence the act answers, the preview answers and the row records.
+ * It SAYS the ruled outcome; the fold that does it, and the return of the stamps, are the World's (WLD-201), and this door computes,
+ * moves and refunds nothing. It replaces the old "an opposed mark with open stakes stands until they unwind" (POS-361's exception).
+ */
+export const townOpposedEffect = (cites) =>
+  `the town opposes it, citing ${cites} — the mark leaves at the next settlement, a parcel included, and any stamps staked on it go back to each staker, the owner included`;
+
+/**
+ * THE PREVIEW FLAG (POS-1136). `preview` is true, false or absent; anything else, null included, is refused. It is the TOWN'S word only (`as: "town"`, one mark): a resident's
+ * stance and a list of marks refuse it by name and write nothing, so no flag is ever accepted and dropped. Anything else is refused too.
+ */
+function judgePreview(args) {
+  const p = args.preview;
+  if (p === undefined || p === false) return false; // absent or false: an ordinary write. null is NOT absent: it refuses below (the household door checks field names, not types)
+  if (p !== true) throw bounce(422, "preview is true or false", `got ${JSON.stringify(p)} — nothing was written`);
+  return true;
+}
+const refusePreview = (why) => bounce(422, "a preview is the town's word on one mark",
+  `${why} — pass as: "town" with one mark in on to preview it (a town hand only); a resident's stance and a list are not previewed, so nothing was written and nothing is said by a preview there`);
+
+async function declareTownStance(repo, args, key, { dbPath = null, crossing = null, townDeps = {}, preview = false } = {}) {
   const hand = judgeTownHand(args, key, townDeps.hands);
   const on = String(args.on ?? "").trim();
   if (!on || !on.includes("/")) throw bounce(422, "which mark?",
@@ -1680,9 +1703,20 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
     witnesses: { source: "unread", reason: "the town's word is spoken from no place — its ground is the whole world", list: [] },
     payload: { on, stance, by: TOWN_SPEAKER, as: AS_TOWN, hand, version, law, law_sha: lawSha.sha, law_sha_from: lawSha.from },
     effect: stance === "opposed"
-      ? `the town opposes it, citing ${cites} — the crossing returns it when it judges, and an opposed mark with open stakes stands until they unwind`
+      ? townOpposedEffect(cites)
       : `the town has looked and says neutral — it clears "awaiting the town" and confers nothing${cites ? ` (citing ${cites})` : ""}`,
   };
+  // A PREVIEW STOPS HERE: every judgment above has run (the hand, the word, the published mark, the law, the version) and the
+  // effect is the one the real act records; nothing below does, so no act is appended and no pen is reached.
+  if (preview) {
+    return {
+      preview: true, would: "declare", on, stance, as: AS_TOWN, by: TOWN_SPEAKER, household: TOWN, hand,
+      version, law, law_sha: lawSha.sha, law_sha_from: lawSha.from,
+      ...(prior ? { would_supersede: { stance: prior.stance, at: prior.at, seq: prior.seq, hand: prior.hand ?? null } } : {}),
+      effect: entry.effect,
+      nothing_written: "a preview: no act appended — speak again without preview: true to write the town's word",
+    };
+  }
   const row = await writeStanceAct(entry, "the town's word is safe to speak again");
   return {
     on, stance, as: AS_TOWN, by: TOWN_SPEAKER, household: TOWN, hand,
@@ -1724,8 +1758,12 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 
   // A LIST OF MARKS is this same door once per mark (below). The two gates
   // above answer the whole call once; everything after them is per mark.
-  if (Array.isArray(args.on))
+  // THE PREVIEW FLAG IS JUDGED ONCE, BEFORE ANYTHING IS READ OR WRITTEN (POS-1136): true is the town's word on one mark and nothing else.
+  const preview = judgePreview(args);
+  if (Array.isArray(args.on)) {
+    if (preview) throw refusePreview("a list of marks");
     return await declareStanceList(repo, args, key, { dbPath, witnessStamp, crossing, setDownDeps, townDeps });
+  }
 
   // THE TOWN SPEAKS THROUGH THIS SAME VERB (POS-361), and only when the act
   // says so in its one explicit field. A town hand speaking without `as` is a
@@ -1733,8 +1771,9 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   if (args.as != null && args.as !== "") {
     if (args.as !== AS_TOWN) throw bounce(422, `as must be "${AS_TOWN}"`,
       `got ${JSON.stringify(args.as)} — as: "${AS_TOWN}" speaks the town's word through its own pen; omit it to speak as your resident`);
-    return await declareTownStance(repo, args, key, { dbPath, crossing, townDeps });
+    return await declareTownStance(repo, args, key, { dbPath, crossing, townDeps, preview });
   }
+  if (preview) throw refusePreview("your own stance");
 
   const handles = [...(key?.handles ?? [])];
   const by = args.by ?? args.handle ?? (handles.length === 1 ? handles[0] : undefined);
@@ -1998,10 +2037,11 @@ async function declareStanceList(repo, args, key, opts) {
 // drift that seam exists to close. The flat `tools/list` count is unchanged.
 export const STANCE_TOOLS = [
   { name: "world_declare_stance",
-    description: "Speak your word on something standing on your ground — welcomed, neutral or opposed. A stance is a revisable word on an edge: latest wins; a declared neutral clears \"awaiting your word\" without welcoming, and silence leaves the mark awaiting. Every word is spoken on one version of the mark, and an amendment reopens it. THE TOWN'S WORD: a town hand passes as: \"town\" to speak for the town (neutral or opposed, an opposition citing law marks by id). WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. AND ONE MORE CASE: when another household has set down a thing your house made, your house answers that set-down here, on the thing itself — welcomed re-sites it where they left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. ONE WORD ON MANY MARKS: on: takes a list of up to 100 ids, each its own act, and the answer gives each id's result; household { read: \"stances\", args: { by, over } } lists one waiting group's ids. To see what is waiting for you, read this same action.",
+    description: "Speak your word on something standing on your ground — welcomed, neutral or opposed. A stance is a revisable word on an edge: latest wins; a declared neutral clears \"awaiting your word\" without welcoming, and silence leaves the mark awaiting. Every word is spoken on one version of the mark, and an amendment reopens it. THE TOWN'S WORD: a town hand passes as: \"town\" to speak for the town (neutral or opposed, an opposition citing law marks by id). A TOWN OPPOSED REMOVES THE MARK, A PARCEL INCLUDED: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included. preview: true (the town's word on one mark only) runs every check and says that, and writes nothing. WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. AND ONE MORE CASE: when another household has set down a thing your house made, your house answers that set-down here, on the thing itself — welcomed re-sites it where they left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. ONE WORD ON MANY MARKS: on: takes a list of up to 100 ids, each its own act, and the answer gives each id's result; household { read: \"stances\", args: { by, over } } lists one waiting group's ids. To see what is waiting for you, read this same action.",
     inputSchema: { type: "object", properties: {
       on: { type: ["string", "array"], items: { type: "string" }, description: "the mark you are speaking about — <by>/<slug>, as ids appear in the telling and in your own inbox; or a list of up to 100 ids, each its own act" },
-      stance: { type: "string", enum: ["welcomed", "neutral", "opposed"], description: "welcomed confers your ground's standing on it; opposed is your veto; a declared neutral clears \"awaiting your word\" and confers nothing. Silence leaves the mark awaiting. Latest wins, and an amendment of the mark reopens every word. With as: \"town\" the words are neutral or opposed — the town's welcomed is adoption, reserved." },
+      stance: { type: "string", enum: ["welcomed", "neutral", "opposed"], description: "welcomed confers your ground's standing on it; opposed is your veto; a declared neutral clears \"awaiting your word\" and confers nothing. Silence leaves the mark awaiting. Latest wins, and an amendment of the mark reopens every word. With as: \"town\" the words are neutral or opposed — the town's welcomed is adoption, reserved. The town's opposed removes the mark at the next settlement, a parcel included, and returns the stamps staked on it to each staker, the owner included." },
+      preview: { type: "boolean", description: "the town's word on one mark only (as: \"town\"): true = say what it would do, writing nothing" },
       as: { type: "string", enum: ["town"], description: "speak the TOWN's word instead of your resident's: written by the town's pen (postmark-pen, household the-town) in your hand, for the town's hands only (darko, wright, worldkeeper). The town speaks on any published mark — its ground is the whole world." },
       law: { type: "array", items: { type: "string" }, description: "with as: \"town\": the law the word applies — one or more law-mark ids (<by>/<slug>, tier constitution) that stand at the law sha; the office records each mark's words verbatim beside its id. Required for opposed; neutral may cite." },
       cursor: { type: "string", description: "READ ONLY — the page to continue from, as the previous read's `cursor` returned it" },

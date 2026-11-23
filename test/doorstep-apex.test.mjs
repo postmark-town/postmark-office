@@ -157,9 +157,32 @@ test("a doorstep is its own residents' only: no key, or a key with no residents,
 
 test("D4: per handle — a key with several names one, and a handle not on the key is refused", async () => {
   const two = { handles: new Set(["wright", "rei"]) };
-  assert.equal((await doorstepApex({}, two, doors().ctx)).code, 422);
-  assert.equal((await doorstepApex({ handle: "rei" }, two, doors().ctx)).doorstep, "rei");
+  // POS-1094: bare, it answers for the HOUSE's first-joined resident on the key and names the others (it was a 422 until then).
+  // The key's own set is in the order the handles were added to it, and a harbor handle can come first there.
+  const harborFirst = { handles: new Set(["rei", "wright"]) };
+  const c = doors().ctx;
+  const unordered = await doorstepApex({}, harborFirst, c);
+  assert.equal(unordered.code, undefined, JSON.stringify(unordered).slice(0, 200));
+  assert.equal(unordered.doorstep, "rei", "with no register to ask, the key's own order");
+  const ordered = await doorstepApex({}, harborFirst, { ...c, residentOrder: async (hs) => [...hs].sort().reverse() });
+  assert.equal(ordered.doorstep, "wright", "the house's first-joined comes first, whatever the key's order");
+  assert.match(ordered.others, /holds 2 residents; this is wright's, the house's first joined.*<rei>/, "and the line says so, naming the others");
+  const failed = await doorstepApex({}, harborFirst, { ...c, residentOrder: async () => { throw new Error("registry down"); } });
+  assert.equal(failed.doorstep, "rei", "an order that cannot be read keeps the key's own");
+  const second = await doorstepApex({ handle: "rei" }, two, doors().ctx);
+  assert.equal(second.doorstep, "rei");
+  assert.equal(second.others, undefined, "naming a handle says nothing of the others");
+  assert.equal((await doorstepApex({}, KEY, doors().ctx)).others, undefined, "a key with one resident has no others");
   assert.equal((await doorstepApex({ handle: "kogane" }, two, doors().ctx)).code, 403);
+});
+
+test("POS-1094: residentOrderOf puts a key's handles in their household's own order, the unlisted after", async () => {
+  const { residentOrderOf } = await import("../src/households.mjs");
+  const registry = { households: { "wright-house": { residents: ["wright", "rei", "mari"] } } };
+  const pins = {};
+  assert.deepEqual(residentOrderOf(registry, pins, ["mari", "wright"]), ["wright", "mari"]);
+  assert.deepEqual(residentOrderOf(registry, pins, ["harbor-guest", "rei", "wright"]), ["wright", "rei", "harbor-guest"], "a handle the house does not list goes last");
+  assert.deepEqual(residentOrderOf(registry, pins, ["stray-b", "stray-a"]), ["stray-b", "stray-a"], "no house: the key's own order");
 });
 
 test("a door that cannot answer drops its lines, and the world says so in one line", async () => {
@@ -185,6 +208,25 @@ test("WLD-51 — YOU's at-risk line states the snapshot it was read from, and ke
   const two = youPart({ unread: 0, needs: { stakes_at_risk: { rows: [{ mark: "invented/a-lamp" }, { mark: "invented/a-bench" }] } } }).filter((i) => i.from === "household.stakes");
   assert.equal(two[0].what, `2 marks of yours would be swept at the next settlement. ${FRAME}`);
   assert.equal(youPart({ unread: 0, needs: { stakes_at_risk: { rows: [] } } }).some((i) => i.from === "household.stakes"), false, "no risk, no line, so no frame to state");
+});
+
+// ── POS-1035 · the host is asked to write what happened ─────────────────────
+
+test("POS-1035 — YOU asks the host to write the recountings of an event that ended in sparks (every one of its collection, or a free event's drafts), from needs-you; a new completion is a new line past the cursor", async () => {
+  const { youPart, digestOf } = await import("../src/doorstep-apex.mjs");
+  const line = (rows) => youPart({ unread: 0, needs: { recountings_awaiting: { rows } } }).filter((i) => /ended in sparks/.test(i.what));
+  const one = line([{ event: "wright/sorbet-night", sparks: ["wright/sorbet-night"] }]);
+  assert.deepEqual(one, [{ what: "1 event of yours ended in sparks — write what happened, their recountings: wright/sorbet-night", from: "household.needs-you" }]);
+  const rooms = line([{ event: "wright/sorbet-night", sparks: ["wright/sorbet-night", "wright/sorbet-night-2"] }]);
+  assert.match(rooms[0].what, /^1 event of yours ended in sparks — .*: wright\/sorbet-night, wright\/sorbet-night-2$/, "every spark of the collection, never a first one");
+  const two = line([{ event: "wright/tea", sparks: ["wright/tea"] }, { event: "wright/sorbet-night", sparks: ["wright/sorbet-night"] }]);
+  assert.match(two[0].what, /^2 events of yours ended in sparks — .*wright\/tea, wright\/sorbet-night$/);
+  assert.notEqual(digestOf(two[0]), digestOf(one[0]), "a new spark changes the line, so a since: read shows it again");
+  assert.equal(digestOf(line([{ sparks: ["wright/sorbet-night"] }])[0]), digestOf(one[0]), "an unchanged ask is the same line: the cursor hides it");
+  const drafts = line([{ event: "wright/old-fair", drafts: ["wright/old-fair", "wright/old-fair-2"] }]);
+  assert.match(drafts[0].what, /^1 event of yours ended in sparks \(a free event's are your drafts, not the town's canon\) — .*: wright\/old-fair, wright\/old-fair-2$/);
+  assert.deepEqual(line([]), [], "nothing waiting, no line");
+  assert.deepEqual(line(undefined), [], "a needs-you without the list (an older office), no line");
 });
 
 // ── POS-806 · the first-visit line points at FIRST-DAY.md ────────────────────

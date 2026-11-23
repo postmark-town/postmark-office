@@ -88,6 +88,10 @@ export const MOVE_REFUSALS = Object.freeze({
   // Wright 2026-11-09 12:43Z (POS-726, on #985): "If the source household has any likeness state, refuse by name,
   // rechecked under the lock, before any write or output, and never print it in the dump."
   LIKENESS_STATE: MOVE_ROW_REFUSALS.LIKENESS_STATE,
+  // POS-1055 (tools/repair-dreaming-household.mjs only): the answer carried is the leaving house's recorded no; a target with private state is left alone.
+  NO_SOURCE_NO: MOVE_ROW_REFUSALS.NO_SOURCE_NO,
+  TARGET_LIKENESS_STATE: MOVE_ROW_REFUSALS.TARGET_LIKENESS_STATE,
+  WRONG_HOUSE: { code: 409, defect: "the household --handle leaves is not the one this correction names — nothing was written" },
   COLLATERAL: { code: 409, defect: "printing the registry would change more than the two households — the town's files are behind the store elsewhere; run the registry drain first" },
   HOUSE_KEY: { code: 409, defect: "the house's key line cannot be written today" },
   DRAIN_REFUSED: { code: 409, defect: "the registry drain refused to print" },
@@ -134,7 +138,7 @@ const cloneHead = (clone) => { try { return gitOut(clone, ["rev-parse", "HEAD"])
  * planHouseKey (it judges the key line before anything is written, and signs it
  * in memory), injected in test.
  */
-export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey }) {
+export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey, settleLikeness = false, onlyFrom = null }) {
   if (!(rows.pins ?? []).some((p) => p.handle === handle)) throw refuse(MOVE_REFUSALS.NO_PIN, handle);
   const byslug = new Map(rows.households.map((r) => [r.slug, r]));
   const target = byslug.get(to);
@@ -182,22 +186,28 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
     const [[slug, houses]] = proven;
     from = slug;
     source = { slug: from, residents: [handle], name: houses[from].name ?? null };
+    if (onlyFrom && from !== onlyFrom) throw refuse(MOVE_REFUSALS.WRONG_HOUSE, from);
   } else {
     source = rows.households.find((r) => (r.residents ?? []).includes(handle)) ?? null;
     if (!source) throw refuse(MOVE_REFUSALS.NOT_HOUSED, handle);
     from = source.slug;
+    if (onlyFrom && from !== onlyFrom) throw refuse(MOVE_REFUSALS.WRONG_HOUSE, from);
     if ((source.residents ?? []).length !== 1) throw refuse(MOVE_REFUSALS.NOT_EMPTY, `${from}: ${source.residents.join(", ")}`);
     if (source.invited_by != null) throw refuse(MOVE_REFUSALS.CREDIT, `${from} was invited by ${source.invited_by.by ?? "?"}`);
     // A row that carries the state (a train whose parser reads 092) refuses here too; moveResident has already asked
     // the store directly, because an older parser omits the column and its absence here proves nothing.
     if (holdsLikenessState(source)) throw refuse(MOVE_REFUSALS.LIKENESS_STATE, from);
+    if (settleLikeness) {
+      if (source.likeness?.answer !== "no") throw refuse(MOVE_REFUSALS.NO_SOURCE_NO, from);
+      if (holdsLikenessState(target)) throw refuse(MOVE_REFUSALS.TARGET_LIKENESS_STATE, to);
+    }
   }
 
   // The rows as they will stand: the target moved, the source gone.
   const after = resuming ? rows : {
     ...rows,
     households: rows.households.filter((r) => r.slug !== from).map((r) => (r.slug === to
-      ? { ...r, ...movedTargetRow({ handle, source, target }) } : r)),
+      ? { ...r, ...movedTargetRow({ handle, source, target, settleLikeness }) } : r)),
   };
   const targetAfter = after.households.find((r) => r.slug === to);
 
@@ -242,8 +252,10 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
   return {
     handle, from, to, resuming, date, clone_head: cloneHead(clone),
     pin: { handle, untouched: true },
+    // POS-1055: the answers only (never the record): the house reads "given"/"not given" before and after.
+    likeness: settleLikeness && !resuming ? { house: to, before: target.likeness?.answer === "yes" ? "given" : "not given", after: "not given" } : null,
     store: resuming ? null : {
-      update: { table: "households", slug: to, before: pick(target), after: pick({ ...target, ...movedTargetRow({ handle, source, target }) }) },
+      update: { table: "households", slug: to, before: pick(target), after: pick({ ...target, ...movedTargetRow({ handle, source, target, settleLikeness }) }) },
       retire: { table: "households", slug: from, row: withoutPrivate(source) },
     },
     registry: { retired: files[from] ? from : null, before: files[to] ?? null, after: printedHouses[to] ?? null },
@@ -276,7 +288,7 @@ const frontHouseLine = (text) => {
  */
 export async function moveResident({ handle, to, clone, env = process.env, date = easternDate(), dryRun = false,
   keyPlan = planHouseKey, owner = ownerClient, move = moveResidentInStore, drainWith = collectingDrain, commit = penCommit,
-  stateHeld = likenessStateHeld } = {}) {
+  stateHeld = likenessStateHeld, settleLikeness = false, onlyFrom = null } = {}) {
   const rows = await loadRegistryRows(env);
   if (rows === null) throw refuse(MOVE_REFUSALS.NO_RECORD);
   // LIKENESS STATE, BEFORE ANY OUTPUT OR WRITE (Wright 12:43Z): asked of the store itself, through the row's own jsonb,
@@ -287,13 +299,18 @@ export async function moveResident({ handle, to, clone, env = process.env, date 
     const held = await stateHeld(leaving.slug, env);
     if (held === null) throw refuse(MOVE_REFUSALS.NO_RECORD, "the likeness-state check could not read the record");
     if (held) throw refuse(MOVE_REFUSALS.LIKENESS_STATE, leaving.slug);
+    if (settleLikeness) {
+      const heldTo = await stateHeld(to, env);
+      if (heldTo === null) throw refuse(MOVE_REFUSALS.NO_RECORD, "the likeness-state check could not read the record");
+      if (heldTo) throw refuse(MOVE_REFUSALS.TARGET_LIKENESS_STATE, to);
+    }
   }
-  const plan = planMove({ handle, to, rows, clone, date, keyPlan });
+  const plan = planMove({ handle, to, rows, clone, date, keyPlan, settleLikeness, onlyFrom });
   if (dryRun) return { dryRun: true, plan };
 
   if (!plan.resuming) {
     const client = await owner(env);
-    try { await move(client, { handle, from: plan.from, to }); }
+    try { await move(client, { handle, from: plan.from, to, ...(settleLikeness ? { settleLikeness } : {}) }); }
     finally { try { await client.end(); } catch { /* a client that will not close still committed or rolled back */ } }
   }
 
@@ -347,6 +364,7 @@ export function describe(plan, { dryRun }) {
     out.push(`    ${JSON.stringify(human == null ? row : { ...row, human: "(set; private, not printed)" })}`);
     out.push(`  rows spelled hh:${plan.from} or its accounts' gh:<id> keep their spelling; ${plan.to}'s spelling set carries them`);
   } else out.push("store: no change (already moved)");
+  if (plan.likeness) out.push(`likeness: ${plan.likeness.house} reads ${plan.likeness.before} -> ${plan.likeness.after}, in the same row write as the move (the leaving house's own recorded no is carried; no other likeness field is read or printed)`);
   out.push(`town files (one pen commit):`);
   // the drain writes the registers; these two lines only say what it will print
   const registryText = `  ${REGISTRY_PATH}: ${plan.registry.retired} leaves the printout; ${plan.to} printed as ${JSON.stringify(plan.registry.after)}`;

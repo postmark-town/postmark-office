@@ -34,6 +34,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { CROSSING_MS } from "../src/crossings.mjs";
@@ -237,8 +238,16 @@ test("4 · a page cap that is hit is a loud refusal, never a silent truncation",
 
 // ── 5 · the same capture twice, through the town's own epoch-close ──────────
 
-const RAIL_TOWN = [process.env.PAYPAL_RAIL_TOWN, TOWN].filter(Boolean)
-  .find((p) => existsSync(join(p, "tools", "stamp-mint.mjs")) && readFileSync(join(p, "tools", "stamp-mint.mjs"), "utf8").includes("'paypal'"));
+// Whether a town keeps the paypal rail is asked of its grammar, the KEEPING_RAILS stamp-mint exports, not of one file's
+// text: town 3b73a557 moved the rails into census-fold.mjs (stamp-mint re-exports them), so a grep of stamp-mint.mjs
+// found no 'paypal' and test 5 skipped while still reading as a pass (POS-1088). stamp-mint runs nothing on import.
+const railsOf = async (p) => {
+  const f = join(p, "tools", "stamp-mint.mjs");
+  if (!existsSync(f)) return [];
+  try { return (await import(pathToFileURL(f).href)).KEEPING_RAILS ?? []; } catch { return []; }
+};
+let RAIL_TOWN = null;
+for (const p of [process.env.PAYPAL_RAIL_TOWN, TOWN].filter(Boolean)) if ((await railsOf(p)).includes("paypal")) { RAIL_TOWN = p; break; }
 
 function fetchFor(transactions) {
   return async (url, init = {}) => {

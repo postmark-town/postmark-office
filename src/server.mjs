@@ -55,16 +55,19 @@ import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs"
 import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finished — one implementation, three doors
 import { withRev, revOf, splitGlobal, parseKnown, GLOBAL_VERSION } from "./doorstep-rev.mjs"; // POS-1086: a doorstep's content revision, REST doors only
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
+import { makeMaintenance, sendMaintenance } from "./maintenance.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
+import { noteRestRefusal } from "./refusal-log.mjs"; // POS-1003: a refused write is kept, privately, for 90 days
 import { newTiming, runTiming, markRouted, timingLine, restActDoor } from "./read-timing.mjs"; // POS-1064/b: where a doorstep or household read's time goes (measurement only)
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { speakerBook } from "./speaker-line.mjs"; // POS-1132
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
@@ -100,6 +103,7 @@ import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's 
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
 import { installRejectionGuard } from "./rejection-guard.mjs";
+import { PIN_STOP_HINT, isPinStop } from "./town-tool.mjs"; // POS-994: a pin stop is a named 503
 
 // POS-709: a promise nobody awaited is logged loudly and the office keeps
 // serving; before this, Node's default exit took every resident's door down.
@@ -374,7 +378,7 @@ const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 //
 // THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
 // "Probe first"). The two reads used to run side by side and held two of the
-// thread's pen connections at once (the pen is three per pool instance,
+// thread's pen connections at once (the pen is six per pool instance, three until POS-1095,
 // world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
 // the store does. The probe goes first: it
 // carries the as-of and the write path's sign-in and resident checks, and the
@@ -611,7 +615,7 @@ const j = (res, code, obj, cause) => {
   if (code === 503 && obj?.defect === MISTS_UNREADABLE && !res.hasHeader?.("retry-after"))
     res.setHeader("retry-after", String(MISTS_RETRY_AFTER_S));
   obj = withBounceCode(code, obj);
-  if (code >= 400) obj = markRefused(obj);
+  if (code >= 400) { noteRestRefusal(res.req, code, obj); obj = markRefused(obj); } // POS-1003: the one writer of every REST refusal keeps a write's, privately
   const body = JSON.stringify(obj, null, 1);
   const headers = {
     "content-type": "application/json; charset=utf-8",
@@ -766,7 +770,12 @@ const bounce = (res, code, defect, hint, field, cause) => {
 // resident reads, which can be a SQL fragment, a path on the box, a table name.
 // The defect stays each door's own sentence ("the drafts door tripped"); the
 // hint is FAULT_LOGGED; the message is logged by bounce, beside the status.
-const bounceFault = (res, defect, e, code = 500) => bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
+// POS-994 (Truey's review of #1065): a pin stop under a read door or the letter
+// send is no trip of the office's: it is the named 503 the exec doors answer, its
+// hint the office's own words, what differs in the log.
+const bounceFault = (res, defect, e, code = 500) => isPinStop(e)
+  ? bounce(res, 503, "town-pin-mismatch", PIN_STOP_HINT, undefined, e)
+  : bounce(res, code, defect, FAULT_LOGGED, undefined, e ?? "(no error)");
 
 // ── THE CONTRACT AT THE PLAIN API (POS-70 box 1) ─────────────────────────────
 //
@@ -1031,6 +1040,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
+      // POS-1096: present only while the planned-maintenance switch is on (src/maintenance.mjs), so the sentinel reads "maintenance", not a fault
+      ...maintenance.field(),
     });
   }
 
@@ -1051,6 +1062,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       ...RELEASE, started_at: STARTED_AT, as_of: AS_OF,
       ...roleDisclosure(ROLE, WRITER_URL),
       write_grant: PEN.token !== "",
+      ...maintenance.field(), // POS-1096
       ...(readPool ? { read_workers: readPool.disclose() } : {}),
       // POS-680: which settlement's law and world graph THIS process answers
       // from, and whether its refreshers are keeping up: when each last asked
@@ -1315,6 +1327,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   const key = resolvedKey;
   noteRequester(key); // POS-633 H4: a site act is the human's only at their own residents' wheel (act-provenance.mjs)
   req.tel.household = key?.household ?? null;
+  req.tel.key = key; // POS-1003: who a refused write is kept for (refusal-log.mjs § noteRestRefusal); never written to the access line
+  req.tel.path = path;
 
   // Keyless public GETs get the same token-bucket backstop as nginx's prepared
   // outer layer. Invalid/stale credentials deliberately land in this tier.
@@ -1844,12 +1858,17 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
         // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
         try {
-          if (url.searchParams.get("before") && world2ServeEnabled()) {
+          await speakerBook(); // POS-1132: the book the sync line shapers read, so a human's line says what their profile says now
+          // POS-1035: a named circle or room (?circle= / ?room=) is looked for in the record too, where the store is engaged — memory
+          // only holds the last voices, and history past the first page must answer complete, folded or unavailable honestly
+          if ((url.searchParams.get("before") || url.searchParams.get("circle") || url.searchParams.get("room")) && world2ServeEnabled()) {
             const r = await world2Serve("/world2/conversations", url.searchParams);
             if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
             return j(res, 200, worldConversations(null, r.body));
           }
-          return j(res, 200, worldConversations(url.searchParams));
+          const body = worldConversations(url.searchParams);
+          if (body.find?.refused) return bounce(res, 422, body.find.refused.defect, body.find.refused.hint);
+          return j(res, 200, body);
         } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from
@@ -2107,8 +2126,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
+        // sort= recent | staked (POS-854); staked on a class that takes no stake answers newest first and says so
+        const sortQ = url.searchParams.get("sort") ?? undefined;
         return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
-          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }))
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ, sort: sortQ }, { whole: true })) // POS-732: the plain REST list keeps its whole answer when it names no page
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
@@ -2437,9 +2458,30 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   countAct(channel);
 
   // ── write tier: a valid credential required ───────────────────────────
+    // POS-721: a keyless PATCH at the human's profile path is pointed at the form, not told to bring a key it could never use
+    // (no key sets the profile; the door below refuses every one). Still 401: nothing was presented.
+    if (!key && req.method === "PATCH" && /^\/households\/[a-z0-9-]+\/human$/.test(path)) {
+      const { humanProfileLink } = await import("./human-profile.mjs");
+      const slug = /^\/households\/([a-z0-9-]+)\/human$/.exec(path)[1];
+      return bounce(res, 401, "the household's human sets their profile through a GitHub sign-in in a browser, not with a key",
+        `open ${humanProfileLink(slug)} in a browser and set it there; no key sets it. Nothing was kept`);
+    }
     if (!key) {
       setWwwAuth(res);
       return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
+    }
+
+    // PATCH /households/{slug}/human — NO BEARER SETS THE HUMAN'S PROFILE (POS-721/c, Darko
+    // 2026-11-17 00:31Z: "Human only, like likeness"). The town name, short line and pronouns are
+    // set only through the office's own browser sign-in, /oauth/human?household=<slug> (oauth.mjs),
+    // the likeness answer's road. So every key at this path, a household key, a resident's own key,
+    // a berth or an OAuth/MCP access token alike, is refused whole before its body is read, and
+    // pointed at that form. The path stays so the refusal names the road; it is not a write door.
+    const humanAt = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/human$/.exec(path) : null;
+    if (humanAt) {
+      const { notByKey } = await import("./human-profile.mjs");
+      const no = notByKey(humanAt[1]);
+      return bounce(res, no.code, no.defect, no.hint);
     }
 
     // PATCH /address|/home|/profile|/window /{handle} — a household edits its OWN
@@ -2657,6 +2699,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("household", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "household", args: payload }; // POS-1003
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
@@ -2840,6 +2883,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("world", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "world", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb, cost: worldWriteCost(verb, payload) });
@@ -2888,6 +2932,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const payload = JSON.parse(raw || "{}");
           req.tel.call = callShape("town", payload);
+          if (payload?.do != null && payload.do !== "") req.tel.act = { name: "town", args: payload }; // POS-1003
           if (payload?.do != null && payload.do !== "") {
             const verb = townDispatchToolFor(payload.do) ?? "town";
             const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb });
@@ -3183,9 +3228,14 @@ const handleRequest = (req, res) => {
   try { tm = newTiming(); req.tm = tm; } catch { tm = undefined; }
   return tm ? runTiming(tm, () => handleRequestBody(req, res)) : handleRequestBody(req, res);
 };
+// POS-1096: the planned-maintenance switch (src/maintenance.mjs). Asked FIRST, before the bearer's lookup (a store read) and before any door, so every
+// door answers at once while the store restarts. The manifest, /release and the keyless in-memory ops reads stay up (the switch names which).
+const maintenance = makeMaintenance();
 const handleRequestBody = (req, res) => {
   const t0 = Date.now();
-  const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
+  const sw = maintenance.refuses(req.method, (req.url ?? "/").split("?")[0].replace(/\/+$/, "") || "/");
+  if (sw) return sendMaintenance(res, sw, { asOf: AS_OF });
+  const auth =/^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };
   if (!auth) return route(req, res, null, t0).catch(tripped);
   resolveBearer(auth[1]).then((key) => key, (e) => {

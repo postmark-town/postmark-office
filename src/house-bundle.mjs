@@ -209,9 +209,11 @@ async function alertsOf(handles, { nowMs, readers = {} }) {
   catch (e) { return { alerts: [], unread: [{ kind: "*", reason: `the alerts could not be composed (${plainReason(e, "record", "the house's alerts")})` }] }; }
 }
 
-async function stakesOf(handles, { nowMs, readers = {} }) {
+async function stakesOf(handles, { nowMs, readers = {}, holds = true }) {
   const { stakesFor } = readers.stakesFor ? { stakesFor: readers.stakesFor } : await import("./doorstep-stakes.mjs");
-  return stakesFor(handles, { now: new Date(nowMs) });
+  // POS-1100 (Wright 2026-11-17): everything the house has stamps behind is the house's own view. This read's public half, for any house, carries
+  // the marks only (as before this PR); the aggregate rides only a key that holds one of the house's residents.
+  return stakesFor(handles, { now: new Date(nowMs), ...(holds ? {} : { allocationPage: false }) });
 }
 
 /**
@@ -303,7 +305,7 @@ async function houseBundleOf({ household = null } = {}, ctx = {}) {
   // THE WORLD'S THREE, ONCE. Stances first: outcomes reads its ground.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(ashore, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
@@ -468,7 +470,7 @@ async function housePageOf({ household = null, limit = null, offset = null } = {
   // walkers roll is read once, for the page.
   const [stances, stakes, stands] = await Promise.all([
     stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
-    stakesOf(ashore, { nowMs, readers }),
+    stakesOf(ashore, { nowMs, readers, holds }),
     standsOf(page, readers),
   ]);
   const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
@@ -530,6 +532,8 @@ async function housePageOf({ household = null, limit = null, offset = null } = {
       serves: "household.stakes", scope: ashore,
       published: stakes.count ?? (stakes.rows ?? []).length,
       at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
+      // POS-1100: everything the house has stamps behind (marks, ideas, bounties, pots, votes), as the aggregate; the list is the read below
+      ...(stakes.allocation ? { allocation: stakes.allocation } : {}),
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
       read: 'household { read: "stakes" } for your own house; handle: narrows to one resident. ' + SNAPSHOT_LIMIT,
@@ -617,6 +621,17 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
   } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
 
+  // THE HOST'S RECOUNTING (POS-1035, ruled 21:55/21:57Z): an event this house's resident hosted ended in sparks recounted from
+  // their invitation, so they are asked to write what happened (event-sparks.mjs § THE HOST'S INVITATION: every spark of the recorded collection, or a free event's private drafts, until each one's recounting is rewritten or it is
+  // gone). Unreadable is unknown, never none — it keeps "nothing waits" unsaid.
+  let recountings;
+  try {
+    const rows = readers.recountingsAwaiting
+      ? await readers.recountingsAwaiting(mine)
+      : await (await import("./event-sparks.mjs")).recountingsAwaitingAtOffice(mine);
+    recountings = { rows: rows ?? [] };
+  } catch { recountings = { rows: [], unavailable: "the house's completed events could not be read, so whether one waits on your recounting is unknown, not none" }; }
+
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first. ${SNAPSHOT_LIMIT}`,
   }));
@@ -630,7 +645,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
+  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length + recountings.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -652,7 +667,9 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     alerts,
     ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable
+    // said only when one waits or the read failed (POS-1035), as takes_awaiting is: every other house's page keeps its shape
+    ...(recountings.rows.length || recountings.unavailable ? { recountings_awaiting: recountings } : {}),
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable && !recountings.unavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

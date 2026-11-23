@@ -13,8 +13,9 @@
 //
 // Each row carries ONLY the general fields (design-notes/posts-fields.md § 4):
 // class, id, title, author, household, state, latest {act, at}, responses,
-// role, stake, ours. Nothing reads a class's own `fields`, so a reader draws
-// every class with one row and branches on `class` for nothing but a colour.
+// role, stake, ours. (`latest` carries a `by` only for an act that is not a
+// resident's: the town's return of a removed mark's stamps, `act: "town-return"`.)
+// Nothing reads a class's own `fields`, so a reader draws every class with one row and branches on `class` for nothing but a colour.
 //
 // ── THE CLASSES TODAY ───────────────────────────────────────────────────────
 //
@@ -54,7 +55,7 @@
 
 import { resolve, dirname, join } from "node:path";
 import { existsSync, statSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { officeRead } from "./world2-pen.mjs";
 import { ideasTank } from "./world-classes.mjs";
@@ -63,6 +64,7 @@ import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { BUG_CLASS } from "./bugs.mjs";
+import { pageRows } from "./page-rows.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -178,6 +180,15 @@ export async function postRowsLoad(client, cls, now, { keep = null } = {}) {
 export function postRowsFrom({ kept, who, acts }, now) {
   if (!kept.length) return [];
   const latest = new Map(acts.map((a) => [a.object, { act: ACT_WORD[a.action] ?? a.action, at: new Date(a.at).toISOString() }]));
+  // A POST CONVERTED FROM A MARK (POS-854) carries when its author first put the idea up as `fields.origin.date`;
+  // while its only act is the conversion's own `post`, that is when it was last active, so a hundred converted
+  // ideas do not all read as written the night the tool ran. Its first later act (an amend, a stage) is newer, and wins.
+  const fieldsOf = (p) => (typeof p.fields === "string" ? JSON.parse(p.fields) : (p.fields ?? {}));
+  const latestOf = (p) => {
+    const l = latest.get(p.id) ?? null;
+    const origin = fieldsOf(p).origin?.date;
+    return l && l.act === "post" && origin && !Number.isNaN(Date.parse(origin)) ? { act: "post", at: new Date(origin).toISOString() } : l;
+  };
   return kept.map((p) => ({
     class: p.class,
     id: p.id,
@@ -185,7 +196,7 @@ export function postRowsFrom({ kept, who, acts }, now) {
     author: p.author,
     household: p.household ?? null,
     state: stateOf(p, now),
-    latest: latest.get(p.id) ?? null,
+    latest: latestOf(p),
     responses: (who.get(p.id) ?? []).length,
     // the span's start, for the order only; never on the answer (§ ORDER)
     [STARTS]: p.starts == null ? null : new Date(p.starts).toISOString(),
@@ -205,11 +216,26 @@ export function postRowsFrom({ kept, who, acts }, now) {
 // on top, here and nowhere else:
 //   event   its window (postRowsOf § WINDOWED) and its state from the clock (§ stateOf)
 //   bug     its stage, which is its stored state
-//   idea    no stake stands on an idea post yet (the stake on posts is w43's), so
-//           `stake` and `ours` are 0, which is true; and the half is quiet when it
-//           cannot be read while the class is closed (ideas.mjs § ideaPostsOn)
+//   idea    takes a stake (POS-854): `stake` is what the stamp ledger holds behind the post and
+//           `ours` the house's part of it, from post-stake.mjs § postBackingOf; a house that
+//           staked an idea it did not write takes part. The half is quiet when it cannot be
+//           read while the class is closed (ideas.mjs § ideaPostsOn)
 // A class added to POST_CLASSES is read with no change here. The Think Tank's
-// idea MARKS are world marks, not posts, and keep their own read (§ ideaRows).
+// idea MARKS are world marks, not posts, and keep their own read (§ ideaRows), until the
+// conversion has made each its author's post (tools/convert-idea-marks.mjs): a mark that has
+// become a post is read once, as the post (§ CONVERTED MARKS below).
+
+/**
+ * The Think Tank's mark rows that have NOT become a post (POS-854): a mark that is a post's `origin.mark` is that post,
+ * and is read once, as the post. `postRows` are the table's rows (they carry `FIELDS`, which never reaches an answer).
+ */
+export function unconvertedMarks(markRows, postRows) {
+  const converted = new Set(postRows.filter((r) => r.class === IDEA_CLASS).map((r) => r[FIELDS]?.origin?.mark).filter(Boolean));
+  return markRows.filter((r) => !converted.has(r.id));
+}
+
+/** The classes whose posts take a stake: the post's `stake` and `ours` are the ledger's. (A bug takes none; a ballot has its own.) */
+const STAKE_CLASSES = new Set([IDEA_CLASS]);
 
 /** What each class's half is called when it cannot be read; a class not named here says "the <class> posts". */
 const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "the idea posts", [BUG_CLASS]: "the bugs", quest: "the quests" });
@@ -227,9 +253,24 @@ const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(en
  * already read keep their rows, and each class after it is read on a lease of its own, one after another, as before POS-1129. The transaction
  * cannot commit then, so its refusal is not the classes' answer.
  */
-async function tableRowsAll(classes, members, now, { env, what }) {
+async function tableRowsAll(classes, members, now, { env, what, townClone = TOWN_CLONE, backingOf = null }) {
   const house = new Set(members);
-  const keep = (p, who) => house.has(p.author) || who.some((h) => house.has(h));
+  // A class that takes a stake (POS-854: the idea) carries what stands behind each post, from the ledger's
+  // own fold (post-stake.mjs § postBackingOf), the one owner of a post's escrow. A ledger that cannot be
+  // read leaves the stake at 0 and says so in `unavailable`: never a quiet zero for "could not tell".
+  // It is read BEFORE the lease, as it was before the one-lease page: the ledger is a file fold, and no pen connection waits on it.
+  const backing = new Map();
+  const backingGap = new Map();
+  for (const cls of classes) {
+    if (!(STAKE_CLASSES.has(cls) && (cls !== IDEA_CLASS || ideaPostsOn(env)))) continue;   // while the class is closed there is no idea post to back
+    try { backing.set(cls, backingOf ? await backingOf(townClone) : await (await import("./post-stake.mjs")).postBackingOf(townClone)); }   // `backingOf` is a suite's seam
+    catch { backingGap.set(cls, `the stakes behind ${what(cls)} could not be read from the stamp ledger`); }
+  }
+  const heldByOf = (cls) => (id) => backing.get(cls)?.holders.get(id) ?? [];
+  const keepOf = (cls) => {
+    const heldBy = heldByOf(cls);
+    return (p, who) => house.has(p.author) || who.some((h) => house.has(h)) || heldBy(p.id).some((h) => house.has(h.handle));
+  };
   let loaded = null, dead = false;
   try {
     await officeRead(async (client) => {
@@ -240,7 +281,7 @@ async function tableRowsAll(classes, members, now, { env, what }) {
         try {
           await client.query("SAVEPOINT posts_class");
           begun = true;
-          const raw = await postRowsLoad(client, cls, now, { keep });
+          const raw = await postRowsLoad(client, cls, now, { keep: keepOf(cls) });
           await client.query("RELEASE SAVEPOINT posts_class");
           loaded.push({ raw });   // only once its RELEASE stands
         } catch {
@@ -256,21 +297,26 @@ async function tableRowsAll(classes, members, now, { env, what }) {
   }
   for (let i = 0; i < classes.length; i++) {
     if (!loaded[i]?.lone) continue;
-    try { loaded[i] = { raw: await officeRead((client) => postRowsLoad(client, classes[i], now, { keep }), { env }) }; }
+    try { loaded[i] = { raw: await officeRead((client) => postRowsLoad(client, classes[i], now, { keep: keepOf(classes[i]) }), { env }) }; }
     catch { loaded[i] = { failed: true }; }
   }
   return classes.map((cls, i) => {
     const unavailable = { unavailable: `${what(cls)} could not be read from the office's record` };
     if (loaded[i].failed) return unavailable;
     try {
-      return {
-        rows: postRowsFrom(loaded[i].raw, now).map((r) => ({
-          ...r,
-          role: house.has(r.author) ? "author" : "participant",
-          stake: 0,
-          ours: 0,
-        })),
+      const heldBy = heldByOf(cls);
+      const out = {
+        rows: postRowsFrom(loaded[i].raw, now).map((r) => {
+          const ours = heldBy(r.id).filter((h) => house.has(h.handle)).reduce((a, h) => a + h.n, 0);
+          return {
+            ...r,
+            role: house.has(r.author) ? "author" : "participant",
+            stake: backing.get(cls)?.escrow.get(r.id) ?? 0,
+            ours,
+          };
+        }),
       };
+      return backingGap.has(cls) ? { ...out, unavailable: backingGap.get(cls) } : out;
     } catch {
       return unavailable;
     }
@@ -287,6 +333,8 @@ async function tableRowsAll(classes, members, now, { env, what }) {
 // other file-backed caches keep (docs/read-workers.md), so a crossing that
 // appends to the ledger is read on the next call and never before.
 let backingCache = null;
+/** Who a town return's `latest.by` names: the town, not the staker it went back to (POS-1142). */
+const TOWN_ACTOR = "the-town";
 
 async function backingOf(townClone) {
   const ledger = join(townClone, "WHITE_PAGES", "stamp-ledger.md");
@@ -294,8 +342,10 @@ async function backingOf(townClone) {
   try { const st = statSync(ledger); stamp = `${st.mtimeMs}:${st.size}`; } catch { /* the engine reads an absent ledger as empty */ }
   const key = `${townClone}|${stamp}`;
   if (backingCache?.key === key) return backingCache.value;
-  const stake = await import(pathToFileURL(join(townClone, "tools", "world-stake.mjs")));
-  const { classifyEntry } = await import(pathToFileURL(join(townClone, "tools", "stamp-mint.mjs")));
+  // POS-994: the office's pinned copies, checked against the clone.
+  const { importTownTool } = await import("./town-tool.mjs");
+  const stake = await importTownTool(townClone, "world-stake.mjs");
+  const { classifyEntry } = await importTownTool(townClone, "stamp-mint.mjs");
   const state = stake.worldStakeState(townClone);
   // who holds what on each mark, and the newest stake or unstake on it
   const holders = new Map();
@@ -306,12 +356,20 @@ async function backingOf(townClone) {
     holders.set(mark, [...(holders.get(mark) ?? []), { handle: k.slice(cut + 1), n }]);
   }
   const moved = new Map();
+  // POS-1142: the town hands a removed mark's stamps back as ITS act (`for: town-return:S<n>`, town #4796), never an unstake in
+  // the staker's name. It is its own movement here, with the town as its actor (`by`), and the stakers it went back to are kept
+  // so a position the town closed to zero is still told to the house that held it. The classifier is the town's own; no grammar here.
+  const returned = new Map();
   for (const e of state.entries) {
     const c = classifyEntry(e.canonical);
     if (c.kind === "world-stake" || c.kind === "world-unstake")
       moved.set(c.mark, { act: c.kind === "world-stake" ? "stake" : "unstake", at: c.date });
+    else if (c.kind === "world-town-return") {
+      moved.set(c.mark, { act: "town-return", by: TOWN_ACTOR, at: c.date });
+      returned.set(c.mark, new Set([...(returned.get(c.mark) ?? []), c.handle]));
+    }
   }
-  const value = { escrow: state.escrow, holders, moved };
+  const value = { escrow: state.escrow, holders, moved, returned };
   backingCache = { key, value };
   return value;
 }
@@ -332,7 +390,10 @@ async function ideaRows(members, whose, { townClone }) {
     const held = backing.holders.get(idea.id) ?? [];
     const ours = held.filter((x) => house.has(x.handle)).reduce((a, x) => a + x.n, 0);
     const author = String(idea.by ?? idea.id.split("/")[0]);
-    const role = house.has(author) ? "author" : ours > 0 ? "participant" : null;
+    // a position the town handed back is zero now, and the house that held it is still told what became of it (POS-1142): it is
+    // listed while the idea stands in the Think Tank, not from any history; an ordinary unstake to zero is not.
+    const wasReturned = [...(backing.returned.get(idea.id) ?? [])].some((h) => house.has(h));
+    const role = house.has(author) ? "author" : ours > 0 || wasReturned ? "participant" : null;
     if (!role) continue;
     const posted = idea.date ? { act: "post", at: String(idea.date) } : null;
     const last = backing.moved.get(idea.id);
@@ -383,7 +444,7 @@ export function postOrder(a, b) {
  * @param {string} handle  any resident of the house; the answer is the house's
  * @param {{ now?: number, env?: object, clone?: string|null, townClone?: string, readers?: object }} ctx
  */
-export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {} } = {}) {
+export async function householdPosts(handle, { now = Date.now(), env = process.env, clone = null, townClone = TOWN_CLONE, readers = {}, backingOf = null, page = null } = {}) {
   const h = String(handle ?? "").trim();
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
@@ -397,13 +458,24 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   // answer is the same. `ideaRows` takes no pen connection, so it still runs beside them.
   const [ideas, halves] = await Promise.all([
     ideaRows(mine.members, whose, { townClone }),
-    tableRowsAll(classes, mine.members, now, { env, what: (cls) => CLASS_WORDS[cls] ?? `the ${cls} posts` }),
+    tableRowsAll(classes, mine.members, now, { env, townClone, backingOf, what: (cls) => CLASS_WORDS[cls] ?? `the ${cls} posts` }),
   ]);
-  const rows = [...halves.flatMap((x) => x.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
+  // CONVERTED MARKS (POS-854): an idea mark that has become its author's post is the post's `origin.mark`; while
+  // the mark still stands (the world half withdraws it at a crossing) it is read once, as the post.
+  // (named apart from the module's `tableRowsAll` reader above: a local of that name would shadow it, and the call would hit its temporal dead zone)
+  const tableRowList = halves.flatMap((x) => x.rows ?? []);
+  const rows = [...tableRowList, ...unconvertedMarks(ideas.rows ?? [], tableRowList)].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
-    return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
+    // POS-732: a call that names `limit` or `offset` walks each list in the one paging pattern (default POSTS_CAP). A call that
+    // names neither keeps the bounded preview the doorstep's segment is (the segment IS this read's answer at the same args),
+    // and a cut preview now says how to go on: the same `next_offset` and `more_note`.
+    if (page && (page.limit != null || page.offset != null)) return pageRows(all.map(plain), page, { noun: "post", dflt: POSTS_CAP, hold: false });
+    const shown = Math.min(all.length, POSTS_CAP);
+    const more = all.length - shown;
+    return { total: all.length, shown, rows: all.slice(0, POSTS_CAP).map(plain),
+      ...(more > 0 ? { next_offset: shown, more_note: `${more} further post${more === 1 ? "" : "s"} — call again with offset: ${shown}` } : {}) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)
   const gaps = halves.map((x, i) => (QUIET_WHEN_CLOSED[classes[i]]?.(env) ? null : x.unavailable));

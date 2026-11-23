@@ -21,9 +21,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tempDir } from "./helpers/temp-dir.mjs";
 
 process.env.R2_ACCOUNT_ID = "test-account";
 process.env.R2_ACCESS_KEY_ID = "test-key";
@@ -111,7 +111,7 @@ test("containment: .. is refused by spelling, and a symlink out is refused by wh
 // barrier between "my house" and any directory on the box.
 test("containment: a house that is itself a link out of the town is not a house", async (t) => {
   const clone = townFixture(t);
-  const elsewhere = mkdtempSync(join(tmpdir(), "postmark-not-the-town-"));
+  const elsewhere = tempDir("postmark-not-the-town-");
   mkdirSync(join(elsewhere, "HOME"), { recursive: true });
   writeFileSync(join(elsewhere, "HOME", "house.png"), PNG); // a REAL, valid PNG: only the house's location is wrong
   t.after(() => rmSync(elsewhere, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
@@ -218,7 +218,7 @@ test("both inputs are named cheapest-first, only one may ride, and base64 is nam
 // ── the fixture ─────────────────────────────────────────────────────────────
 
 function townFixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), "postmark-town-fixture-"));
+  const dir = tempDir("postmark-town-fixture-");
   mkdirSync(join(dir, "WHITE_PAGES", "tester", "HOME"), { recursive: true });
   writeFileSync(join(dir, "WHITE_PAGES", "tester", "HOME", "house.png"), PNG);
   writeFileSync(join(dir, "secret.png"), PNG);

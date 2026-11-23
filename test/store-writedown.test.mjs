@@ -636,6 +636,33 @@ test("F8s · a docket the SETTLEMENT took away whole is a lawful crossing, not a
   assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1 })).reason, "store-starving");
 });
 
+test("F8w · a docket whose every row a maker's withdrawal won over a hold printout is a lawful crossing (WLD-179)", () => {
+  // fold-delta removes those printouts from `marks` (they materialized; the
+  // crossing removes the mark instead). Escrow stands elsewhere, as it always does.
+  const stakes = [{ mark: "alpha/staked", holder: "beta", n: 3, weight: 3, tick: 0 }];
+  const r = starvingCheck({ marks: [], stakes, docketClaims: 1, overtakenByWithdrawal: 1 });
+  assert.equal(r.starving, false);
+  assert.equal(r.overtaken_by_withdrawal, 1, "named as its own subset");
+  assert.equal(r.withheld_by_settlement, undefined, "and not as R11's settlement-withheld rows");
+  assert.match(r.why, /maker withdrew the mark/);
+  // CONTROLS: nothing overtaken, or the field absent, is still F8a's refusal: an unexplained empty offer
+  assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1, overtakenByWithdrawal: 0 })).reason, "store-starving");
+  assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1, overtakenByWithdrawal: undefined })).reason, "store-starving");
+  assert.equal(caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1, overtakenByWithdrawal: null })).reason, "store-starving");
+  // and R11 keeps its own sentence when both are present
+  const both = starvingCheck({ marks: [], stakes, docketClaims: 2, withheldBySettlement: 1, overtakenByWithdrawal: 1 });
+  assert.equal(both.withheld_by_settlement, 1);
+  assert.equal(both.overtaken_by_withdrawal, 1);
+});
+
+test("F8w · a count of overtaken printouts that is not a count refuses, never coerces", () => {
+  const stakes = [{ mark: "alpha/staked", holder: "beta", n: 3, weight: 3, tick: 0 }];
+  for (const bad of ["1", 1.5, -1, [], true, {}, Number.NaN]) {
+    const e = caught(() => starvingCheck({ marks: [], stakes, docketClaims: 1, overtakenByWithdrawal: bad }));
+    assert.equal(e?.reason, "fold-input-shape", `${JSON.stringify(bad)} refuses by shape`);
+  }
+});
+
 test("F8d · a stake position of zero is not escrow — it must not hold the guard open", () => {
   const r = starvingCheck({ marks: [], stakes: [{ mark: "alpha/one", holder: "beta", n: 0, weight: 0, tick: 0 }] });
   assert.equal(r.starving, false);

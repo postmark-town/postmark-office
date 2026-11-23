@@ -348,3 +348,78 @@ test("the read stays a read at both doors: town_stake_read is not a WRITE_TOOL",
   assert.ok(WRITE_TOOLS.has("town_post"),
     "and town_post joined them — it publishes a mark and stakes 1✦, and had been reachable flat with no auth challenge");
 });
+
+// ── AN IDEA POST IS THE OTHER TARGET (POS-854) ──────────────────────────────
+//
+// Darko, 2026-11-16 22:44 EST: "the idea, stakes carry over, exactly." Once the Think Tank's marks are their authors'
+// posts, `mark: "<author>/<slug>"` also names an idea post. The mark guard answers first; only a mark it cannot find
+// (404) is looked for among the posts, so a stake on a mark never reads the posts table, and the post's stake is the
+// post door's own act (src/post-stake.mjs), over the same ledger. Synthetic ids.
+const POST_ID = "wright/a-quay-lantern";
+const ON_POSTS = { ...process.env, IDEA_POSTS: "1" };
+const KEY = { household: "starforge", handles: new Set(["wright"]) };
+function postDeps({ found = { id: POST_ID, class: "idea", state: "posted" }, calls = [] } = {}) {
+  return { post: { env: ON_POSTS, judge: async (id, o) => { calls.push(["judge", id, o?.forUnstake === true]); return found && found.id === id ? { post: found } : null; },
+    held: async () => ({ liquid: 10, staked: 0 }), ledger: async (p) => { calls.push(["ledger", p.verb, p.post, p.n]); return { applied: p.n, post: p.post, verb: p.verb }; } } };
+}
+
+test("a post id that is no mark is staked at the post door, with the stamps block, and the world door is never asked", async () => {
+  const { cleanup } = storeWith([{ id: IDEA, class: "idea" }]);
+  try {
+    const calls = [];
+    const r = await townStake({ mark: POST_ID, stamps: 2 }, KEY, postDeps({ calls }));
+    assert.equal(r.applied, 2); assert.equal(r.post, POST_ID);
+    assert.deepEqual(calls, [["judge", POST_ID, false], ["ledger", "stake", POST_ID, 2]], "the post door, once, and the ledger with the post's own id");
+    assert.ok(r.stamps, "the same stamps block every stamp-moving door answers");
+    const back = await townUnstake({ mark: POST_ID, stamps: 1 }, KEY, postDeps({ calls: [] }));
+    assert.deepEqual([back.verb, back.applied], ["unstake", 1]);
+    const read = await townStakeRead({ mark: POST_ID }, postDeps({ calls: [] }));
+    // the escrow is the ledger's: a clone that holds one answers the post's escrow (this id has none), one that does not is the refusal, never an invented zero
+    assert.ok(read.error === "bounce" || (read.post === POST_ID && read.class === "idea" && Number.isInteger(read.escrow) && Array.isArray(read.holders)), JSON.stringify(read));
+  } finally { cleanup(); }
+});
+
+test("a MARK stake never reads the posts table; an id that is neither mark nor post stays the guard's 404", async () => {
+  const { cleanup } = storeWith([{ id: IDEA, class: "idea" }]);
+  try {
+    const calls = [];
+    const refused = await townStake({ mark: "wright/nothing-at-all", stamps: 1 }, KEY, postDeps({ calls, found: null }));
+    assert.equal(refused.code, 404, "neither a mark nor a post: the same refusal as before");
+    assert.deepEqual(calls, [["judge", "wright/nothing-at-all", false]], "the posts were asked only after the marks said no");
+    const marks = [];
+    const viaMark = await townStake({ mark: IDEA, stamps: 1, handle: "wright" }, null, postDeps({ calls: marks }));
+    assert.equal(marks.length, 0, "an idea MARK is the world door's act: the post door is not consulted");
+    assert.notEqual(viaMark.code, 404);
+  } finally { cleanup(); }
+});
+
+test("an idea post takes no stake once finished, a post of another class takes none, and a post store that cannot be read is said", async () => {
+  const { stakePostViaOffice, unstakePostViaOffice, judgePostTarget } = await import("../src/post-stake.mjs");
+  const base = { env: ON_POSTS, held: async () => ({ liquid: 10, staked: 0 }), ledger: async () => { throw new Error("must not reach the ledger"); } };
+  const row = (found) => async () => found;
+  const finished = await stakePostViaOffice({ mark: POST_ID, stamps: 1 }, KEY, { ...base, judge: (id, o) => judgePostTarget(id, { ...o, row: row({ id: POST_ID, class: "idea", state: "shipped" }) }) });
+  assert.equal(finished.code, 409); assert.match(finished.defect, /is finished \(shipped\) and takes no new stake/);
+  assert.match(finished.hint, /unstake/, "…and the way out is named");
+  const back = await unstakePostViaOffice({ mark: POST_ID, stamps: 1 }, KEY, { ...base, ledger: async (p) => ({ applied: 1, verb: p.verb }),
+    judge: (id, o) => judgePostTarget(id, { ...o, row: row({ id: POST_ID, class: "idea", state: "shipped" }) }) });
+  assert.equal(back.applied, 1, "an unstake is always open, finished or not");
+  const bug = await stakePostViaOffice({ mark: "x/y", stamps: 1 }, KEY, { ...base, judge: (id, o) => judgePostTarget(id, { ...o, row: row({ id: "x/y", class: "bug", state: "reported" }) }) });
+  assert.equal(bug.code, 422); assert.match(bug.defect, /is a bug post, and a bug takes no stake here/);
+  const down = await judgePostTarget(POST_ID, { env: ON_POSTS, row: async () => { throw new Error("down"); } });
+  assert.equal(down.refused.code, 503); assert.match(down.refused.defect, /could not be read/);
+  assert.equal(await judgePostTarget(POST_ID, { env: { ...process.env, IDEA_POSTS: undefined }, row: async () => { throw new Error("must not be asked"); } }), null,
+    "while the idea class is closed there is no post to back, and the posts are not asked");
+});
+
+test("a post stake needs a resident, whole stamps, and offers a preview that moves nothing", async () => {
+  const { stakePostViaOffice } = await import("../src/post-stake.mjs");
+  const judge = async () => ({ post: { id: POST_ID, class: "idea", state: "posted" } });
+  const calls = [];
+  const deps = { env: ON_POSTS, judge, held: async () => ({ liquid: 3, staked: 0 }), ledger: async (p) => { calls.push(p); return { applied: 1 }; } };
+  assert.equal((await stakePostViaOffice({ mark: POST_ID, stamps: 1 }, null, deps)).code, 403, "a key that acts for no resident stakes nothing");
+  assert.equal((await stakePostViaOffice({ mark: POST_ID, stamps: 0 }, KEY, deps)).code, 422);
+  assert.equal((await stakePostViaOffice({ mark: POST_ID, stamps: 1.5 }, KEY, deps)).code, 422);
+  const prev = await stakePostViaOffice({ mark: POST_ID, stamps: 5, preview: true }, KEY, deps);
+  assert.equal(prev.preview, true); assert.ok(prev.nothing_written);
+  assert.equal(calls.length, 0, "a preview reaches no ledger");
+});

@@ -174,6 +174,13 @@ test("a row that names no Linear owner, no until, or a day that is not a day is 
   assert.deepEqual(rowShapeProblems(row("test/a.test.mjs", "fine")), []);
 });
 
+test("a row's owner is a Postmark Linear issue key: POS, WLD, CORE and CON are accepted; lower case, other teams and a missing or non-numeric number are refused", () => {
+  for (const owner of ["POS-1", "WLD-199", "CORE-1", "CON-2"])
+    assert.deepEqual(rowShapeProblems(row("test/a.test.mjs", "fine", { owner })), [], owner);
+  for (const owner of ["wld-199", "STAR-1", "POS-", "WLD-x", "WLD-199 ", "XWLD-1", "WLD-1x"])
+    assert.equal(rowShapeProblems(row("test/a.test.mjs", "fine", { owner })).length, 1, JSON.stringify(owner));
+});
+
 test("a row past its until is OVERDUE: named, and the run is still GREEN", () => {
   const results = { "test/a.test.mjs": red("listed one") };
   const late = row("test/a.test.mjs", "listed one", { until: "2026-10-18" });

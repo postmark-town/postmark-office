@@ -213,6 +213,7 @@
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
+import { importTownTool } from "../src/town-tool.mjs"; // POS-994: the town's mint is the office's pinned copy
 
 import { CROSSING_MS } from "../src/crossings.mjs";
 import { fundGuards, penRecorder } from "../src/fund.mjs";
@@ -799,9 +800,9 @@ export function writeState(p, state) {
 }
 
 export async function townEngine(clone) {
-  const mint = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(mint)) return null;
-  const m = await import(pathToFileURL(mint));
+  if (!existsSync(join(clone, "tools", "stamp-mint.mjs"))) return null;
+  // POS-994: the office's pinned copy, checked against the clone; a pin stop throws by name, never "no engine".
+  const m = await importTownTool(clone, "stamp-mint.mjs");
   const needs = ["foldPotReceipts", "parseStampLedger", "potFile", "keepingDial", "intakeCheck", "householdKeys"];
   return needs.every((k) => typeof m[k] === "function") ? m : null;
 }

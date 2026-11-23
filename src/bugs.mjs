@@ -191,26 +191,39 @@ export function judgeLink(v) {
 // link (wright-starforge's world#208) stays refused (bug-credit.mjs).
 // AND A COMMENT OR ISSUE LINK IS ON THE BUG'S OWN ISSUE when the bug names one
 // (fields.issue): work on another issue earned another bug's stage.
+//
+// THE REPORT ITSELF CAN EARN DIAGNOSED (POS-1105; CORE-105, Emily and Kogane
+// 2026-11-17: "A cause in the report itself counts"; Wright's § 3b). diagnosed
+// also takes the bug's own post, `post:<author>/<slug>`: only the post being
+// advanced, credited to its reporter or someone in their household, the rule a
+// letter follows. Its words must be the reporter's own, each field dated by
+// the act that wrote it (bug-credit.mjs § ownPostEvidenceOf reads the post's
+// acts, field by field). The checker still judges which words, if any, are the
+// cause; the office judges only whose they are and when each was written.
+// briefed is unchanged: a brief needs its acceptance test and falsifier
+// written out.
 export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STATE_FIXED]);
 
 /** What earns each checked stage, in the words every refusal teaches with. */
 export const EARNED_BY = Object.freeze({
-  [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it; its author is who's credited, and a founder's pull request never earns it",
+  [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it, or the bug's own post when the reporter's own report names it; its author is who's credited, and a founder's pull request never earns it",
   [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it",
   // POS-912 W2 (Wright, settled 2026-11-05 17:51:47Z): a carried fix links its merged carrier (bug-credit.mjs § A CARRIED FIX)
   [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited. A fix carried onto another pull request links the merged carrier, whose body's first line is \"carries: <repo>#<n>\": the carried pull request's author is who's credited, when the two make the same change by whole patch-id (context included) and byte for byte in the changed lines. Hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations",
 });
 const EARNED_SHAPES = Object.freeze({
-  [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
+  [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", a letter\'s id, or "post:<author>/<slug>" (this bug\'s own post)',
   [STATE_BRIEFED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
   [STATE_FIXED]: 'link: "https://github.com/postmark-town/<repo>/pull/<n>"',
 });
 const EARNED_KINDS = Object.freeze({
-  [STATE_DIAGNOSED]: Object.freeze(["comment", "issue", "letter", "pull"]),
+  [STATE_DIAGNOSED]: Object.freeze(["comment", "issue", "letter", "pull", "post"]),
   [STATE_BRIEFED]: Object.freeze(["comment", "issue", "letter", "pull"]),
   [STATE_FIXED]: Object.freeze(["pull"]),
 });
-const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter" });
+const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter", post: "the bug's own post" });
+/** The card's words for the own-post link (POS-1105). */
+export const OWN_POST_LINK = "at diagnosed only, the bug's own post, post:<author>/<slug>, when the reporter's own report names the cause: it credits its reporter or a resident of their household, and counts only the body or steps the reporter last wrote themselves, each dated by the act that wrote it";
 
 /**
  * The founders' GitHub accounts, by id (the login is a label), and the handles they credit.
@@ -243,6 +256,8 @@ const ISSUE_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/is
 const PULL_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/pull/(\\d+)$`);
 /** A letter's id, as the town spells one (`<from>-<date>-to-<to>-<slug>`): no slash, no colon. */
 const LETTER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** A bug's own post (POS-1105): `post:<author>/<slug>`, its id as the posts read names it. */
+const OWN_POST_LINK_RE = /^post:([a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/;
 
 /** What a link names: `{ kind, repo?, number?, comment?, id? }`, or null for no shape we read. */
 export function earnedRef(s) {
@@ -250,6 +265,7 @@ export function earnedRef(s) {
   if ((m = COMMENT_LINK_RE.exec(s))) return { kind: "comment", repo: m[1], number: Number(m[2]), comment: m[3] };
   if ((m = ISSUE_LINK_RE.exec(s))) return { kind: "issue", repo: m[1], number: Number(m[2]) };
   if ((m = PULL_LINK_RE.exec(s))) return { kind: "pull", repo: m[1], number: Number(m[2]) };
+  if ((m = OWN_POST_LINK_RE.exec(s))) return { kind: "post", id: m[1] };
   if (LETTER_ID_RE.test(s)) return { kind: "letter", id: s };
   return null;
 }
@@ -269,16 +285,24 @@ export function judgeEarnedLink(to, v) {
   const ref = earnedRef(s);
   if (!ref) throw refuse(422, `${to}'s link is not one the office can read`, how, { field: "link" });
   if (!EARNED_KINDS[to].includes(ref.kind))
-    throw refuse(422, `${to} is earned by a pull request, and this link is ${KIND_NAME[ref.kind]}`, how, { field: "link" });
+    throw refuse(422, ref.kind === "post"
+      ? `${to} is not earned by the bug's own post: only diagnosed is, when the reporter's own report names the cause`
+      : `${to} is earned by a pull request, and this link is ${KIND_NAME[ref.kind]}`, how, { field: "link" });
   return { link: s, ref };
 }
 
 /**
- * A comment or issue link is on the bug's own issue, when the bug names one
- * (fields.issue). A bug with no issue named takes the link as it is; a PR or a
- * letter is not judged here.
+ * The link is this bug's: a post link names the post being advanced, never
+ * another (POS-1105), and a comment or issue link is on the bug's own issue,
+ * when the bug names one (fields.issue). A bug with no issue named takes a
+ * comment or issue link as it is; a PR or a letter is not judged here.
  */
 export function judgeOnBugIssue(to, link, ref, prev) {
+  if (ref?.kind === "post") {
+    if (ref.id === prev?.id) return;
+    throw refuse(422, `${link} is the post "${ref.id}", and the bug here is "${prev?.id}"`,
+      `${EARNED_BY[to]} — a post link is the bug's own: post:${prev?.id}`, { field: "link" });
+  }
   if (ref?.kind !== "comment" && ref?.kind !== "issue") return;
   const m = /^https:\/\/github\.com\/postmark-town\/([A-Za-z0-9._-]+)\/issues\/(\d+)$/.exec(String(prev?.fields?.issue ?? ""));
   if (!m) return;

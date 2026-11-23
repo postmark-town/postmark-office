@@ -68,7 +68,7 @@ import { classDials, classProperty } from "./world-classes.mjs";
 import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
-import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { markClassOf, kindFieldOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { heldBy } from "./held.mjs"; // POS-688: a held thing is published but unplaced
 
 /** The thing class's own params, read from the record every time (never cached here). */
@@ -1468,7 +1468,7 @@ async function setDownMade({ made, args, key, actor }) {
   const stood = await standpointOfActor(actor);
   if (!stood) throw bounce(409, "the record does not place you anywhere",
     `a thing is set down where you stand, and the walk ledger has no position for ${actor}: walk somewhere first. Nothing was changed.`);
-  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.SET_DOWN_EXTENT });
+  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.setDownExtentOf(made) });
   if (dropStake?.terms) return dropStake.terms;
   const { leaveMarkViaOffice } = await import("./world.mjs");
   const { WORLD_CLONE } = await import("./world-store.mjs");
@@ -1688,6 +1688,13 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark ?? null; } catch { m = null; }
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
     if (face === "take") {
+      // A CLASSLESS SITED PIECE IS A FIXED BUILD, NOT A THING (POS-1143; Darko, picker POS-1143/a: "No, fixed stays fixed"; Wright: "the smallest change:
+      // the take executor refuses a classless `sited` mark"). The reads already leave it out: usable-verbs.mjs offers take only on a mark whose class
+      // lineage holds `thing`, and a classless one names no class (world-grants § markClassOf: null for a plain sited mark). The executor had no such
+      // kind veto, so an explicit take of another household's fixed build went through. The same resolver, so the two cannot mean different things by
+      // "classless"; only the sited kind, only the take, before any holding act is written. Classed things (portable or not) and other kinds are untouched.
+      if (m && kindFieldOf(m) === "sited" && markClassOf(m) == null)
+        throw bounce(409, `${args.thing} is a fixed piece, not a thing`, "a sited mark with no class is part of what its maker built, so it stays where it stands and stays theirs: it is not taken. Nothing was recorded.");
       // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
       if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
         throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
