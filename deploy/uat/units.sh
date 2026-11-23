@@ -34,7 +34,7 @@ ENABLE=(
   postmark-ferry.timer postmark-crossing-save.timer
   postmark-office-keep.timer
   postmark-settlement.timer postmark-world2-clearing.timer
-  postmark-town-index.timer postmark-world2-law-ingest.timer postmark-world2-marks-ingest.timer
+  postmark-town-index.timer postmark-world2-law-ingest.timer
   postmark-world2-notary.timer
   postmark-site-refresh.timer
   postmark-harbor-watch.timer
