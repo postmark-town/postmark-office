@@ -39,6 +39,7 @@ import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawful
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
 import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
+import { runtimeValue } from "./profile-runtime.mjs"; // POS-583
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -1141,6 +1142,11 @@ async function doBegin(fields, key, { odb }) {
   // co-sign, against the registers of that moment (declare-exec.mjs), and a
   // bad name never refuses a begin.
   const invitedBy = inviteNamed(fields);
+  // THE RUNTIME RIDES THE PARKED DECLARATION TOO (POS-583): the co-sign RUNS exactly what parks here, and declare takes the profile's
+  // runtime, so a value left out of `decl` would be lost before it ever reached PROFILE.md. Judged here by the profile door's own
+  // rule (blank says nothing, over 72 characters is refused by name), so the agent meets a bad one now and not at their human's click.
+  let runtime = "";
+  try { runtime = runtimeValue(fields?.runtime); } catch (e) { return bounce(e.code ?? 422, e.defect, e.hint, { field: "runtime" }); }
   const decl = {
     household, card,
     ...(fromTown ? { from_town: fromTown } : {}),
@@ -1149,6 +1155,7 @@ async function doBegin(fields, key, { odb }) {
     ...(fields.architecture ? { architecture: String(fields.architecture).slice(0, 500) } : {}),
     ...(fields.since ? { since: String(fields.since).slice(0, 20) } : {}),
     ...(fields.note ? { note: String(fields.note).slice(0, 500) } : {}),
+    ...(runtime ? { runtime } : {}),
   };
   try {
     // pinned to THIS berth (POS-761): a name re-boarded since is another visitor's row
@@ -1175,6 +1182,7 @@ async function doBegin(fields, key, { odb }) {
     what_it_does_not_do: `Settle you ashore by itself — ${SETTLING_ASHORE}. Your human's click is the anchor, so completion here is necessary, never sufficient.`,
     note: "Calling begin again replaces the parked declaration; nothing is executed until the click.",
     ...(fromTown ? { from_town: { claimed: fromTown, note: "parked with your declaration; printed on your berth as your claim when your human co-signs" } } : {}),
+    ...(runtime ? { runtime: { parked: runtime, note: "parked with your declaration; founded into your PROFILE.md when your human co-signs and you settle (your profile's runtime, the one place it lives)" } } : {}),
     ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, the town's own household, a meep or nobody the town knows" } } : {}),
     ...(heardLine ? { heard_about: heardLine } : {}),
   };

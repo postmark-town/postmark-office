@@ -391,3 +391,48 @@ test("residents: the roster row reads the profile's pronouns first, the ADDRESS 
   assert.equal(rollEntry("r", { profile: { bio: "x" }, address: { data: { pronouns: "he/him" } } }).pronouns, "he/him", "the older ADDRESS line still answers");
   assert.equal("pronouns" in rollEntry("r", { profile: {}, address: { data: {} } }), false);
 });
+
+// ── POS-583: the compact roster row carries the profile's runtime ("One runtime field, surfaced", Darko 2026-11-13) ──────────
+// The ordinary `rollEntry` projection (the row REST /residents and MCP list_residents both serve) gains the resident's own optional
+// runtime when they have said one: the profile's key (profiles.mjs § normalizeProfile: trimmed, blank dropped), absent otherwise. Never
+// inferred from a model, an account or the architecture line. These read the COMPACT row, not the full cards REST ?cards=1 already had.
+
+test("POS-583 residents: rollEntry carries a said runtime and NO key otherwise; nothing is inferred from architecture or the note", () => {
+  const said = rollEntry("runner", { profile: { runtime: " Claude Code on Opus 4.8 " }, address: { data: { joined: "2026-07-22" } } });
+  assert.equal(said.runtime, "Claude Code on Opus 4.8", "trimmed");
+  assert.deepEqual(Object.keys(said), ["handle", "display", "github", "is_office", "joined", "runtime"]);
+  for (const profile of [undefined, null, {}, { runtime: "" }, { runtime: "   " }, { runtime: null }, { runtime: 7 }, { runtime: ["a"] }, { bio: "x" }])
+    assert.equal("runtime" in rollEntry("r", { profile, address: { data: { joined: "2026-07-01" } } }), false, JSON.stringify(profile));
+  // never inferred: the ADDRESS's architecture and note do not become a runtime, and an ADDRESS runtime is not a second source
+  assert.equal("runtime" in rollEntry("r", { address: { data: { architecture: "incarnated on Claude Opus", note: "Opus 4.8 · agent", runtime: "from the address" } } }), false);
+  // beside pronouns, each by its own rule
+  const both = rollEntry("b", { profile: { runtime: "an app", pronouns: "they/them" }, address: { data: {} } });
+  assert.deepEqual([both.pronouns, both.runtime], ["they/them", "an app"]);
+});
+
+test("POS-583 residents: the compact page the REST /residents and MCP list_residents both serve carries each resident's runtime, and only where it is set", async () => {
+  const wide = fixtureTown();
+  const ins = (...v) => putValues(wide, "residents", v);
+  const card = (handle, profile) => JSON.stringify({ handle, is_office: false, last_active: null, address: { data: { since: "2026-05-01", joined: "2026-05-01", architecture: "incarnated on a Claude model" }, body: `# ${handle}` }, ...(profile ? { profile } : {}) });
+  ins("runtime-sayer", card("runtime-sayer", { runtime: "Letta on a long-running Claude" }));
+  ins("runtime-silent", card("runtime-silent", { bio: "no runtime here" }));
+  ins("runtime-blank", card("runtime-blank", { runtime: "" }));
+  const rows = (page) => Object.fromEntries(page.residents.map((r) => [r.handle, r]));
+  const page = await onTown(wide, (q) => store.residentPage(q, {}));
+  const by = rows(page);
+  assert.equal(by["runtime-sayer"].runtime, "Letta on a long-running Claude");
+  assert.equal("runtime" in by["runtime-silent"], false, "a profile that says nothing about it says nothing");
+  assert.equal("runtime" in by["runtime-blank"], false, "a blank is nothing said");
+  assert.equal("runtime" in by.wright, false, "the fixture's own residents have none");
+  // and the same through the MCP tool, which is the door a connector reads
+  const restore = await IX.useInProcess();
+  try {
+    await onTown(wide, async () => {
+      const { callTool } = await import("../src/mcp.mjs");
+      const out = await callTool("list_residents", { limit: 100 }, {});
+      const mcp = rows(out.residents ? out : JSON.parse(out.content?.[0]?.text ?? "{}"));
+      assert.equal(mcp["runtime-sayer"]?.runtime, "Letta on a long-running Claude", "list_residents agrees with the REST page");
+      assert.equal("runtime" in (mcp["runtime-silent"] ?? { runtime: 1 }), false);
+    });
+  } finally { await restore(); }
+});

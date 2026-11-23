@@ -314,3 +314,28 @@ test("G7 · THE CROSSING THAT SETTLES A HELD ROW MARKS ITS BERTH ASHORE, dated t
   } finally { o.close(); }
 });
 
+
+test("POS-583 · THE RUNTIME A HELD JOIN OFFERED IS FOUNDED INTO PROFILE.md BY THE CROSSING THAT SETTLES IT; no runtime founds no profile", async () => {
+  const { readProfile } = await import("../src/profiles.mjs");
+  const clone = townClone();
+  const o = liveOdb();
+  try {
+    await flagOn(async () => {
+      // the declaration door's own row shape (declare.mjs): household, card, member_of, and the runtime only when one was offered
+      await appendTownJournal(o, { cls: "join", act: "declare-household", household: "with-runtime", handle: "with-runtime", ghId: "781", ghLogin: "with-runtime-gh",
+        payload: { household: "with-runtime", card: "with-runtime's card.", runtime: "Claude Code on Opus 4.8" } });
+      await appendTownJournal(o, { cls: "join", act: "declare-household", household: "no-runtime", handle: "no-runtime", ghId: "782", ghLogin: "no-runtime-gh",
+        payload: { household: "no-runtime", card: "no-runtime's card." } });
+      setGangway(clone, "frozen");
+      await run(o, { clone, date: "2026-08-24" });
+      assert.equal(existsSync(join(clone, "WHITE_PAGES", "with-runtime", "PROFILE.md")), false, "held: nothing is written for a row the gangway holds");
+
+      setGangway(clone, "open");
+      const r = await run(o, { clone, date: "2026-08-25" });
+      assert.deepEqual([...r.settled].sort(), ["no-runtime", "with-runtime"]);
+      assert.equal(readProfile(clone, "with-runtime")?.runtime, "Claude Code on Opus 4.8", "the canonical reader reads what the row parked");
+      assert.doesNotMatch(readFileSync(join(clone, "WHITE_PAGES", "with-runtime", "ADDRESS.md"), "utf8"), /^runtime:/m, "not on the ADDRESS");
+      assert.equal(existsSync(join(clone, "WHITE_PAGES", "no-runtime", "PROFILE.md")), false, "a row with no runtime founds no profile");
+    });
+  } finally { o.close(); }
+});

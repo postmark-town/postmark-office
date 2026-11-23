@@ -444,6 +444,7 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
       architecture: row.payload?.architecture,
       since: row.payload?.since,
       note: row.payload?.note,
+      runtime: row.payload?.runtime, // POS-583: parked on the row at the declaration, founded into PROFILE.md here
     })) put(f.path, f.content);
     // A row the gangway held boarded a berth at its door; settling it marks
     // that berth ashore in the same crossing (POS-574, residency.mjs § berthAshore).

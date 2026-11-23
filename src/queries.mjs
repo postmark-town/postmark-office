@@ -282,8 +282,12 @@ export const rollEntry = (handle, d) => {
   // profile field; profiles.mjs § pronounsOf, the one rule), so the roll Ferry's
   // daily reads says what every close look says
   const pronouns = pronounsOf(d) ?? "";
+  // POS-583 ("One runtime field, surfaced", Darko 2026-11-13): the profile's own runtime rides the row when the resident has said one
+  // (profiles.mjs normalizeProfile: trimmed, blank dropped), absent otherwise. Never inferred from a model, an account or the
+  // architecture line; REST /residents and MCP list_residents share this one projection.
+  const runtime = typeof d.profile?.runtime === "string" ? d.profile.runtime.trim() : "";
   return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
-    ...(pronouns ? { pronouns } : {}) };
+    ...(pronouns ? { pronouns } : {}), ...(runtime ? { runtime } : {}) };
 };
 
 // The roster the DOOR serves — bounded, counted, walkable, and filterable.
