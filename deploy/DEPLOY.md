@@ -519,6 +519,7 @@ sudo cp deploy/nginx-present-grid.conf /etc/nginx/conf.d/postmark-present-grid.c
 sudo cp deploy/nginx-present-zone.conf /etc/nginx/conf.d/postmark-present-zone.conf
 sudo cp deploy/nginx-api.conf /etc/nginx/snippets/postmark-api.conf
 sudo cp deploy/nginx-api-timing.conf /etc/nginx/conf.d/postmark-api-timing.conf
+sudo cp deploy/nginx-front-door.conf /etc/nginx/conf.d/postmark-front-door.conf  # CORE-160: conversation pacing + HTML no-cache (2026-11-23)
 sudo nginx -t && sudo systemctl reload nginx
 
 # 5. the panes origin (household windows — postmark-windows Phase 0)

@@ -250,7 +250,7 @@ export function declareHolding({ db, thing, to = null, actor, roster = null, gro
 
 export const HOLD_TOOLS = [
   { name: "world_hold",
-    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): takes reach 60 m, the same as a give — you stand within the thing's extent, or within 60 m of its point, to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
+    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): takes reach 60 m, the same as a give — you stand within the thing's extent, or within 60 m of its point, to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A thing your household put forward and has not yet seen published moves with its claim: set down elsewhere, the claim is re-filed where you stand, with the stamps behind it, and the next settlement judges it there, on that ground, which can refuse it (the receipt says so). A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
@@ -1267,8 +1267,10 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
  */
 export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null, writtenAt = null, extra = {}, deps = {} }) {
   try {
-    let mark = deps.mark !== undefined ? deps.mark
-      : await (async () => { const { canonMarkById } = await import("./world.mjs"); return (await canonMarkById(String(thing))).mark; })(); // the record as printed: the amend copies its own lines (POS-688)
+    // the record as printed: the amend copies its own lines (POS-688). Its count says whether canon was read at all
+    const canon = deps.mark !== undefined ? { mark: deps.mark, canon_marks: deps.canonMarks ?? null }
+      : await (async () => { const { canonMarkById } = await import("./world.mjs"); return canonMarkById(String(thing)); })();
+    let mark = canon.mark;
     // ── THE AUTHOR'S OWN DRAFT (postmark#3663, kogane) ─────────────────────
     //
     // An unpublished thing may be taken and dropped inside its author's house
@@ -1276,16 +1278,32 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
     // filed nothing: the claim kept the fold place and published there, and
     // the set-down was lost. A PRIVATE DRAFT is the author's to re-site, so its
     // live record is amended in place (the claims pen rewrites the author's
-    // own draft rather than adding a second). A claim already PUT FORWARD is
-    // on the docket, and re-siting it waits on a ruling; it says so instead of
-    // promising an amend that will never come.
-    let draft = false;
+    // own draft rather than adding a second).
+    //
+    // ── A CLAIM ALREADY PUT FORWARD MOVES WITH IT (POS-990/a) ───────────────
+    //
+    // Darko, 2026-11-13 09:11 EST: "Moves with it". A claim set down somewhere
+    // else before its settlement is re-filed at the new spot with its stamps,
+    // and judged there. So its live record is amended in place too, as a
+    // put-forward amend at the set-down place: the claims pen's own rule (one
+    // pending claim per mark per window, POS-241 ruling 1) retracts the claim
+    // at the old place as `replaced`, the stamps stay in escrow behind the mark
+    // (escrow is the mark's, never the claim row's), and the clearing judges
+    // the new claim, with that escrow, on the new ground, which can refuse it.
+    // No stake is moved, returned or asked again. Only when canon was READ and
+    // holds no such mark: a published mark's pending amend is not an unpublished
+    // claim, and an unread canon cannot tell the two apart.
+    let draft = false, moved = null;
     if (!mark) {
       const live = deps.liveClaim !== undefined ? deps.liveClaim : await ownLiveClaim(thing, key, actor);
       if (live?.claim_status === "draft") { mark = draftRecordOf(live); draft = true; }
-      else if (live && (live.claim_status === "pending" || live.put_forward === true))
-        return { filed: false, put_forward_unpublished: true,
-          why: `${thing} is put forward and not yet published, and re-siting a claim already on the docket waits on a ruling (postmark#3663)` };
+      else if (live && (live.claim_status === "pending" || live.put_forward === true)) {
+        if (!(Number(canon.canon_marks) > 0))
+          return { filed: false, put_forward_unpublished: true,
+            why: `canon could not be read here, so this door cannot tell whether ${thing} is still an unpublished claim; nothing was re-filed, and the settlement judges it where it was put forward` };
+        mark = draftRecordOf(live);
+        moved = { claim: live.claim_id == null ? null : String(live.claim_id), stake: Number(live.stamps) || 0 };
+      }
     }
     // PRINTED AS HELD (POS-688): canon has no place lines for it, and the settlement
     // prints the set-down itself (world2/tools/hold-through.mjs), so no amend is owed.
@@ -1297,16 +1315,31 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
       const [{ leaveMarkViaOffice }, { WORLD_CLONE }] = await Promise.all([import("./world.mjs"), import("./world-store.mjs")]);
       return leaveMarkViaOffice(WORLD_CLONE, payload, k, opts);
     });
-    const res = await leave(built.payload, key, { setDown: { ...built.setDown, ...extra } });
-    if (res?.error) return { filed: false, why: `the amend door answered: ${res.defect ?? res.error}` };
+    const res = await leave(built.payload, key, { setDown: { ...built.setDown, ...extra, ...(moved ? { moves_claim: moved.claim } : {}) } });
+    if (res?.error) return { filed: false, ...(moved ? { put_forward_unpublished: true } : {}), why: `the amend door answered: ${res.defect ?? res.error}` };
     return {
       filed: true, mark: res?.id ?? String(thing), seq: res?.seq ?? null, put_forward: res?.put_forward === true,
       ...(draft ? { draft: true } : {}),
+      ...(moved ? { moved_claim: moved.claim, stake: moved.stake, ...(res?.publishing?.note ? { note: res.publishing.note } : {}) } : {}),
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
     return { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` };
   }
+}
+
+/**
+ * THE DROP'S HALF OF POS-990/a: a thing its own household put forward and has
+ * not seen published is re-filed where it was set down (`fileAuthorsAmend`,
+ * above, the one amend shape). Null when the thing is no pending claim of the
+ * dropper's house (a private draft, a published mark, none, or unread): the
+ * drop is exactly as before, and the settlement's printout (POS-688) is the one
+ * writer of a published thing's place. Never throws.
+ */
+export async function refileSetDownClaim({ thing, stood, key, actor, actId = null, writtenAt = null }, deps = {}) {
+  const live = deps.liveClaim !== undefined ? deps.liveClaim : await ownLiveClaim(thing, key, actor);
+  if (!(live && live.claim_status !== "draft" && (live.claim_status === "pending" || live.put_forward === true))) return null;
+  return fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt, deps: { ...deps, liveClaim: live } });
 }
 
 /** The author's own live claim on `thing` (draft or pending), or null when none or unreadable. */
@@ -1378,6 +1411,12 @@ export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdO
 export function setDownNote(setDown) {
   const lead = "it stands where you stood when you set it down, and the act carries that place";
   if (!setDown) return `${lead}.`;
+  // A CLAIM PUT FORWARD AND NOT YET PUBLISHED (POS-990/a): what happened to the claim is the receipt's sentence
+  const claim = setDown.claim;
+  if (claim?.filed === true && claim.moved_claim !== undefined)
+    return `${lead}. Your claim on it moves with it: ${claim.note ?? "it is re-filed here, in place of the one put forward where it stood, and the next settlement judges it on this ground, which can refuse it."}`;
+  if (claim && claim.filed !== true)
+    return `${lead}. Your claim on it was put forward where it stood before and could not be re-filed here (${claim.why}), so the next settlement judges it there.`;
   if (setDown.whose === "another household's")
     return `${lead}. It is ${setDown.owner}'s, lent to you: the settlement prints it here at the next crossing, and ${setDown.owner}'s house may still ask for it back.`;
   return `${lead}; the settlement prints it here at the next crossing.`;
@@ -1697,11 +1736,21 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       // NO AMEND (POS-688, E8): the settlement prints a set-down where it was made (D2),
       // so the printout is the one writer of a held thing's place. The POS-138 amend
       // at the door (`fileSetDownAmend`) was a second writer of the same place.
-      const house = sameHousehold(String(owner), String(actor), await (async () => {
+      const householdOf = await (async () => {
         try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; }
-      })());
-      const setDown = { by: String(actor), made_by: String(args.thing).split("/")[0], owner: String(owner),
-        at: stood ?? null, whose: house.same ? "your house's" : "another household's" };
+      })();
+      const house = sameHousehold(String(owner), String(actor), householdOf);
+      const madeBy = String(args.thing).split("/")[0];
+      // THE PENDING CLAIM MOVES WITH IT (POS-990/a, Darko 2026-11-13: "Moves with it"). A thing its own household put
+      // forward and has not seen published has no standing row for the printout to move, so the printout would leave
+      // the claim to be judged, and locked, where it was put forward. The claim itself is re-filed here instead, with
+      // the stamps behind it, and the next settlement judges it on this ground. Canon's own record first: a published
+      // thing is the printout's, as above.
+      const claim = !m && sameHousehold(madeBy, String(actor), householdOf).same
+        ? await refileSetDownClaim({ thing: String(args.thing), stood, key, actor: String(actor), actId: out.seq ?? null, writtenAt: out.at ?? null })
+        : null;
+      const setDown = { by: String(actor), made_by: madeBy, owner: String(owner),
+        at: stood ?? null, whose: house.same ? "your house's" : "another household's", ...(claim ? { claim } : {}) };
       return { ...out, ...(staked ?? {}), stands_note: setDownNote(setDown), set_down: setDown };
     }
   } finally { /* no handle is opened: the record is read through the guards */ }
