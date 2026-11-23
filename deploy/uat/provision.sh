@@ -56,9 +56,13 @@ uat_say "UAT's own user, and the trees prod's units expect, all its own"
 id "$UAT_USER" >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/$UAT_USER --shell /bin/bash "$UAT_USER"
 if id -nG "$UAT_USER" | tr ' ' '\n' | grep -qx meepo; then uat_die "$UAT_USER is in meepo's group; it must not be."; fi
 for d in /srv/postmark-office /srv/postmark-site-refresh /srv/uat-stubs /srv/world2-lab /srv/world2-lab/ops \
-         /srv/postmark-harbor /srv/postmark-sentinel /var/www/postmark-town-site; do
+         /srv/postmark-harbor /srv/postmark-sentinel /var/www/postmark-panes /var/www/postmark-ops; do
   install -d -o "$UAT_USER" -g "$UAT_USER" -m 0755 "$d"
 done
+# /var/www is the office user's on prod (meepo there, uat here): the site refresh makes .postmark-town-site.next
+# BESIDE the webroot and renames that symlink over it, so /var/www/postmark-town-site must NOT exist as a directory.
+chown "$UAT_USER":root /var/www
+[ -d /var/www/postmark-town-site ] && [ ! -L /var/www/postmark-town-site ] && rmdir /var/www/postmark-town-site 2>/dev/null || true
 # the meeps' home stays closed to UAT (750, and only rei's ACL besides): say so rather than assume it
 if sudo -n -u "$UAT_USER" test -r /home/meepo 2>/dev/null; then uat_die "$UAT_USER can read /home/meepo; close it before going on."; fi
 

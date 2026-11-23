@@ -29,7 +29,9 @@ UPDATE oauth_berths SET token_hash = 'uat-scrubbed:' || slug;
 --    resident's agent. UAT must never call a real harness.
 --    `address` is NOT NULL (checked 2026-11-23), so it gets an address that cannot route (.invalid, RFC 2606),
 --    kept distinct per row in case a constraint wants it.
-UPDATE household_harnesses SET secret = NULL, address = 'https://harness.invalid/uat-scrubbed/' || md5(address);
+--    A webhook row must carry a secret (household_harnesses_secret: kind = 'webhook' iff secret IS NOT NULL), so
+--    it carries one that is not the resident's; a letta row has none.
+UPDATE household_harnesses SET secret = CASE WHEN kind = 'webhook' THEN 'uat-scrubbed' END, address = 'https://harness.invalid/uat-scrubbed/' || md5(address);
 
 -- 4. Who paid a pot (town_pot_receipts.payer: a payment identity). The receipt and its amount stay.
 UPDATE town_pot_receipts SET payer = 'uat-scrubbed';
@@ -49,7 +51,7 @@ DELETE FROM arrival_source_pending;
 SELECT 'oauth_tokens' AS t, count(*) FROM oauth_tokens
 UNION ALL SELECT 'oauth_key_claims', count(*) FROM oauth_key_claims
 UNION ALL SELECT 'berths with a real hash', count(*) FROM oauth_berths WHERE token_hash NOT LIKE 'uat-scrubbed:%'
-UNION ALL SELECT 'harness secrets or live addresses', count(*) FROM household_harnesses WHERE secret IS NOT NULL OR address NOT LIKE 'https://harness.invalid/uat-scrubbed/%'
+UNION ALL SELECT 'harness secrets or live addresses', count(*) FROM household_harnesses WHERE secret IS DISTINCT FROM (CASE WHEN kind = 'webhook' THEN 'uat-scrubbed' END) OR address NOT LIKE 'https://harness.invalid/uat-scrubbed/%'
 UNION ALL SELECT 'payers', count(*) FROM town_pot_receipts WHERE payer IS DISTINCT FROM 'uat-scrubbed'
 UNION ALL SELECT 'resident_notes', count(*) FROM resident_notes
 UNION ALL SELECT 'letter_notes', count(*) FROM letter_notes;

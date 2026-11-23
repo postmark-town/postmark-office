@@ -10,7 +10,7 @@
 # /etc/postmark-uat-aws.env (root:root 0600: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION), is sourced
 # into one subshell's environment and never printed or put on a command line. Then:
 #   1. the store's roles, by prod's names, with UAT's own passwords (from UAT's /etc/postmark-world2-dev.env);
-#   2. the dump into a NEW database, owners and grants kept (the roles exist, so prod's grants restore exactly);
+#   2. the dump into a NEW database (it carries no owners or grants: --no-owner --no-acl), then grants.sql;
 #   3. scrub.sql inside it, refused until Darko has reviewed it (its REVIEWED line), with a readback of zeros;
 #   4. the swap: the new database becomes world2_uat, the old one is kept as world2_uat_prev until the next run.
 # The office and every store unit are stopped across the swap and started after it.
@@ -74,8 +74,15 @@ sudo -u postgres dropdb --if-exists "$NEW"
 sudo -u postgres createdb --owner world2_owner "$NEW"
 sudo -u postgres pg_restore --exit-on-error --dbname "$NEW" "$DUMP" || uat_die "pg_restore failed; $NEW is left for a look, $UAT_DB is untouched"
 
+# The nightly dump is taken --no-owner --no-acl (deploy/world2-backup.sh), so prod's grants are not in it: without
+# them every role but the owner is refused every table. grants.sql is prod's GRANT/REVOKE set, read from a
+# schema-only dump of prod (see its header); it is applied before the scrub, in one transaction.
+[ -f "$HERE/grants.sql" ] || uat_die "grants.sql is missing: the dump carries no grants (its header says how to make it)"
+uat_say "the grants (prod's, from grants.sql: the dump carries none)"
+sudo -u postgres psql -q -v ON_ERROR_STOP=1 -1 -d "$NEW" -f "$HERE/grants.sql" || uat_die "the grants failed; $NEW is left for a look, $UAT_DB is untouched"
+
 uat_say "scrub (scrub.sql), then the readback: every count must be 0"
-OUT="$(sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$NEW" -tA -F' ' -f "$HERE/scrub.sql")" || uat_die "the scrub failed; $UAT_DB is untouched"
+OUT="$(sudo -u postgres psql -q -v ON_ERROR_STOP=1 -d "$NEW" -tA -F' ' -f "$HERE/scrub.sql")" || uat_die "the scrub failed; $UAT_DB is untouched"
 echo "$OUT" | grep -E ' [0-9]+$' | sed 's/^/  /'
 echo "$OUT" | grep -E ' [0-9]+$' | awk '$NF != 0 { bad = 1 } END { exit bad }' || uat_die "a scrub readback is not 0; $NEW is left for a look, $UAT_DB is untouched"
 
