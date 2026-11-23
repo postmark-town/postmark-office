@@ -97,6 +97,19 @@ export function newestTrainRef(refs) {
 function openTrainRef() {
   const explicit = String(process.env.TRAIN_REF ?? "").trim();
   if (explicit) return explicit;
+  // THE BASELINE IS WHAT THIS RUN MERGES INTO (2026-11-23, Wright on the #1200 red). A pull request compares its
+  // script with its base (GITHUB_BASE_REF): a hotfix into main against main's, a PR into a train against that train's.
+  // A push compares with its own branch when that branch is main or a train. Before this, every run read the newest
+  // train, so once w49 carried POS-1025's rewrite (#1022, 13:50Z 11-23) every main-based PR tested main's harness
+  // against w49's script and went red on F-git ("[witness] not configured") for a script it does not ship. Never the
+  // run's own checkout: that would compare a script with itself, and the instrument could not fail.
+  const base = String(process.env.GITHUB_BASE_REF ?? "").trim()
+    || (/^(main|master|train\/.+)$/.test(String(process.env.GITHUB_REF_NAME ?? "").trim()) ? String(process.env.GITHUB_REF_NAME).trim() : "");
+  if (base) {
+    const ref = `origin/${base}`;
+    try { execFileSync("git", ["-C", OFFICE, "rev-parse", "--verify", "-q", `${ref}^{commit}`], { stdio: "ignore" }); return ref; }
+    catch { /* the base is not fetched here: fall back to the newest train, as before */ }
+  }
   const refs = execFileSync("git", [
     "-C", OFFICE, "for-each-ref",
     "--format=%(refname:short)", "refs/remotes/origin/train/*",
