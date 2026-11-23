@@ -42,7 +42,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   ingest, planIngest, applyIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
-  commitReader, isPrintoutCommit, PRINTOUT_PENS, carriedRow,
+  commitReader, isPrintoutCommit, PRINTOUT_PENS, carriedRow, mixedChanges, checkoutAt,
 } from "../world2/tools/marks-ingest.mjs";
 import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
@@ -548,6 +548,162 @@ test("POS-614 · planIngest: a path only the printout touched is SKIPPED with it
   assert.deepEqual([plan.adds, plan.amends, plan.retires, plan.stops], [[], [], [], []]);
   assert.deepEqual(plan.skipped.map((s) => [s.slug, s.fields[0]]), [["a/added", "(add)"], ["a/amended", "body"], ["a/gone", "(retire)"]]);
   for (const s of plan.skipped) assert.match(s.why, /^only the settlement's own printout changed its file \(print-p\/\S+ settlement: sweep 9 published\) — .*\(POS-614\)$/);
+});
+
+// ── POS-1197: a hand commit that only renames a mark file is not a hand edit ──
+//
+// World #432 (acedb3f5, Jetto, on Darko's ruling (e) on POS-1195) moved
+// kinofire/the-uphill-firepit's page out of kinofire/spin-ghar-manor/ to its own
+// name, byte for byte. The S188 printout then wrote it as sited, from kinofire's
+// act 59899. In (S187, S188] the mixed arm counted the rename as a hand edit and
+// derived the world at it, where the firepit is a predicate out of its parent's
+// folder: "MARKS INGEST FAILED — nothing was written: kinofire/the-uphill-firepit
+// is predicate and names no parent", every 15 minutes on prod. This builds the
+// same shape on the pinned tag: a resident's predicate whose only parent is the
+// folder it is filed in, moved by hand to its own name with the same bytes, then
+// re-kinded sited by the printout, with the store already holding the act.
+
+const JETTO = { name: "Jetto", email: "jetto@starforge.local" };
+const R_TAG = "pos1197-fixture-R", E_TAG = "pos1197-fixture-E";
+const SWEEP = "settlement: sweep 32 published, 0 unpublished, 0 left drafted, 1 withdrawn, 0 quarantined, 0 dropped, 0 re-framed";
+let rx = null;
+
+async function renameFixture() {
+  if (rx) return rx;
+  const rdir = tempDir("pos1197-ingest-");
+  const repo = join(rdir, "w");
+  execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
+  git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
+  const shaA = git(repo, ["rev-parse", "HEAD"]).trim();
+  const { deriveSeed } = await import("../world2/tools/seed-import.mjs");
+  const seed = await deriveSeed({ worldRepo: repo, lawSha: shaA });
+  const { paths } = await pathsAt(repo);
+  const byId = new Map(seed.marks.map((m) => [String(m.id), m]));
+  const frontOf = (p) => readFileSync(join(repo, ...p.split("/")), "utf8").match(FM)?.[1] ?? "";
+  // The firepit's shape: WORLD/marks/<owner>/<parent>/<leaf>/mark.md, a predicate with no
+  // `parent:` line (its folder is its only parent), nothing filed beneath it, a sited parent
+  // filed at its own root, and the owner's root free under the leaf's name.
+  const pick = (not) => seed.marks.find((m) => {
+    const p = paths.get(m.slug);
+    if (!p || not.has(m.slug) || !["predicate", "predicated"].includes(m.kind) || m.owner === "the-town") return false;
+    const parts = p.split("/");
+    const parent = m.parent ? byId.get(String(m.parent)) : null;
+    return parts.length === 6 && parts[4] === m.slug.split("/")[1]
+      && parent?.kind === "sited" && parent.geometry?.at && paths.get(parent.slug)?.split("/").length === 5
+      && !/^parent:/m.test(frontOf(p)) && isLeafDir(join(repo, ...parts.slice(0, 5)))
+      && !existsSync(join(repo, "WORLD", "marks", parts[2], parts[4]));
+  });
+  const moved = pick(new Set());
+  const edited = moved && pick(new Set([moved.slug]));
+  assert.ok(moved && edited, "the fixture could not find two resident predicates filed in a sited parent's folder");
+
+  // the author through the environment, which beats any `-c user.*` and any author a session exports
+  const commitAs = (who, subject) => {
+    git(repo, ["commit", "-q", "-m", subject], { GIT_AUTHOR_NAME: who.name, GIT_AUTHOR_EMAIL: who.email,
+      GIT_COMMITTER_NAME: who.name, GIT_COMMITTER_EMAIL: who.email });
+    return git(repo, ["rev-parse", "HEAD"]).trim();
+  };
+  const folderOf = (slug) => dirname(paths.get(slug));
+  const rootFile = (slug) => join(repo, "WORLD", "marks", ...slug.split("/"), "mark.md");
+  // What the printout writes once the resident's act re-kinds the mark: sited, beside its old parent.
+  const printedSited = (slug, text) => {
+    const fm = text.match(FM);
+    const lines = fm[1].split(/\r?\n/);
+    const get = (k) => lines.find((l) => l.startsWith(`${k}:`))?.slice(k.length + 1).trim();
+    const parent = byId.get(String(seed.marks.find((m) => m.slug === slug).parent));
+    const { x, y } = parent.geometry.at;
+    return `---\nkind: sited\nby: ${get("by")}\ndate: 2026-11-22T20:31:31.756Z\nat: { x: ${x + (parent.geometry.extent?.w ?? 1)}, y: ${y} }\n` +
+      `extent: { w: 3, h: 2 }\nclaimed_at: ${get("date")}\n---\n${text.slice(fm[0].length)}`;
+  };
+
+  // R: the hand's pure rename (World #432's shape), then the printout re-kinds the file.
+  git(repo, ["mv", folderOf(moved.slug), `WORLD/marks/${moved.slug}`]);
+  const renameSha = commitAs(JETTO, `POS-1195: ${moved.slug} files at its id, as the frozen-filing law asks`);
+  writeFileSync(rootFile(moved.slug), printedSited(moved.slug, readFileSync(rootFile(moved.slug), "utf8")));
+  git(repo, ["add", "-A"]);
+  const printSha = commitAs(PEN, SWEEP);
+  git(repo, ["tag", R_TAG]);
+  // The store already holds the resident's act (the clearing carried it): the mark as the ref derives it.
+  const actRow = (await deriveSeed({ worldRepo: repo, lawSha: printSha })).marks.find((m) => m.slug === moved.slug);
+  assert.equal(actRow?.kind, "sited", "the printout's file derives as sited");
+
+  // E: off A, a hand commit that renames AND edits a file, then the printout over it.
+  git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", shaA]);
+  git(repo, ["mv", folderOf(edited.slug), `WORLD/marks/${edited.slug}`]);
+  writeFileSync(rootFile(edited.slug), readFileSync(rootFile(edited.slug), "utf8").trimEnd() + " Moved by hand.\n");
+  git(repo, ["add", "-A"]);
+  const editSha = commitAs(JETTO, `a hand move and edit of ${edited.slug}`);
+  writeFileSync(rootFile(edited.slug), printedSited(edited.slug, readFileSync(rootFile(edited.slug), "utf8")));
+  git(repo, ["add", "-A"]);
+  const print2Sha = commitAs(PEN, SWEEP);
+  git(repo, ["tag", E_TAG]);
+  // the sides as the tool reads them, from the log itself
+  const sideOf = (sha) => {
+    const [email, subject] = git(repo, ["log", "-1", "--format=%ae%x1f%s", sha]).trim().split("\x1f");
+    return isPrintoutCommit({ email, subject }) ? "printout" : "hand";
+  };
+  assert.deepEqual([renameSha, printSha, editSha, print2Sha].map(sideOf), ["hand", "printout", "hand", "printout"],
+    "the fixture's commits read as the hand's and the printout's");
+
+  const owners = new Set(seed.marks.map((m) => m.owner));
+  const genesis = { ...seed.window, status: "closed" };
+  const open = { id: genesis.id + 1, status: "open", opens_at: genesis.closes_at, closes_at: new Date(Date.now() + 864e5).toISOString() };
+  const makeStore = () => fakeStore({
+    marks: seed.marks.map((m) => structuredClone(m.slug === moved.slug ? { ...actRow, id: m.id } : m)),
+    claims: seed.claims.map((c) => ({ id: c.id })), windows: [genesis, open],
+    roll: Object.fromEntries([...owners].map((o) => [`h-${o}`, [o]])),
+  });
+  rx = { rdir, repo, shaA, moved: moved.slug, edited: edited.slug, renameSha, printSha, editSha, print2Sha, makeStore };
+  return rx;
+}
+after(() => { if (rx) rmSync(rx.rdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+const rawOf = (repo, sha) => git(repo, ["log", "-1", "-M", "--raw", "--no-abbrev", "--format=", sha]).split("\n").filter((l) => l.startsWith(":"));
+
+test("POS-1197 · CAN FAIL: the world at the hand's pure rename cannot be derived — a predicate out of its parent's folder names no parent", { skip: WHY_SKIP }, async () => {
+  const r = await renameFixture();
+  const [line] = rawOf(r.repo, r.renameSha).filter((l) => l.split("\t").at(-1).endsWith(`${r.moved}/mark.md`));
+  const [, , from, to, status] = line.split("\t")[0].split(" ");
+  assert.equal(status, "R100", `the hand commit is a pure rename: ${line}`);
+  assert.equal(from, to, "the same blob on both sides");
+  const { deriveSeed } = await import("../world2/tools/seed-import.mjs");
+  const co = checkoutAt(r.repo, r.renameSha, "pos1197");
+  try {
+    await assert.rejects(() => deriveSeed({ worldRepo: co.dir, lawSha: r.renameSha }),
+      new RegExp(`${r.moved.replace("/", "\\/")} is predicated? and names no parent`));
+  } finally { co.dispose(); }
+});
+
+test("POS-1197 · THE REPLAY: a byte-identical rename by hand, then the printout re-kinds the mark — the ingest runs, plans nothing for it, and never carries the hand's predicate", { skip: WHY_SKIP }, async () => {
+  __clearHouseCache?.();
+  const r = await renameFixture();
+  const store = r.makeStore();
+  const res = await ingest(store.client, { worldRepo: r.repo, ref: R_TAG });
+  assert.equal(res.status, "ingested", res.receipt);
+  assert.deepEqual(res.plan.stops, [], res.receipt);
+  const named = [...res.plan.adds, ...res.plan.amends, ...res.plan.retires, ...res.plan.held].map((c) => c.slug);
+  assert.ok(!named.includes(r.moved), `the renamed mark is planned:\n${res.receipt}`);
+  assert.deepEqual([res.plan.adds, res.plan.amends, res.plan.retires], [[], [], []], res.receipt);
+  const m = store.bySlug(r.moved);
+  assert.equal(m.kind, "sited", "the store keeps the resident's act, NOT the hand's predicate");
+  assert.equal(m.parent ?? null, null, "and no parent edge");
+  assert.equal(store.head(), git(r.repo, ["rev-parse", R_TAG]).trim(), "the head moves to the ref");
+});
+
+test("POS-1197 · mixedChanges: a pure rename by hand is no hand commit; a hand commit that renames AND edits the file still is", { skip: WHY_SKIP }, async () => {
+  const r = await renameFixture();
+  const pure = mixedChanges(r.repo, { base: r.shaA, target: git(r.repo, ["rev-parse", R_TAG]).trim() });
+  assert.deepEqual([...pure.keys()], [], "the printout alone changed the renamed file's bytes, so it is not mixed");
+
+  const [line] = rawOf(r.repo, r.editSha).filter((l) => l.split("\t").at(-1).endsWith(`${r.edited}/mark.md`));
+  const [, , from, to, status] = line.split("\t")[0].split(" ");
+  assert.match(status, /^R\d+$/, `git reads the hand commit as a rename: ${line}`);
+  assert.notEqual(from, to, "with different bytes");
+  const edit = mixedChanges(r.repo, { base: r.shaA, target: git(r.repo, ["rev-parse", E_TAG]).trim() });
+  const path = `WORLD/marks/${r.edited}/mark.md`;
+  assert.deepEqual([...edit.keys()], [path]);
+  assert.deepEqual(edit.get(path).hands.map((c) => c.sha), [r.editSha], "the rename that edits is the hand's");
+  assert.deepEqual(edit.get(path).printouts.map((c) => c.sha), [r.print2Sha]);
 });
 
 // ── the plan's gates, without a world ──────────────────────────────────────
