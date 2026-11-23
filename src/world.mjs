@@ -1999,6 +1999,11 @@ function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
       // POS-1035 (call 3): the say this one answers, by act number — the ONE stored edge circles are derived from. Public
       // like the words: it leaves the box in the notary's archive with the rest of the payload.
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
+      // POS-1185 (Darko 2026-11-22): the conversation this say joined, decided once when it was spoken (voices.mjs § nameRoom) and
+      // recorded here so no later say can change it: the id of the room, `t<its first say's instant, ms>-<that speaker>` — its own
+      // id when it founds one. A room is the says that carry its id. Public like the words and `place`. An act written before this
+      // has none, and is read as it was named when spoken (rooms.mjs). Not a place: POS-1152's `place_mark` is where a root say stood.
+      ...(typeof voice.root === "string" && voice.root ? { conversation: voice.root } : {}),
     },
     effect: "the words were spoken where the actor stood and heard by whoever was within earshot; hearing fades, the record does not",
     writtenAt: new Date(voice.at).toISOString(),
@@ -2136,6 +2141,8 @@ hearing.refresh().catch(() => {});
 export const hearingWindowAt = (at) => hearing.read(at);
 /** Every published settlement this office keeps in memory (ms, ascending): where a conversation splits (POS-779). */
 export const settlementsKnown = () => hearing.settlements();
+/** Every published settlement world main holds (ms, ascending), for the conversations RECORD's reads (POS-1185): no room is too old to open. */
+export const settlementsRecorded = () => hearing.recorded();
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
@@ -7811,7 +7818,7 @@ export const WORLD_TOOLS = [
       // visitors, and this field on a say says they were read.
       rules_read: { type: "boolean", description: "visitors (berths) only: true says you have read the town's rules for visitors (GET /berth shows them, and so does the answer to your first say). Recorded once; residents never need it." },
       // CIRCLES (POS-1035; CORE-70 calls 3, 11, 21, 25). The reply edge rides a say with text; the three selectors are reads.
-      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in the room you are speaking into (the same conversation, even across a settlement while the room carries on). Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
+      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in an open conversation within earshot of where you stand (even one carried across a settlement), and your reply joins that say's conversation. Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
       circle: { type: "number", description: "no text: read one circle whole — the say with this id and every reply under it, with the says above it as context. Paged: pass the `next` it returns." },
       after: { type: "number", description: "with circle: the `after` from that circle's previous page's `next`." },
       with: { type: "string", description: "no text: where this resident is talking in your room — their says, each with the say it answers as context, and the circles they are in." },

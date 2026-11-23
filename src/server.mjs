@@ -378,7 +378,7 @@ const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 //
 // THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
 // "Probe first"). The two reads used to run side by side and held two of the
-// thread's pen connections at once (the pen is three per pool instance,
+// thread's pen connections at once (the pen is six per pool instance, three until POS-1095,
 // world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
 // the store does. The probe goes first: it
 // carries the as-of and the write path's sign-in and resident checks, and the
