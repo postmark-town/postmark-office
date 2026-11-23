@@ -137,10 +137,8 @@ test("the root's start survives its founding say leaving memory (the joiners car
   assert.equal(thread.place_mark, A, "its start did not leave with it");
 });
 
-// A SAY BETWEEN TWO ROOMS. Older room: pica at x 0 (founder), dan at x 8 joins. Younger room: seth at x 110 founds it at mark X, claran at
-// x 118 joins (her line carries X as her room's start). Then a say from x 55, within earshot of both rooms; its nearest voice is dan's (47 m).
-// POS-1185 (Darko 2026-11-22): until then that say BRIDGED the two rooms into one under the older root, and these tests asserted the merged
-// room's start. Rooms no longer fuse: the say joins the older room alone, and each room keeps its own start.
+// A BRIDGE: a say heard by two rooms joins them under the older root. Older room: pica at x 0 (founder), dan at x 8 joins.
+// Younger room: seth at x 110 founds it at mark X, claran at x 118 joins (her line carries X as her room's start). The bridge is a say from x 55.
 const X = "quill/the-barn";
 async function bridged({ olderKnown }) {
   const mark = ({ x }) => (x < 30 ? (olderKnown ? A : null) : x >= 100 ? X : null);
@@ -152,33 +150,27 @@ async function bridged({ olderKnown }) {
   return { d, before };
 }
 
-const roomHolding = (live, said) => live.find((c) => c.voices.some((v) => v.said === said));
-
-test("a say between an older room with NO recorded start and a younger room with one joins the older room alone: two rooms still, each with its own start, live, in the line and after a rebuild", async () => {
+test("a bridge between an older room with NO recorded start and a younger room with one: the merged room has none, live, in the bridge line and after a rebuild", async () => {
   const { d, before } = await bridged({ olderKnown: false });
-  assert.deepEqual(before, [null, X], "two rooms before the say: the young one's start, and none");
+  assert.deepEqual(before, [null, X], "two rooms before the bridge: the young one's start, and none");
   for (const store of [d.store, d.remake()]) {
     const live = store.conversations().live;
-    assert.equal(live.length, 2, "POS-1185: still two rooms after a say within earshot of both");
-    assert.equal(roomHolding(live, "heard by both").place_mark, undefined, "the room it joined (the older one) has no recorded start, and borrows none from the younger room");
-    assert.deepEqual(roomHolding(live, "heard by both").voices.map((v) => v.said), ["joins the old room", "heard by both"]);
-    assert.equal(roomHolding(live, "young room opens").place_mark, X, "the younger room keeps its own start");
+    assert.equal(live.length, 1, "one room after the bridge");
+    assert.equal(live[0].place_mark, undefined, "the younger room's start is not the older room's");
   }
-  const between = logOf(d.path).at(-1);
-  assert.equal(between.handle, "mara");
-  assert.equal(between.root, `t${T}-pica`, "its line names the one room it joined");
-  assert.equal(between.merged, undefined, "and records no join of two rooms");
-  assert.equal(between.root_place_mark, undefined, "and carries no start it was never given");
+  const bridge = logOf(d.path).at(-1);
+  assert.equal(bridge.handle, "mara");
+  assert.ok(bridge.merged?.length, "the bridge line records the merge");
+  assert.equal(bridge.root_place_mark, undefined, "and carries no start it was never given");
 });
 
-test("a say between two rooms that joins an older room with a recorded start carries that room's own marker after its founder left memory: live, in the line and after a rebuild", async () => {
+test("a bridge into an older room with a recorded start keeps that room's own marker after its founder left memory: live, in the bridge line and after a rebuild", async () => {
   const { d } = await bridged({ olderKnown: true });
-  assert.ok(!d.store.conversations().live.some((c) => c.voices.some((v) => v.said === "old room opens")), "the older founder has left memory");
+  assert.ok(!d.store.conversations().live[0].voices.some((v) => v.said === "old room opens"), "the older founder has left memory");
   for (const store of [d.store, d.remake()]) {
     const live = store.conversations().live;
-    assert.equal(live.length, 2);
-    assert.equal(roomHolding(live, "heard by both").place_mark, A, "the older room's own start, not the younger room's");
-    assert.equal(roomHolding(live, "young room opens").place_mark, X, "and the younger room's is still its own");
+    assert.equal(live.length, 1);
+    assert.equal(live[0].place_mark, A, "the older room's own start, not the younger room's");
   }
   assert.equal(logOf(d.path).at(-1).root_place_mark, A);
 });
