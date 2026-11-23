@@ -31,15 +31,15 @@ seed() { # <name> <github url> <ref>
   local name="$1" url="$2" ref="$3" bare="$S/$1.git"
   if [ -d "$bare" ]; then uat_say "$name: stub exists, left as it is"; return; fi
   uat_say "$name: seeding a bare stub from $url at $ref"
-  sudo -u meepo git init -q --bare "$bare"
-  sudo -u meepo git -C "$bare" fetch -q --tags "$url" "+refs/heads/*:refs/heads/*"
-  sudo -u meepo git -C "$bare" rev-parse -q --verify "$ref^{commit}" >/dev/null || uat_die "$name: $ref is not in $url"
+  sudo -u uat git init -q --bare "$bare"
+  sudo -u uat git -C "$bare" fetch -q --tags "$url" "+refs/heads/*:refs/heads/*"
+  sudo -u uat git -C "$bare" rev-parse -q --verify "$ref^{commit}" >/dev/null || uat_die "$name: $ref is not in $url"
   # the stub's default branch stays main; the ref is what the clone below checks out
 }
 
 seed postmark https://github.com/postmark-town/postmark.git "$TOWN_REF"
 seed postmark-world https://github.com/postmark-town/postmark-world.git "$WORLD_REF"
-[ -d "$S/postmark-world2-notary.git" ] || { uat_say "postmark-world2-notary: an empty stub (UAT's notary starts its own record)"; sudo -u meepo git init -q --bare "$S/postmark-world2-notary.git"; }
+[ -d "$S/postmark-world2-notary.git" ] || { uat_say "postmark-world2-notary: an empty stub (UAT's notary starts its own record)"; sudo -u uat git init -q --bare "$S/postmark-world2-notary.git"; }
 
 # The clones prod's units read (TOWN_CLONE and WORLD_CLONE in /etc/postmark-office.env; the env template
 # names these same paths). Cloned from the stubs, so `origin` IS the stub and a push lands there.
@@ -50,8 +50,8 @@ clone() { # <stub> <path> <ref>
     [ "$o" = "$stub" ] || uat_die "$path exists with origin $o, not the stub $stub. Never point a UAT clone at GitHub."
     uat_say "$path: already cloned from its stub"; return
   fi
-  sudo -u meepo git clone -q "$stub" "$path"
-  sudo -u meepo git -C "$path" checkout -q "$ref"
+  sudo -u uat git clone -q "$stub" "$path"
+  sudo -u uat git -C "$path" checkout -q "$ref"
   uat_say "$path: cloned from $stub at $ref"
 }
 clone postmark /srv/postmark-office/town-clone "$TOWN_REF"

@@ -1,60 +1,63 @@
-# UAT: the machine a frozen release is tested on (CORE-160)
+# UAT: the frozen release's week of testing, on the Beelink (CORE-160, CORE-165)
 
-**Why it exists.** Darko, 2026-11-22, at the weekly review:
+**Why it exists.** Darko, 2026-11-22:
 - 21:59 EST: "maybe we just need a separate UAT environment. because I do think if dev is frozen, then we can't actually test things out flexibly on dev."
 - 22:05 EST: "Yeah, I think a separate UAT makes a lot of sense, and ideally, I think we would try to leverage the UAT box as much as possible to keep the prod box under as little load possible from non-resident operations."
 
-From w50, the frozen release runs here for its week of testing, and dev goes back to following the open train (postmark-telemetry SHIPPING, draft § 2.6). w49 is tested on dev.
-
-**Status: every script here is UNRUN.** They were written on 2026-11-23 so that the machine can be built in an afternoon once Darko's steps below are done. Each one refuses to run on prod's box (`lib.sh`).
+**Where it runs.** Darko, 2026-11-23 08:50 EST: "yeah beelink becomes UAT and heavy work runs, perfect. we paid a lot for the beelink; might as well make use of it". That's town-rig (Ubuntu 24.04.5, 16 cores, 27 GB), which also runs the town's meeps (Letta, as `meepo`). Prod stays on EC2. From w49's freeze (Friday 2026-11-27), the frozen release is tested here, and dev stays flexible (SHIPPING § 2.6).
 
 ## What UAT is
 
-UAT is **prod-shaped on purpose**. It runs the repo's own unit files, paths, ports and schedule, and the frozen release's code. What makes it UAT, not prod:
+UAT is **prod-shaped on purpose**: the repo's own unit files, paths, ports and schedule, and the frozen release's code. What makes it UAT, and keeps it apart from the meeps it shares the box with:
 
-| | prod | UAT |
+| | prod (EC2) | UAT (town-rig) |
 |---|---|---|
-| the store | `world2_dev` (the live record) | `world2_uat`: last night's prod dump, restored and scrubbed (`store-restore-scrub.sh`, `scrub.sql`) |
-| what it pushes to | GitHub's town, world and notary repos | local bare stubs in `/srv/uat-stubs` (`stubs.sh`); no GitHub token on the box |
-| sign-in | the GitHub OAuth app for postmark.town | its own OAuth app for uat.postmark.town; no prod token survives the scrub |
-| who can reach it | everyone | Cloudflare Access, as dev (`nginx-uat.sh` generates the vhost from prod's, plus dev's gate) |
-| units | all | prod's set minus what reaches real people or money: the payment watches, the earpiece, the media sweep, the backup, the settlement shadow (`units.sh`) |
+| who runs it | `meepo` | **`uat`**, its own system user: not in meepo's group, no right to meepo's home. On town-rig, `meepo` is the meeps' Letta user. |
+| size | t3.xlarge, 4 vCPU, 16 GB | **`uat.slice`**: cores 12–15 only (`AllowedCPUs`), 16 GB (`MemoryMax`), no swap. A load run's numbers mean something for prod, and the other twelve cores stay the meeps'. |
+| Node | v22 | Node 22 at `/usr/bin/node`; each unit's PATH puts it first. The meeps' `/usr/local/bin/node` (v25) isn't touched. |
+| the store | `world2_dev` (the live record) | `world2_uat`: last night's prod dump, restored and scrubbed (`store-restore-scrub.sh`, `scrub.sql`), read with UAT's own read-only AWS key |
+| what it pushes to | GitHub's town, world and notary | local bare stubs in `/srv/uat-stubs` (`stubs.sh`); no GitHub token on it |
+| how it's reached | its public address | **a Cloudflare tunnel** (`tunnel.sh`): uat.postmark.town to nginx on 127.0.0.1:8480, behind Access. No public port, DNS record or certificate on the box. |
+| units | all | prod's set minus what reaches real people, money or the meeps: the payment watches, the earpiece, the media sweep, the backup, the shadow, the tmp janitor (it deletes *meepo's* `/tmp` files) |
 | clock | crossings at 00:00 and 12:00 UTC | the same: the crossing is town law, and its clock is part of what's tested |
 
-It is also a place to run heavy work that should not run on prod's box. A full-against-incremental site build compare (POS-1191) needs about 4.4 GB and a whole build's CPU, which prod's disk alarm and Darko's 22:05 ruling both say should not happen there.
+It's also where heavy work that shouldn't run on prod's box goes. The POS-1191 build compares ran on the seat house for that reason.
 
-## Darko's steps (credentials and money: none of these are the kit's to take)
+## Darko's steps (credentials and accounts: none of these are the kit's to take)
 
-1. **AWS.**
-   - Launch a **t3.large with 60 GB gp3** from a **fresh Ubuntu 24.04 image**: never prod's AMI or a snapshot of prod's disk. `provision.sh` refuses a clone, because a clone boots with prod's units and credentials.
-   - Attach an instance role that may **list and get** the backup bucket (`DEPLOY.md` § The S3 route), and nothing else.
-   - Rough cost (CORE-160): about $66 a month.
-2. **Cloudflare.** A `uat.postmark.town` DNS record (proxied), an **origin certificate** at `/etc/ssl/uat.postmark.town-origin.pem` and `/etc/ssl/private/uat.postmark.town-origin.key`, and an **Access application** saying who may sign in, like dev's.
-3. **GitHub.** A GitHub **OAuth app** for `https://uat.postmark.town` (its client id and secret go in `office.env`), and a way for the frozen release to reach the box. Until `release-train.yml` learns a `uat` target, that's a hand-carry (below).
-4. **Keys of UAT's own**, never copies of prod's: a witness key, the creature seed key, store role passwords, and optionally an R2 bucket for uploads. No Bluesky, PayPal, Stripe or USDC credential, ever.
-5. **The scrub review.** `scrub.sql` is a draft. `store-restore-scrub.sh` refuses to run until its `REVIEWED:` line names his ruling. Two questions are still open in its header: are there private parts beyond the listed ones, and what about `arrival_source_pending`?
+1. ~~**AWS:** an IAM user that may only list and read the backup bucket.~~ **Done 2026-11-23 09:27 EST** (the key in Darko's vault file; it goes to `/etc/postmark-uat-aws.env`).
+2. **Cloudflare:** ~~install `cloudflared` on town-rig~~ (**done 09:30 EST**). Then make the tunnel, with public hostname `uat.postmark.town` → `http://127.0.0.1:8480`, and its **Access application** (who may sign in, like dev's). The tunnel's token goes to Jetto as a file, never pasted.
+3. **GitHub:** an OAuth app for `https://uat.postmark.town` (its client id and secret go in `office.env`).
+4. **UAT's own keys,** never copies of prod's: a witness key, the creature seed key, the store role passwords. No Bluesky, PayPal, Stripe or USDC credential, ever.
+5. **The scrub review.** `scrub.sql` is a draft. `store-restore-scrub.sh` refuses until its `REVIEWED:` line names his ruling. The open questions are in its header.
 
-## The order (after Darko's steps)
+## The order (on town-rig, as root)
 
 ```
-sudo bash deploy/uat/provision.sh                      # packages, node 22, Postgres 16, the user, the marker
+sudo bash deploy/uat/provision.sh                      # the slice, Node 22, Postgres 16, nginx, the uat user, the marker
 sudo bash deploy/uat/stubs.sh main settlement/S<N>     # bare stubs for town, world, notary; the clones point at them
-#   the env files, from env/*.template (root:root 0600)
-#   the frozen release into /srv/postmark-office. The FIRST time, as meepo (the carry's preflight refuses an
-#   empty root): curl -sL https://github.com/postmark-town/postmark-office/archive/<sha>.tar.gz |
-#   tar -xz --strip-components=1 -C /srv/postmark-office && (cd /srv/postmark-office && npm ci)
-#   Every time after: deploy/dev-office-carry.sh with
-#   BOX=<uat host> DEV_ROOT=/srv/postmark-office DEV_SERVICE=postmark-office DEV_PORT=4380
+#   the env files from env/*.template (root:root 0600), and /etc/postmark-uat-aws.env from Darko's key
+#   the frozen release into /srv/postmark-office, as uat. The FIRST time:
+#     sudo -u uat sh -c 'curl -sL https://github.com/postmark-town/postmark-office/archive/<sha>.tar.gz | tar -xz --strip-components=1 -C /srv/postmark-office && cd /srv/postmark-office && PATH=/usr/bin:/bin npm ci'
+#   after that: deploy/dev-office-carry.sh with BOX=town-rig DEV_ROOT=/srv/postmark-office DEV_SERVICE=postmark-office DEV_PORT=4380
 sudo bash deploy/uat/store-restore-scrub.sh            # last night's dump -> world2_uat, scrubbed (needs REVIEWED)
-sudo bash deploy/uat/units.sh --start                  # prod's units, minus the masked set
-sudo bash deploy/uat/nginx-uat.sh                      # the vhost, generated from prod's, behind the gate
+sudo bash deploy/uat/units.sh --start                  # prod's units as uat in uat.slice, minus the masked set
+sudo bash deploy/uat/nginx-uat.sh                      # the vhost, generated from prod's, on 127.0.0.1:8480 behind the gate
+sudo bash deploy/uat/tunnel.sh <the tunnel-token file> # the connector; the token never reaches a command line
 ```
 
 At each freeze: carry the frozen release, run `store-restore-scrub.sh` (a fresh scrubbed copy), and rerun `units.sh` (the unit files ride the release).
 
+## Checked before UAT is trusted
+
+- **The cap holds, and the meeps aren't slowed:** a load inside `uat.slice` stays on cores 12–15 and under 16 GB, while the meeps' rounds keep their timings. The receipt goes on CORE-160 before UAT's first load run.
+- `systemctl show -p User` on every UAT unit reads `uat`, never `meepo` (`units.sh` refuses otherwise).
+
 ## Open (a person decides; the kit doesn't guess)
 
 - **The sentinel.** It posts to a Discord webhook. Give UAT its own channel, or leave it off (`units.sh` leaves it off).
-- **`TOWN_PUSH`, `POSTMARK_TOWN_REPO` and the human tokens** are marked CHECK in `env/office.env.template`. Confirm what the office does with each before the first boot.
-- **The UAT box's own roll-call row and sentinel probe**, so it can't drift unseen the way dev's store did (a 09-25 copy).
-- **`release-train.yml` with a `uat` target**, so a frozen release reaches UAT the way a tag reaches prod, with rollback as dispatching the previous tag.
+- **`TOWN_PUSH`, `POSTMARK_TOWN_REPO` and the human tokens** are marked CHECK in `env/office.env.template`.
+- **The site refresh's `POSTMARK_API`** (prod's unit points at a read pool on :4390). Point it at UAT's office, or bring the read pool too.
+- **UAT's own roll-call row and sentinel probe,** so it can't drift unseen.
+- **`release-train.yml` with a `uat` target,** so a frozen release reaches UAT the way a tag reaches prod.
+- **After UAT is up (Darko's 22:05 EST idea, scoping first):** run the settlement, its shadow and the site builds here, with prod receiving only results.
