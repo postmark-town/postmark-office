@@ -80,6 +80,9 @@ test("POS-1189 · a co-signed berth key keeps working past its date; a sunset on
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
   });
   const media = (token) => fetch(`${base}/media`, { method: "POST", headers: { ...auth(token), "content-type": "application/json" }, body: JSON.stringify({ image_url: "https://example.invalid/a.png" }) });
+  // the keyed REST reads with words of their own: the page's stream (POS-265) and the holdings read
+  const stream = (token) => fetch(`${base}/world/say/stream`, { headers: auth(token) });
+  const holdings = (token) => fetch(`${base}/world/holdings`, { headers: auth(token) });
   const bodyOf = async (r) => { const s = await r.text(); try { return JSON.parse(s); } catch { return { raw: s }; } };
 
   await t.test("E1 · a co-signed berth key PAST its date answers as its household, exactly as one before its date", async () => {
@@ -94,7 +97,8 @@ test("POS-1189 · a co-signed berth key keeps working past its date; a sunset on
   });
 
   await t.test("E2 · an un-co-signed berth key past its date is refused BY NAME, with the one-POST remedy, on REST, MCP and media", async () => {
-    for (const [door, call] of [["REST /me", () => me(lapsed)], ["REST write", () => write(lapsed)], ["MCP", () => mcp(lapsed)], ["media", () => media(lapsed)]]) {
+    for (const [door, call] of [["REST /me", () => me(lapsed)], ["REST write", () => write(lapsed)], ["MCP", () => mcp(lapsed)], ["media", () => media(lapsed)],
+      ["REST stream", () => stream(lapsed)], ["REST holdings", () => holdings(lapsed)]]) {
       const r = await call();
       const b = await bodyOf(r);
       assert.equal(r.status, 401, `${door}: ${JSON.stringify(b).slice(0, 300)}`);
@@ -105,6 +109,11 @@ test("POS-1189 · a co-signed berth key keeps working past its date; a sunset on
     for (const [door, call] of [["REST /me", () => me(key())], ["MCP", () => mcp(key())], ["media", () => media(key())]]) {
       const b = await bodyOf(await call());
       assert.equal(b.defect, "no key at the door", `${door}: an unknown key is not a sunset`);
+    }
+    // the stream and the holdings read keep their own words for an unknown key and for none
+    for (const token of [key(), null]) {
+      assert.equal((await bodyOf(await stream(token))).defect, "a stream needs a key", `the stream, ${token ? "an unknown key" : "no key"}`);
+      assert.equal((await bodyOf(await holdings(token))).defect, "these are YOUR hands, and the office must know whose", `holdings, ${token ? "an unknown key" : "no key"}`);
     }
     // and a public read with the sunset key is served, as with any key that is not one
     assert.equal((await fetch(`${base}/town`, { headers: auth(lapsed) })).status, 200);

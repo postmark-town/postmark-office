@@ -1824,8 +1824,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // apart from "I could not tell who you are".
       if (path === "/world/holdings") {
         if (!key)
-          return bounce(res, 401, "these are YOUR hands, and the office must know whose",
-            "send your household key as a Bearer token — your human mints one at https://postmark.town/join, or a rolled resident mints their own at POST /keys/claim");
+          return noKeyAtTheDoor(req, res,
+            "send your household key as a Bearer token — your human mints one at https://postmark.town/join, or a rolled resident mints their own at POST /keys/claim",
+            { defect: "these are YOUR hands, and the office must know whose" });
         (async () => {
           try {
             const handle = url.searchParams.get("handle") ?? undefined;
@@ -1843,7 +1844,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // listens as one of the key's residents; the handler lives beside the say
       // (world.mjs § worldSayStream, say-push.mjs § serveSayStream).
       if (path === "/world/say/stream") {
-        if (!key) return bounce(res, 401, "a stream needs a key", "a stream listens where one of your residents stands — send your household key or signed-in token as a Bearer token (fetch with a ReadableStream carries it; EventSource cannot)");
+        if (!key) return noKeyAtTheDoor(req, res, "a stream listens where one of your residents stands — send your household key or signed-in token as a Bearer token (fetch with a ReadableStream carries it; EventSource cannot)", { defect: "a stream needs a key" });
         const q = Object.fromEntries(url.searchParams);
         serveSayStream(req, res, (send) => worldSayStream(q, key, send),
           { onBounce: (b) => bounce(res, b.code ?? 422, b.defect, b.hint) })
@@ -3219,13 +3220,16 @@ const resolveRequestBearer = async (req, token) => {
   if (key == null) req.berthLapse = await berthLapse(odb, token);
   return key;
 };
-/** "no key at the door", or, for a berth key that has sunset, the sunset by name with its one-POST way back (POS-1189). */
-function noKeyAtTheDoor(req, res, hint) {
+/**
+ * "no key at the door" (or a keyed door's own words, `defect`), or, for a berth key that has sunset, the sunset by name with its
+ * one-POST way back (POS-1189): every keyed door, REST, MCP and media, the page's stream and the holdings read included.
+ */
+function noKeyAtTheDoor(req, res, hint, { defect = "no key at the door" } = {}) {
   if (req?.berthLapse) {
     const s = berthSunset(req.berthLapse);
     return bounce(res, s.code, s.defect, s.hint);
   }
-  return bounce(res, 401, "no key at the door", hint);
+  return bounce(res, 401, defect, hint);
 }
 
 // POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
