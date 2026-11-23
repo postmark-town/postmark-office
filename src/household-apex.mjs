@@ -988,7 +988,8 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       tier,
       berth: key.slug,
       speaker: `berth-${key.slug}`,
-      ...(row?.expires ? { sunset_at: new Date(row.expires * 1000).toISOString() } : {}),
+      // a co-signed berth does not sunset (POS-1189, "keep working"): only a berth nobody co-signed names its sunset
+      ...(row?.expires && !cosigned ? { sunset_at: new Date(row.expires * 1000).toISOString() } : {}),
       ...(decl ? { declaration: { household: decl.household, handle: key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
       next:
         tier === "berth" ? [
