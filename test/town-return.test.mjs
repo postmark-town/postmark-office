@@ -100,15 +100,20 @@ test("THE BOX'S CALLERS: settlement-auto.sh passes the flag only with SETTLEMENT
   const auto = readFileSync(join(ROOT, "deploy", "settlement-auto.sh"), "utf8");
   const guard = auto.split("\n").find((l) => l.includes('TOWN_RETURNS="--town-returns"'));
   assert.equal(guard?.trim(), 'if [ -z "${SETTLEMENT_DRY+set}" ]; then TOWN_RETURNS="--town-returns"; fi');
-  assert.match(auto, /fold-input-cli\.mjs" \\\n[^\n]*\n[^\n]*--world-repo "\$SWEEP" \$TOWN_RETURNS\)/, "the real call carries it");
+  // POS-1025/d: the writer's call is the seal step's, which pays each saved decision's returns before it seals it
+  assert.match(auto, /settlement-seal\.mjs" \\\n[^\n]*--town-clone "\$TOWN" \$SEAL_DRY_FLAG \$TOWN_RETURNS\)/, "the real call carries it");
+  assert.ok(auto.indexOf("settlement-seal.mjs") < auto.indexOf("settlement-printout.mjs\" print"), "paid and sealed before anything prints");
+  const seal = readFileSync(join(ROOT, "world2", "tools", "settlement-seal.mjs"), "utf8");
+  assert.match(seal, /townReturnWrite\(\{ flag: process\.argv\.includes\("--town-returns"\), env: process\.env \}\)/, "and the tool asks the flag and the environment again");
   // the guard as the script runs it, under each environment
   const said = (env) => execFileSync("/bin/sh", ["-c", `set -eu\nTOWN_RETURNS=""\n${guard.trim()}\nprintf %s "$TOWN_RETURNS"`], { encoding: "utf8", env });
   const base = { PATH: process.env.PATH };
   assert.equal(said(base), "--town-returns");
   for (const v of ["1", "0", ""]) assert.equal(said({ ...base, SETTLEMENT_DRY: v }), "", `SETTLEMENT_DRY=${JSON.stringify(v)}`);
+  // the shadow rehearses the printout (a dry print of the saved header when the decision is not sealed yet), and never pays or seals
   const shadow = readFileSync(join(ROOT, "deploy", "settlement-shadow.sh"), "utf8");
-  assert.match(shadow, /fold-input-cli\.mjs/);
-  assert.doesNotMatch(shadow, /--town-returns|TOWN_RETURNS/, "a rehearsal never pays");
+  assert.match(shadow, /settlement-printout\.mjs" print/);
+  assert.doesNotMatch(shadow, /--town-returns|TOWN_RETURNS|settlement-seal\.mjs/, "a rehearsal never pays, and never seals");
 });
 
 test("settleTownReturns: written first, then read; a failed write leaves the return waiting; no writer writes nothing", async () => {
@@ -261,7 +266,9 @@ test("NO FLAG, OR ANY SETTLEMENT_DRY: nothing is paid, and the town-opposed shed
     assert.ok(written(r).includes(SHED) && written(r).includes(NAME), "neither leaves this crossing");
     assert.equal(t.receipt, undefined, "no write was made");
     assert.match(t.not_written, /no --town-returns|SETTLEMENT_DRY is set/);
-    assert.deepEqual(t.held, [{ mark: SHED, leaving: [SHED, NAME], open: { [SHED]: 12, [NAME]: 2 } }]);
+    assert.deepEqual(t.held, [{ mark: SHED, leaving: [SHED, NAME], open: { [SHED]: 12, [NAME]: 2 },
+      // who holds them, from the same live read (POS-1025: a blocked return's receipt names its stakers)
+      stakers: { [SHED]: [{ handle: "ann", n: 3 }, { handle: "bo", n: 4 }, { handle: "cy", n: 5 }], [NAME]: [{ handle: "cy", n: 2 }] } }]);
     assert.equal(ledger(), before, "the ledger is untouched");
   }
 });
@@ -295,14 +302,22 @@ test("THE FALSIFIER: the real crossing returns the owner and every other staker 
   assert.equal(v.ok, true, (v.problems ?? []).join("; "));
 });
 
-test("REPLAY: the crossing run again finds every position closed, writes nothing, and the marks still leave", { skip }, async () => {
+test("REPLAY: the crossing run again is the same removal: the town writes nothing and names the FIRST return (POS-1175's once-only id), and the marks still leave", { skip }, async () => {
   await seedWord();
   const before = ledger();
   const r = await cross();
   const t = r.selection.settlement.town_returns;
   assert.equal(t.receipt.appended, false);
+  assert.equal(t.receipt.already_returned, true);
+  assert.equal(t.receipt.id, "town-return:S11", "the town's once-only id for the removal");
   assert.deepEqual(t.receipt.returned, []);
-  assert.deepEqual(t.receipt.nothing_open, [SHED, NAME]);
+  assert.equal(t.receipt.first.id, "town-return:S11");
+  assert.equal(t.receipt.first.date, "2026-10-02");
+  assert.deepEqual(t.receipt.first.returned, [
+    { mark: SHED, handle: "ann", n: 3 }, { mark: SHED, handle: "bo", n: 4 }, { mark: SHED, handle: "cy", n: 5 }, { mark: NAME, handle: "cy", n: 2 },
+  ], "the repeat names the first return, stake by stake");
+  assert.equal(t.receipt.proof, undefined, "a repeat carries no proof of its own");
+  assert.deepEqual(t.receipt.open_after, { [SHED]: 0, [NAME]: 0 }, "the gate's evidence is the ledger, read under the same locks, never the flag");
   assert.equal(ledger(), before, "byte for byte");
   assert.ok(!written(r).includes(SHED) && !written(r).includes(NAME));
 });
