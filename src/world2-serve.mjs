@@ -710,35 +710,6 @@ export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_
                 WHERE crossing >= $2 AND action = ANY($1) AND at >= $3::timestamptz ${talk.VOICE_ORDER_SQL}`;
 
 /**
- * THE UNBOUNDED VOICE SCAN RUNS ONE AT A TIME (POS-1184). `conversationsFromRecord` reads every voice act the store holds, with the same SQL
- * and the same parameters for a bare read, `?before=`, `?room=` and `?circle=`. Three of them at once held all three `serve` connections for
- * 1.2 to 2.1 s each (once 10.4 s), and every other world-door read queued behind them and timed out. So at most one scan runs per pool.
- * A caller that arrives while none runs starts one. A caller that arrives while one runs waits for the NEXT scan, which starts when the
- * running one ends and is shared by every caller that arrived meanwhile. So every caller's rows come from a scan that began after it asked:
- * a resident who has just spoken and opens their say never reads a scan that began before it. A burst costs at most two scans, one
- * connection at a time. Nothing is kept after a scan ends (no TTL, no cache). A scan that rejects rejects only the callers that were
- * waiting on it; the one behind it starts clean. The flight is per pool object, so two pools never share one. The rows are shared by the
- * callers of one scan, and read, never changed, by each of them (the test freezes them).
- */
-export const ALL_VOICES_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`;
-const voiceScans = new WeakMap(); // pool -> { running: a scan is open, next: the flight every later arrival waits on, or null }
-const flightOf = () => { const f = {}; f.promise = new Promise((ok, no) => { f.ok = ok; f.no = no; }); return f; };
-function allVoicesOnce(p) {
-  let s = voiceScans.get(p);
-  if (!s) voiceScans.set(p, s = { running: false, next: null });
-  const launch = (flight) => {
-    s.running = true;
-    Promise.resolve().then(() => p.query(ALL_VOICES_SQL, [talk.VOICE_ACTIONS]))
-      .then(flight.ok, flight.no)
-      .then(() => { s.running = false; const behind = s.next; s.next = null; if (behind) launch(behind); });
-  };
-  if (!s.running) { const flight = flightOf(); launch(flight); return flight.promise; }
-  s.next ??= flightOf();
-  return s.next.promise;
-}
-
-/**
  * Route a GET under /world2/*. Returns null when the path is not ours
  * (server.mjs falls through), else { code, body }.
  *
@@ -840,7 +811,8 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
   const voicesBeforeAt = rawVoicesBefore ? (/^\d+$/.test(rawVoicesBefore) ? Number(rawVoicesBefore) : Date.parse(rawVoicesBefore)) : null;
   const voicesBefore = Number.isFinite(voicesBeforeAt) ? voicesBeforeAt : null;
   const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
-    allVoicesOnce(p), // POS-1184: one scan at a time per pool, shared by every caller that arrives while it runs
+    p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+              WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
     p.query(talk.ANCHOR_MARKS_SQL),
   ]);
   const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
