@@ -1,0 +1,22 @@
+# /etc/systemd/system/uat.slice: every UAT unit runs inside this slice (CORE-165).
+#
+# Darko, 2026-11-23 08:50 EST (CORE-160 Rulings): UAT runs on the Beelink (town-rig: 16 cores, 27 GB), capped to
+# prod's size, so a load run's numbers mean something for prod. Prod is a t3.xlarge: 4 vCPU, 16 GB.
+#
+# AllowedCPUs, not CPUQuota: four whole cores, the last four. Inside the slice, nproc and Node's availableParallelism
+# answer 4, as on prod, so worker pools size as they do there, rather than seeing 16 cores and being throttled to 4.
+# The other twelve cores are left to everything else on the box, the town's meeps and Letta among them. So the cap is
+# also their protection, by construction rather than by weight. MemoryMax is prod's RAM. MemoryHigh starts reclaim
+# just under it, as a 16 GB box would. Swap is off, as on prod (no swap there).
+[Unit]
+Description=UAT: Postmark's frozen release, capped to prod's size (4 cores, 16 GB; CORE-165)
+Before=slices.target
+
+[Slice]
+AllowedCPUs=12-15
+MemoryAccounting=yes
+MemoryHigh=15G
+MemoryMax=16G
+MemorySwapMax=0
+IOAccounting=yes
+IOWeight=50

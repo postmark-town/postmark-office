@@ -5,8 +5,10 @@
 #
 # Weekly, at the freeze, before the carry (the SHIPPING draft § 2.6: the seed advances once, at the freeze, and
 # never while people are testing). It never touches prod: it reads the NIGHTLY DUMP the backup lane already ships
-# to S3 (DEPLOY.md § The S3 route), through UAT's own instance role, which may only list and get (Darko's AWS act;
-# never the prod box's postmark-box-backup role, which can also put). Then:
+# to S3 (DEPLOY.md § The S3 route), with UAT's own AWS key, which may only list and read that bucket (Darko's step,
+# 2026-11-23 09:27 EST; never the prod box's postmark-box-backup role, which can also put). The key lives in
+# /etc/postmark-uat-aws.env (root:root 0600: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION), is sourced
+# into one subshell's environment and never printed or put on a command line. Then:
 #   1. the store's roles, by prod's names, with UAT's own passwords (from UAT's /etc/postmark-world2-dev.env);
 #   2. the dump into a NEW database, owners and grants kept (the roles exist, so prod's grants restore exactly);
 #   3. scrub.sql inside it, refused until Darko has reviewed it (its REVIEWED line), with a readback of zeros;
@@ -32,16 +34,21 @@ grep -qE '^-- REVIEWED: (no|)$' "$HERE/scrub.sql" && uat_die "scrub.sql is not r
 grep -qE '^-- REVIEWED: .+' "$HERE/scrub.sql" || uat_die "scrub.sql has no REVIEWED line."
 
 AWS="$(command -v aws || echo /snap/bin/aws)"
-sudo -u meepo "$AWS" sts get-caller-identity >/dev/null || uat_die "no AWS identity for meepo: UAT's read-only instance role is Darko's step."
+AWSENV=/etc/postmark-uat-aws.env
+[ -r "$AWSENV" ] && [ "$(stat -c '%U:%a' "$AWSENV")" = "root:600" ] || uat_die "$AWSENV must exist, root:root 0600 (UAT's read-only key: Darko's step)."
+# every aws call goes through this: the key enters one subshell's environment, nowhere else
+uaws() ( set -a; . "$AWSENV"; set +a; "$AWS" "$@" )
+uaws sts get-caller-identity --query Arn --output text >/dev/null || uat_die "UAT's AWS key does not authenticate."
 
 WORK="$(mktemp -d /var/tmp/uat-restore.XXXXXX)"; trap 'rm -rf "$WORK"' EXIT
-chown meepo:meepo "$WORK"; chmod 0755 "$WORK"   # meepo fetches (its AWS role); postgres restores (it reads the dump)
+chmod 0755 "$WORK"   # root fetches (the key is root's); postgres restores (it reads the dump)
 if [ -z "$NIGHT" ]; then
-  NIGHT="$(sudo -u meepo "$AWS" s3 ls "s3://$BUCKET/world2/" | awk '$1 == "PRE" { sub("/$", "", $2); print $2 }' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tail -n1)"
+  NIGHT="$(uaws s3 ls "s3://$BUCKET/world2/" | awk '$1 == "PRE" { sub("/$", "", $2); print $2 }' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tail -n1)"
 fi
 [ -n "$NIGHT" ] || uat_die "no night found under s3://$BUCKET/world2/"
 uat_say "night $NIGHT: fetching the dump and its sum"
-sudo -u meepo "$AWS" s3 cp --recursive --only-show-errors --no-progress --exclude '*' --include 'world2-*.dump' --include 'world2-*.dump.sha256' "s3://$BUCKET/world2/$NIGHT/" "$WORK/"
+uaws s3 cp --recursive --only-show-errors --no-progress --exclude '*' --include 'world2-*.dump' --include 'world2-*.dump.sha256' "s3://$BUCKET/world2/$NIGHT/" "$WORK/"
+chmod 0644 "$WORK"/*
 DUMP="$(ls -1 "$WORK"/world2-*.dump | head -n1)"; [ -f "$DUMP" ] || uat_die "the night has no world2-*.dump"
 ( cd "$WORK" && sha256sum -c "$(basename "$DUMP").sha256" ) || uat_die "the dump does not match its sum"
 
@@ -85,5 +92,5 @@ SQL
 [ -n "$UNITS" ] && systemctl start $UNITS
 [ -n "$TIMERS" ] && systemctl start $TIMERS
 echo "{\"night\":\"$NIGHT\",\"restored_at\":\"$(date -u +%FT%TZ)\",\"scrub\":\"$(sed -n 's/^-- REVIEWED: //p' "$HERE/scrub.sql")\"}" > /srv/postmark-office/uat-store.json
-chown meepo:meepo /srv/postmark-office/uat-store.json
+chown uat:uat /srv/postmark-office/uat-store.json
 uat_say "UAT's store is prod's night $NIGHT, scrubbed. The previous copy is ${UAT_DB}_prev until the next run."
