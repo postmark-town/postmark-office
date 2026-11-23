@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 
+import { printoutMessage } from "../world2/tools/settlement-printout.mjs"; // POS-1025: the printout commit says its window itself
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const store = await startStore({ db: "settlement_late_clear_test" });
 after(async () => { await store.stop(); });
@@ -59,15 +60,11 @@ async function seed() {
 }
 const rows = () => owner(async (c) => (await c.query("SELECT number, window_id, snapshot_id FROM settlements ORDER BY number")).rows);
 
-/** settlement-auto.sh's own `name_window`, read out of the script — never a copy of it. */
-function nameWindowFn() {
-  const src = readFileSync(join(ROOT, "deploy", "settlement-auto.sh"), "utf8");
-  const m = /^name_window\(\) \{\n[\s\S]*?\n\}\n/m.exec(src);
-  assert.ok(m, "deploy/settlement-auto.sh defines name_window");
-  return m[0];
-}
-
-/** A world whose crossing folded window 211 and published at 06:52Z, tagged settlement/S90; `trailer` runs name_window first. */
+/**
+ * A world whose crossing folded window 211 and published its PRINTOUT at 06:52Z, tagged settlement/S90. With `trailer` the commit's message is
+ * the printout's own (settlement-printout.mjs § printoutMessage, which ends in `Window: 211`); without it, the same message less its trailer
+ * (a commit that names no window: what the retired sweep's commit was before name_window, and what a backfill must still hold rather than guess).
+ */
 function worldRepo({ trailer }) {
   const repo = tempDir("pos940-world-");
   const git = (args, env = {}) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
@@ -78,15 +75,10 @@ function worldRepo({ trailer }) {
   const from = git(["rev-parse", "main"]).trim();
   writeFileSync(join(repo, "swept"), "211\n");
   git(["add", "-A"]);
-  git(["-c", "user.name=Postmark Pen", "-c", "user.email=pen@test.invalid", "commit", "-q", "-m", "settlement: sweep 1 published, 0 unpublished, 0 left drafted"],
+  const full = printoutMessage({ settlement: 90, window: 211, snapshotId: 1, digest: DIGEST, townSha: null, written: 1, removed: 0, reframed: 0, from: { sealed_settlement: 89, window_id: 210 }, quiet: false });
+  const message = trailer ? full : full.replace(/\n\nWindow: 211$/, "");
+  git(["-c", "user.name=Postmark Pen", "-c", "user.email=pen@test.invalid", "commit", "-q", "-m", message],
     { GIT_COMMITTER_DATE: "2026-10-10T06:52:00Z", GIT_AUTHOR_DATE: "2026-10-10T06:52:00Z" });
-  if (trailer) {
-    const work = tempDir("pos940-work-");
-    execFileSync("bash", ["-c", `set -eu\n${nameWindowFn()}\nname_window`], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, HOME: work, SWEEP: repo, WORK: work, WORLD_FROM: from, DOCKET_WINDOW: "211" },
-    });
-  }
   git(["-c", "user.name=keeper", "-c", "user.email=keeper@test.invalid", "tag", "-a", "settlement/S90", "-m", "S90"], { GIT_COMMITTER_DATE: "2026-10-10T07:10:00Z" });
   return { repo, message: git(["log", "-1", "--format=%B", "main"]), committed: git(["log", "-1", "--format=%cI", "main"]).trim() };
 }
@@ -99,7 +91,7 @@ const tick = (repo) => {
 test("THE DEFECT, HELD: a crossing that folded 211 thirteen hours late and says no window is NOT written — the time rule names 212, which is open", { skip }, async () => {
   await seed();
   const w = worldRepo({ trailer: false });
-  assert.doesNotMatch(w.message, /^Window:/m, "the script as it was: no trailer");
+  assert.doesNotMatch(w.message, /^Window:/m, "a commit that names no window");
   const r = tick(w.repo);
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /HELD: 1 settlement row\(s\) not written — S90 \(window 212 is open, not closed\)/, r.out);
@@ -107,11 +99,11 @@ test("THE DEFECT, HELD: a crossing that folded 211 thirteen hours late and says 
   assert.deepEqual(await rows(), [], "nothing inserted: no row names the successor with a NULL snapshot");
 });
 
-test("THE TRAILER NAMES IT: name_window writes Window: 211 on the published commit, keeping its date, and the tick writes S90 at 211 with 211's snapshot", { skip }, async () => {
+test("THE TRAILER NAMES IT: the printout's own message ends in Window: 211 on the published commit, keeping its date, and the tick writes S90 at 211 with 211's snapshot", { skip }, async () => {
   const snapshot = await seed();
   const w = worldRepo({ trailer: true });
   assert.match(w.message, /\n\nWindow: 211\s*$/,`the published commit's message ends in the trailer:\n${w.message}`);
-  assert.equal(new Date(w.committed).toISOString(), "2026-10-10T06:52:00.000Z", "the committer date (the row's published_at) is the sweep's own");
+  assert.equal(new Date(w.committed).toISOString(), "2026-10-10T06:52:00.000Z", "the committer date (the row's published_at) is the printout's own");
   const r = tick(w.repo);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /wrote 1 row\(s\) — S90/, r.out);
