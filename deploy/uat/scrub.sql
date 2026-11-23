@@ -1,16 +1,16 @@
--- deploy/uat/scrub.sql — what UAT's copy of the store loses before anyone signs in (CORE-160). A DRAFT.
+-- deploy/uat/scrub.sql — what UAT's copy of the store loses before anyone signs in (CORE-160).
 --
--- REVIEWED: no
+-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (resident_notes, letter_notes)
 --
 -- store-restore-scrub.sh refuses to run until the line above reads `REVIEWED: <Darko's ruling, dated>`.
 -- The list is Jetto's proposal from 2026-11-23 (CORE-160, "the scrub list for Darko"), checked against
 -- prod's columns that night (information_schema, read-only: every column whose name says token, secret,
--- hash, login, payer, address and the like). The questions still his: do PRIVATE parts exist beyond these
--- (drafts, unsent letters, household settings) that must go too? And `arrival_source_pending`, the one
--- other table whose name says pending: keep or empty?
+-- hash, login, payer, address and the like), and for household-private tables (row policies to office_api):
+-- resident_notes and letter_notes are the two, and both go (5). arrival_source_pending held 0 rows.
 --
 -- The rule: keep the public record (handles, households, acts, marks, letters, settlements) so UAT tests
--- what residents see; drop every credential and anything that would let UAT reach a real person or system.
+-- what residents see; drop every credential, every household-private word, and anything that would let UAT
+-- reach a real person or system.
 -- Runs in one transaction against the freshly restored copy, never against a live store.
 
 BEGIN;
@@ -34,6 +34,13 @@ UPDATE household_harnesses SET secret = NULL, address = 'https://harness.invalid
 -- 4. Who paid a pot (town_pot_receipts.payer: a payment identity). The receipt and its amount stay.
 UPDATE town_pot_receipts SET payer = 'uat-scrubbed';
 
+-- 5. Household-private words: a resident's note to its returning self (resident_notes, POS-392) and a
+--    household's marks on its letters (letter_notes). Private from other residents on prod by row policy,
+--    but not from the box; UAT's copy carries none. Testers write their own.
+DELETE FROM resident_notes;
+DELETE FROM letter_notes;
+DELETE FROM arrival_source_pending;
+
 -- Kept on purpose, as the public record: household_pins.login, identities.gh_login, office_roles.login,
 -- office_role_audit.login, office_town_journal.gh_login, town_residents.github_address (GitHub logins
 -- the town already shows), oauth_berths.cosigned_gh_login.
@@ -43,6 +50,8 @@ SELECT 'oauth_tokens' AS t, count(*) FROM oauth_tokens
 UNION ALL SELECT 'oauth_key_claims', count(*) FROM oauth_key_claims
 UNION ALL SELECT 'berths with a real hash', count(*) FROM oauth_berths WHERE token_hash NOT LIKE 'uat-scrubbed:%'
 UNION ALL SELECT 'harness secrets or live addresses', count(*) FROM household_harnesses WHERE secret IS NOT NULL OR address NOT LIKE 'https://harness.invalid/uat-scrubbed/%'
-UNION ALL SELECT 'payers', count(*) FROM town_pot_receipts WHERE payer IS DISTINCT FROM 'uat-scrubbed';
+UNION ALL SELECT 'payers', count(*) FROM town_pot_receipts WHERE payer IS DISTINCT FROM 'uat-scrubbed'
+UNION ALL SELECT 'resident_notes', count(*) FROM resident_notes
+UNION ALL SELECT 'letter_notes', count(*) FROM letter_notes;
 
 COMMIT;
