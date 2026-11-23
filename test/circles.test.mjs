@@ -170,22 +170,21 @@ test("folded counts add up: a fold's `says` is its whole branch, so a folded-cou
   assert.equal(total + v.lines.length, 14, "every say in the room is accounted for");
 });
 
-// POS-1185 (Darko 2026-11-22): until then the refusals said "the room you are speaking into"; rooms no longer fuse, so a reply may answer any open conversation in earshot.
 test("reply_to resolution: by id, by handle plus time, by a name in the words — and refused outside the room", () => {
   const r = room();
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: 50105 }), { id: 50105, how: "id", handle: "claran", at_ms: at(5) });
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: "50105" }).id, 50105, "the digits of an id");
   assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: "2026-11-14T20:03:00Z" } }).id, 50102, "the exact instant");
   assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) } }).id, 50102, "the exact instant as at_ms");
-  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).refused.defect, /said nothing within your hearing at exactly/, "a nearby say is never chosen (CORE-82 read)");
+  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).refused.defect, /said nothing in this room at exactly/, "a nearby say is never chosen (CORE-82 read)");
   assert.equal(C.resolveReplyTo(r.slice(0, 10), { speaker: "vesper", text: "Claran, …the Borrowed-Hand Moth." }).id, 50110, "Vesper's line (call 3): linked by name to Claran's latest");
   assert.equal(C.resolveReplyTo(r, { speaker: "vesper", text: "Claran, …" }).how, "name");
   assert.equal(C.resolveReplyTo(r, { speaker: "claran", text: "claran here, talking about myself" }), null, "your own name links nothing");
   assert.equal(C.resolveReplyTo(r, { speaker: "x", text: "the clarinet is lovely" }), null, "a handle inside another word is not a name");
   assert.equal(C.resolveReplyTo(r, { text: "nobody named" }), null, "no reply_to and no name: a top circle");
-  assert.match(C.resolveReplyTo(r, { replyTo: 99 }).refused.defect, /say 99 is not in a conversation you can hear from where you stand/);
-  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "nobody", at: at(1) } }).refused.defect, /has not spoken in a conversation you can hear from where you stand/);
-  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(30) } }).refused.defect, /said nothing within your hearing at exactly/);
+  assert.match(C.resolveReplyTo(r, { replyTo: 99 }).refused.defect, /say 99 is not in the room you are speaking into/);
+  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "nobody", at: at(1) } }).refused.defect, /has not spoken in the room/);
+  assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(30) } }).refused.defect, /said nothing in this room at exactly/);
   assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth" } }).refused.defect, /needs both/);
   const twice = [...r, { id: 50200, handle: "seth", at: at(3), text: "again", x: 0, y: 0 }];
   assert.match(C.resolveReplyTo(twice, { replyTo: { handle: "seth", at: at(3) } }).refused.defect, /has 2 says at exactly/, "two at one instant is refused, never guessed");
@@ -311,7 +310,7 @@ test("the say door: a reply outside the speaker's room is refused (call 21) and 
   tick();
   const r = await store.say("far", "answering from across town", { replyTo: 70001 });
   assert.equal(r.code, 422);
-  assert.match(r.defect, /say 70001 is not in a conversation you can hear from where you stand/);
+  assert.match(r.defect, /say 70001 is not in the room you are speaking into/);
   assert.equal(written.length, 1, "the pen never saw the refused say");
 });
 
@@ -431,10 +430,7 @@ test("CORE-97: past the hour of grace the room has closed — a reply to it is r
   tick(61 * 60_000);                          // silence through the whole hour after the settlement: the room closed at the hour
   const r = await store.say("seth", "Is the lemon one sour?", { replyTo: 70001 });
   assert.equal(r.code, 422);
-  // POS-1185: a closed conversation has its own words. Until then this was the out-of-reach refusal, whose hint ("walk back within earshot") cannot help once the room has closed.
-  assert.equal(r.defect, "say 70001 is in a conversation that has closed");
-  assert.match(r.hint, /^that conversation has closed, and a reply cannot reopen it\. Say it fresh, with no reply_to, and it starts or joins a conversation where you are\./);
-  assert.doesNotMatch(r.hint, /walk back/);
+  assert.match(r.defect, /say 70001 is not in the room you are speaking into/);
   assert.equal(written.length, 1, "nothing written for the refused say");
 });
 

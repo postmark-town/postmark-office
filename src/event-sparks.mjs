@@ -183,7 +183,7 @@ const near = (p, place, m = EVENT_PLACE_M) => Math.hypot(p.x - place.x, p.y - pl
  * never read as no conversation.
  *
  * THE PAGE'S OWN ROOMS (POS-1035 × CORE-97 parity): the rooms are clustered exactly as the conversations page clusters the record —
- * every voice from the oldest published settlement on, one continuation rule (talk.roomsOf → hearing-window § roomOpen: a room
+ * every voice from the oldest published settlement on, one continuation rule (talk.clusterVoices → hearing-window § roomOpen: a room
  * carries across a settlement while anyone speaks in the hour after it) — and then the event's are picked out. So a room that began
  * before the doors, or that carried across a settlement into the window, is the event's under the SAME id the page, `?room=`, its
  * circles and their sparks' `rooms` name it by — never a second id made from the window's slice of it.
@@ -195,10 +195,7 @@ export function eventRoomFrom(voices, { window, place, edges = [], earshotM = ta
       note: `the event's window opens before the oldest settlement this office has read (${iso(marks[0])}), so the rooms its talk formed cannot be told — this is not evidence that nobody spoke` };
   // the page's grouping: a voice older than the oldest published settlement has no known epoch, and is not grouped (as the page says)
   const grouped = voices.filter((v) => v.at <= window.to && (!marks.length || v.at >= marks[0]));
-  // POS-1185: the page's own rooms are the says that name them (rooms.mjs § roomsOf, through the record's module): a say's room was
-  // decided when it was spoken, so two rooms at an event stay two (each its own spark), and the slice up to the window's end names
-  // every room exactly as the page does.
-  const clusters = talk.roomsOf(grouped, { earshotM, boundaries: marks });
+  const clusters = talk.clusterVoices(grouped, { earshotM, boundaries: marks });
   // PLACE MEMBERSHIP is the office's existing rule for "the conversation at a point" (voices.mjs § openConversationAt): a room
   // with a voice within earshot of the point — here, a voice spoken inside the event's window. EVERY such room is the event's
   // (Darko via Wright 18:46:13Z, "All of them, combined"): none is ranked or chosen, and they are listed in the order they started.
