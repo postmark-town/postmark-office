@@ -62,6 +62,19 @@ test("berth tiers: bare → begin; declared → the one link; the checklist move
   assert.equal((await householdStanding(key, { odb })).tier, "berth-cosigned");
 });
 
+test("POS-1189 · a berth nobody co-signed names its sunset; a co-signed berth names none, past its date or not (it keeps working)", async () => {
+  await mintBerth(odb, "sunset-walker");
+  const key = { berth: true, slug: "sunset-walker", household: null, handles: new Set() };
+  const bare = await householdStanding(key, { odb });
+  assert.match(bare.sunset_at ?? "", /^\d{4}-\d{2}-\d{2}T/, "an un-co-signed berth's standing says when it sunsets");
+  odb.prepare("UPDATE berths SET cosigned_gh_id = 43, cosigned_gh_login = 'sunset-human' WHERE slug = 'sunset-walker'").run();
+  const cos = await householdStanding(key, { odb });
+  assert.equal(cos.tier, "berth-cosigned");
+  assert.equal("sunset_at" in cos, false, "a co-signed berth does not sunset, so its standing names no sunset");
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'sunset-walker'").run();
+  assert.equal("sunset_at" in (await householdStanding(key, { odb })), false, "nor a past one");
+});
+
 test("resident: papers per handle, gaps named with the do: that fixes each", async () => {
   const key = { household: "keemin", handles: new Set(["wright"]) };
   const s = await householdStanding(key, { clone: null });
