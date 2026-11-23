@@ -9,7 +9,7 @@
 # address, DNS record or certificate of its own: cloudflared (tunnel.sh) carries uat.postmark.town from Cloudflare's
 # edge to this nginx on loopback. So the generated vhost:
 #   · keeps only prod's main server block (the port-80 redirect and the www block have no meaning behind a tunnel);
-#   · listens on 127.0.0.1:8080 only, plain HTTP (TLS ends at Cloudflare's edge, and the tunnel is encrypted);
+#   · listens on 127.0.0.1:8480 only, plain HTTP (TLS ends at Cloudflare's edge, and the tunnel is encrypted);
 #   · names uat.postmark.town and carries dev's GATE: only traffic with an Access JWT enters. Tunnel traffic arrives
 #     from 127.0.0.1, which the edge map already counts as edge (cf-edge-map.conf), so the JWT is the check that
 #     matters, and Access (Darko's step) decides who holds one.
@@ -22,7 +22,7 @@ uat_refuse_prod
 uat_require_marker
 
 SRC=/srv/postmark-office/deploy
-PORT="${UAT_NGINX_PORT:-8080}"
+PORT="${UAT_NGINX_PORT:-8480}"
 [ -f "$SRC/nginx-postmark-town.conf" ] || uat_die "$SRC has no nginx copies: carry the frozen release first."
 
 uat_say "http{}-level files (DEPLOY.md § 4, plus the edge map the gate reads)"

@@ -4,7 +4,7 @@
 #   sudo bash deploy/uat/tunnel.sh /path/to/tunnel-token-file
 #
 # Darko made the tunnel and its Access application in Cloudflare (his step). Its public hostname, uat.postmark.town,
-# points at http://localhost:8080 (nginx-uat.sh). This installs the connector without the token ever reaching a
+# points at http://127.0.0.1:8480 (nginx-uat.sh). This installs the connector without the token ever reaching a
 # command line, a process list or a log. `cloudflared service install <token>` would put it on a command line, so:
 # the token file's one line goes, as TUNNEL_TOKEN=..., into /etc/cloudflared/uat.env (root:root 0600). A unit of
 # this kit's own (cloudflared-uat.service, in uat.slice) runs `cloudflared tunnel run`, which reads TUNNEL_TOKEN from
