@@ -4609,7 +4609,7 @@ async function escrowBehindMark(mark) {
  * nothing behind it — the same reason `stamps: 0` is a deliberate putting-
  * forward there and not a no-op.
  */
-export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0 } = {}) {
+export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0, refiling = false } = {}) {
   const min = Number(groundMin);
   const behind = Number(escrowBehind) || 0;
   const byStake = staking === true && Number(stamps) >= min;
@@ -4619,13 +4619,17 @@ export function putForwardVerdict({ staking = false, stamps = 0, amending = fals
   // the mark's own escrow, which it is not: escrow_behind and escrow_after stay the mark's.
   const backing = Number(groundBacking) || 0;
   const byGround = amending === true && typeof backedBy === "string" && backing >= min;
+  // POS-990/a: a claim already put forward, re-filed where its thing was set down, stays put forward whatever the
+  // escrow behind it, because the claim moves with its thing and the settlement judges it there (journalLeaveMark)
+  const byRefiling = amending === true && refiling === true;
   return {
-    put_forward: byStake || byStanding || byGround,
+    put_forward: byStake || byStanding || byGround || byRefiling,
     // WHICH FACT CARRIED IT, for the sentence and for a reader of the log. Not
     // a tiebreak: a staked amendment on a backed mark is both, and the stake is
     // named because it is the thing the author just did.
-    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : null,
+    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : byRefiling ? "set-down" : null,
     ...(byGround && !byStake && !byStanding ? { backed_by: backedBy, ground_backing: backing } : {}),
+    ...(byRefiling ? { refiled: true, ground_min: min } : {}),
     escrow_behind: amending === true ? behind : 0,
     // WHAT THE CALL LEAVES (postmark#3593, kogane; Darko 2026-10-09). `stamps:`
     // ADDS to the stake, so the escrow behind the mark after this act is what
@@ -4648,6 +4652,12 @@ export function amendmentPublishNote(verdict) {
   if (verdict?.put_forward !== true) return null;
   const behind = Number(verdict.escrow_behind) || 0;
   const staked = Number(verdict.staked) || 0;
+  // POS-990/a: a claim re-filed where its thing was set down is judged at the next settlement, which can refuse it
+  if (verdict.refiled === true) {
+    const with_ = behind > 0 ? `with the ✦${behind} in escrow behind it` : "with no stamps in escrow behind it";
+    const commons = behind < (Number(verdict.ground_min) || 0) ? ": off your household's own ground, a mark stands only with a stamp behind it" : "";
+    return `it is re-filed here, in place of the claim put forward where it stood, ${with_}, and the next settlement judges it on this ground, which can refuse it${commons}.`;
+  }
   if (staked > 0) {
     const after = Number(verdict.escrow_after) || behind + staked;
     return behind > 0
@@ -4939,8 +4949,14 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // own escrow does not carry is judged by the escrow behind that ground, read by the same door and as safely.
     const backedBy = amending && ground?.backing && escrowBehind < (ground?.min ?? 1) ? ground.backing : null;
     const groundBacking = backedBy ? await escrowBehindMark(backedBy) : 0;
+    // A CLAIM PUT FORWARD MOVES WITH ITS THING (POS-990/a, Darko 2026-11-13: "Moves with it"): the hold door's
+    // set-down (`_set_down`, which only the hold door passes) of a claim already pending and not yet in canon is
+    // re-filed put forward, and the clearing judges it on the new ground. Ruled here, it would be the author's
+    // draft whenever the escrow behind it did not clear that ground, and the claim at the old place would stand
+    // and be judged there; the new ground's refusal is the settlement's to make, with the stamps the claim has.
+    const refiling = amending && clean._set_down != null && priorLive?.claim_status === "pending" && !priorCanon;
     const verdict = putForwardVerdict({
-      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking });
+      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking, refiling });
     const putForward = verdict.put_forward;
 
     // The refusal is a refusal to PUBLISH, never a refusal to save: the
