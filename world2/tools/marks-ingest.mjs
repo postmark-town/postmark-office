@@ -680,11 +680,23 @@ export function commitReader(repo, { base, target }) {
  * The mark files a hand commit AND the printout both changed in (base, target]:
  * path -> { hands, printouts }, each a list of commits, newest first. Usually
  * empty (7 of 106 blessing intervals up to S72, none since this pen started).
+ *
+ * A HAND COMMIT THAT ONLY RENAMES A MARK FILE IS NOT A HAND EDIT (POS-1197).
+ * World #432 (acedb3f5) moved kinofire/the-uphill-firepit's page out of its
+ * manor's folder, the same bytes, and the S188 printout then wrote it as sited.
+ * Counted as a hand edit, the rename sent the mixed arm to derive the world at
+ * that commit, where the firepit is a predicate out of its parent's folder, and
+ * `resolveParent` refused the whole batch. So a rename whose blob is the same on
+ * both sides (`-M --raw`) is no hand commit for its file: the file is then the
+ * printout's alone, and the normal arm reads it (where commitReader still names
+ * the rename, as the commit that put the file at its path). A rename that also
+ * changes the bytes is a hand edit, as before. Past git's rename limit a rename
+ * reads as a delete and an add, and counts as a hand commit, as before.
  */
 export function mixedChanges(repo, { base, target }) {
   if (!base) return new Map();
   const SEP = "\x1f", REC = "\x1e";
-  const log = git(repo, ["log", `--format=${REC}%H${SEP}%P${SEP}%an${SEP}%ae${SEP}%cI${SEP}%s`, "--name-only", `${base}..${target}`, "--", "WORLD/marks"]);
+  const log = git(repo, ["log", `--format=${REC}%H${SEP}%P${SEP}%an${SEP}%ae${SEP}%cI${SEP}%s`, "--raw", "-M", "--no-abbrev", `${base}..${target}`, "--", "WORLD/marks"]);
   const byPath = new Map();
   for (const chunk of log.split(REC)) {
     const [head, ...files] = chunk.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -692,8 +704,13 @@ export function mixedChanges(repo, { base, target }) {
     const [sha, parents, author, email, at, subject] = head.split(SEP);
     const commit = { sha, parent: parents.split(" ")[0], author, at: new Date(at).toISOString(), subject };
     const side = isPrintoutCommit({ email, subject }) ? "printouts" : "hands";
-    for (const f of files) {
+    for (const line of files) {
+      // `:<mode> <mode> <blob before> <blob after> <status>\t<path>[\t<new path>]`
+      const [meta, ...names] = line.split("\t");
+      const [, , blobBefore, blobAfter, status] = meta.split(" ");
+      const f = names.at(-1) ?? "";
       if (!f.endsWith("/mark.md")) continue;
+      if (status?.startsWith("R") && blobBefore === blobAfter) continue;   // moved, not edited (POS-1197)
       if (!byPath.has(f)) byPath.set(f, { hands: [], printouts: [] });
       byPath.get(f)[side].push(commit);
     }
