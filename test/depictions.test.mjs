@@ -227,6 +227,34 @@ test("the seed: re-encoded to WebP, minted on the town's own wall, kept as the t
 
 // ── the media sweep keeps what a depiction names (POS-737) ──────────────────
 
+// ── POS-1202 (prepared; the name's persistence, conflict and authority rules are not yet ruled) ──
+test("the sheet input adapter: the URL string stays as it was; { url, name? } is the one additive form; anything else is the door's 422, the value never echoed", async () => {
+  const { sheetInputOf } = await import("../src/depictions.mjs");
+  const u = `${M}/lantern-row/a.webp`;
+  assert.deepEqual(sheetInputOf(u), { url: u, name: null }, "the existing call");
+  assert.deepEqual(sheetInputOf({ url: u }), { url: u, name: null });
+  assert.deepEqual(sheetInputOf({ url: u, name: "  Julian  " }), { url: u, name: "Julian" }, "trimmed");
+  assert.deepEqual(sheetInputOf({ url: u, name: "   " }), { url: u, name: null }, "an empty name is no name");
+  assert.deepEqual(sheetInputOf({ url: u, name: null }), { url: u, name: null });
+  for (const bad of [null, undefined, 7, true, [], [u], {}, { name: "x" }, { url: 7 }, { url: u, name: 7 }, { url: u, name: {} }, { url: u, who: "x" }, { url: { toString: 1 } }]) {
+    try { sheetInputOf(bad); assert.fail(`${JSON.stringify(bad)} was not refused`); }
+    catch (e) { assert.equal(e.code, 422); assert.equal(e.defect, "a sheet is a media-door URL"); assert.match(e.hint, /Nothing was written$/); }
+  }
+});
+
+test("the sheet read carries a name only when the row has one: an unnamed or old row is exactly as it was, and the anchor is untouched", async () => {
+  const rows = [
+    { id: "41", subject: "wick", kind: "sheet", url: `${M}/lantern-row/b.webp`, made_by: "lantern-row", made_at: new Date("2026-11-20T00:00:00Z"), source: "the household's own", name: "Vex" },
+    { id: "40", subject: "wick", kind: "sheet", url: `${M}/lantern-row/a.webp`, made_by: "lantern-row", made_at: new Date("2026-11-19T00:00:00Z"), source: "the household's own" },
+  ];
+  const read = await sheetRead({ handle: "wick" }, { env: {}, query: async () => rows, registry: registry({ "lantern-row": yes }) });
+  assert.equal(read.sheets[0].name, "Vex");
+  assert.equal("name" in read.sheets[1], false, "unnamed: no name field, none guessed");
+  assert.equal(read.anchor, rows[0].url, "the anchor is still the household's newest, named or not");
+  const plain = await sheetRead({ handle: "wick" }, { env: {}, query: async () => rows.map(({ name: _n, ...r }) => r), registry: registry({ "lantern-row": yes }) });
+  assert.ok(plain.sheets.every((s) => !("name" in s)), "the legacy shape is unchanged");
+});
+
 test("the media sweep reads depictions as a source: a kept sheet's file is referenced, so it is never freed under it", async () => {
   const { storeKeys, STORE_SOURCES, HANGING_DOORS } = await import("../src/media-sweep.mjs");
   const { MEDIA_BASE } = await import("../src/media.mjs");

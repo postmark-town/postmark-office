@@ -122,7 +122,26 @@ const shape = (r, household) => ({
   id: r.id, url: r.url, made_by: r.made_by, made_at: r.made_at instanceof Date ? r.made_at.toISOString() : r.made_at,
   ...(r.source ? { source: r.source } : {}), own: r.made_by === household,
   ...(r.made_by === TOWN ? { note: TOWN_SHEET_NOTE } : {}),
+  // POS-1202 (prepared, not yet live): a sheet's optional name rides its row when the record carries one; an unnamed or old row has none, and none is made up
+  ...(typeof r.name === "string" && r.name !== "" ? { name: r.name } : {}),
 });
+
+/**
+ * THE INPUT ADAPTER for `update_profile { sheet }` (POS-1202, prepared): the existing call is a media URL string; the one additive form is
+ * `{ url, name? }`. Pure: it reads the shape and nothing else (no persistence, no length or authority policy for the name, which are not
+ * yet ruled). A string answers `{ url, name: null }`, an object with a string `url` and an optional string `name` answers `{ url, name }`
+ * (the name trimmed, "" and absent both `null`); any other shape, or an unknown key, is the door's 422 without echoing the value.
+ */
+export function sheetInputOf(sheet) {
+  const refuse = () => bounce(422, "a sheet is a media-door URL",
+    "pass the url upload_media handed back as sheet, or { url, name } to say who it shows; a sheet is never cleared, a newer one supersedes it. Nothing was written");
+  if (typeof sheet === "string") return { url: sheet, name: null };
+  if (!sheet || typeof sheet !== "object" || Array.isArray(sheet)) throw refuse();
+  if (Object.keys(sheet).some((k) => k !== "url" && k !== "name") || typeof sheet.url !== "string") throw refuse();
+  if (sheet.name != null && typeof sheet.name !== "string") throw refuse();
+  const name = typeof sheet.name === "string" && sheet.name.trim() !== "" ? sheet.name.trim() : null;
+  return { url: sheet.url, name };
+}
 
 /**
  * One resident's sheets (GET /residents/{h}/sheet): its household's own, shown
