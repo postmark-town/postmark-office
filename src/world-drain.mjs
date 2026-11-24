@@ -214,7 +214,7 @@ export function planDrain(rows, { publishedPathOf = null, toFileFrame = null } =
     const p = row.payload ?? {};
     const path = pathOf(id);
     // POS-1212: a mark with no filing (a declared parent that cannot be found; no maker) is HELD BY NAME, never filed at the root or at a guessed id
-    if (!path) { held.push({ id, household, why: p.parent_id ? "parent-unresolved" : "no-maker", declared_parent: p.parent_id ?? null }); continue; }
+    if (!path) { const why = p.parent_id ? "parent-unresolved" : "no-maker"; held.push({ id, household, why, crossing_output: why, declared_parent: p.parent_id ?? null }); continue; }
     const nested = isNestedFiling(path);
     // THE ONE CONVERSION, and only where the file frame differs from the world
     // frame: a nested record's at/points are offsets from its parent's centre.
@@ -985,6 +985,20 @@ export async function drain({
     };
 
     const plan = planDrain(rows, { publishedPathOf, toFileFrame });
+    // POS-1212: A MARK THE PLAN HELD BY NAME (a declared parent that cannot be found; no maker) REFUSES THE DRAIN, before anything is written. The drain
+    // truncates every journal row through `plan.head`, so draining past a held mark would delete its row: the mark would be lost silently. The smallest
+    // existing pattern is the refusal above (a named `refused` before any write-down, state, cursor or truncate): the rows stay, the cursor stays, nothing is
+    // partially drained, and the operator is told which mark and why. No partial drain and no new window policy.
+    if (plan.held?.length) {
+      return {
+        refused: "filing-held",
+        count: plan.held.length,
+        held: plan.held,
+        detail: `${plan.held.length} mark(s) have no filing, so nothing was drained (a held mark's journal row would be deleted with the rest): `
+          + plan.held.map((h) => `${h.id} (${h.why}${h.declared_parent ? `: it declares parent ${h.declared_parent}, which cannot be found` : ""})`).join("; ")
+          + `. The journal, the cursor and the sketchbooks are untouched; repair the declaration (name a parent that exists) and drain again`,
+      };
+    }
     trip(failAt, "after-plan");
 
     // ── the write-down ───────────────────────────────────────────────────────

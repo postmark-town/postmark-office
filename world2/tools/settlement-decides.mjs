@@ -121,6 +121,26 @@ export async function filingHoldsBeforeSeal(q, { worldRepo, rows }) {
   return { held: holds, against: { settlement: Number(last.sealed_settlement), printout_sha: head }, unchecked: null };
 }
 
+/**
+ * THE SEAL'S FILING HOLDS, as the decision seals them (clearing-job.mjs). PURE. A hold is one of two kinds, and each is sealed as what it is (POS-1212):
+ * a COLLISION (the planned filing is another id's published file, or was planned under one: WLD-230) keeps its path and whose file it met; a mark with NO FILING
+ * (a declared parent the planner cannot find, or no maker) is sealed with its cause (`held: "parent-unresolved" | "no-maker"`) and the parent it declared, never as
+ * a collision with null words. A slug already held for another reason (`takenSlugs`) is not sealed twice.
+ */
+export function sealedFilingHeld(filingHeld, takenSlugs = new Set()) {
+  return (filingHeld ?? []).filter((h) => !takenSlugs.has(h.slug)).map((h) => (h.crossing_output === "parent-unresolved" || h.crossing_output === "no-maker"
+    ? { slug: h.slug, held: h.crossing_output, path: null, ...(h.declared_parent ? { declared_parent: h.declared_parent } : {}) }
+    : { slug: h.slug, held: "filing-collision", path: h.path, held_by_filing_of: h.held_by_filing_of, ...(h.held_under ? { held_under: h.held_under } : {}) }));
+}
+
+/** The printout line for one sealed filing hold: truthful about which kind it is. PURE. */
+export function filingHeldWords(h) {
+  if (h.held === "parent-unresolved")
+    return `  ⚑ held: ${h.slug} — it declares parent ${h.declared_parent ?? "(unnamed)"}, which cannot be found, so it has no filing (POS-1212); sealed not published, its store row kept`;
+  if (h.held === "no-maker") return `  ⚑ held: ${h.slug} — it has no maker, so it has no filing (POS-1212); sealed not published, its store row kept`;
+  return `  ⚑ held: ${h.slug} — its filing ${h.path} is ${h.held_by_filing_of}'s on main (WLD-230); sealed not published, its store row kept`;
+}
+
 /** The registry as it stands now (its live rows), by slug. */
 async function liveRegistry(q) {
   const { rows } = await q("SELECT slug, class, stale, ord, from_window FROM settlement_publications WHERE to_window IS NULL");
@@ -336,7 +356,7 @@ export async function settlementDecides(q, { windowId, townSha, lawSha, worldRep
     // WLD-230: THE SEAL'S HELD LIST, each mark not admitted with the filing it met; `filing_check` says what main it was checked
     // against, or why it could not be (then nothing was held, and the printout's named refusal stays the backstop)
     ...(filing.held.size ? { filing_held: [...filing.held.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([slug, h]) => ({ slug, path: h.path ?? null,
-      held_by_filing_of: h.held_by_filing_of ?? null, crossing_output: h.crossing_output ?? null, ...(h.held_under ? { held_under: h.held_under } : {}) })) } : {}),
+      held_by_filing_of: h.held_by_filing_of ?? null, crossing_output: h.crossing_output ?? null, ...(h.declared_parent ? { declared_parent: h.declared_parent } : {}), ...(h.held_under ? { held_under: h.held_under } : {}) })) } : {}),
     ...(filing.against || filing.unchecked ? { filing_check: filing.against ? { against: filing.against } : { unchecked: filing.unchecked } } : {}),
     // PORT 5: the marks the settlement's words and limits take away, held by the seal, and the town returns its removal pays
     ...(taken.held.size ? { taken_away: [...taken.held.values()].sort((a, b) => (a.slug < b.slug ? -1 : 1)) } : {}),
