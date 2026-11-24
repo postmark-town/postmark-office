@@ -34,12 +34,21 @@
 // canonical and signature as the store's row N has the same N lines the store
 // has, and only the lines after it are new. The verifier still walks the whole
 // chain; the writer needs one row.
+//
+// ── UAT'S HANDOFF (POS-1214) ─────────────────────────────────────────────────
+//
+// On UAT only, STAMP_UAT_TRUST names a trust file (src/stamp-trust.mjs): the
+// base key signs every line through the trusted seal `afterSeal`, and UAT's own
+// public key signs every line after it, never either key on any line. The writer
+// and the verifier here hold that one boundary, the town verifier's own. Unset,
+// as in production, every line verifies under the base key exactly as before.
 
 import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { importTownTool } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { anchorIndex, uatHandoff, unknownAnchor } from "./stamp-trust.mjs"; // POS-1214: UAT's trust, one policy for every verifier
 
 import { NOT_LANDED, penCommit } from "./write.mjs";
 
@@ -125,10 +134,12 @@ export async function stampHeadVia(q) {
  * shorter than the store, a file whose line at the head is not the head (the
  * past moved), an unsigned line, or a signature that does not verify.
  */
-export function stampRowsPast(clone, head, { engine, pubkeyPem = null }) {
+export function stampRowsPast(clone, head, { engine, pubkeyPem = null, env = process.env }) {
   const pem = pubkeyPem ?? pubkeyOf(clone);
   if (!pem) throw new Error("no tools/stamp-pubkey.pem in the clone: a line's signature cannot be checked, so none is recorded");
   const key = createPublicKey(pem);
+  // null in production (no STAMP_UAT_TRUST): every line below verifies under `key`, as before
+  const handoff = uatHandoff({ env, clone, base: pem });
   const path = ledgerOf(clone);
   const entries = existsSync(path) ? engine.parseStampLedger(readFileSync(path, "utf8")) : [];
   const held = head ? Number(head.seq) : 0;
@@ -139,13 +150,24 @@ export function stampRowsPast(clone, head, { engine, pubkeyPem = null }) {
     if (at.canonical !== head.canonical || at.sig !== head.sig)
       throw new Error(`the stamp ledger's line ${held} is not the line the store holds: its past changed, and it is append-only by town law. Nothing was written.`);
   }
+  // UAT: the anchor's place in the whole chain decides which key signs each new line
+  let anchor = -1, uatKey = null;
+  if (handoff) {
+    const seals = engine.sealChain(entries.map((e) => e.canonical));
+    if (head && seals[held - 1] !== head.seal)
+      throw new Error(`the stamp ledger's line ${held} does not seal to the store's row ${held}: the export's past is not the store's, so the trusted seal can't be placed. Nothing was written.`);
+    anchor = anchorIndex(seals, handoff, "the stamp ledger's export");
+    uatKey = createPublicKey(handoff.pubkeyPem);
+  }
   let prev = head?.seal ?? null;
   const fresh = [];
   for (let i = held; i < entries.length; i++) {
     const e = entries[i];
     if (!e.sig) throw new Error(`the stamp ledger's line ${i + 1} is UNSIGNED: the store records only signed lines. Nothing was written.`);
     const seal = sealAfter(engine, prev, e.canonical);
-    if (!sigOk(key, seal, e.sig)) throw new Error(`the stamp ledger's line ${i + 1}: its signature does not verify over its seal. Nothing was written.`);
+    const uat = handoff !== null && i > anchor;
+    if (!sigOk(uat ? uatKey : key, seal, e.sig))
+      throw new Error(`the stamp ledger's line ${i + 1}: its signature does not verify over its seal${handoff ? (uat ? " under UAT's key (it is past the trusted seal)" : " under the base key (it is not past the trusted seal)") : ""}. Nothing was written.`);
     fresh.push([i + 1, e.canonical, e.sig, seal]);
     prev = seal;
   }
@@ -174,11 +196,11 @@ export async function insertStampRowsVia(client, fresh) {
  * lines a pen commit carries; a caller with many lines (the mint) computes them
  * first with `stampRowsPast` and only inserts inside.
  */
-export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPem = null } = {}) {
+export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPem = null, env = process.env } = {}) {
   const eng = engine ?? await engineOf(clone);
   await lockStampLinesVia(client);
   const head = await stampHeadVia(client);
-  const fresh = stampRowsPast(clone, head, { engine: eng, pubkeyPem });
+  const fresh = stampRowsPast(clone, head, { engine: eng, pubkeyPem, env });
   await insertStampRowsVia(client, fresh);
   return { held: head ? head.seq : 0, inserted: fresh.length };
 }
@@ -189,20 +211,32 @@ export async function syncStampLinesVia(client, clone, { engine = null, pubkeyPe
  * file's entry lines, each exactly `canonical · sig: sig` of the row at its
  * position, no more and no fewer). `{ ok, problems, held, exported }`.
  */
-export async function verifyStampLinesVia(q, clone, { engine = null, pubkeyPem = null } = {}) {
+export async function verifyStampLinesVia(q, clone, { engine = null, pubkeyPem = null, env = process.env } = {}) {
   const eng = engine ?? await engineOf(clone);
   const pem = pubkeyPem ?? pubkeyOf(clone);
   const problems = [];
+  // null in production (no STAMP_UAT_TRUST). Asked for and unusable: one problem says why, and no
+  // signature is checked under the base key alone (that would only call every UAT line forged).
+  let handoff = null, trustOk = true;
+  try { handoff = uatHandoff({ env, clone, base: pem }); } catch (e) { trustOk = false; problems.push(`store: ${e?.message ?? e}`); }
   const rows = await stampLinesVia(q);
   if (!pem) problems.push("no tools/stamp-pubkey.pem: the store's signatures were not checked");
-  const key = pem ? createPublicKey(pem) : null;
-  let prev = null;
+  const key = pem && trustOk ? createPublicKey(pem) : null;
+  const uatKey = handoff ? createPublicKey(handoff.pubkeyPem) : null;
+  // UAT: a trusted seal no row carries is named first (the walk below still checks every seal it reaches)
+  if (handoff && key && !rows.some((r) => r.seal === handoff.afterSeal)) problems.push(`store: ${unknownAnchor(handoff, "the store's chain").message}`);
+  let prev = null, pastAnchor = false;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     if (Number(r.seq) !== i + 1) { problems.push(`store: row ${i + 1} carries seq ${r.seq}: the chain has a gap`); break; }
     const seal = sealAfter(eng, prev, r.canonical);
     if (seal !== r.seal) { problems.push(`store: line ${r.seq}'s seal is not the chain's`); break; }
-    if (key && !sigOk(key, seal, r.sig)) { problems.push(`store: line ${r.seq}'s signature does not verify`); break; }
+    // UAT: the base key through the trusted seal, UAT's key only after it
+    if (key && !sigOk(pastAnchor ? uatKey : key, seal, r.sig)) {
+      problems.push(`store: line ${r.seq}'s signature does not verify${handoff ? (pastAnchor ? " under UAT's key (it is past the trusted seal)" : " under the base key (it is not past the trusted seal)") : ""}`);
+      break;
+    }
+    if (handoff && seal === handoff.afterSeal) pastAnchor = true;
     prev = seal;
   }
   const path = ledgerOf(clone);
@@ -226,11 +260,11 @@ export async function stampedCommit(clone, addPaths, message, { env = process.en
   const { officeWrite } = await import("./world2-pen.mjs");
   const eng = engine ?? await engineOf(clone);
   return officeWrite(async (client) => {
-    await syncStampLinesVia(client, clone, { engine: eng });
+    await syncStampLinesVia(client, clone, { engine: eng, env });
     const commit = penCommit(clone, addPaths, message);
     // A lost race rebases the commit onto the remote: every line it carries is
     // recorded again here (a no-op when the rebase brought none).
-    await syncStampLinesVia(client, clone, { engine: eng });
+    await syncStampLinesVia(client, clone, { engine: eng, env });
     return commit;
   }, { env });
 }
@@ -261,7 +295,7 @@ export async function planStampedCommit(clone, { env = process.env, engine = nul
   const { officeRead } = await import("./world2-pen.mjs");
   const eng = engine ?? await engineOf(clone);
   const head = await officeRead((q) => stampHeadVia(q), { env });
-  return { head, rows: stampRowsPast(clone, head, { engine: eng }), engine: eng };
+  return { head, rows: stampRowsPast(clone, head, { engine: eng, env }), engine: eng };
 }
 
 // The push is the one non-SQL step inside: the store commits only after git
@@ -290,7 +324,7 @@ export async function landPlannedVia(client, clone, plan, addPaths, message, { e
   try { commit = penCommit(clone, addPaths, message); } catch (e) { return notLanded(e); }
   // A lost push race rebases the commit onto the remote's: the lines it brought
   // in are recorded too (none, in the town lock's ordinary case).
-  if (plan && commit && gitIn(clone, "rev-parse", `${commit}^`) !== base) await syncStampLinesVia(client, clone, { engine: plan.engine });
+  if (plan && commit && gitIn(clone, "rev-parse", `${commit}^`) !== base) await syncStampLinesVia(client, clone, { engine: plan.engine, env });
   return { commit };
 }
 

@@ -1,0 +1,137 @@
+// stamp-trust.mjs — UAT'S STAMP TRUST: ONE POLICY FOR EVERY VERIFIER IN THE OFFICE (POS-1214).
+//
+// Why (CORE-176, 2026-11-24): UAT signs its own mints with its own key, as it
+// must (prod's keys stay out of UAT), and every UAT crossing was refused at its
+// gate because the office verified the whole ledger with prod's public key. A
+// UAT ledger is a prod-signed prefix followed by UAT-signed lines.
+//
+// The shape (Wright, 2026-11-24 14:32:35Z on POS-1213, paired with the town's
+// handoff): the copied prefix verifies with the base key up to and including a
+// trusted seal, then UAT's public key only, after it. Never either key on any
+// line. The office's part: an operator-owned, read-only UAT file, named by
+// STAMP_UAT_TRUST, gives the four verification paths
+// (src/stamp-verify-pinned.mjs, world2/tools/stamp-mint-run.mjs,
+// src/house-key.mjs, src/stamp-lines.mjs) the same trust, through this file:
+//
+//   { "pubkeyPem": "<UAT's public verification key, SPKI PEM>",
+//     "afterSeal": "<the trusted seal of the copied prefix's last line, 64 hex>" }
+//
+// mapped to the town's `verifyStampLedger(repo, { pubkeyPem, handoff: { pubkeyPem, afterSeal } })`.
+//
+// THE WALL THAT DECIDES IT: with no STAMP_UAT_TRUST in the environment, this
+// file answers null, reads nothing, and every path behaves exactly as before,
+// byte for byte (test/stamp-trust.test.mjs holds the control).
+//
+// REQUESTED BUT UNUSABLE FAILS CLOSED: once STAMP_UAT_TRUST is in the
+// environment at all (an empty value included), a trust the office can't use is
+// a thrown StampTrustUnusable that names why, never a quiet fall back to prod's
+// key alone. The trust never comes from the clone, the ledger, a resident's
+// request or a signing key: the file must sit outside the town clone, hold
+// exactly the two fields, carry a PUBLIC key (a private key in it is refused),
+// and that key must not be the base key.
+
+import { createPublicKey } from "node:crypto";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
+
+/** The one environment name. Unset is production. */
+export const UAT_TRUST_ENV = "STAMP_UAT_TRUST";
+
+/**
+ * Where the UAT drop-in binds the trust file, read-only, for the town-tool
+ * sandbox (deploy/postmark-town-tool@.service-dropin-uat-stamp-trust.conf). The
+ * sandbox passes its verifier this path and no other (tools/town-tool-sandbox.mjs).
+ */
+export const UAT_TRUST_PATH = "/etc/postmark-uat/stamp-trust.json";
+
+const MAX_BYTES = 64 * 1024;
+const SEAL = /^[0-9a-f]{64}$/;
+
+export class StampTrustUnusable extends Error {
+  constructor(where, why) {
+    super(`${where === null ? `the trust ${UAT_TRUST_ENV} names` : `${UAT_TRUST_ENV} names ${JSON.stringify(String(where)).slice(0, 300)}, and it`} can't be used: ${why}. ` +
+      "UAT's stamp trust was asked for, so nothing is verified without it (POS-1214).");
+    this.name = "StampTrustUnusable";
+    this.code = "STAMP_UAT_TRUST_UNUSABLE";
+  }
+}
+
+/** Was UAT trust asked for? Only the variable's presence decides it: unset is production. */
+export const uatTrustRequested = (env = process.env) => env?.[UAT_TRUST_ENV] !== undefined;
+
+/** The SPKI DER of a public key PEM, for comparing two keys by their bytes. */
+const spki = (pem) => createPublicKey(pem).export({ type: "spki", format: "der" });
+
+/**
+ * The UAT handoff `{ pubkeyPem, afterSeal }`, frozen, or null when no trust was
+ * asked for (production: nothing is read). Throws StampTrustUnusable when it was
+ * asked for and can't be used. `clone`, when named, is the town the trust must
+ * not come from. `base`, when named (a PEM, or a function returning one, called
+ * only when trust was asked for), is the key that verifies the prefix: UAT's key
+ * equal to it is refused.
+ */
+export function uatHandoff({ env = process.env, clone = null, base = null } = {}) {
+  if (!uatTrustRequested(env)) return null;
+  const where = env[UAT_TRUST_ENV];
+  if (typeof where !== "string" || !where || !isAbsolute(where)) throw new StampTrustUnusable(where, "it is not an absolute path");
+  let real, st;
+  try {
+    real = realpathSync(where);
+    st = statSync(real);
+  } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? e?.message ?? e})`); }
+  if (!st.isFile()) throw new StampTrustUnusable(where, "it is not a regular file");
+  if (st.size > MAX_BYTES) throw new StampTrustUnusable(where, `it holds ${st.size} bytes, more than a trust file's ${MAX_BYTES}`);
+  // read-only to everyone but its owner: a group- or world-writable trust is anyone's (POSIX only; Windows has no such bits)
+  if (process.platform !== "win32" && (st.mode & 0o022)) throw new StampTrustUnusable(where, "it is writable by its group or by anyone");
+  if (clone) {
+    let town;
+    try { town = realpathSync(clone); } catch { town = clone; }
+    const rel = relative(town, real);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) throw new StampTrustUnusable(where, "it is inside the town clone, and trust never comes from the town it checks");
+  }
+  let doc;
+  try { doc = JSON.parse(readFileSync(real, "utf8")); } catch (e) { throw new StampTrustUnusable(where, `it is not JSON (${e?.code ?? e?.message ?? e})`); }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) throw new StampTrustUnusable(where, "it is not a JSON object");
+  const keys = Object.keys(doc).sort();
+  if (keys.join(",") !== "afterSeal,pubkeyPem") throw new StampTrustUnusable(where, `it must hold exactly pubkeyPem and afterSeal, and holds ${keys.join(", ") || "nothing"}`);
+  const { pubkeyPem, afterSeal } = doc;
+  if (typeof afterSeal !== "string" || !SEAL.test(afterSeal)) throw new StampTrustUnusable(where, "afterSeal is not a seal (64 lowercase hex)");
+  if (typeof pubkeyPem !== "string" || /PRIVATE KEY/.test(pubkeyPem) || !/^-----BEGIN PUBLIC KEY-----\r?\n/.test(pubkeyPem.trimStart()))
+    throw new StampTrustUnusable(where, "pubkeyPem is not a public key PEM (a private key is never trust)");
+  let uat;
+  try {
+    const k = createPublicKey(pubkeyPem);
+    if (k.asymmetricKeyType !== "ed25519") throw new Error(`a ${k.asymmetricKeyType} key, not ed25519`);
+    uat = spki(pubkeyPem);
+  } catch (e) { throw new StampTrustUnusable(where, `pubkeyPem is not an ed25519 public key (${e?.message ?? e})`); }
+  const basePem = typeof base === "function" ? base() : base;
+  if (basePem != null) {
+    let same;
+    try { same = spki(basePem).equals(uat); } catch (e) { throw new StampTrustUnusable(where, `the base key it hands off from can't be read (${e?.message ?? e})`); }
+    if (same) throw new StampTrustUnusable(where, "its key is the base key: a handoff to the same key is no boundary");
+  }
+  return Object.freeze({ pubkeyPem, afterSeal });
+}
+
+/**
+ * The town verifier's options with the handoff added, or the very same object
+ * when there is none (production passes exactly what it passed before).
+ */
+export const withHandoff = (opts, handoff) => (handoff ? { ...opts, handoff } : opts);
+
+/**
+ * THE BOUNDARY, for the office's own signature checks (src/stamp-lines.mjs),
+ * the town's rule: the line whose running seal is `afterSeal` is the last the
+ * base key signs, and every line after it is UAT's. `seals` are the chain's
+ * running seals from genesis. Answers the anchor's index, or throws
+ * StampTrustUnusable when the trusted seal is not in the chain.
+ */
+export function anchorIndex(seals, handoff, what = "the stamp ledger") {
+  const at = seals.indexOf(handoff.afterSeal);
+  if (at === -1) throw unknownAnchor(handoff, what);
+  return at;
+}
+
+/** The refusal for a trusted seal that no line of `what` carries (the town's "unknown anchor"). */
+export const unknownAnchor = (handoff, what) =>
+  new StampTrustUnusable(null, `its afterSeal ${handoff.afterSeal.slice(0, 12)}… is not a seal in ${what}, so no line is known to be the prefix's last`);

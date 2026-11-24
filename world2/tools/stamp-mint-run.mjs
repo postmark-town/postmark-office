@@ -42,6 +42,7 @@ import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
 import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia } from "../../src/stamp-lines.mjs";
 import { LOST_RACE, penCommit } from "../../src/write.mjs";
+import { uatHandoff, withHandoff } from "../../src/stamp-trust.mjs"; // POS-1214: UAT's trust, one policy for every verifier
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +78,22 @@ export function owedFromStore(engine, { entries, mailLines, pins, rooms }) {
     voided: owedTransfers.filter((t) => t.kind === "void").length,
     recorded: entries.length,
   };
+}
+
+/**
+ * The town's verifier as the mint pass runs it (POS-994): the PINNED copy,
+ * answering to the PINNED public key (the trust root). On UAT only, with
+ * STAMP_UAT_TRUST in `env`, it is also handed UAT's handoff from the office's
+ * one trust policy (src/stamp-trust.mjs, POS-1214), loaded here, before any
+ * line is signed: a trust that can't be used throws, and the pass mints nothing.
+ * Without it, the call is exactly what it was. Extracted so the mapping can be
+ * tested at the office's own boundary.
+ */
+export async function pinnedVerifier(clone, { env = process.env } = {}) {
+  const { verifyStampLedger } = await importTownTool(clone, "stamp-verify.mjs");
+  const pubkeyPem = readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8");
+  const handoff = uatHandoff({ env, clone, base: pubkeyPem });
+  return (repo, opts = {}) => verifyStampLedger(repo, withHandoff({ ...opts, pubkeyPem }, handoff));
 }
 
 /** How many times the pass decides again when the chain's head moved under it, before it refuses. */
@@ -141,16 +158,12 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
     if (arrived != null && existsSync(ledger) && readFileSync(ledger, "utf8") !== arrived && git(clone, "rev-parse", "HEAD") === arrivedAt) writeFileSync(ledger, arrived);
   };
   // POS-994: the pinned verifier, answering to the PINNED public key (the trust root)
-  const verifyLedger = verify ?? await (async () => {
-    const { verifyStampLedger } = await importTownTool(clone, "stamp-verify.mjs");
-    const pubkeyPem = readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8");
-    return (repo, opts = {}) => verifyStampLedger(repo, { ...opts, pubkeyPem });
-  })();
+  const verifyLedger = verify ?? await pinnedVerifier(clone, { env });
   arrive();
   let raced = 0;
   try {
     for (let attempt = 1; attempt <= HEAD_TRIES; attempt++) {
-      await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng }), { env });
+      await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng, env }), { env });
       const { inputs, entries } = await officeRead(async (client) =>
         ({ inputs: await mintInputsVia(client), entries: await stampLinesVia(client) }), { env });
       if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
@@ -165,7 +178,7 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
       const v = await verifyLedger(clone);
       if (!v.ok) throw new Error(`stamp-verify is red over the appended ledger; nothing committed\n${v.problems[0]}`);
       const head = entries.at(-1);
-      const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng });
+      const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng, env });
       if (fresh.length !== d.lines.length) throw new Error(`signed ${d.lines.length} line(s) and the export holds ${fresh.length} past the store; nothing committed`);
       let out;
       try {
