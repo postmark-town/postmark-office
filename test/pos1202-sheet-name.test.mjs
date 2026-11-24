@@ -107,13 +107,48 @@ test("the authority is the existing one: a key that does not hold the resident n
   await assert.rejects(profile({ handle: "wick", sheet: A, sheet_name: "Hijacked" }, OTHER), (e) => e.code === 403, "another household's key");
   const refused = (re) => (e) => e.code === 422 && re.test(e.defect);
   await assert.rejects(profile({ handle: "wick", sheet_name: "Julian" }), refused(/a sheet's name rides with its sheet/), "a name with no sheet to name");
-  for (const bad of ["", "   ", "x".repeat(SHEET_NAME_MAX + 1), "two\nlines", "tab\there", 7, true, {}, [], { toString: 1 }, null])
+  for (const bad of ["x".repeat(SHEET_NAME_MAX + 1), "two\nlines", "tab\there", 7, true, {}, [], { toString: 1 }, null])
     await assert.rejects(profile({ handle: "wick", sheet: A, sheet_name: bad }), refused(/a sheet's name is/), `a bad name is refused: ${typeof bad}`);
   assert.equal((await profile({ handle: "wick", sheet: A, sheet_name: "x".repeat(SHEET_NAME_MAX) })).sheet.name.length, SHEET_NAME_MAX, "the bound is inclusive");
   await profile({ handle: "wick", sheet: A, sheet_name: "Julian" });   // put it back
   assert.equal(await count("SELECT count(*)::int AS n FROM acts WHERE action = 'name-sheet'"), before.acts + 2, "only the two lawful namings above were written");
   assert.equal(await depictions(), before.pics, "and no picture");
   assert.equal(byUrl(await read())[A].name, "Julian");
+});
+
+test("clearing: an explicit empty name clears in one act, history stays, a repeat writes nothing, a rename after works, omission leaves it, the picture is never touched", async () => {
+  const E = `${M}/e-clear.webp`;
+  const id = (await profile({ handle: "wick", sheet: E, sheet_name: "Wrong Person" })).sheet.id;
+  const pics = await depictions();
+  assert.equal(await nameActs(id), 1);
+  const cleared = await profile({ handle: "wick", sheet: E, sheet_name: "" });
+  assert.equal("name" in cleared.sheet, false, "the answer says unnamed");
+  assert.equal(cleared.sheet.already, true);
+  assert.equal(await nameActs(id), 2, "the clearing is one act, and the naming before it is still in the record");
+  assert.equal("name" in byUrl(await read())[E], false, "latest empty means unnamed: no fallback to the older label");
+  await profile({ handle: "wick", sheet: E, sheet_name: "   " });
+  assert.equal(await nameActs(id), 2, "clearing what is already clear (blank text too) writes nothing");
+  assert.equal("name" in (await profile({ handle: "wick", sheet: E })).sheet, false, "omission leaves it cleared");
+  assert.equal(await nameActs(id), 2);
+  assert.equal((await profile({ handle: "wick", sheet: E, sheet_name: "Wrong Person" })).sheet.name, "Wrong Person", "the same text as the cleared one is a new naming");
+  assert.equal(await nameActs(id), 3);
+  assert.equal((await profile({ handle: "wick", sheet: E, sheet_name: "Right Person" })).sheet.name, "Right Person");
+  assert.equal(byUrl(await read())[E].name, "Right Person");
+  assert.equal(await depictions(), pics, "no picture row was written or removed");
+  await assert.rejects(profile({ handle: "wick", sheet: E, sheet_name: "x".repeat(SHEET_NAME_MAX + 1) }), (e) => e.code === 422);
+  assert.equal(byUrl(await read())[E].name, "Right Person", "a refused name changed nothing");
+});
+
+test("unknown is not unnamed: when the names lookup cannot be answered the keep is a 503, with or without a name or a clear, and nothing is appended", async () => {
+  const { keepSheet } = await import("../src/depictions.mjs");
+  const reg = { houses: { "lantern-row": { residents: ["wick"], likeness: { answer: "yes" } } }, houseOf: () => "lantern-row" };
+  const before = await count("SELECT count(*)::int AS n FROM acts WHERE action = 'name-sheet'");
+  let wrote = 0;
+  const seams = { registry: reg, namesOf: async () => null, nameAct: async () => { wrote++; } };
+  for (const extra of [{}, { name: "Julian" }, { name: "" }])
+    await assert.rejects(keepSheet({ handle: "wick", url: A, ...extra }, KEY, seams), (e) => e.code === 503 && /name could not be read/.test(e.defect), `lookup failure with ${JSON.stringify(extra)}`);
+  assert.equal(wrote, 0, "no act was appended after the unknown");
+  assert.equal(await count("SELECT count(*)::int AS n FROM acts WHERE action = 'name-sheet'"), before);
 });
 
 test("the likeness and anchor policy are unchanged by a name: a household whose human has not said yes still reads its own sheet named, with no anchor", async () => {

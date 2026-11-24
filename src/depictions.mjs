@@ -135,15 +135,18 @@ const shape = (r, household) => ({
 // and the anchor are never touched, and no rename service exists: a name is set the way every other appearance word is.
 export const SHEET_NAME_CLASS = "appearance";
 export const SHEET_NAME_ACTION = "name-sheet";
-// "a name, not a sentence": the bound edit.mjs § HOME_TITLE_MAX already gives a house's name, kept here as this label's (no new limit invented)
+// "a name, not a sentence": the 80-character bound chosen for this label (the same number edit.mjs § HOME_TITLE_MAX gives a house's name); settled technically, not a pre-existing label ruling
 export const SHEET_NAME_MAX = 80;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
 
-/** A sheet's name as text: trimmed, one line, 1 to SHEET_NAME_MAX characters. Anything else is the door's 422. Pure; the value is never echoed. */
+/**
+ * A sheet's name as text: trimmed, one line, at most SHEET_NAME_MAX characters. An EXPLICIT empty (or blank) text is the household clearing
+ * the label: it returns "" and the caller writes it as one act. Anything that is not text is the door's 422. Pure; the value is never echoed.
+ */
 export function sheetNameOf(raw) {
-  const t = typeof raw === "string" ? raw.trim() : "";
-  if (!t) throw bounce(422, "a sheet's name is who it shows, in a few words", `send sheet_name as text, at most ${SHEET_NAME_MAX} characters on one line, with the sheet's url as sheet. Nothing was written`);
+  if (typeof raw !== "string") throw bounce(422, "a sheet's name is who it shows, in a few words", `send sheet_name as text, at most ${SHEET_NAME_MAX} characters on one line (empty text clears the name), with the sheet's url as sheet. Nothing was written`);
+  const t = raw.trim();
   if ([...t].length > SHEET_NAME_MAX || CONTROL_CHARS.test(t))
     throw bounce(422, `a sheet's name is a name, not a sentence: at most ${SHEET_NAME_MAX} characters, on one line`, "shorten it and send the same call again. Nothing was written");
   return t;
@@ -252,13 +255,17 @@ export async function keepSheet({ handle, url, name = null } = {}, key = null, {
   const row = await keep({ subject: h, kind: "sheet", url: u, made_by: household, source: "the household's own" }, env);
   if (!row) throw bounce(503, "the office's record cannot be reached", "nothing was kept; send the same call again");
   // POS-1202: the name is a label beside the picture, which the keep above left exactly as it was. A name the household sends is set now (on
-  // this sheet, new or kept before); the same name again writes nothing; a different one is a correction, one more act. No name sent: the
-  // answer shows the name that stands, and nothing is written.
-  const standing = (await namesOf([row.id], { env }))?.get(String(row.id)) ?? null;
+  // this sheet, new or kept before); the same name again writes nothing; a different one is a correction, one more act; an explicit empty
+  // one clears it, also one act (the latest act wins, so a cleared sheet is unnamed and never falls back to an older label; the history stays).
+  // No name sent: the answer shows the name that stands, and nothing is written. A names lookup the record cannot answer is UNKNOWN, not
+  // unnamed: the answer is a 503 either way and nothing is appended after it (the sheet itself stands).
+  const names = await namesOf([row.id], { env });
+  if (names === null) throw bounce(503, "the sheet stands, but its name could not be read: the office's record cannot be reached", "nothing was named or cleared; send the same call again");
+  const standing = names.get(String(row.id)) ?? "";
   if (label !== null && label !== standing) {
     await nameAct({ actor: h, id: row.id, subject: h, name: label, household: String(key?.household ?? "").trim() || household });
     row.name = label;
-  } else if (standing) row.name = standing;
+  } else row.name = standing;
   return { ...shape(row, household), canon: "at once: your household's own sheet is the one used first", ...(row.kept === false ? { already: true } : {}) };
 }
 

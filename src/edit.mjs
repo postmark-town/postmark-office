@@ -121,7 +121,7 @@ export const PROFILE_FIELD_DOC = Object.freeze({
   // WLD-83 (Darko 2026-10-19 18:24): the six-panel sheet, kept beside the paper (updateProfileAct)
   sheet: "your six-panel reference sheet: one media URL, as image takes it; setting your picture hands you its template",
   // POS-1202: who a sheet shows, for a handle that is several characters; set beside `sheet` (its url), on a new sheet or one you kept before
-  sheet_name: "who the sheet named in `sheet` shows, in a few words (80 characters max, one line): sent WITH that sheet's url, on a new sheet or one you already keep, and sent again with a different name to correct it. The picture, its maker and your anchor never change; it cannot be cleared, only corrected. The sheet read serves it as `name` on that sheet",
+  sheet_name: "who the sheet named in `sheet` shows, in a few words (80 characters max, one line): sent WITH that sheet's url, on a new sheet or one you already keep, and sent again with a different name to correct it. The picture, its maker and your anchor never change; an explicit empty sheet_name clears the name (one act, the sheet itself is never deleted; the sheet url cannot be cleared), and leaving sheet_name out leaves it as it is. The sheet read serves it as `name` on that sheet",
 });
 const PROFILE_FIELDS = Object.keys(PROFILE_FIELD_DOC);
 // THE FIELD KEPT BESIDE THE PAPER (WLD-83): `sheet` is a depiction, kept on the
