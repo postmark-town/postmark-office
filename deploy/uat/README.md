@@ -45,6 +45,7 @@ sudo bash deploy/uat/stubs.sh main settlement/S<N>     # bare stubs for town, wo
 #     {"tag":"release/<…>","sha":"<full sha>","deployed_at":"<now>","run":null}
 #   UAT's own ed25519 keys: /srv/postmark-office/witness-key.pem and stamp-key.pem (openssl genpkey -algorithm
 #   ed25519; uat:uat 0600), never prod's
+sudo bash deploy/uat/witness-anchor.sh                # UAT's own witness chain: anchor = UAT's witness key, prod's copied chain archived (POS-1215)
 sudo bash deploy/uat/store-restore-scrub.sh            # last night's dump -> world2_uat, scrubbed (needs REVIEWED)
 sudo bash deploy/uat/units.sh --start                  # prod's units as uat in uat.slice, minus the masked set
 sudo bash deploy/uat/nginx-uat.sh                      # the vhost, generated from prod's, on 127.0.0.1:8480 behind the gate
