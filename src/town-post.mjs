@@ -35,6 +35,14 @@
 // clause), moved to any named stage by the hands, signed up for by anyone
 // (`sign-up`, answered by the hands with `answer-sign-up`), and awarded on by
 // wright or keemin (`award`, which records stamps owed and moves none).
+//
+// And class "flare" (POS-1163; the law is World #397, LOGOS/classes.md:369–404):
+// anyone reports one as themselves, naming the PUBLIC spark it was posted from
+// (`about`) and every place it was posted (`destinations`); the flare hands
+// report the town's own (`maker: "town"`) and take it, once, to accepted-text,
+// accepted-video or declined (flares.mjs). It takes no stake, this door does not
+// support amending or closing it, and it pays nothing: its pay is the posting
+// quest's (POS-509).
 
 import { validateArgs } from "./validate-args.mjs";
 import { postAtTown, amendAtTown, closeAtTown, advanceAtTown, revealAtTown } from "./events-store.mjs";
@@ -48,6 +56,7 @@ import {
 import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
 import { REPORT_CLASS } from "./reports.mjs"; // POS-757: the private post class; its pen is report-store.mjs
 import { BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES } from "./ballots.mjs"; // POS-983: the town's vote, by its hands (ballot-acts.mjs)
+import { FLARE_CLASS, FLARE_HANDS_WORDS, FLARE_HANDS_PENDING, FLARE_FINISHED, FLARE_FORMS, DESTINATIONS_MAX, STATE_REPORTED as FLARE_REPORTED, FLARE_NO_STAKE } from "./flares.mjs"; // POS-1163
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -84,12 +93,28 @@ export const BALLOT_POST_PROPERTIES = Object.freeze({
     items: { type: "object", properties: { name: { type: "string" }, credit: { type: "string" }, link: { type: "string" }, note: { type: "string" } }, required: ["name"], additionalProperties: false } },
 });
 
+/**
+ * The flare's own fields at the town door (POS-1163; the law is World #397, LOGOS/classes.md:369–404). `title` and
+ * `handle` are the event's names, shared. The keys are the office's spellings; the law names only `about:`.
+ */
+export const FLARE_POST_PROPERTIES = Object.freeze({
+  about: { type: "string", description: "class \"flare\": the PUBLIC spark it was posted from, by its id <by>/<slug> (as the gallery and the spark read name it) — a private or pending spark cannot be a flare's" },
+  destinations: { type: "array", minItems: 1, maxItems: DESTINATIONS_MAX,
+    description: `class "flare": every place it was posted, one each — { url: the external URL (https://…), platform ("YouTube", "TikTok", "Bluesky", …), form: ${FLARE_FORMS.map((f) => `"${f}"`).join(" or ")}, screenshot?: a URL of one, where the platform allows } — at most ${DESTINATIONS_MAX}; a flare with no place, or a place whose URL is lost, is not a complete flare`,
+    items: { type: "object", properties: { url: { type: "string" }, platform: { type: "string" }, form: { type: "string", enum: [...FLARE_FORMS] }, screenshot: { type: "string" } },
+      required: ["url", "platform", "form"], additionalProperties: false } },
+  maker: { type: "string", enum: ["town"], description: `class "flare": optional — "town" says the town posted it on its own channels, which only ${FLARE_HANDS_WORDS} say; left off, its maker is your own household` },
+});
+
 // Each lane's own fields, so the other lane's can be refused by name.
 const IDEA_ONLY = ["slug", "at", "on", "stamps", "by", "image"];
 const EVENT_ONLY = ["title", "invitation", "place", "starts", "ends", "doors_open", "handle"];
 const QUEST_ONLY = ["quest"];
 const BUG_ONLY = ["issue", "steps", "record", "for", "fix_myself"];
 const BALLOT_ONLY = ["topic", "window", "choices"];
+const FLARE_ONLY = ["about", "destinations", "maker"];
+// What a flare takes at post (POS-1163): its title, its spark, every place it was posted, the town as maker, and which of your residents reports it.
+const FLARE_TAKES = ["class", "title", "handle", ...FLARE_ONLY];
 // What a ballot takes at post (POS-983): its topic, its text, its choices, and which of your residents is the hand.
 const BALLOT_TAKES = ["class", "title", "body", "handle", ...BALLOT_ONLY];
 // What a bug takes at post: its text and its own fields, and which of your residents acts.
@@ -167,8 +192,16 @@ export async function townPostEvent(args = {}, key = null, { roll = null, env = 
     if (stray) return stray;
     return answer(() => postAtTown(args, key));
   }
+  if (c === FLARE_CLASS) {
+    // a flare takes no stake, by name: what it pays is the posting quest's word (flares.mjs)
+    if (args.stamps !== undefined) return bounceOf(FLARE_NO_STAKE());
+    const stray = strays(args, Object.keys(args).filter((f) => !FLARE_TAKES.includes(f) && args[f] !== undefined), "a flare",
+      "a flare takes title, about (its public spark), destinations (every place it was posted) and handle, and maker: \"town\" from a flare hand");
+    if (stray) return stray;
+    return answer(() => postAtTown(args, key));
+  }
   if (c !== EVENT_CLASS) return null;
-  const stray = strays(args, [...IDEA_ONLY, ...QUEST_ONLY, ...BUG_ONLY, ...BALLOT_ONLY], "an event", "an event takes title, body (or invitation), place, starts, ends, doors_open and handle — slug, at, on and stamps are an idea's, quest a quest's, issue, steps, record, fix_myself and for a bug's, topic, window and choices a ballot's");
+  const stray = strays(args, [...IDEA_ONLY, ...QUEST_ONLY, ...BUG_ONLY, ...BALLOT_ONLY, ...FLARE_ONLY], "an event", "an event takes title, body (or invitation), place, starts, ends, doors_open and handle — slug, at, on and stamps are an idea's, quest a quest's, issue, steps, record, fix_myself and for a bug's, topic, window and choices a ballot's, about, destinations and maker a flare's");
   if (stray) return stray;
   return answer(() => postAtTown(args, key));
 }
@@ -187,17 +220,19 @@ const IDEAS_ON = ideaPostsOn();
 const ifIdeas = (s) => (IDEAS_ON ? s : "");
 
 // close and advance: the acting resident is the post's own for an event, and the town's hand for a quest or a bug.
-const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands" };
+const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands; for a flare, one of its hands" };
 const POST_REF = { type: "string", description: "the post's id, <author>/<slug>, as town { read: \"posts\" } names it" };
 const CLASS_REF = IDEAS_ON
-  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, BALLOT_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\", \"ballot\" or \"report\")" }
-  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\" or \"report\")" };
+  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, BALLOT_CLASS, FLARE_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\", \"ballot\", \"flare\" or \"report\")" }
+  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS, FLARE_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\", \"flare\" or \"report\")" };
 // POS-983: what a ballot's amend, advance and close say, on each card
 const BALLOT_CARD = `A BALLOT is the town's vote, carried only by the town's hands (${BALLOT_HANDS.join(", ")}): ${BALLOT_STATES.join(" → ")}.`;
+// POS-1163: what a flare's advance says, on its card
+const FLARE_CARD = `A FLARE (a post about a public spark, with every place it was posted) is advanced by ${FLARE_HANDS_WORDS} only (${FLARE_HANDS_PENDING}): ${FLARE_REPORTED} → ${FLARE_FINISHED.join(" | ")}, once; the advance takes only to. It pays nothing: what a flare pays is the posting quest's word.`;
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",
-    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)} ${BALLOT_CARD} Its amend takes title, body (what is being decided, how and when, with links), window and choices: a new choice joins at the end, in submissions or while staking runs; a choice named again has its words replaced; nothing is taken off once staking opens, and a closed ballot is not amended.`,
+    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)} ${BALLOT_CARD} Its amend takes title, body (what is being decided, how and when, with links), window and choices: a new choice joins at the end, in submissions or while staking runs; a choice named again has its words replaced; nothing is taken off once staking opens, and a closed ballot is not amended. This door does not support amending a FLARE.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF,
       body: { type: "string", description: `the post's text (an event's invitation), at most ${INVITATION_MAX} characters` },
@@ -206,12 +241,12 @@ export const TOWN_POST_TOOLS = [
       window: BALLOT_POST_PROPERTIES.window, choices: BALLOT_POST_PROPERTIES.choices,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_close",
-    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`) + ` ${BALLOT_CARD} Its close ends the staking; every stake returns whole at the town's close ceremony, as before.`,
+    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`) + ` ${BALLOT_CARD} Its close ends the staking; every stake returns whole at the town's close ceremony, as before. This door does not support closing a FLARE: it finishes by advance (${FLARE_FINISHED.join(", ")}).`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_advance",
-    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. THE WORD IS STATE: "to" names the state the post moves to, and the answer carries both "state" and "stage" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: "<state>", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's), or, ${OWN_POST_LINK}; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. fixed waits for its PR to merge, and shipped waits for a tag, commit or settlement that holds that merge (link it); a refusal names what is missing. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced.${ifIdeas(` An IDEA moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order: ${IDEA_STAGES.join(", ")}. Each move may carry credit (the resident it credits), link and note; duplicate names of. Nothing gates a stage and nothing mints: stamps on an idea are awarded by hand (town { do: "award" }). A finished idea (${IDEA_FINISHED.join(", ")}) moves no further.`)} ${BALLOT_CARD} Its one advance is to: "staking", which opens it to stakes; close ends it. Each class's lifecycle is law, declared class by class.`,
+    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. THE WORD IS STATE: "to" names the state the post moves to, and the answer carries both "state" and "stage" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: "<state>", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's), or, ${OWN_POST_LINK}; the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. fixed waits for its PR to merge, and shipped waits for a tag, commit or settlement that holds that merge (link it); a refusal names what is missing. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced.${ifIdeas(` An IDEA moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order: ${IDEA_STAGES.join(", ")}. Each move may carry credit (the resident it credits), link and note; duplicate names of. Nothing gates a stage and nothing mints: stamps on an idea are awarded by hand (town { do: "award" }). A finished idea (${IDEA_FINISHED.join(", ")}) moves no further.`)} ${BALLOT_CARD} Its one advance is to: "staking", which opens it to stakes; close ends it. ${FLARE_CARD} Each class's lifecycle is law, declared class by class.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
       to: { type: "string", description: "the state to move it to, as its class's law names it" },
