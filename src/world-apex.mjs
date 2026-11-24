@@ -3290,12 +3290,15 @@ async function actLook(args, key, ctx = {}) {
   return lookHere(args, key, ctx);
 }
 // The worker's side: the same two reads, in the same order, on the args, key and roll the act was given.
-onCall(ACT_LOOK, async ({ args, key, roll }) => {
+async function actLookRead({ args, key, roll }) {
   const oriented = await worldOrient(args, key, { roll: roll ?? [], note: false });
   if (oriented?.error) return { oriented };
   const seen = await worldEyes(args, key, { lights: false });
   return { oriented, seen };
-});
+}
+onCall(ACT_LOOK, actLookRead);
+/** Test seam (POS-1219): the worker's read itself, so a test can run it and cross it through a structured clone the way a port does. */
+export const __actLookReadForTest = actLookRead;
 
 async function apexDo(args, key, ctx = {}) {
   const action = String(args.do ?? "").trim();
