@@ -155,7 +155,12 @@ act's orient and eyes asked of a read worker, POS-1219: the main thread's wait f
 answered within the bound), `ledger_scan` (the enter/exit ledger scan, on the ACTS pool, which `leases` does not cover), `spine`, `gather`, `holdings`, `households`, `nonce_kept`, `handler`,
 `land`, `creatures`; and for enter and exit the crossing's own reads and write: `crossing_law`, `world_state`, `ledger`, `standpoint`, `acts_read`, `lends`,
 `dungeon_locks`, `door_holdings`, `vessel_service`, `walking`, `walk_stop`, `land_write` and `record` (the pen write: the town lock's wait, the child process and the commit
-as ONE segment). Argument validation is not timed. A name that is absent did not run on this act; a name with `n` 0 never appears.
+as ONE segment); and for a leave-mark (POS-1221), its handler's steps, nested in `handler`: `m_world` (the world read), `m_forecast` (the placement
+forecast), `m_journal` or `m_draft` (the write's road: the journal, or a draft to the sketchbook), and inside the journal `m_live` (the live marks it is judged
+among), `m_parent` (the declared-parent guard), `m_ground` and `m_escrow` (the ground's minimum stake and the escrow behind it), `m_nest` (the nesting parent,
+against every mark), `m_relations` (overlaps and contains, against every mark), `m_witness` and `m_write` (the write itself); then `m_disclose` (the four
+disclosures, summed) and `m_stake` (a stake carried with the mark). Argument validation is not timed. A name that is absent did not run on this act; a name with
+`n` 0 never appears.
 
     # where a slow enter or exit spent it: the segments of the ten slowest world acts today
     jq -s -c '[.[]|select(.timing.door=="world-act" and .call.do=="enter")]|sort_by(-.ms)|.[:10][]|{ms,admit:.timing.admit_ms,exec:.timing.exec_ms,seg:(.timing.act.seg|map_values(.sum_ms))}' access-$(date -u +%F).jsonl

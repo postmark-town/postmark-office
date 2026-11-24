@@ -73,6 +73,8 @@
 //   walking, walk_stop, land_write   enter / exit: the walk the entry ends, and a set-down's write
 //   land          the ground's set-down after an enter (the lookup and the land pen)
 //   creatures     the creatures' answer to an act in their ring (act-watch.mjs § perceived)
+//   m_*           a leave-mark's handler, step by step (POS-1221; docs/read-workers.md names each): m_world, m_forecast, m_journal | m_draft, and inside the
+//                 journal m_live, m_parent, m_ground, m_escrow, m_nest, m_relations, m_witness, m_write; then m_disclose, m_stake
 //
 // ABSENT, ZERO AND FAILED ARE THREE THINGS: null is "this was not measured here" (no worker ran it, no lease was taken on that thread, no bundle ran), 0 is a
 // measurement that found zero, and `failed` counts acquisitions that did not get a connection.
