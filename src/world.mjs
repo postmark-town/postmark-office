@@ -3370,7 +3370,7 @@ export async function markImageBytes(url, { fetchImpl = null, maxBytes = INVESTI
   // under a mimeType it guessed from a url would be the one place that didn't.
   let sniffed;
   try { sniffed = imageFormat(bytes, MEDIA_FORMATS); }
-  catch (e) { return { bytes: bytes.length, note: `not inlined: what the media host returned is not an image the office recognizes (${String(e?.defect ?? e?.message ?? e).slice(0, 120)}). The url stands.` }; }
+  catch (e) { return { bytes: bytes.length, note: `not inlined: what the media host returned is not an image the office recognizes (${plainReason(e, "record", "the calendar, for a spark's event")}). The url stands.` }; }
 
   return {
     bytes: bytes.length,
