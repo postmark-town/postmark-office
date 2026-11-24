@@ -3293,16 +3293,24 @@ async function actLook(args, key, ctx = {}) {
   const ask = askSeam ?? (workerCallable() ? callOnWorker : null);
   if (ask) {
     let handed = null;
-    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [] }), lookWaitMs)); }
+    // THE DEADLINE RIDES WITH THE CALL (POS-1219, Truey's N2): the instant past which this act no longer waits. A worker that picks the call up after it
+    // reads nothing and answers null, so a saturated pool never spends a look nobody will use. One process, one clock: the workers read the same Date.now.
+    const deadline = Date.now() + lookWaitMs;
+    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [], deadline }), lookWaitMs)); }
     catch { handed = null; }
     if (handed && typeof handed === "object" && handed.oriented !== undefined) return handed;
   }
   return lookHere(args, key, ctx);
 }
-// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given.
-async function actLookRead({ args, key, roll }) {
+const pastDeadline = (deadline) => Number.isFinite(deadline) && Date.now() > deadline;
+// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given; nothing at all once the act stopped waiting.
+// ⚑ (Truey's N1) THE WORKER'S LAW AND WORLD ARE ITS OWN COPIES: its act law, world graph snapshot and fold are each kept fresh on that thread by stamp or
+// message (docs/read-workers.md), not shared with the main thread, so a look read here can trail one the main thread would read by that one hop.
+async function actLookRead({ args, key, roll, deadline = null }) {
+  if (pastDeadline(deadline)) return null; // the act stopped waiting before this worker reached it: it reads its own look
   const oriented = await worldOrient(args, key, { roll: roll ?? [], note: false });
   if (oriented?.error) return { oriented };
+  if (pastDeadline(deadline)) return null; // passed while orient was read: eyes would be read for nobody
   const seen = await worldEyes(args, key, { lights: false });
   return { oriented, seen };
 }
