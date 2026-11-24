@@ -45,6 +45,7 @@ import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // PO
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
 import { noteActWritten } from "./act-watch.mjs"; // POS-637: the crossing pass's row, told to the act door's creatures
 import { actSpan } from "./read-timing.mjs"; // POS-1110: the act's phases, timed under its request (measurement only)
+import { callOnWorker, onCall, workerCallable } from "./read-workers.mjs"; // POS-1219: an act's look is read on a worker
 import { readFileSync, readdirSync } from "node:fs";
 import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household grain is the store's identities
 import { refShaFromDisk } from "./world-branches.mjs";
@@ -3249,6 +3250,53 @@ export async function dispatchCreatureVerb(action, args, key, { kept = null, doo
   }
 }
 
+// ── THE ACT'S LOOK, READ ON A WORKER (POS-1219) ──────────────────────────────
+//
+// Every world act gathers its law from where its caller stands: `worldOrient` (the
+// standpoint and the spine it is within) and then `worldEyes` (what is in reach), the
+// same two reads a worker answers as GET /world/orient and /world/eyes. On prod they
+// ran on the main thread for every act, a whole world look per say (2026-11-24,
+// 15–16Z: 154 MCP says, orient 351 s and eyes 405 s of their segments), while the
+// main thread admits every request, keeps every write and holds every listen. So the
+// look is asked of a read worker, and the act itself (its law, its verb, its write)
+// stays here. Neither read touches the main thread's own memory (docs/read-workers.md:
+// presence reads the positions projection, which every worker keeps by message, and an
+// announced write is applied before a call that follows it on the same port).
+//
+// Same answer, same order: orient, and eyes only when orient did not refuse. When no
+// worker answers (no pool, the office's own workers off, none ready, a key or an answer
+// that cannot be cloned, a worker that stopped, a read that threw there) the act reads
+// both here exactly as before, so an exception is still this thread's own. The segment
+// is `look` when a worker read it, and `orient` and `eyes` when this thread did.
+const ACT_LOOK = "act-look";
+async function lookHere(args, key, ctx) {
+  const oriented = await actSpan("orient", () => worldOrient(args, key, { roll: ctx.roll ?? [], note: false })); // DEC-11: the town roll rides into `present`
+  if (oriented?.error) return { oriented };
+  // no porch lights: this answer shows no houses (WLD-29)
+  const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
+  return { oriented, seen };
+}
+let askSeam = null;
+/** Test seam (POS-1219): who an act's look is asked of, `(name, payload) → answer | null`; null restores the read pool. */
+export const __setActLookCallerForTest = (fn) => { askSeam = fn ?? null; };
+async function actLook(args, key, ctx = {}) {
+  const ask = askSeam ?? (workerCallable() ? callOnWorker : null);
+  if (ask) {
+    let handed = null;
+    try { handed = await actSpan("look", () => ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [] })); }
+    catch { handed = null; }
+    if (handed && typeof handed === "object" && handed.oriented !== undefined) return handed;
+  }
+  return lookHere(args, key, ctx);
+}
+// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given.
+onCall(ACT_LOOK, async ({ args, key, roll }) => {
+  const oriented = await worldOrient(args, key, { roll: roll ?? [], note: false });
+  if (oriented?.error) return { oriented };
+  const seen = await worldEyes(args, key, { lights: false });
+  return { oriented, seen };
+});
+
 async function apexDo(args, key, ctx = {}) {
   const action = String(args.do ?? "").trim();
 
@@ -3293,10 +3341,8 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await actSpan("orient", () => worldOrient(args, key, { roll: ctx.roll ?? [], note: false })); // DEC-11: the town roll rides into `present`
+  const { oriented, seen } = await actLook(args, key, ctx);
   if (oriented?.error) return oriented;
-  // no porch lights: this answer shows no houses (WLD-29)
-  const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
   if (seen?.error) return seen;
 
   const spine = oriented.you?.within ?? [];
