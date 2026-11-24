@@ -19,6 +19,9 @@
 //   · world-apex.mjs § actLookRead: return { oriented } without eyes                → 1 reds (the apex reads `seen.objects` of undefined)
 //   · world-apex.mjs § actLookRead / lookHere: read eyes even when orient refused   → 3 reds
 //   · world-apex.mjs § actLook: ask without `answeredWithin` (no bound)             → 2's "never answers" reds by the runner's timeout (a hang)
+//   · world-apex.mjs § actLook: leave `deadline` off the payload                    → 5's payload test reds
+//   · world-apex.mjs § actLookRead: drop the first deadline check                   → 5's "after its deadline" reds
+//   · world-apex.mjs § actLookRead: drop the check after orient                     → 5's "passes while orient is read" reds
 //   node --import ./test/helpers/sparse-guard.mjs --test test/pos-1219-act-look.test.mjs
 
 import test, { after } from "node:test";
@@ -170,7 +173,8 @@ for (const [who, key] of [["beta (nothing in reach)", KEY_BETA], ["gamma (the so
     // LAW (POS-1219): "an act's orient and eyes reads move to a read worker, and the act itself stays on main"
     assert.equal(asked.length, 1, `the look was asked of a worker once (asked ${asked.length})`);
     assert.equal(asked[0].name, "act-look");
-    assert.deepEqual(Object.keys(asked[0].payload).sort(), ["args", "key", "roll"], "the payload is the act's args, its key and the town roll");
+    // until 2026-11-24 (Truey's N2) this asserted ["args", "key", "roll"]: the payload now carries the act's deadline too (5 · below)
+    assert.deepEqual(Object.keys(asked[0].payload).sort(), ["args", "deadline", "key", "roll"], "the payload is the act's args, its key, the town roll and its deadline");
     assert.deepEqual([...asked[0].payload.key.handles], [...key.handles], "the key crossed whole");
     assert.deepEqual(asked[0].payload.roll, ["beta", "gamma"], "the roll the act was given rides with it");
     assert.ok(there.seg.look?.n === 1, `the look is timed as \`look\`: ${JSON.stringify(there.seg)}`);
@@ -218,6 +222,122 @@ test("2 · a worker that never answers: the act waits only its bound, then reads
   assert.ok(fell.seg.orient?.n === 1 && fell.seg.eyes?.n === 1, `and then read the look here: ${JSON.stringify(fell.seg)}`);
   assert.ok(took < 10_000, `the act did not hang (${Math.round(took)} ms)`);
   sameBytes(here.out, fell.out, "a worker that never answers");
+});
+
+// ── 5 · the deadline (Truey's N2) ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+test("5 · the look's payload carries the act's deadline: the instant the act stops waiting", async () => {
+  const asked = [];
+  const t0 = Date.now();
+  __setActLookCallerForTest(async (name, payload) => { asked.push(payload); return null; }, { waitMs: 4321 });
+  await worldApex({ do: "say" }, KEY_BETA);
+  const t1 = Date.now();
+  __setActLookCallerForTest(null);
+  assert.equal(asked.length, 1);
+  assert.ok(Number.isFinite(asked[0].deadline), `the payload carries a deadline: ${JSON.stringify(Object.keys(asked[0]))}`);
+  assert.ok(asked[0].deadline >= t0 + 4321 && asked[0].deadline <= t1 + 4321, `the deadline is the act's start plus its wait (${asked[0].deadline - t0} ms after it began)`);
+});
+
+test("5 · a worker that reaches the call after its deadline reads nothing and answers null; before it, the look", async () => {
+  const live = await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: Date.now() + 60_000 });
+  assert.ok(live?.oriented && live.seen, "control: a deadline still ahead reads the look");
+  // LAW (Truey's N2): "the worker answers `failed` without reading once it's past" (here: null, which the act reads as no answer)
+  const real = Date.now;
+  let reads = 0;
+  const past = real() - 1;
+  Date.now = () => { reads += 1; return real(); };
+  let out;
+  try { out = await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: past }); }
+  finally { Date.now = real; }
+  assert.equal(out, null, "past its deadline the worker answers null");
+  assert.equal(reads, 1, `and reads nothing: the clock is read once, by the deadline check, and orient never runs (the clock was read ${reads} times)`);
+});
+
+test("5 · a deadline that passes while orient is read leaves eyes unread: null", async () => {
+  const real = Date.now;
+  const base = real();
+  let calls = 0;
+  Date.now = () => (++calls === 1 ? base : base + 3_600_000); // the first look at the clock (the worker's first check) is in time; every later one is an hour on
+  let out;
+  try { out = await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: base + 1000 }); }
+  finally { Date.now = real; }
+  assert.ok(calls > 1, "control: the clock was read again after the first check (the read went on past it)");
+  assert.equal(out, null, "the deadline passed during orient, so eyes was not read and nothing was answered");
+});
+
+test("5 · a saturated worker (answering 20× past the bound) cannot make the act wait longer than its bound; its late answer is dropped", async () => {
+  const here = await control({ do: "say" }, KEY_GAMMA);
+  // ORDER, NOT A WALL-CLOCK MARGIN (TEST-DESIGN § Clocks; Truey on #1220): the act and the worker each say when they answered, and the act must come first
+  const order = [];
+  let workerRun = null;
+  const slow = (name, payload) => (workerRun = (async () => {
+    await new Promise((r) => setTimeout(r, 2000));
+    const look = structuredClone(await __actLookReadForTest({ ...payload, deadline: Infinity }));
+    order.push("worker");
+    return look;
+  })());
+  const fell = await pinned(() => { __setActLookCallerForTest(slow, { waitMs: 100 }); return within(() => worldApex({ do: "say" }, KEY_GAMMA)); });
+  order.push("act");
+  __setActLookCallerForTest(null);
+  const late = await workerRun;
+  // LAW (Truey's N2): "a saturated pool can't make an act wait 20 s and then pay the main-thread cost anyway" — the act waits its bound, not the worker
+  assert.ok(late?.oriented && late.seen, "control: the saturated worker did answer, with a whole look");
+  assert.deepEqual(order, ["act", "worker"], "the act answered before the saturated worker did; the worker's late answer was dropped");
+  assert.ok(fell.seg.look?.n === 1, `the act asked the worker once: ${JSON.stringify(fell.seg.look)}`);
+  assert.ok(fell.seg.orient?.n === 1 && fell.seg.eyes?.n === 1, "and read its look itself");
+  sameBytes(here.out, fell.out, "a saturated worker");
+});
+
+test("5 · end to end: a worker too late answers null, and the act reads its look here, byte-identical", async () => {
+  const here = await control({ do: "say" }, KEY_GAMMA);
+  // the worker reaches the call only once the act has answered (order, not a timer): by then the act's deadline (its pinned start + 40 ms) is long past
+  let actAnswered;
+  const answered = new Promise((r) => { actAnswered = r; });
+  let workerRun = null;
+  const late = (name, payload) => (workerRun = (async () => { await answered; return __actLookReadForTest(payload); })());
+  const fell = await pinned(() => { __setActLookCallerForTest(late, { waitMs: 40 }); return within(() => worldApex({ do: "say" }, KEY_GAMMA)); });
+  __setActLookCallerForTest(null);
+  actAnswered();
+  // LAW (Truey's N2): "the worker answers `failed` without reading once it's past" — the late worker's own return is null (Truey's N1 on #1220: asserted, not assumed)
+  assert.equal(await workerRun, null, "the worker that came too late answered null");
+  assert.ok(fell.seg.orient?.n === 1 && fell.seg.eyes?.n === 1, `the act read the look itself: ${JSON.stringify(fell.seg)}`);
+  sameBytes(here.out, fell.out, "a worker that came too late");
+});
+
+// ── 6 · the look as its worker saw it (measurement only) ───────────────────────────────────────────────────────────────────────────────────────────────
+test("6 · an act's line carries its look's worker, queue, exec, return and the worker's pen leases; a look never answered names its worker and no more", () => {
+  const leases = { n: 3, failed: 0, acquire_ms: { sum: 12.5, max: 9.1 }, held_ms: { sum: 18_400.2, max: 17_900 }, failed_wait_ms: 0 };
+  const tm = newTiming();
+  tm.calls = { "act-look": { slot: 2, sent: 1000, answer: { rid: tm.rid, taken: 1050, done: 19_450, bundle: null, leases }, answer_at: 19_470 } };
+  // LAW (POS-1219, the coordinator 2026-11-24): "worker slot, queue_ms and pen leases (acquire and held) on each look's access line, measurement only"
+  assert.deepEqual(timingLine(tm, { door: "mcp-act", status: 200 }).act.look,
+    { worker: 2, answered: true, queue_ms: 50, exec_ms: 18_400, return_ms: 20, leases }, "the answered look, as its worker reported it");
+  const never = newTiming();
+  never.calls = { "act-look": { slot: 1, sent: 1000, answer: null, answer_at: null } };
+  assert.deepEqual(timingLine(never, { door: "mcp-act", status: 200 }).act.look,
+    { worker: 1, answered: false, queue_ms: null, exec_ms: null, return_ms: null, leases: null }, "a look that never answered still names the worker it waited on");
+  const none = newTiming();
+  assert.equal(timingLine(none, { door: "mcp-act", status: 200 }).act.look, undefined, "no worker asked: no look");
+  assert.equal(timingLine(tm, { door: "doorstep", status: 200 }).act, undefined, "a read's line is unchanged");
+});
+
+test("6 · the worst-case act line with its look block (every segment, the worker's leases and bundle at their widest) still fits the access line's bound", async () => {
+  const { accessLine, LINE_MAX } = await import("../src/telemetry.mjs");
+  const { actSpan } = await import("../src/read-timing.mjs");
+  const NAMES = ["body", "standing", "law_moved", "dispatch", "look", "orient", "eyes", "ledger_scan", "spine", "gather", "holdings", "households", "nonce_kept", "handler",
+    "crossing_law", "world_state", "ledger", "standpoint", "acts_read", "lends", "dungeon_locks", "door_holdings", "vessel_service", "record", "walking", "walk_stop", "land_write", "land", "creatures"];
+  const tm = newTiming();
+  await runTiming(tm, async () => { for (const n of NAMES) { await actSpan(n, async () => {}); await actSpan(n, async () => {}); } });
+  const wide = { n: 999, failed: 999, acquire_ms: { sum: 999_999.9, max: 99_999.9 }, held_ms: { sum: 999_999.9, max: 99_999.9 }, failed_wait_ms: 999_999.9 };
+  tm.calls = { "act-look": { slot: 9, sent: 0, answer: { rid: tm.rid, taken: 99_999.9, done: 999_999.9, bundle: { n: 999, sum_ms: 999_999.9, max_ms: 99_999.9 }, leases: wide }, answer_at: 1_999_999.9 } };
+  const timing = timingLine(tm, { door: "mcp-act", status: 200 });
+  const call = { tool: "world", do: "enter", keys: Array.from({ length: 20 }, (_, i) => `args.field_${String(i).padStart(2, "0")}`), out_bytes: 12345678, bounce: 409 };
+  const line = accessLine({ ts: new Date().toISOString(), ip: "2001:0db8:85a3:0000:0000:8a2e:0370:7334", method: "POST", path: "/world/apex", status: 200, ms: 12345,
+    ua: "u".repeat(120), household: "h".repeat(40), mcp: "tools/call", call, timing });
+  const parsed = JSON.parse(line);
+  assert.ok(Buffer.byteLength(line, "utf8") + 1 <= LINE_MAX, `${Buffer.byteLength(line, "utf8")} bytes`);
+  assert.equal(parsed.timing?.act?.look?.worker, 9, "the look survived whole");
+  assert.equal(parsed.timing_dropped, undefined);
+  assert.equal(parsed.call_dropped, undefined, "and the call was not given up for it");
 });
 
 test("3 · orient refuses: eyes is never read, on the worker's side or here, and the refusal is the act's answer, byte-identical", async () => {

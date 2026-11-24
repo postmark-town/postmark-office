@@ -50,7 +50,7 @@ counts the calls each worker answered (it is not in `disclose()`, which `/releas
 
 | Call | Asked by | Answered with |
 |---|---|---|
-| `act-look` | every world act (`world-apex.mjs § actLook`), before its law | `worldOrient(args, key, { roll, note: false })`, then `worldEyes(args, key, { lights: false })` unless orient refused: the same reads a worker answers as GET `/world/orient` and `/world/eyes`. The act waits at most `ACT_LOOK_WAIT_MS` (20 s) and otherwise reads both itself. The act (its law, its verb, its write) stays on the main thread |
+| `act-look` | every world act (`world-apex.mjs § actLook`), before its law | `worldOrient(args, key, { roll, note: false })`, then `worldEyes(args, key, { lights: false })` unless orient refused: the same reads a worker answers as GET `/world/orient` and `/world/eyes`. The act's access line carries `act.look`: the worker slot it went to (known at the send, so a look that never answered still names it), `answered`, and once it answered `queue_ms`, `exec_ms`, `return_ms` and the worker's own pen `leases` for that look (a call runs under a timing context of its own on the worker, as a handed-over read does). The act waits at most `ACT_LOOK_WAIT_MS` (13 s, about the worker look's p99 on prod) and otherwise reads both itself; the call carries that `deadline`, and a worker that reaches it after the deadline reads nothing and answers null (it skips eyes too when the deadline passes during orient). The act (its law, its verb, its write) stays on the main thread |
 
 ## MESSAGE
 

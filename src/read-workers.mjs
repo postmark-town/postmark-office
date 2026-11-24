@@ -315,10 +315,15 @@ export function serveReadsInWorker(handle) {
     }
     if (msg?.type === "call") { // POS-1219: one named read; the answer is the handler's value, or `failed` (the main thread then reads it itself)
       const fn = callHandlers.get(msg.name);
-      const failed = (e) => { faultLogged("a read worker's call tripped (the main thread reads it itself)", e); parentPort.postMessage({ type: "answer", id: msg.id, failed: true }); };
+      // POS-1219: the call runs under a timing context of its own, joined to the act's by its rid, as a handed-over read does: the leases and bundles it
+      // takes on this thread come back with its answer (workerReport), so the act's line can say where a slow look waited (measurement only)
+      const taken = nowMs();
+      const tm = msg.timing && typeof msg.timing.rid === "string" ? newTiming(taken, msg.timing.rid.slice(0, 32)) : null;
+      const report = () => (tm ? { timing: workerReport(tm, taken) } : {});
+      const failed = (e) => { faultLogged("a read worker's call tripped (the main thread reads it itself)", e); parentPort.postMessage({ type: "answer", id: msg.id, failed: true, ...report() }); };
       Promise.resolve()
-        .then(() => { if (!fn) throw new Error(`this worker answers no call named ${msg.name}`); return fn(msg.payload); })
-        .then((value) => { try { parentPort.postMessage({ type: "answer", id: msg.id, value }); } catch (e) { failed(e); } }, failed);
+        .then(() => { if (!fn) throw new Error(`this worker answers no call named ${msg.name}`); return tm ? runTiming(tm, () => fn(msg.payload)) : fn(msg.payload); })
+        .then((value) => { try { parentPort.postMessage({ type: "answer", id: msg.id, value, ...report() }); } catch (e) { failed(e); } }, failed);
       return;
     }
     if (msg?.type !== "read") return;
@@ -397,6 +402,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         calls.delete(msg.id);
         rec.inflight.delete(msg.id);
         rec.called++;
+        if (c.seen) { c.seen.answer = msg.timing ?? null; c.seen.answer_at = nowMs(); } // POS-1219: measurement only
         c.resolve(msg.failed != null ? null : msg.value ?? null);
         return;
       }
@@ -491,10 +497,14 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
     const r = pick();
     if (!r) return resolve(null);
     const id = nextId++;
-    calls.set(id, { resolve });
+    // POS-1219: which worker the call went to and when, on the asking request's own timing (measurement only): recorded at the send, so a call that never
+    // answers still names its worker; the worker's report and the instant it came back are added when it answers
+    const tm = currentTiming();
+    const seen = tm ? ((tm.calls ??= {})[name] = { slot: r.slot, sent: nowMs(), answer: null, answer_at: null }) : null;
+    calls.set(id, { resolve, seen });
     r.inflight.add(id);
-    try { r.w.postMessage({ type: "call", id, name, payload }); }
-    catch { calls.delete(id); r.inflight.delete(id); resolve(null); }
+    try { r.w.postMessage({ type: "call", id, name, payload, ...(tm ? { timing: { rid: tm.rid } } : {}) }); }
+    catch { calls.delete(id); r.inflight.delete(id); if (tm) delete tm.calls[name]; resolve(null); }
   });
 
   for (let i = 0; i < size; i++) spawn(i);
