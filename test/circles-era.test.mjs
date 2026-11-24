@@ -271,6 +271,18 @@ test("HISTORICAL: acts spoken before the instant decode with their ids and read 
   assert.deepEqual(one.circle_read.path, [31004]);
 });
 
+test("HISTORICAL boundary through the decoder, Date rows as the store hands them: B-1 ms is pre-circles, B and B+1 are circles", () => {
+  const rows = [row(38001, "ada", B - 1), row(38002, "bram", B), row(38003, "cato", B + 1), row(38004, "dell", B + 271)];
+  assert.ok(rows.every((r) => r.at instanceof Date));
+  const voices = decode(rows);
+  assert.deepEqual(voices.map((v) => v.at), [B - 1, B, B + 1, B + 271], "the decoder keeps the Date's milliseconds");
+  const ix = C.circleIndex(voices);
+  assert.deepEqual(ids(ix.timeline), [38001]);
+  assert.deepEqual(ix.tops.map((t) => t.id), [38002, 38003, 38004]);
+  const asString = decode(rows.map((r) => ({ ...r, at: r.at.toISOString() })));
+  assert.deepEqual(asString.map((v) => v.at), [B - 1, B, B + 1, B + 271], "an ISO string reads the same");
+});
+
 test("HISTORICAL CONTROL: the same acts spoken after the instant, with no place mark and no reply, are six circles", () => {
   const rows = OLD.map(([id, h, m]) => row(id + 1000, h, after(m)));
   const voices = decode(rows);

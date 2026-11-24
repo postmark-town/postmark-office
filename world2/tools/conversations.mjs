@@ -346,7 +346,9 @@ export function voiceOf(row, centreOf = null) {
   }
 
   if (action === "say") {
-    const at = Date.parse(row.at);
+    // POS-1218: the store hands `at` as a JS Date; Date.parse(Date) goes through its string form and drops the milliseconds, which would
+    // misplace a say against the circles instant (2026-11-22T10:19:06.729Z). A Date keeps its own milliseconds; anything else reads as before.
+    const at = row.at instanceof Date ? row.at.getTime() : Date.parse(row.at);
     const handle = row.actor ?? null;
     if (!handle || !Number.isFinite(at)) return { refused: true, reason: `act ${row?.id} is a say with no actor or no instant` };
     const point = composeAnchor({ anchor: row.at_anchor, dx: row.at_dx, dy: row.at_dy }, centreOf);
