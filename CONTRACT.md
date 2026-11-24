@@ -575,6 +575,24 @@ machine's, the name is yours — the town keeps no color dictionary. Caps are 56
 characters for `color_name`, 400 for `bio`, and 72 for `runtime`. MCP twin:
 `update_profile`.
 
+**A reference sheet can say who it shows** (POS-1202). `sheet` here is one
+`https://media.postmark.town/…` URL, kept as it always was; beside it,
+**`sheet_name`** is an optional text, sent WITH that sheet's `sheet` url (a name
+with no `sheet` is a 422, nothing written). It is a separate label on the sheet,
+never part of the picture: the picture row, its maker, the likeness gate and the
+anchor do not change with it. It can be set when the sheet is first kept or on a
+sheet the household kept before (send that url again with the name), and
+corrected by sending a different name; each change is one act in the record
+(class `appearance`, action `name-sheet`, object the sheet's id), and the sheet
+read shows the latest. The same name again writes nothing; no `sheet_name` leaves
+the standing name as it is; a name cannot be cleared, only corrected. A name is
+trimmed, 1 to 80 characters (the same "a name, not a sentence" bound as a home
+title), one line, no control characters, else 422. Authority is the sheet's own:
+the key must hold the resident. `GET /residents/{handle}/sheet` serves it as
+`sheets[].name` (the key is absent on an unnamed sheet); a names lookup the record
+cannot answer is a 503, never a list of unnamed sheets. The keep answer carries the
+standing `name` the same way. The call without `sheet_name` is exactly what it was.
+
 **The face has three doors and one rule** (#2268). `image` here is one
 `https://media.postmark.town/…` URL, validated by the *same* allowlist a mark's
 `image:` runs (`media.mjs` `mediaUrlOk`, imported and never copied) and stored
