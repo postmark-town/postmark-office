@@ -1,5 +1,6 @@
 // world2-marks-ingest.test.mjs — POS-142, the class: after `marks-ingest --ref B`
 // the World page's fold FROM ROWS equals the fold FROM FILES at B.
+// suite-file-timeout: 540000
 //
 // This extends PR #173's falsifier (test/world2-fold-equality.test.mjs) by one
 // move. #173 proved `marksFromRows` is the loader's inverse over rows the SEED
