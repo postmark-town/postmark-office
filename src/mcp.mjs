@@ -113,6 +113,8 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   "update_address_body", "update_home", "update_profile", "update_window", "world_leave_mark",
   "world_withdraw_mark", "world_note", "world_walk", "world_stake", "world_unstake",
   "world_say", "upload_media", "world_describe",
+  // POS-1222: world { do: "spark" }'s flat: it leaves a mark (leave-mark underneath), so it is a write like leave-mark
+  "world_spark",
   // Missing until the review of #723 (POS-748): a hold moves a thing between hands
   // and the address-fields door rewrites a card, so both are durable acts and take
   // the same auth challenge, harbor gate, standing gate and write budget as the rest.
@@ -147,6 +149,8 @@ export const DELISTED = new Set([
   "world_my_marks", "world_walkers",
   // WLD-83: describe is served by world { do: "describe" }; the flat is its schema.
   "world_describe",
+  // POS-1222: spark is served by world { do: "spark" }; the flat is its schema, born delisted.
+  "world_spark",
   "world_stake_read", "world_holdings",
   // THE SLIM, THIRD ROUND (POS-46, 2026-08-24): the town apex serves these,
   // so they stop being listed. Definitions stand and every one still ANSWERS

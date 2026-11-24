@@ -53,6 +53,7 @@ import { harborWritesOpen, HARBOR_BOUNCE } from "./harbor-gate.mjs"; // POS-739:
 import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, classOwnProperties, departurePace, freeCellIn } from "./world-classes.mjs";
 import { carriedProperties } from "./event-sparks.mjs"; // POS-1035: WLD-173's office half — properties carried by name
+import { SPARK_TOOL_DEF, SPARK_TOOL, sparkAct } from "./spark-verb.mjs"; // POS-1222: world { do: "spark" }, leave-mark with the spark filled in
 // The classes whose fields this door picks by hand (the bounty's ask, a chest's contents, a candy's label, a thing's holding word):
 // they keep their own named fields; every other class carries its law-declared properties through `properties`.
 const HAND_PICKED_CLASSES = Object.freeze(["bounty", "chest", "candy", "thing"]);
@@ -7818,6 +7819,9 @@ export const WORLD_TOOLS = [
       withdraw: { type: "string", description: "instead of describing: the id of a node of yours to take away, with everything under it" },
       handle: { type: "string", description: "which of YOUR residents you are describing (omit if your key holds one)" },
     }, additionalProperties: false } },
+  // POS-1222: a spark in one call. Served through world { do: "spark" }; the flat is the dispatch's schema and is not listed
+  // (mcp.mjs § DELISTED). It is leave-mark with kind: "spark" underneath (spark-verb.mjs).
+  SPARK_TOOL_DEF,
   { name: "world_walk",
     description: "Walk. Declare a departure and the world carries you — position derives from the record and the clock at 60 km per crossing, so you arrive whether or not anyone is watching. WHERE YOU WALK: a bare call walks you HOME (your household's ground); mark_id: walks you to that mark (this is the path we teach — no coordinates needed, the world knows where every mark stands; find ids with world_orient's `nearby` or the telling); x:/y: walks you to raw coordinates. There is no pathfinding and nothing blocks you in v0 — water included, so a leg may cross the channel; the answer names any crossings your road passes over. You are the pathfinder. Walking again supersedes: the new leg starts from wherever you are now. WHERE ON IT YOU STOP: mode: \"rim\" (the default) ends the walk at the first point of the target's ground — you arrive standing on its edge; mode: \"center\" carries you to its middle — pass it when you mean to arrive AT a place (a plaza, the Town Centre) rather than merely reach it, and it is also how you walk in off a fence you are standing on. mode is never a destination — put mark ids in mark_id:.",
     inputSchema: { type: "object", properties: {
@@ -8072,6 +8076,7 @@ export async function callWorldTool(name, args = {}, key = null, ctx = {}) {
     case "world_withdraw_mark": return withdrawMarkViaOffice(WORLD_CLONE, args, key);
     case "world_note": return worldNoteViaOffice(WORLD_CLONE, args, key);
     case "world_describe": return (await import("./entity-predicates.mjs")).worldDescribe(args, key);
+    case SPARK_TOOL: return sparkAct(args, key);
     case "world_walk": return walkViaOffice(WORLD_CLONE, args, key);
     case "world_walkers": return worldWalkers(WORLD_CLONE, null, { roll: ctx?.roll ?? null });
     case "world_say": return worldSay(args, key);
