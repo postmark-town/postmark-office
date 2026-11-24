@@ -635,3 +635,44 @@ test("THE EVENT READ'S DEFAULT SETTLEMENTS are the historical record's (hearing.
   assert.match(body, /settlementsRecorded\(\)/);
   assert.doesNotMatch(body, /settlementsKnown\(\)/);
 });
+
+// ═══ the completion reads the historical record too ═════════════════════════════════════
+test("THE COMPLETION'S SETTLEMENTS are every published one (deploy/event-sparks-pass.mjs § completionEdges), so an otherwise-eligible long event's first pass is not held for want of rooms", async (t) => {
+  if (skip) return t.skip(skip);
+  const { mkdtempSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { completionEdges } = await import("../deploy/event-sparks-pass.mjs");
+  // a REAL world clone with 64 published sweeps: the four this store knows, then sixty more, so the oldest four are beyond the ear's newest sixty
+  const repo = mkdtempSync(join(tmpdir(), "pos1203-world-"));
+  const git = (env, ...a) => execFileSync("git", ["-C", repo, ...a], { env: { ...process.env, ...env, GIT_AUTHOR_NAME: "k", GIT_AUTHOR_EMAIL: "k@k", GIT_COMMITTER_NAME: "k", GIT_COMMITTER_EMAIL: "k@k" }, stdio: "ignore" });
+  git({}, "init", "-q", "-b", "main");
+  const sweeps = [S1, S2, S3, S4, ...Array.from({ length: 60 }, (_, i) => S4 + (i + 1) * 12 * H)];
+  for (const [i, at] of sweeps.entries()) git({ GIT_AUTHOR_DATE: iso(at), GIT_COMMITTER_DATE: iso(at) }, "commit", "-q", "--allow-empty", "-m", `settlement: sweep S${i + 1}`);
+  const all = await completionEdges(repo, H0.createHearingWindow);
+  assert.equal(all.length, 64, "every published settlement, not the newest sixty");
+  assert.deepEqual(all.slice(0, 4), [S1, S2, S3, S4]);
+  const ear = H0.createHearingWindow({ repo }); await ear.refresh();
+  assert.equal(ear.settlements().length, 60, "the control: the ear's list is clipped at sixty");
+
+  // an ended long event with NO membership yet (the first pass): its window opens before the sixtieth-newest settlement
+  const id = "quill/lantern-first-pass";
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', 'First pass', '', 'quill', 'quill-house', NULL, $2, 0, $3, $4, 'announced', $5, 0, 1, 1)`, [id, LANTERN_X, iso(EVENT_FROM), iso(EVENT_TO), JSON.stringify({ doors_open: iso(EVENT_FROM) })]);
+  const { eventEvidence } = await import("../src/event-sparks.mjs");
+  const { rowOf, POST_COLUMNS } = await import("../src/events-store.mjs");
+  const row = rowOf((await owner.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1`, [id])).rows[0]);
+  const now = S4 + 62 * 12 * H;
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM durable_event_memberships WHERE event_id = $1", [id])).rows[0].n, 0);
+  const clipped = await eventEvidence(office, row, { now, edges: ear.settlements() });
+  assert.equal(clipped.room_history, "unavailable", "with the ear's list the completion would be held");
+  const collect = {};
+  const full = await eventEvidence(office, row, { now, edges: all, collect });
+  assert.equal(full.room_history, "complete", "with the historical list its rooms are told on the first pass");
+  assert.deepEqual(full.rooms.map((r) => r.id), [derived["b1,b2"].id]);
+  assert.ok(collect.membership, "and the window's membership is there to fix, with no pre-existing record");
+
+  // the shipped caller asks this source, and not the ear
+  const text = readFileSync(join(HERE, "..", "deploy", "event-sparks-pass.mjs"), "utf8");
+  assert.match(text, /const edges = await completionEdges\(world, createHearingWindow\);/);
+  assert.doesNotMatch(text, /h\.settlements\(\)/);
+});
