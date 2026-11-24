@@ -160,15 +160,52 @@ export async function withMarkHeld(id, fn, { env = process.env, refusal = "nothi
   }
 }
 
+// ── NO NEW STAKE ON A MARK BEING REMOVED (POS-1177/a) ───────────────────────
+//
+// RULED (Darko, 2026-11-21 23:46 EST, POS-1177/a, "Yes, refuse them"); Wright 04:51Z: "Between the town deciding a mark's removal
+// (and paying its stakers back) and that settlement's seal, the stake door refuses new stakes on that mark, and says why ('this
+// mark is being removed at the next seal'). Withdrawing an existing stake still works. No second return path."
+//
+// The removal is DECIDED when the clearing commits its saved decision (095 § 4, settlement_decisions.town_returns) and SEALED
+// when the settlement crossing copies it into world_snapshots after paying it (world2/tools/settlement-seal.mjs). Between the two,
+// the marks it takes are pending. Asked HERE, under the town flock the exec holds for its whole append and landing and under the
+// mark's own lock, so it is the same boundary the town's return writes under (town-return-exec.mjs takes the flock and every
+// mark's lock): a stake either finished landing before the return took the flock (and the once-only return pays it), or asks
+// after the decision committed and is refused. That closes both races: the one between the return and its gate's read, and a
+// paid decision whose seal failed and waits for its retry. Only a stake is asked; an unstake never is.
+const PENDING_REMOVAL_SQL = `
+  SELECT d.settlement, d.window_id, d.day::text AS day
+    FROM settlement_decisions d
+   WHERE d.town_returns IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM world_snapshots s WHERE s.window_id = d.window_id)
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.town_returns) r, jsonb_array_elements_text(r->'leaving') m WHERE m = $1)
+   ORDER BY d.settlement LIMIT 1`;
+
+/** The saved, unsealed removal that takes this mark — `{ settlement, window, day }` — or null. */
+export async function pendingRemovalOf(client, id) {
+  const { rows: [r] } = await client.query(PENDING_REMOVAL_SQL, [String(id)]);
+  return r ? { settlement: Number(r.settlement), window: Number(r.window_id), day: r.day } : null;
+}
+
+/** The refusal a stake on a mark being removed gets, in the ruling's words, before any stamp moves. */
+export function pendingRemovalRefusal(id, pending) {
+  return bounce(409, `this mark is being removed at the next seal ("${id}", S${pending.settlement})`,
+    `the settlement of window ${pending.window} decided to remove it and is paying its stakers back; a new stake would never come home with that return. Withdrawing a stake you already hold still works. Nothing was staked and your stamps are untouched.`,
+    { stakePendingRemoval: pending });
+}
+
 /**
  * THE STAKE'S QUESTION, asked under the held lock before the engine runs: a
  * mark whose dropped unit has left, or whose newest mark act is a withdrawal,
- * takes no stake. `client` is withMarkHeld's (null: no record to ask).
+ * takes no stake; nor does a mark a saved removal is taking (POS-1177/a).
+ * `client` is withMarkHeld's (null: no record to ask).
  */
 export async function stakeRefusalUnderLock(client, id) {
   if (!client) return null;
   const left = await leftOf(client, id, { withdrawn: true });
-  return left ? leftRefusal(id, left) : null;
+  if (left) return leftRefusal(id, left);
+  const pending = await pendingRemovalOf(client, id);
+  return pending ? pendingRemovalRefusal(id, pending) : null;
 }
 
 /**

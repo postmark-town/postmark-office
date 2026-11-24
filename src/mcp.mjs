@@ -792,6 +792,9 @@ export async function callTool(name, args, ctx) {
       try {
         const looks = await (await import("./entity-predicates.mjs")).appearanceFor(args.handle);
         if (looks && !looks.unavailable) r.appearance = looks;
+        // POS-1201: the official sheet's pointer beside it, from the same helper the REST card calls (depictions.mjs § sheetPointerOf)
+        const sheet = await (await import("./depictions.mjs")).sheetPointerOf(args.handle);
+        if (sheet) r.official_sheet = sheet;
         // their pronouns beside the name, from their profile (server.mjs § residentCard), never guessed
         const pronouns = (await import("./profiles.mjs")).pronounsOf(r);
         if (pronouns) r.pronouns = pronouns;

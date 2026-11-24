@@ -259,27 +259,36 @@ test("memory trim that loses the WHOLE pre-edge part of a carried room still say
   assert.equal(store.conversations().live[0].id, id, "the id is the room's, not the earliest held say's");
 });
 
-test("a spatial bridge that leaves memory leaves ONE room, BOTH sides kept, with the stored record's id", async () => {
+// POS-1185 (Darko 2026-11-22: "we simply dont merge separate conversations just because there is a geometric linker later on"). Until then this
+// asserted that a say heard by two rooms made them ONE room ("a spatial bridge that leaves memory leaves ONE room, BOTH sides kept"). The law is
+// reversed, so the test is inverted: the say joins one room, and the two rooms stay two, each under its own id, in memory and after their fronts leave it.
+test("a say within earshot of two rooms joins ONE and fuses nothing: both rooms keep their ids and their says, even after their first says leave memory", async () => {
   const at = { bridge: { x: 48, y: 0 }, west: { x: 0, y: 0 }, east: { x: 96, y: 0 }, ear: { x: 48, y: 5 } };
-  const { store, tick } = bench(at, { memoryMax: 5 });
+  const log = join(DIR, "two-rooms.jsonl");
+  const { store, tick } = bench(at, { memoryMax: 5, logPath: log });
   const say = async (h, t) => { await store.say(h, t); tick(20_000); };
   await say("west", "w1"); await say("east", "e1");             // two rooms: 96 m apart, out of earshot (60 m)
   assert.equal(store.conversations().live.length, 2);
-  await say("bridge", "b1");                                     // joins them
-  assert.equal(store.conversations().live.length, 1);
-  const joined = store.conversations().live[0].id;
+  const [westId, eastId] = [`t${T0}-west`, `t${T0 + 20_000}-east`];
+  await say("bridge", "b1");                                     // 48 m from each: within earshot of both, nearest to neither, so the most recent voice's room (east's)
+  const after = store.conversations().live;
+  assert.equal(after.length, 2, "POS-1185: two conversations are never fused because a later say is within earshot of both");
+  const byId = (list) => Object.fromEntries(list.map((c) => [c.id, c.voices.map((v) => v.said)]));
+  assert.deepEqual(byId(after), { [westId]: ["w1"], [eastId]: ["e1", "b1"] }, "the say is in exactly one room, and each room still opens by its own id with its own says");
   await say("west", "w2"); await say("east", "e2");
-  await say("west", "w3"); await say("east", "e3"); await say("west", "w4"); // w1, e1 and the bridge have left; both sides are still held
+  await say("west", "w3"); await say("east", "e3"); await say("west", "w4"); // w1, e1 and b1 have left memory; both rooms are still held
   const held = store._voices().map((v) => v.text);
-  assert.equal(held.length, 5);
-  assert.ok(!held.includes("b1") && held.some((t) => t.startsWith("w")) && held.some((t) => t.startsWith("e")), "the bridge is gone, both sides remain");
+  assert.deepEqual(held, ["w2", "e2", "w3", "e3", "w4"]);
   const c = store.conversations();
-  assert.equal(c.live.length, 1, "one room, not two fragments");
-  assert.equal(c.live[0].id, joined);
-  assert.equal(joined, `t${T0}-west`, "the stored record names it by its first say");
+  assert.deepEqual(byId(c.live), { [westId]: ["w2", "w3", "w4"], [eastId]: ["e2", "e3"] }, "two rooms, each named by the say that founded it, not by the earliest say still held");
+  const lines = readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => [l.text, l.root]), [["w1", westId], ["e1", eastId], ["b1", eastId], ["w2", westId], ["e2", eastId], ["w3", westId], ["e3", eastId], ["w4", westId]], "every line names the one room its say joined");
+  for (const l of lines) assert.equal(l.merged, undefined, "no line records a join of two rooms any more");
 });
 
-test("legacy voices are joined ONCE: a say into a room of rootless lines records no alias list again", async () => {
+// POS-1185: until then a say into a room of lines with no recorded root wrote `merged`, the list of every old line it joined. A say now
+// names the room it joins and nothing else: the old lines' room is named as it was (by its first say), and no join is recorded.
+test("a say into a room of old lines with no recorded room names that room, by its first say, and records no join", async () => {
   const log = join(DIR, "legacy.jsonl");
   const lines = [];
   for (let i = 0; i < 30; i++) lines.push(JSON.stringify({ at: new Date(T0 + i * 20_000).toISOString(), handle: "mira", text: `old ${i}`, x: 0, y: 0, place: null, aboard: false }));
@@ -289,22 +298,32 @@ test("legacy voices are joined ONCE: a say into a room of rootless lines records
   for (let i = 0; i < 6; i++) { await b.store.say("odo", `new ${i}`); b.tick(20_000); }
   const written = readFileSync(log, "utf8").trim().split("\n").slice(30).map((l) => JSON.parse(l));
   assert.equal(written.length, 6);
-  assert.ok(written[0].merged?.length >= 29, "the first say records the join of the old room, once");
-  for (const w of written.slice(1)) assert.equal(w.merged, undefined, "later says repeat nothing");
-  assert.equal(written[1].root, written[0].root);
+  for (const w of written) {
+    assert.equal(w.root, `t${T0}-mira`, "the old room's own id: its first say's");
+    assert.equal(w.merged, undefined, "no join is recorded");
+  }
+  const live = b.store.conversations().live;
+  assert.equal(live.length, 1);
+  assert.equal(live[0].voice_count, 36, "the old lines and the new are one room");
 });
 
-test("an ordinary say records no join, and the alias map stays bounded by the memory", async () => {
-  const quiet = bench(AT, { memoryMax: 5 });
-  for (let i = 0; i < 40; i++) { await quiet.store.say("mira", `q${i}`); quiet.tick(20_000); }
-  assert.equal(quiet.store._aliases(), 0, "a say into one room unions nothing");
-  // many rooms joined by bridges, a round at a time: every round is a real join
-  const at = {};
-  const rounds = 40;
-  for (let r = 0; r < rounds; r++) { at[`w${r}`] = { x: 0, y: r * 1000 }; at[`e${r}`] = { x: 96, y: r * 1000 }; at[`b${r}`] = { x: 48, y: r * 1000 }; }
-  const { store, tick } = bench(at, { memoryMax: 6 });
-  for (let r = 0; r < rounds; r++) for (const h of [`w${r}`, `e${r}`, `b${r}`]) { await store.say(h, h); tick(20_000); }
-  assert.ok(store._aliases() <= 2 * 6 + 3, `aliases ${store._aliases()} stay within twice the memory (plus the say being made)`);
+// POS-1185: until then an old line's `merged` made memory keep two rooms as one from that line on. It is no longer read: a say stays in the room it
+// named when it was spoken, so the says a room held before its bridge are that room's own again, and the bridge and the says after it stay where they were.
+test("an old log's recorded join is not replayed: each say sits in the room it named when it was spoken", async () => {
+  const log = join(DIR, "old-bridge.jsonl");
+  const line = (i, handle, x, root, more = {}) => JSON.stringify({ at: new Date(T0 + i * 20_000).toISOString(), handle, text: `${handle} ${i}`, x, y: 0, place: null, aboard: false, root, ...more });
+  const west = `t${T0}-west`, east = `t${T0 + 20_000}-east`;
+  writeFileSync(log, [
+    line(0, "west", 0, west), line(1, "east", 96, east), line(2, "east", 96, east),
+    line(3, "bridge", 48, west, { merged: [east] }),   // the bridge of its day: it fused the two under the older room
+    line(4, "east", 96, west),                          // and a later say on the east side named the fused room
+  ].join("\n") + "\n");
+  const b = bench({ ear: { x: 48, y: 0 } }, { logPath: log });
+  b.tick(6 * 20_000);
+  const rooms = Object.fromEntries(b.store.conversations().live.map((c) => [c.id, c.voices.map((v) => v.said)]));
+  assert.deepEqual(rooms, { [west]: ["west 0", "bridge 3", "east 4"], [east]: ["east 1", "east 2"] },
+    "the younger room reads again under its own id with the says that named it; the bridge and the say after it stay in the room they named");
+  for (const id of [west, east]) assert.equal(b.store.conversations({ find: { room: id } }).find.room.id, id, "each id opens its room");
 });
 
 test("the room's root rides the log line, and a restarted office reads it back without walking the log", async () => {
@@ -317,9 +336,14 @@ test("the room's root rides the log line, and a restarted office reads it back w
   b.store._voices();
   assert.equal(b.store.room.stats.clustered, 0, "loading the log clusters nothing");
   assert.equal(b.store.conversations().live[0].id, idA, "the same room after a restart that holds only its last four voices");
+  // POS-1185: a say's room is named BEFORE its act is penned, so the first say after a start walks the held list twice (once to name the
+  // room, once for the reply with the new say in it); from then on the naming reads the walk the last reply made. Until then this asserted one.
   const base = b.store.room.stats.clustered;
-  await b.store.say("odo", "after");
-  assert.ok(b.store.room.stats.clustered - base <= 1, "a say walks the held list once: the append's walk, read again by the reply");
+  await b.store.say("odo", "after"); b.tick(20_000);
+  assert.ok(b.store.room.stats.clustered - base <= 2, "the first say after a start: one walk to name the room, one for the reply");
+  const next = b.store.room.stats.clustered;
+  await b.store.say("mira", "and again");
+  assert.ok(b.store.room.stats.clustered - next <= 1, "a say walks the held list once: its room is named from the walk the last reply made");
 });
 
 test("/world2/say: a room open just after the edge whose earlier epoch lies behind the 13 h read says it may be part of a carried room", async () => {

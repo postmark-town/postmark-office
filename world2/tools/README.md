@@ -29,7 +29,7 @@ runs the other way — it is the only one that reads the DB and writes the repo.
 | `falsifier-acts-lane-closure.mjs` | every WRITE lane reaches `acts`, checked from each lane's own pen — and a census that reds when a new act appears that nobody has ruled on. STANDING INVOCATION CARRIES `--since 2026-08-29T00:20Z` (the fix's lab deploy): exactly ONE act was lost before the lanes closed — wright's say at 2026-08-28T16:18:38.744Z, the lab's first witnessed act, which lives in voices-log.jsonl and never reached `acts`. The exclusion is dated at the deploy so it excuses only the pre-fix era and nothing after; the loss itself is recorded here, in the merge commit (87f4fe65), and in the epic — a red nobody can act on is a falsifier nobody reads (the discarded-draft lesson), but a loss nobody wrote down is worse. THE MIRROR EXPIRY WAS PER LANE (DEC-2, ruled 2026-08-29) AND IS GONE (G1 / POS-156): this tool and `falsifier-acts-parity.mjs` (deleted) once reddened past a lane's own backstop in `LANE_MIRROR` and NAMED the lanes; the map and both gates left with the journal INSERT, and the arena's exemption by P-143's ruling is carried now by `EXEMPT_LANES` (`src/world2-acts.mjs`) and `FLIP_REFUSED` (`src/world-journal.mjs`). A lane's obligation ended by removing its row — its read ports landed, its deletion ruled — never by moving a date. |
 
 The table is the founding set (2026-08-28/29). The directory has grown since:
-70 more tools stand beside these (among them `marks-ingest.mjs`,
+70 more tools stand beside these (among them `settlement-printout.mjs`,
 `town-index-ingest.mjs`, `escrow-ingest.mjs`, `graph-ingest.mjs`,
 `paperwork-import.mjs`, `migrations-landed.mjs`, `snapshot-backfill.mjs` and
 `world-snapshot.mjs`), each with its contract in its own header and none listed
@@ -918,6 +918,12 @@ this pen can make, and it stops the run.
 `law_sha` and `town_sha` are the **latest closed window's own pins**, not a fresh
 read — the certification says what the law was when the state it certifies was
 cleared.
+
+`settlement` and `snapshot_digest` (POS-1025) are that window's seal: the number the
+clearing gave it and its snapshot's digest, the pair its public `settlement/S<n>` tag
+names on the world. Both are written at the seal and never move. A window sealed
+before migration 095 has no number, and its certification carries neither key, so
+every certification signed before them re-derives byte for byte.
 
 `archives` and `archives_sha` go beyond gold §2's list of three, on purpose: the
 acts cursor alone binds the log's *length*. It would notice an act appended and

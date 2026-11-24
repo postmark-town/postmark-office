@@ -102,7 +102,14 @@ export function marksFromRows(markRows = [], lawRows = []) {
     }
     const parentSlug = row.parent != null ? (slugByUuid.get(String(row.parent)) ?? null) : null;
     if (CONTINUED.has(row.kind)) {
-      rec.parent = parentSlug ?? parentIsLaw ?? d._explicitParent ?? d._parentMarkId ?? undefined;
+      // POS-1180 (WLD-237): the record's own `parent_id` declaration is the LAST source, behind every one above it (the
+      // resolved row parent, the law parent, the as-authored parent, the directory's parent) and only for the continuations
+      // (a property, a sited mark and a parcel never take an authored parent from it). It carries the declared id as it is:
+      // nothing is resolved, forced or filled in here, and the fold derives the placement and tier from it as it does for a file.
+      const declared = typeof d.parent_id === "string" && d.parent_id !== "" ? d.parent_id : null;
+      const named = parentSlug ?? parentIsLaw ?? d._explicitParent ?? d._parentMarkId ?? null;
+      rec.parent = named ?? declared ?? undefined;
+      if (named == null && declared != null && d._parentMarkId === null) rec._parentMarkId = declared;   // an explicit null is no parent: the declared one is the fold's directory parent
       if (rec.parent === undefined) delete rec.parent;
     } else if (row.kind === "property") {
       // walkMarks: a property stands under the class (or property) it belongs to
