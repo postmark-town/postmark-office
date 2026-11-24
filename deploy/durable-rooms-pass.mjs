@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 const arg = (argv, name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; };
 
 export async function main(argv = process.argv.slice(2), env = process.env, { keep = null, settlementsOf = null } = {}) {
-  const world = arg(argv, "--world") ?? env.WORLD_CLONE;
+  const world = arg(argv, "--world");   // named by the caller, never read from the environment: a bare run is usage
   if (!world) { console.error("usage: node deploy/durable-rooms-pass.mjs --world <world clone>"); return 2; }
   let edges;
   try {
