@@ -53,6 +53,8 @@ sudo bash deploy/uat/tunnel.sh <the tunnel-token file> # the connector; the toke
 
 At each freeze: carry the frozen release, run `store-restore-scrub.sh` (a fresh scrubbed copy), and rerun `units.sh` (the unit files ride the release).
 
+**The notary is masked on UAT, on purpose.** Its job is to push a certified snapshot off-box, and nothing from UAT pushes off-box (Wright, CORE-165, 2026-11-24). Its first runs failed only because UAT had no notary checkout, and the fix is not to give it one. Leave it masked.
+
 ## Checked before UAT is trusted
 
 - **The cap holds, and the meeps aren't slowed:** a load inside `uat.slice` stays on cores 12–15 and under 16 GB, while the meeps' rounds keep their timings. The receipt goes on CORE-160 before UAT's first load run.

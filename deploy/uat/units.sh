@@ -36,7 +36,6 @@ ENABLE=(
   postmark-office-keep.timer
   postmark-settlement.timer postmark-world2-clearing.timer
   postmark-town-index.timer postmark-world2-law-ingest.timer
-  postmark-world2-notary.timer
   postmark-site-refresh.timer
   postmark-harbor-watch.timer
 )
@@ -48,6 +47,7 @@ MASK=(
   postmark-earpiece.service postmark-earpiece.timer             # wakes REAL residents during an event's window
   postmark-media-sweep.service postmark-media-sweep.timer       # frees media in a real bucket
   postmark-world2-backup.service postmark-world2-backup.timer   # UAT is a copy; it ships nothing to prod's bucket
+  postmark-world2-notary.service postmark-world2-notary.timer   # nothing from UAT pushes off-box (Wright, CORE-165, 2026-11-24); off by ruling, not a gap to fix
   postmark-settlement-shadow.service postmark-settlement-shadow.timer  # UAT is the rehearsal; the shadow is prod's
   postmark-dev-freshen.service postmark-dev-freshen.timer       # dev's, not UAT's
   postmark-world2-ingest.service postmark-world2-ingest.timer   # disabled on prod too (split into law/marks)
