@@ -116,8 +116,9 @@ export const WORLD_ANCHOR = "the-town/let-there-be-light";
 // `frame` is a reparenting (§8's ruling (b)). Both ride one table, and the drain
 // sorts them by this column: marks to the sketchbook, frames to STATE/log.
 import { TOWN_CLASSES } from "./town-journal.mjs";
-import { isSited } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
+import { isSited, kindFieldOf } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
 import { classExtendsOf } from "./world-classes.mjs";
+const SPARK_KIND = "spark"; // the spark class's own kind, written `kind: spark` with no `class:` line (event-sparks.mjs § SPARK_CLASS, WLD-173)
 
 export const CLASS_MARK = "mark";
 export const CLASS_FRAME = "frame";
@@ -943,7 +944,11 @@ export function pathFor(record, { parentPathOf = null, publishedPathOf = null } 
   // this one's cannot be found, there is NO filing: the mark told us where it belongs, and filing it at its maker's id would be a guess (Wright, 2026-11-24
   // 13:21Z). `null` is the answer, and the planner HOLDS the mark by name (store-writedown.mjs § filingHolds, world-drain.mjs § planDrain). A caller that has
   // no resolver at all (the resident-facing `dir` of a preview) cannot say where a parent is, and is no evidence of a bad parent: it gets the id path.
-  if (!isSited(record, classExtendsOf()) && record?.parent_id && typeof parentPathOf === "function") {
+  //
+  // A SPARK KEEPS #1214's OWN-ID BRANCH EVEN WITH A SUPPLIED PARENT (POS-1209/WLD-173: a spark writes no `parent:` and files at its id). Wright, 2026-11-24 15:00Z:
+  // it stays until POS-1216 (the door's guard on a spark's parent) ships; removing it is that change's, not this merge's. So a spark never takes the parent path.
+  const isSpark = kindFieldOf(record) === SPARK_KIND;
+  if (!isSpark && !isSited(record, classExtendsOf()) && record?.parent_id && typeof parentPathOf === "function") {
     const parentDir = parentPathOf(record.parent_id);
     return parentDir ? `${parentDir}/${slug}/mark.md` : null;
   }

@@ -75,6 +75,13 @@ export const BALLOT_AUTHOR = PEN_HANDLE;
  * this list widens who may move a ballot, never what a key may stand as, nor who may stake, the cap or the law.
  */
 export const BALLOT_HANDS = Object.freeze(["wright", "keemin", "rei"]);
+/**
+ * The hand the office's own keeping tick acts as (STAR-237: a merged Hearth design joins the Hearth ballot by itself).
+ * It is a hand the TICK may name, in-process, and no credential may: ballot-acts.mjs § judgeBallotHand reads BALLOT_HANDS
+ * alone, so a resident who happens to be called "office" can never stand as it at the door, and ballots-store.mjs §
+ * ballotActInStore accepts it only when its caller says it is the tick (`machineHand: true`).
+ */
+export const MACHINE_HANDS = Object.freeze(["office"]);
 
 /** A ballot topic as the town spells one (tools/ballot.mjs § readBallot). */
 export const TOPIC_RE = /^[a-z0-9-]+$/;
