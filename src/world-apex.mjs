@@ -3276,10 +3276,11 @@ async function lookHere(args, key, ctx) {
   const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
   return { oriented, seen };
 }
-// THE WAIT IS BOUNDED. A worker that never answers (hung, or its loop stuck) must not hang the act: past this the act reads its look here, as it did before
-// this change. It is set far above a worker's look (about 1.7 s in prod's quiet hours, worker reads p90 7–9 s in its busy ones), so it fires only for a
-// worker that is not answering at all; a late answer is dropped.
-const ACT_LOOK_WAIT_MS = 20_000;
+// THE WAIT IS BOUNDED. A worker that never answers, or answers too late, must not hold the act: past this the act reads its look here, as it did before
+// POS-1219, and the deadline on the call (below) tells the worker to read nothing once it is past. Set at about the worker look's p99 on prod (w48.7,
+// 18:48–19:03Z, 53 acts: look p50 2.0 s, p90 6.6 s, p99 12.6 s, none falling back): lower, and the acts past it would read their look on the main thread,
+// which is the load this change exists to take off it; a late answer is dropped.
+const ACT_LOOK_WAIT_MS = 13_000;
 let askSeam = null;
 let lookWaitMs = ACT_LOOK_WAIT_MS;
 /** Test seam (POS-1219): who an act's look is asked of, `(name, payload) → answer | null`, and how long the act waits for it; null restores the read pool and the bound. */
@@ -3293,16 +3294,24 @@ async function actLook(args, key, ctx = {}) {
   const ask = askSeam ?? (workerCallable() ? callOnWorker : null);
   if (ask) {
     let handed = null;
-    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [] }), lookWaitMs)); }
+    // THE DEADLINE RIDES WITH THE CALL (POS-1219, Truey's N2): the instant past which this act no longer waits. A worker that picks the call up after it
+    // reads nothing and answers null, so a saturated pool never spends a look nobody will use. One process, one clock: the workers read the same Date.now.
+    const deadline = Date.now() + lookWaitMs;
+    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [], deadline }), lookWaitMs)); }
     catch { handed = null; }
     if (handed && typeof handed === "object" && handed.oriented !== undefined) return handed;
   }
   return lookHere(args, key, ctx);
 }
-// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given.
-async function actLookRead({ args, key, roll }) {
+const pastDeadline = (deadline) => Number.isFinite(deadline) && Date.now() > deadline;
+// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given; nothing at all once the act stopped waiting.
+// ⚑ (Truey's N1) THE WORKER'S LAW AND WORLD ARE ITS OWN COPIES: its act law, world graph snapshot and fold are each kept fresh on that thread by stamp or
+// message (docs/read-workers.md), not shared with the main thread, so a look read here can trail one the main thread would read by that one hop.
+async function actLookRead({ args, key, roll, deadline = null }) {
+  if (pastDeadline(deadline)) return null; // the act stopped waiting before this worker reached it: it reads its own look
   const oriented = await worldOrient(args, key, { roll: roll ?? [], note: false });
   if (oriented?.error) return { oriented };
+  if (pastDeadline(deadline)) return null; // passed while orient was read: eyes would be read for nobody
   const seen = await worldEyes(args, key, { lights: false });
   return { oriented, seen };
 }

@@ -63,7 +63,8 @@
 //                 timed: it is part of the line's `exec_ms` and of nothing named
 //   orient        the apex's standpoint read (worldOrient)    eyes        the apex's read of what the act's caller sees (worldEyes)
 //   look          both of those asked of a read worker (POS-1219, world-apex.mjs § actLook): the main thread's wait for the answer. `orient` and `eyes` then
-//                 appear only when this thread read them itself (no pool, or no worker answered within the bound)
+//                 appear only when this thread read them itself (no pool, or no worker answered within the bound). Beside the segments, `act.look` says
+//                 how that worker saw it: its slot, `answered`, queue_ms, exec_ms, return_ms and the worker's pen leases (§ lookOf)
 //   ledger_scan   the shared enter/exit ledger scan (the ACTS pool), where orient / eyes ask for the enter stack
 //   spine, gather, holdings, households   the apex's law gathering: the containment spine, the actions the ground / reach / held things grant, the holdings read, the roll
 //   nonce_kept    the retry key's store check               handler     the act's own verb (the verb's whole run, its write included)
@@ -276,6 +277,21 @@ const num = (x) => (Number.isFinite(x) ? round(x) : null);
  * The `timing` object for the access line: the main thread's context plus whatever the worker reported. `label` is `{ door, read }` chosen from fixed sets by
  * the caller; anything outside them is dropped here too. Null when the request is not on a path this record is for.
  */
+/**
+ * THE ACT'S LOOK, AS ITS WORKER SAW IT (POS-1219; measurement only): `act.look` on an act's line, from the call read-workers.mjs § caller recorded and the
+ * report its worker sent back (§ workerReport). `worker` is the slot it was sent to, known at the send; `answered` says whether its answer reached this
+ * thread before the line was written (an act that gave up at its bound writes its line first). Then, when it did: `queue_ms` (sent → the worker took it:
+ * its port's queue and its own busy loop), `exec_ms` (taken → done, on the worker), `return_ms` (done → this thread received it: a busy main thread shows
+ * here), and the worker's `leases` (its pen connections for this look: n, failed, acquire and held, as a read's) and `bundle`. Absent: no worker was asked.
+ */
+function lookOf(c) {
+  if (!c) return {};
+  const w = c.answer;
+  return { look: { worker: c.slot, answered: c.answer_at != null,
+    queue_ms: w ? num(w.taken - c.sent) : null, exec_ms: w ? num(w.done - w.taken) : null, return_ms: w && c.answer_at != null ? num(c.answer_at - w.done) : null,
+    leases: w?.leases ?? null, ...(w?.bundle ? { bundle: w.bundle } : {}) } };
+}
+
 export function timingLine(tm, { door = null, read = null, calls = 1, status = null, finish = nowMs() } = {}) {
   try {
     if (!tm || !DOORS.has(door)) return null;
@@ -300,7 +316,7 @@ export function timingLine(tm, { door = null, read = null, calls = 1, status = n
       bundle: onWorker ? (w?.bundle ?? null) : bundleGroup(tm.bundle),
       leases: { main: leaseGroup(tm.leases), worker: onWorker ? (w?.leases ?? null) : null },
       cov: "pen",
-      ...(ACT_DOORS.has(door) ? { act: { seg: segGroup(tm.act?.seg ?? {}) } } : {}), // POS-1110: an act's phases; a read's line is unchanged
+      ...(ACT_DOORS.has(door) ? { act: { seg: segGroup(tm.act?.seg ?? {}), ...lookOf(tm.calls?.["act-look"]) } } : {}), // POS-1110: an act's phases; a read's line is unchanged
     };
   } catch { return null; }
 }
