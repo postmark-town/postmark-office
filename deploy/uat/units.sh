@@ -94,7 +94,16 @@ done
 [ -z "$bad" ] || uat_die "these units still run as meepo:$bad"
 
 uat_say "mask what never runs here"
-for u in "${MASK[@]}"; do systemctl mask --quiet "$u" 2>/dev/null || true; done
+# A unit installed as a real file in /etc/systemd/system cannot be masked (systemctl refuses to replace it), so the
+# installed copy goes first; its source stays in $SRC. Every mask is then CHECKED: a silent failure here left the
+# payment watchers merely disabled on the first bring-up (CORE-165, 2026-11-24).
+for u in "${MASK[@]}"; do
+  systemctl disable --now --quiet "$u" 2>/dev/null || true
+  [ -f "/etc/systemd/system/$u" ] && [ ! -L "/etc/systemd/system/$u" ] && rm -f "/etc/systemd/system/$u"
+  systemctl mask --quiet "$u"
+  [ "$(systemctl is-enabled "$u" 2>/dev/null)" = masked ] || uat_die "$u is not masked"
+done
+systemctl daemon-reload
 
 uat_say "enable the UAT set"
 systemctl enable --quiet "${ENABLE[@]}"
