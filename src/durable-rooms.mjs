@@ -262,6 +262,23 @@ export async function frozenEventRooms(client, eventId) {
     rooms: rows.map((r) => ({ ...headerOf(asObject(r.header)), frame: inOrder(asObject(r.frame), ["room", "at", "extent"]), ...(r.frame_flag ? { frame_flag: r.frame_flag } : {}) })), unplaced_says: Number(m.unplaced_says ?? 0), source: m.source };
 }
 
+/**
+ * The fixed CLOSED rooms an ongoing window already holds: every fixed room with a say spoken in [from, to] within `earshotM` of `place` (the same
+ * place-membership rule as event-sparks.mjs § eventRoomFrom), as the thread headers the event read lists (same keys, same order, `live: false`), oldest first.
+ * A closed room is final, so this is the room as it will always be. [] when the tables have not landed.
+ */
+export async function archivedRoomsInWindow(client, { from, to, place, earshotM }) {
+  if (!(await durableLanded(client))) return [];
+  const { rows } = await client.query(
+    `SELECT r.* FROM durable_rooms r WHERE r.id IN (SELECT room_id FROM durable_room_says WHERE at >= $1 AND at <= $2
+        AND sqrt((x - $3::float8) * (x - $3::float8) + (y - $4::float8) * (y - $4::float8)) <= $5::float8) ORDER BY r.first_at, r.id`,
+    [iso(from), iso(to), place.x, place.y, earshotM]);
+  return rows.map((r) => headerOf({
+    id: r.id, ...(r.place_mark ? { place_mark: r.place_mark } : {}), live: false, place: r.place ?? null, at: { x: r.last_x, y: r.last_y }, aboard: r.aboard,
+    extent: { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1, span_m: r.span_m }, started: new Date(r.first_at).toISOString(), latest: new Date(r.latest_at).toISOString(),
+    participants: r.participants, voice_count: r.voice_count }));
+}
+
 /** The ended events (ids) that already have a fixed membership, among `ids`: the recurring producer reconstructs only the others. */
 export async function eventsAlreadyFixed(client, ids) {
   if (!ids.length || !(await durableLanded(client))) return new Set();

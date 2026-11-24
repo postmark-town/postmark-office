@@ -560,3 +560,78 @@ test("ATOMIC ROOMS: a room whose says do not all land (a keeper and a replay ove
     assert.match(refused.failed[0].why, /the next run asks again/);
   });
 });
+
+// ═══ a long season still on: the historical record, not the ear ════════════════════════
+// CORE-163's season runs December 1 to January 6, longer than the ear's sixty settlements. An ongoing event's read must answer its rooms (and so its
+// gallery) from the archive through its `as_of`, with no premature final membership.
+const SEASON = "quill/long-season", SEASON_LATE = "quill/long-season-late", SEASON_EARLY = "quill/season-before-the-record";
+test("A SEASON STILL ON: the one-event read answers the fixed closed rooms of its window and the open portion, not 'unavailable' because the ear forgot its start; nothing is made final", async (t) => {
+  if (skip) return t.skip(skip);
+  const edges = [S1, S2, S3, S4];
+  const NOW = S4 + 2 * H;
+  await insertSay("g1", S4 + 100 * MIN, "ivy", "quill/the-barn", 0, {});          // after the newest settlement: an OPEN room at the barn
+  const post = (id, title, x, from, to) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', $2, '', 'quill', 'quill-house', NULL, $3, 0, $4, $5, 'announced', $6, 0, 1, 1)`, [id, title, x, iso(from), iso(to), JSON.stringify({ doors_open: iso(from) })]);
+  const SEASON_END = S4 + 30 * H;
+  await post(SEASON, "The long season", 5000, S1 + H, SEASON_END);                  // began before the newest edges; c1 (S1+2h) is in it and long closed
+  await post(SEASON_LATE, "The late season", 5000, S3 + 2 * H, SEASON_END);       // the window cut: opens after c1's room closed, before e1's
+  await post(SEASON_EARLY, "Before the record", 5000, S1 - 2 * H, SEASON_END);    // opens before the oldest settlement: genuinely unknown
+  const env = { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
+  const read = (id, e = edges) => calendarAtOffice({ event: id }, { now: NOW, env, settlements: async () => e });
+  const members0 = await count("durable_event_memberships");
+
+  // THE CONTROL (the old failure): hand the read only the ear's newest edges and the season opens before the oldest of them
+  const ear = (await read(SEASON, [S3, S4])).event.evidence;
+  assert.equal(ear.room_history, "unavailable");
+  assert.equal(ear.gallery, null, "the album's pictures were lost while the event was still on");
+
+  // THE FIX: the historical record's edges: the fixed closed rooms and the open one
+  const ev = (await read(SEASON)).event.evidence;
+  assert.equal(ev.complete, false, "still on");
+  assert.equal(ev.room_history, "complete");
+  const c1room = derived["c1"].id;
+  const e1room = (await owner.query("SELECT room_id FROM durable_room_says WHERE act_id = $1", [ID.e1])).rows[0].room_id;
+  const g1room = ev.rooms.find((r) => r.id !== c1room && r.id !== e1room)?.id;
+  assert.deepEqual(ev.rooms.map((r) => r.id).slice(0, 2), [c1room, e1room], "the old fixed closed rooms, in the order they began");
+  assert.equal(ev.rooms.length, 3, "and the open room of the current portion");
+  assert.equal(ev.rooms[2].voice_count, 1);
+  assert.equal(ev.rooms[2].id, g1room);
+  assert.deepEqual(ev.gallery, { rooms: ev.rooms.map((r) => r.id), sparks: [] }, "a gallery of every room: known, not unknown");
+
+  // the fixed rooms read as the derivation gives them: switch the archive off (no tables seen) and derive the same window from the whole record
+  D.__forgetLandedForTest();
+  const blind = { query: (sql, params) => (/to_regclass/.test(sql) ? Promise.resolve({ rows: [{ ok: false }] }) : office.query(sql, params)) };
+  const { eventEvidence } = await import("../src/event-sparks.mjs");
+  const { rowOf, POST_COLUMNS } = await import("../src/events-store.mjs");
+  const row = rowOf((await owner.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1`, [SEASON])).rows[0]);
+  const whole = await eventEvidence(blind, row, { now: NOW, edges });
+  D.__forgetLandedForTest();
+  assert.deepEqual(ev.rooms, whole.rooms, "the archive's rooms are the whole-record derivation's rooms, header for header");
+  assert.deepEqual(ev.present, whole.present);
+
+  // the closed history is NOT reclustered: the says read are the unfixed ones only
+  const seen = [];
+  const spy = { query: (sql, params) => { seen.push(sql); return office.query(sql, params); } };
+  D.__forgetLandedForTest();
+  await eventEvidence(spy, row, { now: NOW, edges });
+  assert.ok(seen.some((q) => /NOT EXISTS \(SELECT 1 FROM durable_room_says/.test(q)), "the say read leaves out every say a fixed room holds");
+
+  // WINDOW CUT: a season that opens after c1's room has the later rooms and not c1's
+  const late = (await read(SEASON_LATE)).event.evidence;
+  assert.deepEqual(late.rooms.map((r) => r.id), [e1room, g1room], "the window cut: a closed room before the window is not the event's");
+  // NOTHING FINAL: an ongoing read fixes no membership, and writes nothing
+  assert.equal(await count("durable_event_memberships"), members0);
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM durable_event_memberships WHERE event_id = ANY($1)", [[SEASON, SEASON_LATE, SEASON_EARLY]])).rows[0].n, 0);
+  // GENUINELY UNKNOWN stays honest: a window opening before the oldest published settlement
+  const early = (await read(SEASON_EARLY)).event.evidence;
+  assert.equal(early.room_history, "unavailable");
+  assert.equal(early.gallery, null);
+  assert.match(early.gallery_note, /unknown, not none/);
+});
+
+test("THE EVENT READ'S DEFAULT SETTLEMENTS are the historical record's (hearing.recorded), never the ear's sixty", () => {
+  const text = readFileSync(join(HERE, "..", "src", "events-store.mjs"), "utf8");
+  const body = text.slice(text.indexOf("async function publishedSettlements"), text.indexOf("async function publishedSettlements") + 700);
+  assert.match(body, /settlementsRecorded\(\)/);
+  assert.doesNotMatch(body, /settlementsKnown\(\)/);
+});

@@ -17,7 +17,7 @@
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { frozenEventRooms, writeEventMembership, frameFlagOf } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
+import { frozenEventRooms, writeEventMembership, frameFlagOf, durableLanded, archivedRoomsInWindow } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
 import { faultLogged } from "./fault-words.mjs"; // the log's own reader of an error (POS-1203: a failed freeze is logged and never throws)
 import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
@@ -277,8 +277,13 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   // one client, one query at a time (pg queues concurrent queries on a client, and is retiring that). The says are the record as the
   // conversations page groups it (from the oldest published settlement), up to the instant asked: the rooms are the page's own.
   const oldest = [...edges].filter(Number.isFinite).sort((a, b) => a - b)[0];
+  // POS-1203: an ONGOING window (an event still on, which may be a season older than the ear) reads the fixed closed rooms from the archive and derives
+  // only what is not yet fixed (the open and carried rooms, and any closed room the producer has not reached): the says no fixed room holds. So the
+  // read never reclusters the closed history, and the open portion is the derivation's own. An ended event is fixed whole, or derived as ever.
+  const archive = !useFixed && until < window.to && await durableLanded(client);
   const sayRows = useFixed ? [] : (await client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-                   WHERE action = ANY($1) AND at <= $2 ${Number.isFinite(oldest) ? "AND at >= $3" : ""} ${talk.VOICE_ORDER_SQL}`,
+                   WHERE action = ANY($1) AND at <= $2 ${Number.isFinite(oldest) ? "AND at >= $3" : ""}
+                   ${archive ? "AND NOT EXISTS (SELECT 1 FROM durable_room_says d WHERE d.act_id = acts.id)" : ""} ${talk.VOICE_ORDER_SQL}`,
     [talk.VOICE_ACTIONS, iso(scoped.to), ...(Number.isFinite(oldest) ? [iso(oldest)] : [])])).rows;
   const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
   const { rows: actRows } = await client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
@@ -291,6 +296,11 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const { voices, unplaced } = talk.voiceRecords(spoken, { centreOf, strict: false });
   // POS-1203: the fixed record stands in for the derivation (same fields, same order); otherwise the derivation, as it always was
   const found = useFixed ? { rooms: useFixed.rooms.map(({ frame: _f, ...header }) => header), history: "complete" } : eventRoomFrom(voices, { window: scoped, place, edges });
+  if (archive && found.history === "complete") {
+    // the fixed closed rooms with a say in the window near the place, joined with the derived open ones in the order the rooms began
+    const closed = await archivedRoomsInWindow(client, { from: scoped.from, to: scoped.to, place, earshotM: talk.SAY_DIAL_SPEC.earshot_m[0] });
+    found.rooms = [...closed, ...found.rooms].sort((a, b) => Date.parse(a.started) - Date.parse(b.started) || (a.id < b.id ? -1 : 1));
+  }
   // the says this read could not place, counted for the event's own window (the read reaches further back, for the rooms' sake)
   const windowActs = new Set(spoken.filter((r) => ms(r.at) >= scoped.from && ms(r.at) <= scoped.to).map((r) => String(r.id)));
   const unplacedInWindow = useFixed ? useFixed.unplaced_says : unplaced.filter((u) => windowActs.has(String(u.act_id))).length;

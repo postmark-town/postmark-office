@@ -72,8 +72,10 @@ import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window,
  * this module never boots the world to read a calendar; a read that cannot get them groups the window as one settlement and says so.
  */
 async function publishedSettlements() {
-  const { settlementsKnown } = await import("./world.mjs");
-  return settlementsKnown();
+  // POS-1203: the HISTORICAL source, every published settlement (hearing.recorded()), not the ear's newest sixty: an event read is the record's, and an
+  // ongoing season older than the ear must not lose its rooms (and so its gallery) while it is still on
+  const { settlementsRecorded } = await import("./world.mjs");
+  return settlementsRecorded();
 }
 
 /** How many ended events one page of the lasting list carries (POS-1035, calls 13 and 25). */

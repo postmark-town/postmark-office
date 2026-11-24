@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS durable_room_says (
   UNIQUE (room_id, ord)
 );
 CREATE INDEX IF NOT EXISTS durable_room_says_say ON durable_room_says (say_id) WHERE say_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS durable_room_says_at  ON durable_room_says (at);   -- an ongoing event's read: the fixed rooms with a say in its window
 
 CREATE TABLE IF NOT EXISTS durable_event_memberships (
   event_id      text PRIMARY KEY,
