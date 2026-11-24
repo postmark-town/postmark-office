@@ -62,6 +62,8 @@
 //   dispatch      the whole door call: worldApex / householdApex / townApex (everything below nests in it). Argument validation is a synchronous in-memory check and is not
 //                 timed: it is part of the line's `exec_ms` and of nothing named
 //   orient        the apex's standpoint read (worldOrient)    eyes        the apex's read of what the act's caller sees (worldEyes)
+//   look          both of those asked of a read worker (POS-1219, world-apex.mjs § actLook): the main thread's wait for the answer. `orient` and `eyes` then
+//                 appear only when this thread read them itself (no pool, or no worker answered within the bound)
 //   ledger_scan   the shared enter/exit ledger scan (the ACTS pool), where orient / eyes ask for the enter stack
 //   spine, gather, holdings, households   the apex's law gathering: the containment spine, the actions the ground / reach / held things grant, the holdings read, the roll
 //   nonce_kept    the retry key's store check               handler     the act's own verb (the verb's whole run, its write included)
