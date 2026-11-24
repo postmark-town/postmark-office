@@ -41,7 +41,7 @@ const sameBytes = (a, b, what) => {
 
 // ── the miniature world (test/pos-1110-act-timing.test.mjs § 3's, cut to the one ambient `say`) ─────────────────────────────────────────────────────────
 const repo = tempDir("postmark-1219-");
-after(() => rmSync(repo, { recursive: true, force: true }));
+after(() => rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })); // this test's own temp folder (Windows can hold a handle a moment longer)
 const tmpHome = tempDir("postmark-1219-tmp-");
 process.env.TEMP = process.env.TMP = process.env.TMPDIR = tmpHome; // BEFORE the first ../src import that computes a cache path: a private engine cache
 after(() => rmSync(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));

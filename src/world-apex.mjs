@@ -3286,7 +3286,7 @@ let lookWaitMs = ACT_LOOK_WAIT_MS;
 export const __setActLookCallerForTest = (fn, { waitMs = ACT_LOOK_WAIT_MS } = {}) => { askSeam = fn ?? null; lookWaitMs = waitMs; };
 const answeredWithin = (p, ms) => {
   let timer = null;
-  const late = new Promise((ok) => { timer = setTimeout(() => ok(null), ms); timer.unref?.(); });
+  const late = new Promise((ok) => { timer = setTimeout(() => ok(null), ms); }); // not unref'd: the act is waiting on it (and it is cleared the moment either side settles)
   return Promise.race([p, late]).finally(() => clearTimeout(timer));
 };
 async function actLook(args, key, ctx = {}) {

@@ -315,7 +315,7 @@ export function serveReadsInWorker(handle) {
     }
     if (msg?.type === "call") { // POS-1219: one named read; the answer is the handler's value, or `failed` (the main thread then reads it itself)
       const fn = callHandlers.get(msg.name);
-      const failed = (e) => parentPort.postMessage({ type: "answer", id: msg.id, failed: String(e?.message ?? e).slice(0, 200) });
+      const failed = (e) => { faultLogged("a read worker's call tripped (the main thread reads it itself)", e); parentPort.postMessage({ type: "answer", id: msg.id, failed: true }); };
       Promise.resolve()
         .then(() => { if (!fn) throw new Error(`this worker answers no call named ${msg.name}`); return fn(msg.payload); })
         .then((value) => { try { parentPort.postMessage({ type: "answer", id: msg.id, value }); } catch (e) { failed(e); } }, failed);
