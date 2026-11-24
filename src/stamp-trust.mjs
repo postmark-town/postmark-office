@@ -18,12 +18,14 @@
 //
 // mapped to the town's `verifyStampLedger(repo, { pubkeyPem, handoff: { pubkeyPem, afterSeal } })`.
 //
-// THE WALL THAT DECIDES IT: with no STAMP_UAT_TRUST in the environment, this
-// file answers null, reads nothing, and every path behaves exactly as before,
-// byte for byte (test/stamp-trust.test.mjs holds the control).
+// THE WALL THAT DECIDES IT: with no STAMP_UAT_TRUST in the environment, or an
+// empty one (an empty value names no file: no UAT file is bound; Rivet's
+// settlement on POS-1214, 2026-11-24), this file answers null, reads nothing,
+// and every path behaves exactly as before, byte for byte
+// (test/stamp-trust.test.mjs holds the control).
 //
-// REQUESTED BUT UNUSABLE FAILS CLOSED: once STAMP_UAT_TRUST is in the
-// environment at all (an empty value included), a trust the office can't use is
+// REQUESTED BUT UNUSABLE FAILS CLOSED: once STAMP_UAT_TRUST names a file (any
+// non-empty value), a trust the office can't use is
 // a thrown StampTrustUnusable that names why, never a quiet fall back to prod's
 // key alone. The trust never comes from the clone, the ledger, a resident's
 // request or a signing key: the file must sit outside the town clone, hold
@@ -56,8 +58,11 @@ export class StampTrustUnusable extends Error {
   }
 }
 
-/** Was UAT trust asked for? Only the variable's presence decides it: unset is production. */
-export const uatTrustRequested = (env = process.env) => env?.[UAT_TRUST_ENV] !== undefined;
+/** Was UAT trust asked for? Only a non-empty STAMP_UAT_TRUST asks: unset or empty is production (no file bound). */
+export const uatTrustRequested = (env = process.env) => {
+  const v = env?.[UAT_TRUST_ENV];
+  return v !== undefined && v !== "";
+};
 
 /** The SPKI DER of a public key PEM, for comparing two keys by their bytes. */
 const spki = (pem) => createPublicKey(pem).export({ type: "spki", format: "der" });
@@ -81,8 +86,8 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
   } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? "no error code"})`); }
   if (!st.isFile()) throw new StampTrustUnusable(where, "it is not a regular file");
   if (st.size > MAX_BYTES) throw new StampTrustUnusable(where, `it holds ${st.size} bytes, more than a trust file's ${MAX_BYTES}`);
-  // read-only to everyone but its owner: a group- or world-writable trust is anyone's (POSIX only; Windows has no such bits)
-  if (process.platform !== "win32" && (st.mode & 0o022)) throw new StampTrustUnusable(where, "it is writable by its group or by anyone");
+  // Who owns the file and that it is read-only are the binding's and its install's to hold (the UAT
+  // drop-in binds it read-only); no file-mode policy was ruled here (Rivet's settlement, 2026-11-24).
   if (clone) {
     let town;
     try { town = realpathSync(clone); } catch { town = clone; }

@@ -190,7 +190,7 @@ export function checkRequest(req, ownClone) {
  * since production's unit doesn't bind it. `fixedPath` is the test's seam.
  */
 export async function sandboxTrustEnv(unitEnv, ownClone, { fixedPath = null } = {}) {
-  if (unitEnv?.STAMP_UAT_TRUST === undefined) return {};
+  if (!unitEnv?.STAMP_UAT_TRUST) return {}; // unset or empty: no file bound
   const { UAT_TRUST_ENV, UAT_TRUST_PATH, uatHandoff, StampTrustUnusable } = await import("../src/stamp-trust.mjs");
   const path = fixedPath ?? UAT_TRUST_PATH;
   const asked = unitEnv[UAT_TRUST_ENV];

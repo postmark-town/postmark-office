@@ -15,7 +15,10 @@
 //     each line (the writer and the verifier), and loads it only when the trust is asked for;
 //   · src/stamp-verify-pinned.mjs: the runner hands the town verifier `handoff`, and in prod exactly what it did;
 //   · world2/tools/stamp-mint-run.mjs § pinnedVerifier: the mint pass's verifier, the same;
-//   · src/house-key.mjs § replayHolds: the admission replay's child, the same.
+//   · src/house-key.mjs § replayHolds: the admission replay's child, the same;
+//   · world2/tools/stamp-mint-parity.mjs § parityControl: the rehearsal gate's control (the fifth caller, Rivet's
+//     settlement confirmed by Wright, 2026-11-24), the same.
+// An empty STAMP_UAT_TRUST binds no file, like unset (Rivet's settlement): every PROD CONTROL runs it too.
 // The town's handoff (POS-1213) is pinned in src/town-pins from its head f5201394, so the arms that need the town's
 // verifier and rule run against the pins the office ships; OFFICE_HANDOFF_TOWN points them at another town
 // checkout (a later POS-1213 head) before a re-pin.
@@ -44,6 +47,7 @@ import { stampKeyPlanFor, stampRowsPast, verifyStampLinesVia } from "../src/stam
 import { PIN_ROOT } from "../src/town-tool.mjs";
 import { replayHolds } from "../src/house-key.mjs";
 import { pinnedVerifier } from "../world2/tools/stamp-mint-run.mjs";
+import { parityControl } from "../world2/tools/stamp-mint-parity.mjs";
 import { copyTownModule, pinRootNow, pinTown } from "./helpers/pinned-town.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -103,6 +107,8 @@ test("the loader: unset is production, null, and nothing is read (the base key's
   const never = () => { throw new Error("the base key was read in production"); };
   assert.equal(uatHandoff({ env: {}, base: never }), null);
   assert.equal(uatHandoff({ env: DECOYS("/etc/postmark-uat/stamp-trust.json"), base: never }), null, "only STAMP_UAT_TRUST asks");
+  // Rivet's settlement (POS-1214, 2026-11-24): "An empty STAMP_UAT_TRUST names no file and should be neutral like unset"
+  assert.equal(uatHandoff({ env: { [UAT_TRUST_ENV]: "" }, base: never }), null, "an empty value binds no file: production");
   const opts = { pubkeyPem: BASE.pub, registry: null };
   assert.equal(withHandoff(opts, null), opts, "production's options are the very same object");
 });
@@ -113,6 +119,9 @@ test("the loader: a usable trust is exactly its two fields, frozen", () => {
   assert.deepEqual(h, { pubkeyPem: UAT.pub, afterSeal: seal });
   assert.ok(Object.isFrozen(h));
   assert.deepEqual(withHandoff({ pubkeyPem: BASE.pub }, h), { pubkeyPem: BASE.pub, handoff: h });
+  // Rivet's settlement: "Remove the uncommissioned host group/world-mode refusal" (read-only is the binding's to hold)
+  const open = trustFile({ pubkeyPem: UAT.pub, afterSeal: seal }, { mode: 0o666 });
+  assert.deepEqual(uatHandoff({ env: { [UAT_TRUST_ENV]: open }, base: BASE.pub }), { pubkeyPem: UAT.pub, afterSeal: seal }, "no file-mode policy of its own");
 });
 
 test("the loader: asked for and unusable fails closed, by name, every way (the whole verdict map)", () => {
@@ -120,7 +129,6 @@ test("the loader: asked for and unusable fails closed, by name, every way (the w
   const ec = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ type: "spki", format: "pem" });
   const town = fresh("town-holding-trust");
   const cases = {
-    "an empty value": [""],
     "a relative path": ["stamp-trust.json"],
     "a missing file": [join(scratch, "no-such-trust.json")],
     "a directory": [fresh("a-dir")],
@@ -135,17 +143,16 @@ test("the loader: asked for and unusable fails closed, by name, every way (the w
     "not ed25519": [trustFile({ pubkeyPem: ec, afterSeal: seal })],
     "the base key": [trustFile({ pubkeyPem: BASE.pub, afterSeal: seal })],
     "inside the town clone": [trustFile({ pubkeyPem: UAT.pub, afterSeal: seal }, { dir: town }), town],
-    ...(process.platform === "win32" ? {} : { "group-writable": [trustFile({ pubkeyPem: UAT.pub, afterSeal: seal }, { mode: 0o664 })] }),
   };
   const why = {
-    "an empty value": /not an absolute path/, "a relative path": /not an absolute path/, "a missing file": /can't be read \(ENOENT\)/,
+    "a relative path": /not an absolute path/, "a missing file": /can't be read \(ENOENT\)/,
     "a directory": /not a regular file/, "not JSON": /not JSON/, "an array": /not a JSON object/,
     "a third field": /exactly pubkeyPem and afterSeal, and holds afterSeal, privateKeyPem, pubkeyPem/,
     "no afterSeal": /exactly pubkeyPem and afterSeal, and holds pubkeyPem\. /,
     "a short seal": /afterSeal is not a seal/, "an uppercase seal": /afterSeal is not a seal/,
     "a private key": /not a public key PEM \(a private key is never trust\)/, "not a key": /pubkeyPem is not a readable public key/,
     "not ed25519": /pubkeyPem is a ec key, not ed25519/, "the base key": /its key is the base key/,
-    "inside the town clone": /inside the town clone/, "group-writable": /writable by its group or by anyone/,
+    "inside the town clone": /inside the town clone/,
   };
   const verdicts = {}, expected = {};
   for (const [name, [path, clone = null]] of Object.entries(cases)) {
@@ -165,6 +172,7 @@ test("the town's rule is loaded only when UAT's trust is asked for: production i
   // a clone the loader could never check: a load would throw, so null proves nothing was loaded
   assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), {}), null);
   assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), DECOYS("/x")), null);
+  assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), { [UAT_TRUST_ENV]: "" }), null, "empty: no file bound");
   const given = () => ({});
   assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), { [UAT_TRUST_ENV]: "/x" }, given), given, "a caller's plan is used as handed");
   await assert.rejects(stampKeyPlanFor(join(scratch, "no-such-town"), { [UAT_TRUST_ENV]: "/x" }), "asked for, it loads through the pin check, which refuses a town it can't check");
@@ -178,10 +186,13 @@ test("PROD CONTROL: the writer, with no STAMP_UAT_TRUST, records what it recorde
   assert.deepEqual(rows, plain.canonicals.map((c, i) => [i + 1, c, plain.sigs[i], plain.seals[i]]));
   assert.deepEqual(stampRowsPast(plain.town, null, { engine: ENGINE, env: DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: plain.seals[2] })) }), rows,
     "a decoy name changes nothing");
+  assert.deepEqual(stampRowsPast(plain.town, null, { engine: ENGINE, env: { [UAT_TRUST_ENV]: "" } }), rows, "an empty value binds no file");
   // a UAT suffix under prod's configuration: the line the base key didn't sign, in the words it always had
   const mixed = mixedTown(6, 3);
-  assert.throws(() => stampRowsPast(mixed.town, null, { engine: ENGINE, env: {} }),
-    { message: "the stamp ledger's line 4: its signature does not verify over its seal. Nothing was written." });
+  for (const env of [{}, { [UAT_TRUST_ENV]: "" }]) {
+    assert.throws(() => stampRowsPast(mixed.town, null, { engine: ENGINE, env }),
+      { message: "the stamp ledger's line 4: its signature does not verify over its seal. Nothing was written." });
+  }
 });
 
 test("the writer keeps the town's boundary (its own stampKeyPlan): the base key through the trusted seal, UAT's key only after it", { skip: shippedHasHandoff }, () => {
@@ -225,10 +236,14 @@ const storeOf = (m, count = m.canonicals.length) => ({
 
 test("PROD CONTROL: the verifier, with no STAMP_UAT_TRUST, answers what it answered", async () => {
   const plain = mixedTown(5, 5);
-  assert.deepEqual(await verifyStampLinesVia(storeOf(plain), plain.town, { engine: ENGINE, env: {} }), { ok: true, problems: [], held: 5, exported: 5 });
+  for (const env of [{}, { [UAT_TRUST_ENV]: "" }]) {
+    assert.deepEqual(await verifyStampLinesVia(storeOf(plain), plain.town, { engine: ENGINE, env }), { ok: true, problems: [], held: 5, exported: 5 });
+  }
   const mixed = mixedTown(5, 2);
-  assert.deepEqual(await verifyStampLinesVia(storeOf(mixed), mixed.town, { engine: ENGINE, env: DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: mixed.afterSeal })) }),
-    { ok: false, problems: ["store: line 3's signature does not verify"], held: 5, exported: 5 });
+  for (const env of [DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: mixed.afterSeal })), { [UAT_TRUST_ENV]: "" }]) {
+    assert.deepEqual(await verifyStampLinesVia(storeOf(mixed), mixed.town, { engine: ENGINE, env }),
+      { ok: false, problems: ["store: line 3's signature does not verify"], held: 5, exported: 5 });
+  }
 });
 
 test("the verifier keeps the same boundary (the town's stampKeyPlan), and fails visibly on a trust it can't use", { skip: shippedHasHandoff }, async () => {
@@ -247,9 +262,10 @@ test("the verifier keeps the same boundary (the town's stampKeyPlan), and fails 
   assert.ok(short.problems.some((p) => /is not a seal of this ledger/.test(p)), JSON.stringify(short.problems));
   const noRule = await verifyStampLinesVia(storeOf(m), m.town, { engine: ENGINE, keyPlan: () => ({ problems: [], keyAt: null, anchor: 0 }), env: uatEnv(m.afterSeal) });
   assert.match(noRule.problems[0], /the town's handoff rule refuses it: no key plan/);
-  const unusable = await verifyStampLinesVia(storeOf(m), m.town, { ...opts, env: { [UAT_TRUST_ENV]: "" } });
+  const gone = join(scratch, "gone-trust.json");
+  const unusable = await verifyStampLinesVia(storeOf(m), m.town, { ...opts, env: { [UAT_TRUST_ENV]: gone } });
   assert.equal(unusable.ok, false);
-  assert.match(unusable.problems[0], /^store: STAMP_UAT_TRUST names "", and it can't be used/);
+  assert.match(unusable.problems[0], /^store: STAMP_UAT_TRUST names ".*gone-trust\.json", and it can't be used: it can't be read \(ENOENT\)/);
 });
 
 // ── src/stamp-verify-pinned.mjs: the runner every stamp-verify door goes through ────────────────────────────────
@@ -268,7 +284,7 @@ const GREEN = "✓ stamp-ledger verifies — 0 line(s), 0 minted, chain + signat
 
 test("PROD CONTROL: the runner, with no STAMP_UAT_TRUST, hands the town verifier exactly { pubkeyPem, registry } and says what it said", () => {
   const pinned = stubPinned(), repo = fresh("repo");
-  for (const env of [childEnv(), childEnv(DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "1".repeat(64) })))]) {
+  for (const env of [childEnv(), childEnv(DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "1".repeat(64) }))), childEnv({ [UAT_TRUST_ENV]: "" })]) {
     const r = runRunner(pinned, repo, env);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(r.stderr, "");
@@ -287,7 +303,7 @@ test("the runner hands the town verifier UAT's handoff from the trust file, mapp
 
 test("the runner refuses an unusable trust before the verifier is so much as imported: exit 2, NOT verified", () => {
   const pinned = stubPinned(), repo = fresh("repo"), seal = "3".repeat(64);
-  for (const path of ["", join(scratch, "missing.json"), trustFile({ pubkeyPem: UAT.priv, afterSeal: seal }), trustFile({ pubkeyPem: BASE.pub, afterSeal: seal }),
+  for (const path of ["relative/trust.json", join(scratch, "missing.json"), trustFile({ pubkeyPem: UAT.priv, afterSeal: seal }), trustFile({ pubkeyPem: BASE.pub, afterSeal: seal }),
     trustFile({ pubkeyPem: UAT.pub, afterSeal: seal }, { dir: repo })]) {
     const r = runRunner(pinned, repo, childEnv({ [UAT_TRUST_ENV]: path }));
     assert.equal(r.status, 2, `${path}: ${r.stdout}${r.stderr}`);
@@ -382,13 +398,13 @@ async function withPins({ pins, probe }, fn) {
 test("PROD CONTROL: the mint pass's verifier, with no STAMP_UAT_TRUST, calls the town verifier exactly as before", async () => {
   const s = stubTown();
   await withPins(s, async () => {
-    for (const env of [{}, DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "4".repeat(64) }))]) {
+    for (const env of [{}, DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "4".repeat(64) })), { [UAT_TRUST_ENV]: "" }]) {
       const v = await pinnedVerifier(s.town, { env });
       assert.deepEqual(v(s.town).opts, { pubkeyPem: BASE.pub });
       assert.deepEqual(v(s.town, { registry: { households: {} } }).opts, { registry: { households: {} }, pubkeyPem: BASE.pub });
     }
   });
-  assert.deepEqual(calls(s.probe).map((c) => c.keys), [["pubkeyPem"], ["registry", "pubkeyPem"], ["pubkeyPem"], ["registry", "pubkeyPem"]]);
+  assert.deepEqual(calls(s.probe).map((c) => c.keys), Array.from({ length: 3 }, () => [["pubkeyPem"], ["registry", "pubkeyPem"]]).flat());
 });
 
 test("the mint pass's verifier hands over UAT's handoff, and refuses an unusable trust before any line is signed", async () => {
@@ -406,11 +422,50 @@ const REPLAY = { signed: ["- 2026-11-24 · registry: ada = hh:ada-house · sig: 
 test("PROD CONTROL: the admission replay, with no STAMP_UAT_TRUST, hands its child's verifier exactly { pubkeyPem }", async () => {
   const s = stubTown();
   await withPins(s, () => {
-    for (const env of [{}, DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "6".repeat(64) }))]) {
+    for (const env of [{}, DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "6".repeat(64) })), { [UAT_TRUST_ENV]: "" }]) {
       assert.deepEqual(replayHolds(s.town, { ...REPLAY, env }), { holds: true, checked: "verified", active: ["ada"], fresh: [] });
     }
   });
-  assert.deepEqual(calls(s.probe), [{ keys: ["pubkeyPem"], opts: { pubkeyPem: BASE.pub } }, { keys: ["pubkeyPem"], opts: { pubkeyPem: BASE.pub } }]);
+  assert.deepEqual(calls(s.probe), Array.from({ length: 3 }, () => ({ keys: ["pubkeyPem"], opts: { pubkeyPem: BASE.pub } })));
+});
+
+// ── the fifth caller (Rivet's settlement, confirmed by Wright): stamp-mint-parity's control, the rehearsal's gate ──
+// tools/dev-rehearsal.mjs:538 runs world2/tools/stamp-mint-parity.mjs; its main's control (§ parityControl) folds into
+// its exit 1. "Give it the same shared loader and options, plus a neutral (production) control test."
+
+test("PROD CONTROL: the parity gate's control, with no file bound, calls the town verifier exactly { pubkeyPem }", async () => {
+  const s = stubTown();
+  await withPins(s, async () => {
+    const { verifyStampLedger } = await import(pathToFileURL(join(s.pins, "tools", "stamp-verify.mjs")).href);
+    for (const env of [{}, { [UAT_TRUST_ENV]: "" }, DECOYS(trustFile({ pubkeyPem: UAT.pub, afterSeal: "a".repeat(64) }))]) {
+      assert.deepEqual(parityControl(s.town, verifyStampLedger, { env }).opts, { pubkeyPem: BASE.pub });
+    }
+  });
+  assert.deepEqual(calls(s.probe).map((c) => c.keys), [["pubkeyPem"], ["pubkeyPem"], ["pubkeyPem"]]);
+});
+
+test("the parity gate's control takes UAT's handoff from the same loader, and refuses an unusable trust", async () => {
+  const s = stubTown(), afterSeal = "b".repeat(64);
+  await withPins(s, async () => {
+    const { verifyStampLedger } = await import(pathToFileURL(join(s.pins, "tools", "stamp-verify.mjs")).href);
+    assert.deepEqual(parityControl(s.town, verifyStampLedger, { env: { [UAT_TRUST_ENV]: trustFile({ pubkeyPem: UAT.pub, afterSeal }) } }).opts,
+      { pubkeyPem: BASE.pub, handoff: { pubkeyPem: UAT.pub, afterSeal } });
+    assert.throws(() => parityControl(s.town, verifyStampLedger, { env: { [UAT_TRUST_ENV]: join(scratch, "no-trust-here.json") } }),
+      (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE");
+  });
+  assert.equal(calls(s.probe).length, 1, "the refused trust never reached the verifier");
+});
+
+test("WITH THE TOWN'S HANDOFF (as pinned): the parity gate's control, the real verifier, takes UAT's suffix only with the trust", { skip: needsHandoff }, async () => {
+  const m = mixedTown(6, 3);
+  copyTownModule(HANDOFF_TOWN, m.town, "stamp-verify.mjs");
+  const sigProblems = (r) => (r.problems ?? []).filter((p) => /SIGNATURE|UNSIGNED|handoff:/.test(p));
+  const pins = pinTown(m.town);
+  await withPins({ pins, probe: join(scratch, "unused.jsonl") }, async () => {
+    const { verifyStampLedger } = await import(pathToFileURL(join(pins, "tools", "stamp-verify.mjs")).href);
+    assert.deepEqual(sigProblems(parityControl(m.town, verifyStampLedger, { env: uatEnv(m.afterSeal) })), []);
+    assert.deepEqual(sigProblems(parityControl(m.town, verifyStampLedger, { env: {} })).map((p) => p.slice(0, 31)), ["line 4: SIGNATURE FAILS — first"]);
+  });
 });
 
 test("the admission replay hands its child's verifier UAT's handoff, and refuses an unusable trust before the child runs", async () => {

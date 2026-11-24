@@ -42,7 +42,7 @@
 // public key signs every line after it, never either key on any line. The writer
 // and the verifier here hold that one boundary by asking the town's own rule,
 // the pinned stamp-verify.mjs § stampKeyPlan (POS-1213), which key verifies
-// which line: the office draws no boundary of its own. Unset, as in production,
+// which line: the office draws no boundary of its own. Unset or empty, as in production,
 // nothing is imported and every line verifies under the base key exactly as before.
 
 import { createPublicKey, verify as edVerify } from "node:crypto";

@@ -116,6 +116,7 @@ test("the UAT drop-in: one fixed path, bound read-only with the trust policy, an
 test("PROD CONTROL: with no STAMP_UAT_TRUST in the unit, the sandbox adds nothing to the verifier's environment", async () => {
   assert.deepEqual(await sandboxTrustEnv({}, scratch), {});
   assert.deepEqual(await sandboxTrustEnv({ ...DECOY_ENV, STAMP_UAT_TRUST_PATH: UAT_TRUST_PATH }, scratch), {}, "only the one name asks");
+  assert.deepEqual(await sandboxTrustEnv({ STAMP_UAT_TRUST: "" }, scratch), {}, "an empty value binds no file (Rivet's settlement, POS-1214)");
 });
 
 test("the sandbox passes the verifier only its fixed trust PATH, after the trust policy has read it; anything else refuses", async () => {
@@ -130,7 +131,7 @@ test("the sandbox passes the verifier only its fixed trust PATH, after the trust
   assert.deepEqual(await sandboxTrustEnv({ STAMP_UAT_TRUST: fixed }, clone, { fixedPath: fixed }), { STAMP_UAT_TRUST: fixed }, "a path, never the key's bytes");
   await assert.rejects(sandboxTrustEnv({ STAMP_UAT_TRUST: join(dir, "elsewhere.json") }, clone, { fixedPath: fixed }),
     (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && e.message.includes(`reads UAT's trust only at ${fixed}`));
-  assert.ok((await sandboxTrustEnv({ STAMP_UAT_TRUST: "" }, clone).catch((e) => e)).message.includes(`reads UAT's trust only at ${UAT_TRUST_PATH}`),
+  assert.ok((await sandboxTrustEnv({ STAMP_UAT_TRUST: fixed }, clone).catch((e) => e)).message.includes(`reads UAT's trust only at ${UAT_TRUST_PATH}`),
     "the box's fixed path is the default");
   write({ pubkeyPem: uat.privateKey.export({ type: "pkcs8", format: "pem" }), afterSeal: "9".repeat(64) });
   await assert.rejects(sandboxTrustEnv({ STAMP_UAT_TRUST: fixed }, clone, { fixedPath: fixed }), /a private key is never trust/);
