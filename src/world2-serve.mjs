@@ -101,7 +101,7 @@ import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, settlementsRecorded, heldPlaced } from "./world.mjs";
 import { hearable, roomOpen, ROOM_GRACE_MS } from "./hearing-window.mjs";
-import { storedRoomFor } from "./durable-rooms.mjs"; // POS-1203: a closed room is a fixed record, looked up
+import { storedRoomFor, storedClosedRooms, storedRoomOfActs, storedSaysOfRooms } from "./durable-rooms.mjs"; // POS-1203: a closed room is a fixed record, looked up and listed
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -1030,6 +1030,46 @@ async function roomsKept(p, edges, cut) {
 /** The rooms as the page orders them: by their newest say, and for a tie in the order they began (rooms.mjs § roomsOf's own order). */
 const roomsInOrder = (ix) => [...ix.rooms].sort((a, b) => a.latest - b.latest || a.order - b.order);
 
+/**
+ * POS-1203: THE LISTS READ FIXED ROOMS. The bare page and `?before=` list closed rooms; a room that has closed and been fixed (src/durable-rooms.mjs) is listed
+ * FROM ITS RECORD, by the id it was issued under, so the list, the room's own read (`?room=`) and a cold start all agree, whatever the reconstruction's dials
+ * or anchors are now. The kept index still answers for what is not fixed (an open or carried room, a room the producer has not yet reached, a store without
+ * migration 103) and for the envelope's counts, merged without a room twice: a derived room is left out when a fixed one already stands for it (the same id,
+ * or any of its says held by a fixed room that had closed at the instant asked). A fixed room that closed AFTER the instant asked (`?at=`) was open then, and
+ * the derivation answers for it. Returns the entries in the page's order; a fixed entry is `{ root, latest, order, fixed: true, ids: [] }`, its ids and
+ * says filled by `fillFixed` for the rooms the page holds only.
+ */
+async function withFixedRooms(p, derived, { atMs, edges }) {
+  let stored;
+  try { stored = await storedClosedRooms(p, atMs); } catch { return derived; }
+  if (!stored.length) return derived;
+  const byId = new Map(stored.map((r) => [r.id, r]));
+  const unfixed = derived.filter((e) => !byId.has(e.root) && !roomOpen(e.latest, atMs, edges));
+  let held = new Map();
+  try { held = await storedRoomOfActs(p, unfixed.flatMap((e) => e.ids)); } catch { held = new Map(); }
+  const stood = (e) => byId.has(e.root) || (!roomOpen(e.latest, atMs, edges) && e.ids.some((id) => byId.has(held.get(String(id)))));
+  const fixed = stored.map((r) => ({ root: r.id, latest: r.latest, order: -1, fixed: true, ids: [], first: r.first }));
+  return [...derived.filter((e) => !stood(e)), ...fixed].sort((a, b) => a.latest - b.latest || (a.first ?? 0) - (b.first ?? 0) || a.order - b.order || String(a.root).localeCompare(String(b.root)));
+}
+
+/** Lay the fixed rooms of a page: their act numbers, and (after `readRooms`) each say's recorded place over what its anchor composes to now. */
+async function fillFixed(p, entries) {
+  const fixed = entries.filter((e) => e.fixed);
+  if (!fixed.length) return new Map();
+  const saysOf = await storedSaysOfRooms(p, fixed.map((e) => e.root));
+  for (const e of fixed) e.ids = (saysOf.get(e.root) ?? []).map((r) => Number(r.act_id));
+  return saysOf;
+}
+function layRecordedPlaces(read, entries, saysOf) {
+  for (const e of entries) {
+    if (!e.fixed) continue;
+    const room = read.rooms.get(e);
+    if (!room) continue;
+    const placed = new Map((saysOf.get(e.root) ?? []).map((r) => [String(r.act_id), r]));
+    for (const v of room.voices) { const r = placed.get(String(v.act_id)); if (r) { v.x = r.x; v.y = r.y; v.place = r.place; v.aboard = r.aboard; } }
+  }
+}
+
 /** Read `entries` (kept rooms) whole: their says by act number, the marks those says stand on, and the say dials. */
 async function readRooms(p, entries) {
   const roomOfAct = new Map();
@@ -1122,7 +1162,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     } else {
       // THE CEILINGS (§ above): a page's closed rooms and a read's open rooms are bounded, so no read fetches the whole record
       const askedClosed = n("closed", 40);
-      const page = talk.conversationsPage(roomsInOrder(ix), { now: at.ms, boundaries: edges, closedMax: Math.min(askedClosed, CONVERSATIONS_CLOSED_MAX), before });
+      const page = talk.conversationsPage(await withFixedRooms(p, roomsInOrder(ix), { atMs: at.ms, edges }), { now: at.ms, boundaries: edges, closedMax: Math.min(askedClosed, CONVERSATIONS_CLOSED_MAX), before });
       const live = page.live.slice(0, CONVERSATIONS_LIVE_MAX); // newest first, so the open rooms with the newest says
       if (askedClosed > CONVERSATIONS_CLOSED_MAX)
         limits.closed = { asked: askedClosed, served_at_most: CONVERSATIONS_CLOSED_MAX,
@@ -1131,7 +1171,9 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
         limits.live = { open: page.live.length, served: live.length,
           note: `${page.live.length} conversations are open at the instant asked and one read serves the ${CONVERSATIONS_LIVE_MAX} with the newest says. The others are not on this answer; each still opens by its id (?room=<id>)`
             + (edges.length ? "" : ". No settlement is known at that instant, so every conversation in the record counts as open: ask at an instant after a settlement and the closed ones are paged by ?before=") };
+      const recorded = await fillFixed(p, page.closed);
       read = await readRooms(p, [...live, ...page.closed]);
+      layRecordedPlaces(read, page.closed, recorded);
       const held = (list) => list.filter((e) => read.rooms.has(e)); // a room whose every say is unplaced has nothing to show
       body = talk.conversationsBody({ live: held(live), closed: held(page.closed), remaining: page.remaining },
         { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap, fadeMs: read.dials.fade_min.ms, voicesBefore, roomOf: (e) => read.rooms.get(e) });

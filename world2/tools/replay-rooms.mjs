@@ -29,103 +29,29 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import * as talk from "../tools/conversations.mjs";
 import { everyPublishedSettlementAt } from "../../src/hearing-window.mjs";
-import { roomRecordOf, writeRooms, writeEventMembership, durableLanded, isClosed, SUSPECT_SPAN_M } from "../../src/durable-rooms.mjs";
-import { eventEvidence, eventWindow } from "../../src/event-sparks.mjs";
-import { POST_COLUMNS, rowOf } from "../../src/events-store.mjs";
-import { EVENT_CLASS } from "../../src/events.mjs";
-
-const PAGE = 2000;
-const iso = (ms) => new Date(ms).toISOString();
-/** A say spoken inside a dungeon room is on no public read, and in no room of one (WLD-74). */
-const spokenInRoom = (row) => Boolean(row?.payload?.room ?? row?.payload?.payload?.room);
-
-/** Every voice act, by act number, a page at a time (the same read the door's kept rooms build from, with its words). */
-async function everyVoiceAct(client) {
-  const rows = [];
-  for (let after = 0; ;) {
-    const { rows: page } = await client.query(
-      "SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE action = ANY($1) AND id > $2 ORDER BY id LIMIT $3", [talk.VOICE_ACTIONS, after, PAGE]);
-    rows.push(...page);
-    if (page.length < PAGE) break;
-    after = Number(page.at(-1).id);
-  }
-  return rows;
-}
+import { writeRooms } from "../../src/durable-rooms.mjs";
+import { planDurable, fixEvent } from "../../src/durable-keep.mjs";
 
 /**
  * The replay. `edges` are the published settlements (ms, ascending), `nowMs` the instant "closed" is judged at, `apply` whether anything is written.
- * Returns the report. The caller owns the connection; a write happens in ONE transaction here, rolled back whole on any error.
+ * Returns the report. The caller owns the connection. The derivation is the producer's own (src/durable-keep.mjs § planDurable) and runs OUTSIDE the
+ * write; the write is one transaction, rolled back whole on any error. Unlike the keeping tick's producer it hands EVERY closed room to the write, so a
+ * stored room the rules would now derive differently is compared and reported under `drift`.
  */
 export async function replayRooms(client, { edges, nowMs = Date.now(), apply = false, events = true } = {}) {
-  const marks = [...edges].filter(Number.isFinite).sort((a, b) => a - b);
-  const landed = await durableLanded(client);
-  const rows = await everyVoiceAct(client);
-  const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
-  const centres = talk.anchorCentres(markRows);
-  const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
-  const earshotM = dials.earshot_m.value;
-  const interior = rows.filter(spokenInRoom).length;
-  const open = rows.filter((r) => !spokenInRoom(r));
-  const { voices, unplaced, refusals } = talk.voiceRecords(open, { centreOf: (id) => centres.get(id) ?? null, strict: false });
-  const oldest = marks[0] ?? null;
-  const grouped = oldest == null ? voices : voices.filter((v) => v.at >= oldest);
-  const ungrouped = voices.length - grouped.length;
-  const rooms = talk.roomsOf(grouped, { earshotM, boundaries: marks });
-  const closed = rooms.filter((r) => isClosed(r.latest, nowMs, marks));
-  const records = closed.map((r) => roomRecordOf(r, { edges: marks, nowMs, earshotM, source: "replay" }));
-
-  let existingIds = new Set();
-  if (landed && records.length) {
-    const { rows: have } = await client.query("SELECT id FROM durable_rooms WHERE id = ANY($1::text[])", [records.map((r) => r.room.id)]);
-    existingIds = new Set(have.map((r) => r.id));
-  }
-  const report = {
-    mode: apply ? "apply" : "dry-run", now: iso(nowMs), migration_landed: landed,
-    settlements: { known: marks.length, first: marks.length ? iso(marks[0]) : null, last: marks.length ? iso(marks.at(-1)) : null },
-    says: { voice_acts: rows.length, placed: voices.length, grouped: grouped.length, unplaced: unplaced.length, refused: refusals.length, ungrouped_before_first_settlement: ungrouped,
-      dungeon_interior_never_read: interior, first_say: voices.length ? iso(Math.min(...voices.map((v) => v.at))) : null },
-    rooms: { derived: rooms.length, closed: closed.length, open_or_carried: rooms.length - closed.length, already_stored: existingIds.size, to_write: records.length - existingIds.size,
-      timeline_only: records.filter((r) => !r.room.has_replies).length },
-    suspect_frames: records.filter((r) => r.room.frame_flag).map((r) => ({ id: r.room.id, span_m: r.room.span_m, extent: [r.room.x0, r.room.y0, r.room.x1, r.room.y1], note: r.room.frame_flag })),
-    unplaced_examples: unplaced.slice(0, 5).map((u) => ({ act_id: u.act_id, anchor: u.anchor })),
-    refused_examples: refusals.slice(0, 5),
-  };
-  if (!landed && apply) throw new Error("migration 103 (durable rooms) has not landed: nothing was written");
-
-  // the ended events whose rooms can be told and are not yet fixed
-  const eventReport = { ended: 0, already_fixed: 0, to_fix: 0, unknown: [], fixed: [] };
-  const toFix = [];
-  if (events) {
-    const { rows: ended } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends <= $2 AND state <> 'cancelled' ORDER BY ends, id`, [EVENT_CLASS, iso(nowMs)]);
-    const done = landed ? new Set((await client.query("SELECT event_id FROM durable_event_memberships")).rows.map((r) => r.event_id)) : new Set();
-    for (const row of ended.map(rowOf)) {
-      eventReport.ended += 1;
-      if (done.has(row.id)) { eventReport.already_fixed += 1; continue; }
-      if (!eventWindow(row)) { eventReport.unknown.push({ event: row.id, why: "no window" }); continue; }
-      const collect = {};
-      const evidence = await eventEvidence(client, row, { now: nowMs, edges: marks, collect });
-      if (!evidence?.complete || evidence.room_history !== "complete" || !collect.membership) {
-        eventReport.unknown.push({ event: row.id, why: evidence?.room_note ?? "its rooms cannot be told" });
-        continue;
-      }
-      toFix.push({ row, m: collect.membership });
-    }
-    eventReport.to_fix = toFix.length;
-  }
-  report.events = eventReport;
+  const plan = await planDurable(client, { edges, nowMs, events, newOnly: false });
+  const report = { mode: apply ? "apply" : "dry-run", ...plan.report };
+  if (!plan.landed && apply) throw new Error("migration 103 (durable rooms) has not landed: nothing was written");
   if (!apply) return report;
 
   await client.query("BEGIN");
   try {
-    report.written = { rooms: await writeRooms(client, records), events: [] };
-    for (const { row, m } of toFix) {
-      const rooms = m.rooms.map(({ frame, ...header }) => ({ id: header.id, header, frame, says: m.members.find((x) => x.id === header.id)?.says ?? [] }));
-      const out = await writeEventMembership(client, { eventId: row.id, window: m.window, unplaced: m.unplaced, source: "replay", rooms,
-        basis: "the rooms with a say spoken inside the event's window within earshot of its place (event-sparks.mjs § eventRoomFrom), as they stood at the window's end; the says each held up to then" });
-      report.written.events.push({ event: row.id, rooms: rooms.length, ...out });
-      eventReport.fixed.push(row.id);
+    report.written = { rooms: await writeRooms(client, plan.records), events: [] };
+    for (const item of plan.toFix) {
+      const out = await fixEvent(client, item, "replay");
+      report.written.events.push({ event: item.row.id, rooms: item.m.rooms.length, ...out });
+      report.events.fixed.push(item.row.id);
     }
     await client.query("COMMIT");
   } catch (e) {

@@ -52,9 +52,11 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
 // 29 since POS-816: the invite pass, right after the welcome pass.
 // 31 since POS-904: the Bluesky publisher, after the world step.
-test("the step list is the script's: 31 steps, 5 fatal and 26 soft, no step twice", () => {
-  assert.equal(STEPS.length, 31);
-  assert.equal(new Set(STEPS).size, 31);
+// 32 since POS-1203: the durable rooms pass (closed rooms and ended events fixed as records), after positions.
+test("the step list is the script's: 32 steps, 5 fatal and 27 soft, no step twice", () => {
+  assert.equal(STEPS.length, 32);
+  assert.equal(new Set(STEPS).size, 32);
+  assert.deepEqual(STEPS.slice(STEPS.indexOf("positions"), STEPS.indexOf("positions") + 2), ["positions", "rooms"], "the durable rooms pass runs in the tick, after positions");
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);

@@ -152,7 +152,7 @@ test("THE MIGRATION is idempotent and insert only: re-applying it changes nothin
   assert.equal((await owner.query(`SELECT (${LANDED["103_durable_rooms.sql"].probe}) AS ok`)).rows[0].ok, true);
 });
 
-let derived = null;
+let derived = null, baseList = null;
 test("BEFORE ANYTHING IS FIXED the door answers every room from the derivation (the baseline the fixed record must equal)", async (t) => {
   if (skip) return t.skip(skip);
   const r = await ask(pool, "closed=1000&voices=1000");
@@ -161,6 +161,7 @@ test("BEFORE ANYTHING IS FIXED the door answers every room from the derivation (
   for (const k of ["a1,a2,a3", "b1,b2", "c1", "d1,d2"]) assert.ok(derived[k], `the derivation holds the room ${k}: ${Object.keys(derived)}`);
   assert.equal(derived["b1,b2"].live, true, "at N1 the carried room is open (its hour after the third settlement is running)");
   assert.equal(derived["a1,a2,a3"].live, false);
+  baseList = r.body;   // the whole page as the derivation gives it: the list over fixed rooms must equal it
 });
 
 test("THE DRY RUN writes nothing and says what it would", async (t) => {
@@ -170,7 +171,7 @@ test("THE DRY RUN writes nothing and says what it would", async (t) => {
   assert.equal(report.migration_landed, true);
   assert.deepEqual([report.rooms.derived, report.rooms.closed, report.rooms.open_or_carried, report.rooms.already_stored, report.rooms.to_write], [4, 3, 1, 0, 3]);
   assert.equal(report.rooms.timeline_only, 2, "C (one say) and D (named, no replies) have no reply links: timelines, never invented circles");
-  assert.deepEqual(report.events, { ended: 1, already_fixed: 0, to_fix: 1, unknown: [], fixed: [] });
+  assert.deepEqual(report.events, { ended: 1, already_fixed: 0, to_fix: 1, unknown: [], fixed: [], suspect_frames: [] });
   assert.equal(report.says.dungeon_interior_never_read, 1);
   assert.equal(report.says.unplaced, 1, "a say whose anchor is in no row is counted, never placed at the Origin");
   for (const t of ["durable_rooms", "durable_room_says", "durable_event_memberships", "durable_event_rooms", "durable_event_room_says"]) assert.equal(await count(t), 0, `${t} untouched`);
@@ -225,6 +226,46 @@ test("THE SECOND REPLAY writes nothing new and moves no id", async (t) => {
   assert.equal(again.events.already_fixed, 1);
   assert.deepEqual((await owner.query("SELECT id, recorded_at FROM durable_rooms ORDER BY id")).rows, before.rows);
   assert.equal(await count("durable_room_says"), 6);
+});
+
+test("THE LISTS READ FIXED ROOMS: the bare page and ?before= list the closed rooms from their records, equal to the derivation's page, with no room twice", async (t) => {
+  if (skip) return t.skip(skip);
+  const seen = [];
+  const watching = { query: async (sql, params) => { seen.push(sql); return pool.query(sql, params); } };
+  const list = await ask(watching, "closed=1000&voices=1000");
+  assert.equal(list.code, 200);
+  assert.ok(seen.some((q) => /FROM durable_rooms/.test(q)), "the closed rooms were listed from the store");
+  assert.deepEqual(list.body, baseList, "the page over fixed rooms is the page the derivation gave before anything was fixed, byte for byte");
+  const ids = [...list.body.live, ...list.body.closed].map((c) => c.id);
+  assert.equal(new Set(ids).size, ids.length, "no room twice (a fixed room and the derived one it stands for)");
+  // paging: ?before= walks the same closed rooms, one a page, and lands where the full list does
+  const walked = [];
+  let cursor = null, pages = 0;
+  for (; pages < 6; pages++) {
+    const page = await ask(watching, `closed=1&voices=1000${cursor ? `&before=${encodeURIComponent(cursor)}` : ""}`);
+    walked.push(...page.body.closed.map((c) => c.id));
+    if (!page.body.earlier.remaining) break;
+    cursor = page.body.earlier.before;
+  }
+  assert.deepEqual(walked, list.body.closed.map((c) => c.id), "the cursor pages the fixed rooms in the page's own order");
+  // a COLD START (a pool that has kept nothing) and MOVED ANCHORS: the fixed rooms keep the ids and the places they were fixed with, and the list agrees with the room's own read
+  const { default: pg } = await import("pg");
+  const cold = new pg.Pool({ connectionString: s.url("office_api"), max: 2 });
+  await owner.query("UPDATE marks SET geometry = $2::jsonb WHERE slug = $1", ["quill/west-bench", JSON.stringify({ at: { x: 40, y: 0 }, extent: { w: 4, h: 4 } })]);
+  try {
+    const moved = await ask(cold, "closed=1000&voices=1000");
+    assert.deepEqual(moved.body.closed.map((c) => c.id), list.body.closed.map((c) => c.id), "the same ids after a cold start and a moved anchor");
+    for (const c of moved.body.closed) {
+      const detail = await ask(cold, `room=${c.id}&voices=1000`);
+      const pick = ({ id, extent, at, voice_count, participants, started, latest }) => ({ id, extent, at, voice_count, participants, started, latest });
+      assert.deepEqual(pick(c), pick(detail.body.find.room), `the list's header is the room's own read's: ${c.id}`);
+    }
+    const a = moved.body.closed.find((c) => c.id === derived["a1,a2,a3"].id);
+    assert.equal(a.extent.x0, 0, "the place it was fixed with, not the anchor's new composition");
+  } finally {
+    await owner.query("UPDATE marks SET geometry = $2::jsonb WHERE slug = $1", ["quill/west-bench", JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 4, h: 4 } })]);
+    await cold.end();
+  }
 });
 
 test("THE GALLERY OUTLIVES THE 60-SETTLEMENT WINDOW: the same read that answered unknown now answers the event's room and its gallery, whatever settlements this office has read", async (t) => {
@@ -352,4 +393,170 @@ test("THE REPLAY REFUSES to write when migration 103 has not landed, and says so
   assert.equal(dry.migration_landed, false);
   await assert.rejects(replayRooms(fakeClient, { edges: [S1, S2, S3, S4], nowMs: N2, apply: true }), /migration 103 \(durable rooms\) has not landed: nothing was written/);
   D.__forgetLandedForTest();
+});
+
+// ═══ the recurring producer (the keeping tick's step) ═══════════════════════════════════
+// The tick's own caller is deploy/office-keep.sh → deploy/durable-rooms-pass.mjs → src/durable-keep.mjs § keepDurable. The shell's wiring is pinned in
+// test/office-keep-receipt.test.mjs (a tick that does not call the pass fails there); these run the pass and the producer itself, over the real store.
+const EVENT_FREE = "quill/barn-dance";          // a FREE event, no stake: outside DUE_EVENTS_SQL and the drafts cohort entirely (nothing configured)
+const EVENT_ODD = "quill/bench-and-pier";        // an event whose room's bounds are malformed (the named 30 km room)
+const E_FROM = S3 + 2 * H, E_TO = S3 + 4 * H;
+const penOver = (state) => ({
+  officeRead: async (fn) => fn(office),
+  officeWrite: async (fn) => {
+    state.writes += 1;
+    if (state.failing) throw Object.assign(new Error("the store refused"), { code: "XX000" });
+    await office.query("BEGIN");
+    try { const out = await fn(office); await office.query("COMMIT"); return out; } catch (e) { await office.query("ROLLBACK"); throw e; }
+  },
+});
+
+test("THE PRODUCER fixes a newly closed room and an ended event OUTSIDE the financial cohort, reports a failed write, retries it on the next tick, and then writes nothing it already wrote", async (t) => {
+  if (skip) return t.skip(skip);
+  const { keepDurable } = await import("../src/durable-keep.mjs");
+  const edges = [S1, S2, S3, S4];
+  // a room that spoke after the third settlement and was never carried: closed at the fourth settlement's hour
+  await insertSay("e1", S3 + 3 * H, "fay", "quill/the-barn", 0, {});
+  await insertSay("e2", S3 + 3 * H + 5 * MIN, "gus", "quill/the-barn", 0, { reply_to: ID.e1 });
+  const post = (id, title, x, from, to) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', $2, '', 'quill', 'quill-house', NULL, $3, 0, $4, $5, 'announced', $6, 0, 1, 1)`, [id, title, x, iso(from), iso(to), JSON.stringify({ doors_open: iso(from) })]);
+  await post(EVENT_FREE, "Barn dance", 5000, E_FROM, E_TO);
+  const oddFrom = S1 + 3 * H - 30 * MIN;
+  await post(EVENT_ODD, "Bench and pier", 0, oddFrom, oddFrom + H);
+  const { DUE_EVENTS_SQL } = await import("../deploy/event-sparks-pass.mjs");
+  const due = (await owner.query(DUE_EVENTS_SQL, [iso(N2), null])).rows.map((r) => r.id);
+  assert.ok(!due.includes(EVENT_FREE) && !due.includes(EVENT_ODD), "neither is due for the money's pass: no stake, no drafts cutoff configured");
+
+  const rooms0 = await count("durable_rooms"), events0 = await count("durable_event_memberships");
+  const state = { writes: 0, failing: true };
+  // TICK 1: the store refuses the writes. Reported, nothing half-written, nothing thrown
+  const one = await keepDurable({ edges, nowMs: N2, pen: penOver(state) });
+  assert.equal(one.landed, true);
+  assert.equal(one.rooms.to_write, 1, "the one room that has closed and is not stored (e1, e2)");
+  assert.equal(one.events.to_fix, 2);
+  assert.deepEqual([one.rooms.failed.length, one.events.failed.length, one.wrote], [1, 2, false], JSON.stringify(one.rooms.failed));
+  assert.deepEqual([await count("durable_rooms"), await count("durable_event_memberships")], [rooms0, events0], "a failed tick leaves the store as it was");
+  // TICK 2: the next tick asks again, and it lands
+  state.failing = false; state.writes = 0;
+  const two = await keepDurable({ edges, nowMs: N2, pen: penOver(state) });
+  assert.deepEqual([two.rooms.failed.length, two.events.failed.length, two.rooms.written.inserted, two.events.fixed.length, two.wrote], [0, 0, 1, 2, true]);
+  assert.deepEqual([await count("durable_rooms"), await count("durable_event_memberships")], [rooms0 + 1, events0 + 2]);
+  const e1room = (await owner.query("SELECT * FROM durable_rooms WHERE first_at = $1", [iso(S3 + 3 * H)])).rows[0];
+  assert.equal(e1room.source, "live");
+  assert.equal(e1room.closed_at.getTime(), S4 + H);
+  assert.deepEqual((await owner.query("SELECT act_id FROM durable_room_says WHERE room_id = $1 ORDER BY ord", [e1room.id])).rows.map((r) => Number(r.act_id)), [ID.e1, ID.e2]);
+  assert.deepEqual(two.events.suspect_frames.map((f) => [f.event, f.room, f.span_m]), [[EVENT_ODD, ID.DNAME, 30_000]], "the tick that fixes an event holding the malformed frame names it");
+  const free = (await owner.query("SELECT * FROM durable_event_memberships WHERE event_id = $1", [EVENT_FREE])).rows[0];
+  assert.deepEqual([free.rooms_count, free.source, free.window_to.getTime()], [1, "live", E_TO]);
+  // TICK 3: NEW ONLY. Everything is stored, so nothing is handed to a write at all (no transaction, however much history there is)
+  state.writes = 0;
+  const three = await keepDurable({ edges, nowMs: N2, pen: penOver(state) });
+  assert.equal(state.writes, 0, "no write was even opened: the stored rooms and events are filtered out before it");
+  assert.deepEqual([three.rooms.to_write, three.events.to_fix, three.wrote], [0, 0, false]);
+  assert.equal(three.rooms.already_stored, three.rooms.closed);
+});
+
+test("THE PRODUCER runs as the tick runs it: the pass, over the real pen as office_api, answers by exit code, and its line carries counts and ids, never a say's words", async (t) => {
+  if (skip) return t.skip(skip);
+  const pass = await import("../deploy/durable-rooms-pass.mjs");
+  const env = { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
+  const run = async (opts) => {
+    const lines = [], errs = [];
+    const log = console.log, err = console.error;
+    console.log = (l) => lines.push(l); console.error = (l) => errs.push(l);
+    try { const code = await pass.main(["--world", "/nowhere"], env, opts); return { code, lines, errs }; } finally { console.log = log; console.error = err; }
+  };
+  // a new room closes: the real pen, the real store, the real clock (every settlement here is long past)
+  await insertSay("f1", S4 + 3 * H, "hal", "quill/the-barn", 0, {});
+  const real = await run({ settlementsOf: async () => [S1, S2, S3, S4, S4 + 12 * H] });
+  assert.equal(real.code, 0, real.errs.join("\n"));
+  const line = JSON.parse(real.lines[0]);
+  assert.equal(line.durable_rooms.fixed_now, 1, "f1: a room of its own, closed once the next settlement and its hour passed");
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM durable_room_says WHERE act_id = $1", [ID.f1])).rows[0].n, 1);
+  assert.ok(!/speaks/.test(real.lines.join("\n")), "the line names no say's words");
+  assert.deepEqual(line.suspect_frames, [], "the line reports the frames it fixed THIS tick (the malformed one was named when it was fixed; the replay's dry run lists it for judgment)");
+  const again = await run({ settlementsOf: async () => [S1, S2, S3, S4, S4 + 12 * H] });
+  assert.equal(JSON.parse(again.lines[0]).durable_rooms.fixed_now, 0);
+  assert.equal(again.code, 0);
+  // the exit codes the shell maps: nothing to tell (3), the world's settlements unreadable (1), a failed write (1), a stored record that differs (1)
+  assert.equal((await run({ settlementsOf: async () => [] })).code, 3);
+  assert.equal((await run({ settlementsOf: async () => { throw new Error("no repo"); } })).code, 1);
+  assert.equal((await run({ settlementsOf: async () => [S1], keep: async () => ({ landed: false }) })).code, 3);
+  const failed = await run({ settlementsOf: async () => [S1], keep: async () => ({ landed: true, rooms: { failed: [{ id: "x" }], drift: [] }, events: { failed: [] } }) });
+  assert.equal(failed.code, 1);
+  assert.match(failed.errs.join("\n"), /the next tick asks again/);
+  assert.equal((await run({ settlementsOf: async () => [S1], keep: async () => ({ landed: true, rooms: { failed: [], drift: [{ id: "x", why: "y" }] }, events: { failed: [] } }) })).code, 1);
+});
+
+test("THE FLAG TRAVELS: an event that holds the malformed frame fixes it WITH its flag, the fixed read gives the flag back, and the replay report names it; a clean frame carries none", async (t) => {
+  if (skip) return t.skip(skip);
+  const rows = (await owner.query("SELECT room_id, frame_flag, header FROM durable_event_rooms WHERE event_id = $1", [EVENT_ODD])).rows;
+  assert.deepEqual(rows.map((r) => r.room_id), [ID.DNAME]);
+  assert.match(rows[0].frame_flag, /suspect frame: the bounds span 30000 m/);
+  assert.equal(rows[0].header.extent.span_m, 30_000, "the bounds are exactly as derived: flagged, never repaired");
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM durable_event_rooms WHERE frame_flag IS NOT NULL AND event_id <> $1", [EVENT_ODD])).rows[0].n, 0, "no clean frame carries a flag");
+  // the event's own read, answered from the fixed record after the settlements it needs are gone from this office's view
+  const odd = await calendarAtOffice({ event: EVENT_ODD }, { now: N2, env: { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }, settlements: async () => [S4] });
+  const r = odd.event.evidence.rooms[0];
+  assert.deepEqual([r.id, r.extent.span_m], [ID.DNAME, 30_000]);
+  assert.match(r.frame_flag, /suspect frame/, "the frozen frame is not read back as an unqualified clean one");
+  const clean = await calendarAtOffice({ event: EVENT }, { now: N2, env: { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }, settlements: async () => [S4] });
+  assert.equal("frame_flag" in clean.event.evidence.rooms[0], false);
+  // the replay's dry run reports it before any apply, for the lead's judgment (a fresh event, not yet fixed)
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ('quill/odd-again', 'event', 'Again', '', 'quill', 'quill-house', NULL, 0, 0, $1, $2, 'announced', $3, 0, 1, 1)`, [iso(S1 + 3 * H - 20 * MIN), iso(S1 + 3 * H + 40 * MIN), JSON.stringify({ doors_open: iso(S1 + 3 * H - 20 * MIN) })]);
+  const dry = await replayRooms(office, { edges: [S1, S2, S3, S4], nowMs: N2, apply: false });
+  assert.deepEqual(dry.events.suspect_frames.map((x) => [x.event, x.room]), [["quill/odd-again", ID.DNAME]]);
+  assert.equal(await count("durable_event_memberships") > 0, true);
+  assert.equal((await owner.query("SELECT count(*)::int AS n FROM durable_event_memberships WHERE event_id = 'quill/odd-again'")).rows[0].n, 0, "a dry run fixed nothing");
+});
+
+// ═══ exact and atomic writes ════════════════════════════════════════════════════════════
+const fakeRecord = (id, acts, extra = {}) => {
+  const base = { id, aliases: [], keys: [], first_at: iso(S1 + 4 * H), latest_at: iso(S1 + 5 * H), closed_at: iso(S2 + H), x0: 0, y0: 0, x1: 4, y1: 4, span_m: 4,
+    voice_count: acts.length, participants: ["zed"], place: null, place_mark: null, last_x: 0, last_y: 0, aboard: false, era: "live", has_replies: false, inputs: {}, frame_flag: null, source: "replay", ...extra };
+  return { room: base, says: acts.map((a, ord) => ({ act_id: a, room_id: id, ord, at: iso(S1 + 4 * H + ord * MIN), handle: "zed", x: 0, y: 0, place: null, aboard: false, say_id: null, reply_to: null, era: "live", root: null, place_mark: null })) };
+};
+const inRolledBack = async (fn) => { await office.query("BEGIN"); try { return await fn(office); } finally { await office.query("ROLLBACK"); } };
+
+test("EXACT MEMBERSHIP: a stored room is compared WHOLE both ways: a stored say the rules no longer derive is drift, as is a derived say that is not stored; the stored record stands", async (t) => {
+  if (skip) return t.skip(skip);
+  await inRolledBack(async (c) => {
+    const three = fakeRecord("t1800000000000-zed", [9_000_001, 9_000_002, 9_000_003]);
+    assert.equal((await D.writeRooms(c, [three])).inserted, 1);
+    const fewer = await D.writeRooms(c, [fakeRecord("t1800000000000-zed", [9_000_001, 9_000_002])]);
+    assert.deepEqual([fewer.inserted, fewer.existing, fewer.drift.length], [0, 1, 1], "the stored room holds an extra say the new derivation lacks: a difference, not a match");
+    assert.match(fewer.drift[0].why, /holds 3 says and the rules derive 2 now \(0 not stored, 1 stored and not derived\)/);
+    const more = await D.writeRooms(c, [fakeRecord("t1800000000000-zed", [9_000_001, 9_000_002, 9_000_003, 9_000_004])]);
+    assert.match(more.drift[0].why, /\(1 not stored, 0 stored and not derived\)/);
+    const same = await D.writeRooms(c, [three]);
+    assert.deepEqual([same.existing, same.drift.length], [1, 0]);
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM durable_room_says WHERE room_id = 't1800000000000-zed'")).rows[0].n, 3, "nothing was replaced or added");
+  });
+});
+
+test("ATOMIC ROOMS: a room whose says do not all land (a keeper and a replay overlapping) is rolled back whole, never left with part of its membership, and the others still land", async (t) => {
+  if (skip) return t.skip(skip);
+  await inRolledBack(async (c) => {
+    assert.equal((await D.writeRooms(c, [fakeRecord("t1800000000001-zed", [9_100_001])])).inserted, 1);
+    // the pre-check sees nothing (the other writer has not committed yet, in life), and the say is then taken: the insert conflicts
+    const blind = { query: (sql, params) => (/FROM durable_room_says WHERE act_id = ANY/.test(sql) ? Promise.resolve({ rows: [] }) : c.query(sql, params)) };
+    const out = await D.writeRooms(blind, [fakeRecord("t1800000000002-zed", [9_100_001, 9_100_002]), fakeRecord("t1800000000003-zed", [9_100_003])]);
+    assert.deepEqual([out.inserted, out.drift.length, out.failed.length], [1, 1, 0]);
+    assert.match(out.drift[0].why, /1 of its 2 says could be stored.*rolled back whole/);
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM durable_rooms WHERE id = 't1800000000002-zed'")).rows[0].n, 0, "no room row without its says");
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM durable_room_says WHERE act_id = 9100002")).rows[0].n, 0, "and not a say of it either");
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM durable_rooms WHERE id = 't1800000000003-zed'")).rows[0].n, 1, "the next room landed");
+    // a say already in ANOTHER room is named by the pre-check and the room is not written
+    const taken = await D.writeRooms(c, [fakeRecord("t1800000000004-zed", [9_100_001, 9_100_004])]);
+    assert.match(taken.drift[0].why, /already stored in another room/);
+    // a count that disagrees with the room's own says never stands
+    const bad = await D.writeRooms(c, [fakeRecord("t1800000000005-zed", [9_100_005, 9_100_006], { voice_count: 5 })]);
+    assert.equal(bad.inserted, 0);
+    assert.equal((await c.query("SELECT count(*)::int AS n FROM durable_room_says WHERE act_id = ANY($1)", [[9_100_005, 9_100_006]])).rows[0].n, 0);
+    // a write the store refuses is named and does not stop the rest
+    const refused = await D.writeRooms(c, [fakeRecord("not-a-room-id", [9_100_007]), fakeRecord("t1800000000006-zed", [9_100_008])]);
+    assert.deepEqual([refused.failed.length, refused.inserted], [1, 1]);
+    assert.match(refused.failed[0].why, /the next run asks again/);
+  });
 });

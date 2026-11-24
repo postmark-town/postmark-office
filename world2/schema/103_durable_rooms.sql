@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS durable_event_rooms (
   room_id  text    NOT NULL,
   header   jsonb   NOT NULL,
   frame    jsonb   NOT NULL,
+  frame_flag text,
   PRIMARY KEY (event_id, room_id),
   UNIQUE (event_id, ord)
 );

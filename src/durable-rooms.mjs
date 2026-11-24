@@ -32,6 +32,10 @@ export const SUSPECT_SPAN_M = 20_000;
 /** The producer's algorithm, named in every record's inputs so a later rule change is visible against the rows it did not touch. */
 export const ALGORITHM = "src/rooms.mjs roomsOf (POS-1185) + src/hearing-window.mjs roomOpen (CORE-97), threadOf's header";
 
+/** The flag a room's bounds earn: set when they span more than SUSPECT_SPAN_M, else null. A REPORT for judgment; the bounds are never changed. */
+export const frameFlagOf = (spanM) => (spanM > SUSPECT_SPAN_M
+  ? `suspect frame: the bounds span ${spanM} m (more than ${SUSPECT_SPAN_M}); stored exactly as derived, for judgment (CORE-155), never repaired` : null);
+
 const iso = (ms) => new Date(ms).toISOString();
 const sortedEdges = (edges) => [...(edges ?? [])].filter(Number.isFinite).sort((a, b) => a - b);
 
@@ -77,8 +81,7 @@ export function roomRecordOf(room, { edges, nowMs, earshotM, source = "live" }) 
       says: { named_by_the_act: named, named_when_spoken: voices.length - named },
       note: "a say's room was decided when it was spoken (a recorded name, or the room it joined by the rules of its day, named once); the rows are the identity",
     },
-    frame_flag: span > SUSPECT_SPAN_M
-      ? `suspect frame: the bounds span ${span} m (more than ${SUSPECT_SPAN_M}); stored exactly as derived, for judgment (CORE-155), never repaired` : null,
+    frame_flag: frameFlagOf(span),
     source,
   };
   const says = voices.map((v, ord) => ({
@@ -108,38 +111,68 @@ export const __forgetLandedForTest = () => { landed = false; };
 const SAY_COLS = ["act_id", "room_id", "ord", "at", "handle", "x", "y", "place", "aboard", "say_id", "reply_to", "era", "root", "place_mark"];
 const SAY_TYPES = ["bigint", "text", "int", "timestamptz", "text", "float8", "float8", "text", "bool", "bigint", "bigint", "text", "text", "text"];
 
+/** The records not yet stored (by room id): the recurring producer hands the write only these, so a tick's transaction never grows with the history. */
+export async function newRooms(client, records) {
+  if (!records.length) return [];
+  const { rows } = await client.query("SELECT id FROM durable_rooms WHERE id = ANY($1::text[])", [records.map((r) => r.room.id)]);
+  const have = new Set(rows.map((r) => r.id));
+  return records.filter((r) => !have.has(r.room.id));
+}
+
 /**
- * Write closed rooms, INSERT ONLY and idempotent. A room already stored is never touched: it is compared with what the rules derive now
- * and, if its says differ, REPORTED (`drift`) and left. A room one of whose says is already stored in ANOTHER room is not written at all
- * (a say is in exactly one room) and is reported. Returns `{ inserted, existing, says_inserted, drift: [{ id, why }] }`. The caller holds
- * the transaction.
+ * Write closed rooms, INSERT ONLY, idempotent, EXACT and ATOMIC PER ROOM. A room is written whole or not at all (each in its own savepoint):
+ *   · a room already stored is never touched; its COMPLETE stored membership is compared with the derived one, both ways, and a difference is
+ *     REPORTED (`drift`) and the stored record stands;
+ *   · a room one of whose says is already stored in ANOTHER room is not written (a say is in exactly one room) and is reported;
+ *   · a room whose says do not all land (a keeper and a replay overlapping, a say taken by another room in between) is rolled back whole and reported,
+ *     never left with part of its membership; and the stored count is checked against the room's own `voice_count` before the room is let stand.
+ * A room whose write fails is reported (`failed`) and the others go on: it is asked again by the next run. Returns
+ * `{ inserted, existing, says_inserted, drift: [{ id, why }], failed: [{ id, why }] }`. The caller holds the transaction.
  */
 export async function writeRooms(client, records) {
   if (!(await durableLanded(client))) throw new Error("migration 103 (durable rooms) has not landed: nothing was written");
-  const out = { inserted: 0, existing: 0, says_inserted: 0, drift: [] };
+  const out = { inserted: 0, existing: 0, says_inserted: 0, drift: [], failed: [] };
   for (const { room, says } of records) {
     const actIds = says.map((s) => s.act_id);
-    const { rows: held } = await client.query("SELECT act_id, room_id FROM durable_room_says WHERE act_id = ANY($1::bigint[])", [actIds]);
-    const elsewhere = held.filter((h) => h.room_id !== room.id);
-    if (elsewhere.length) { out.drift.push({ id: room.id, why: `${elsewhere.length} of its says are already stored in another room (e.g. act ${elsewhere[0].act_id} in ${elsewhere[0].room_id})` }); continue; }
-    const { rows: ins } = await client.query(
-      `INSERT INTO durable_rooms (id, aliases, keys, first_at, latest_at, closed_at, x0, y0, x1, y1, span_m, voice_count, participants, place, place_mark,
-                                  last_x, last_y, aboard, era, has_replies, inputs, frame_flag, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (id) DO NOTHING RETURNING id`,
-      [room.id, room.aliases, room.keys, room.first_at, room.latest_at, room.closed_at, room.x0, room.y0, room.x1, room.y1, room.span_m, room.voice_count,
-        room.participants, room.place, room.place_mark, room.last_x, room.last_y, room.aboard, room.era, room.has_replies, JSON.stringify(room.inputs), room.frame_flag, room.source]);
-    if (!ins.length) {
-      out.existing += 1;
-      const stored = new Set(held.map((h) => String(h.act_id)));
-      const same = stored.size === actIds.length && actIds.every((id) => stored.has(String(id)));
-      if (!same) out.drift.push({ id: room.id, why: `the stored room holds ${stored.size} of the ${actIds.length} says the rules derive now: the stored record stands` });
-      continue;
+    await client.query("SAVEPOINT durable_room");
+    try {
+      const { rows: held } = await client.query("SELECT act_id, room_id FROM durable_room_says WHERE act_id = ANY($1::bigint[])", [actIds]);
+      const elsewhere = held.filter((h) => h.room_id !== room.id);
+      if (elsewhere.length) {
+        out.drift.push({ id: room.id, why: `${elsewhere.length} of its says are already stored in another room (e.g. act ${elsewhere[0].act_id} in ${elsewhere[0].room_id})` });
+        await client.query("ROLLBACK TO SAVEPOINT durable_room"); continue;
+      }
+      const { rows: ins } = await client.query(
+        `INSERT INTO durable_rooms (id, aliases, keys, first_at, latest_at, closed_at, x0, y0, x1, y1, span_m, voice_count, participants, place, place_mark,
+                                    last_x, last_y, aboard, era, has_replies, inputs, frame_flag, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (id) DO NOTHING RETURNING id`,
+        [room.id, room.aliases, room.keys, room.first_at, room.latest_at, room.closed_at, room.x0, room.y0, room.x1, room.y1, room.span_m, room.voice_count,
+          room.participants, room.place, room.place_mark, room.last_x, room.last_y, room.aboard, room.era, room.has_replies, JSON.stringify(room.inputs), room.frame_flag, room.source]);
+      if (!ins.length) {
+        // already stored: its WHOLE stored membership against the derived one (a say stored here and not derived is as much a difference as the reverse)
+        const { rows: stored } = await client.query("SELECT act_id FROM durable_room_says WHERE room_id = $1", [room.id]);
+        const have = new Set(stored.map((r) => String(r.act_id))), want = new Set(actIds.map(String));
+        const missing = [...want].filter((id) => !have.has(id)).length, extra = [...have].filter((id) => !want.has(id)).length;
+        out.existing += 1;
+        if (missing || extra || have.size !== want.size)
+          out.drift.push({ id: room.id, why: `the stored room holds ${have.size} says and the rules derive ${want.size} now (${missing} not stored, ${extra} stored and not derived): the stored record stands` });
+        await client.query("RELEASE SAVEPOINT durable_room"); continue;
+      }
+      const cols = SAY_COLS.map((c) => says.map((s) => s[c]));
+      const r = await client.query(
+        `INSERT INTO durable_room_says (${SAY_COLS.join(", ")}) SELECT * FROM unnest(${SAY_TYPES.map((t, i) => `$${i + 1}::${t}[]`).join(", ")}) ON CONFLICT (act_id) DO NOTHING`, cols);
+      const { rows: [{ n }] } = await client.query("SELECT count(*)::int AS n FROM durable_room_says WHERE room_id = $1", [room.id]);
+      if (r.rowCount !== says.length || n !== says.length || n !== room.voice_count) {
+        out.drift.push({ id: room.id, why: `not written: ${r.rowCount} of its ${says.length} says could be stored (the rest were taken meanwhile), so the room was rolled back whole` });
+        await client.query("ROLLBACK TO SAVEPOINT durable_room"); continue;
+      }
+      await client.query("RELEASE SAVEPOINT durable_room");
+      out.inserted += 1;
+      out.says_inserted += r.rowCount;
+    } catch (e) {
+      await client.query("ROLLBACK TO SAVEPOINT durable_room").catch(() => {});
+      out.failed.push({ id: room.id, why: `the write failed (${e?.code ?? "error"}); the next run asks again` });
     }
-    const cols = SAY_COLS.map((c, i) => says.map((s) => s[c]));
-    const r = await client.query(
-      `INSERT INTO durable_room_says (${SAY_COLS.join(", ")}) SELECT * FROM unnest(${SAY_TYPES.map((t, i) => `$${i + 1}::${t}[]`).join(", ")}) ON CONFLICT (act_id) DO NOTHING`, cols);
-    out.inserted += 1;
-    out.says_inserted += r.rowCount;
   }
   return out;
 }
@@ -196,12 +229,14 @@ export async function writeEventMembership(client, m) {
   }
   let says = 0;
   for (const [ord, r] of m.rooms.entries()) {
-    await client.query("INSERT INTO durable_event_rooms (event_id, ord, room_id, header, frame) VALUES ($1,$2,$3,$4,$5)",
-      [m.eventId, ord, r.id, JSON.stringify(r.header), JSON.stringify(r.frame)]);
+    await client.query("INSERT INTO durable_event_rooms (event_id, ord, room_id, header, frame, frame_flag) VALUES ($1,$2,$3,$4,$5,$6)",
+      [m.eventId, ord, r.id, JSON.stringify(r.header), JSON.stringify(r.frame), r.frame_flag ?? frameFlagOf(r.header?.extent?.span_m)]);
     if (!r.says.length) continue;
     const res = await client.query(
       "INSERT INTO durable_event_room_says (event_id, room_id, act_id, in_window) SELECT $1, $2, * FROM unnest($3::bigint[], $4::bool[]) ON CONFLICT (event_id, act_id) DO NOTHING",
       [m.eventId, r.id, r.says.map((s) => s.act_id), r.says.map((s) => s.in_window)]);
+    // EXACT: every say of the room lands, or the whole event's record is not written (the caller's transaction rolls back; the event is asked again)
+    if (res.rowCount !== r.says.length) throw new Error(`event ${m.eventId}: ${res.rowCount} of room ${r.id}'s ${r.says.length} says could be stored: the event's record is not written`);
     says += res.rowCount;
   }
   return { inserted: true, rooms: m.rooms.length, says };
@@ -221,8 +256,43 @@ export async function frozenEventRooms(client, eventId) {
   if (!(await durableLanded(client))) return null;
   const { rows: [m] } = await client.query("SELECT * FROM durable_event_memberships WHERE event_id = $1", [eventId]);
   if (!m) return null;
-  const { rows } = await client.query("SELECT header, frame FROM durable_event_rooms WHERE event_id = $1 ORDER BY ord", [eventId]);
+  const { rows } = await client.query("SELECT header, frame, frame_flag FROM durable_event_rooms WHERE event_id = $1 ORDER BY ord", [eventId]);
   const asObject = (v) => (typeof v === "string" ? JSON.parse(v) : v);
   return { window: { from: new Date(m.window_from).getTime(), to: new Date(m.window_to).getTime() },
-    rooms: rows.map((r) => ({ ...headerOf(asObject(r.header)), frame: inOrder(asObject(r.frame), ["room", "at", "extent"]) })), unplaced_says: Number(m.unplaced_says ?? 0), source: m.source };
+    rooms: rows.map((r) => ({ ...headerOf(asObject(r.header)), frame: inOrder(asObject(r.frame), ["room", "at", "extent"]), ...(r.frame_flag ? { frame_flag: r.frame_flag } : {}) })), unplaced_says: Number(m.unplaced_says ?? 0), source: m.source };
+}
+
+/** The ended events (ids) that already have a fixed membership, among `ids`: the recurring producer reconstructs only the others. */
+export async function eventsAlreadyFixed(client, ids) {
+  if (!ids.length || !(await durableLanded(client))) return new Set();
+  const { rows } = await client.query("SELECT event_id FROM durable_event_memberships WHERE event_id = ANY($1::text[])", [ids]);
+  return new Set(rows.map((r) => r.event_id));
+}
+
+// ── THE LISTS (the bare read and ?before=): fixed rooms stand in for the closed rooms the kept index would derive ──
+
+/**
+ * Every fixed room that had closed by `atMs`, light columns only (no says): `[{ id, latest, first, closed }]` in ms, or [] when the tables have not
+ * landed. A room fixed as closed at a later instant than the one a read is evaluated at (`?at=`) was still open then, and is the derivation's.
+ */
+export async function storedClosedRooms(client, atMs) {
+  if (!(await durableLanded(client))) return [];
+  const { rows } = await client.query("SELECT id, first_at, latest_at, closed_at FROM durable_rooms WHERE closed_at <= $1 ORDER BY latest_at, id", [iso(atMs)]);
+  return rows.map((r) => ({ id: r.id, latest: new Date(r.latest_at).getTime(), first: new Date(r.first_at).getTime(), closed: new Date(r.closed_at).getTime() }));
+}
+
+/** The fixed room (id) holding each of `actIds`, as a Map(act id → room id): which derived rooms a fixed one already stands for. */
+export async function storedRoomOfActs(client, actIds) {
+  if (!actIds.length || !(await durableLanded(client))) return new Map();
+  const { rows } = await client.query("SELECT act_id, room_id FROM durable_room_says WHERE act_id = ANY($1::bigint[])", [actIds.map(Number)]);
+  return new Map(rows.map((r) => [String(r.act_id), r.room_id]));
+}
+
+/** The says of the fixed rooms `ids`, as Map(room id → rows in order). */
+export async function storedSaysOfRooms(client, ids) {
+  const out = new Map();
+  if (!ids.length || !(await durableLanded(client))) return out;
+  const { rows } = await client.query("SELECT * FROM durable_room_says WHERE room_id = ANY($1::text[]) ORDER BY room_id, ord", [ids]);
+  for (const r of rows) { if (!out.has(r.room_id)) out.set(r.room_id, []); out.get(r.room_id).push(r); }
+  return out;
 }

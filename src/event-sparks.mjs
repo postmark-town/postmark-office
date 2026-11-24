@@ -17,7 +17,7 @@
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { frozenEventRooms, writeEventMembership } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
+import { frozenEventRooms, writeEventMembership, frameFlagOf } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
 import { faultLogged } from "./fault-words.mjs"; // the log's own reader of an error (POS-1203: a failed freeze is logged and never throws)
 import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
@@ -176,7 +176,7 @@ export async function freezeEventRooms(row, collect, { env = process.env, source
   if (!m) return { froze: false, why: "nothing to fix (not ended, already fixed, or its rooms cannot be told)" };
   try {
     const pen = await import("./world2-pen.mjs");
-    const rooms = m.rooms.map(({ frame, ...header }) => ({ id: header.id, header, frame, says: m.members.find((x) => x.id === header.id)?.says ?? [] }));
+    const rooms = m.rooms.map(({ frame, frame_flag, ...header }) => ({ id: header.id, header, frame, frame_flag, says: m.members.find((x) => x.id === header.id)?.says ?? [] }));
     const out = await pen.officeWrite((client) => writeEventMembership(client, {
       eventId: row.id, window: m.window, unplaced: m.unplaced, source, rooms,
       basis: "the rooms with a say spoken inside the event's window within earshot of its place (event-sparks.mjs § eventRoomFrom), as they stood at the window's end; the says each held up to then",
@@ -191,6 +191,13 @@ export async function freezeEventRooms(row, collect, { env = process.env, source
 export function roomFrame(thread) {
   const { x0, y0, x1, y1 } = thread.extent;
   return { room: thread.id, at: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, extent: { w: x1 - x0, h: y1 - y0 } };
+}
+
+/** A room as an event lists it: its header, its frozen frame and, ONLY when its bounds look wrong, the flag (a report for judgment, never a repair). */
+export function roomWithFrame(thread) {
+  const { frame_flag: stored, frame: _f, ...header } = thread;
+  const flag = stored ?? frameFlagOf(header.extent?.span_m);
+  return { ...header, frame: roomFrame(header), ...(flag ? { frame_flag: flag } : {}) };
 }
 
 /** The frame with no conversation: the maker's resolved place (an event's canonical place) and the 60 m radius. */
@@ -289,7 +296,7 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const unplacedInWindow = useFixed ? useFixed.unplaced_says : unplaced.filter((u) => windowActs.has(String(u.act_id))).length;
   // POS-1203: what an ended event FIXES (durable-rooms.mjs § writeEventMembership) rides beside the evidence, never in it: the public envelope is unchanged
   if (collect && !useFixed && until === window.to && found.history === "complete") {
-    collect.membership = { window, unplaced: unplacedInWindow, members: found.members ?? [], rooms: found.rooms.map((r) => ({ ...r, frame: roomFrame(r) })) };
+    collect.membership = { window, unplaced: unplacedInWindow, members: found.members ?? [], rooms: found.rooms.map(roomWithFrame) };
   }
   const placed = actRows.map((r) => ({ ...r, point: talk.composeAnchor({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf) }));
   const present = presentFrom(placed, { window: scoped, place });
@@ -299,7 +306,7 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
     complete,
     // every room of the event, in the order it started, each with its own frozen frame — the whole public coverage, whatever the
     // automatic spark makes of it (v1 makes one only for a single room; several stay listed here, never silently dropped)
-    rooms: found.rooms.map((c) => ({ ...c, frame: roomFrame(c) })),
+    rooms: found.rooms.map(roomWithFrame),
     room_history: found.history,
     ...(found.note ? { room_note: found.note } : {}),
     present,
