@@ -15,7 +15,10 @@ import { tmpdir } from "node:os";
 const C = await import("../src/circles.mjs");
 const { createVoices } = await import("../src/voices.mjs");
 
-const T = Date.parse("2026-11-14T20:00:00Z");
+// POS-1218: until then this clock read 2026-11-14, before circles went live (C.CIRCLES_LIVE_AT, 2026-11-22T10:19:06.729Z). An identified
+// parentless say from before that instant now reads as the room's flowing timeline, so the worked example is spoken after it:
+// its openers are circles. The pre-circles reading has its own file (circles-era.test.mjs).
+const T = Date.parse("2026-11-23T20:00:00Z");
 const at = (min) => T + Math.round(min * 60_000);
 // THE WORKED EXAMPLE (call 3, ruled; POS-1035 description). [id, by, minute, reply_to, said]
 const EXAMPLE = [
@@ -175,7 +178,7 @@ test("reply_to resolution: by id, by handle plus time, by a name in the words â€
   const r = room();
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: 50105 }), { id: 50105, how: "id", handle: "claran", at_ms: at(5) });
   assert.deepEqual(C.resolveReplyTo(r, { replyTo: "50105" }).id, 50105, "the digits of an id");
-  assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: "2026-11-14T20:03:00Z" } }).id, 50102, "the exact instant");
+  assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: "2026-11-23T20:03:00Z" } }).id, 50102, "the exact instant");
   assert.equal(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) } }).id, 50102, "the exact instant as at_ms");
   assert.match(C.resolveReplyTo(r, { replyTo: { handle: "seth", at: at(3) + 20_000 } }).refused.defect, /said nothing within your hearing at exactly/, "a nearby say is never chosen (CORE-82 read)");
   assert.equal(C.resolveReplyTo(r.slice(0, 10), { speaker: "vesper", text: "Claran, â€¦the Borrowed-Hand Moth." }).id, 50110, "Vesper's line (call 3): linked by name to Claran's latest");
