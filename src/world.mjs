@@ -5005,11 +5005,23 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // household's live drafts). The door's disclosures downstream (overhang, the
     // publish note) run on this answer exactly as they run on a written one.
     if (clean.preview === true) {
-      const landing = pathFor({ ...declaration, id }, { publishedPathOf: filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))) });
+      // POS-1212: the preview asks the SAME question the write asks, with the same resolver (canon's filing, else the live drafts and canon's marks), so the
+      // `dir` it says is the `dir` the act answers; an omitted resolver is never read as a bad parent
+      const filedPathOfPreview = filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE)));
+      const landing = pathFor({ ...declaration, id }, {
+        publishedPathOf: filedPathOfPreview,
+        parentPathOf: (pid) => {
+          const filed = filedPathOfPreview(pid);
+          if (filed) return filed.replace(/\/mark\.md$/, "");
+          const p = liveById.get(pid) ?? canon.byId.get(pid);
+          const pp = p ? pathFor({ ...p, id: pid }) : null;
+          return pp ? pp.replace(/\/mark\.md$/, "") : null;
+        },
+      });
       return {
         preview: true, id, kind: clean.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
         at: clean.at ?? null, extent: clean.extent ?? null,
-        dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
+        dir: landing ? String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, "") : null,
         branch: draftBranch(household), put_forward: putForward,
         ...(amending ? { amended: true, moved: false, _verdict: verdict } : {}),
         ...(carries ? { carries } : {}),
@@ -5089,13 +5101,14 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         const filed = filedPathOf(pid);
         if (filed) return filed.replace(/\/mark\.md$/, "");
         const p = liveById.get(pid) ?? canon.byId.get(pid);
-        return p ? pathFor({ ...p, id: pid }).replace(/\/mark\.md$/, "") : null;
+        const pp = p ? pathFor({ ...p, id: pid }) : null;
+        return pp ? pp.replace(/\/mark\.md$/, "") : null;
       },
     });
     return {
       id, kind: clean.kind, parent, ...(relations ?? {}),
       at: clean.at ?? null, extent: clean.extent ?? null,
-      dir: String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, ""),
+      dir: willLandAt ? String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, "") : null,
       branch: draftBranch(household),
       // Which store is the RECORD for this act, as every flipped lane's answer
       // says it. `record` comes from the write itself rather than from

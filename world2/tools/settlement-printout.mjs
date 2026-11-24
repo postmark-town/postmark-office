@@ -490,6 +490,10 @@ export async function parcelCapturesAfterFold(world, { publishedIds, beforeText 
 export function registryRowRefusal({ slug, path, household, held = [] }) {
   if (path && household) return null;
   const h = (held ?? []).find((x) => x.id === slug);
+  // POS-1212: a mark the planner held for want of a filing (a declared parent it cannot find; no maker) is no collision: say what it is, and still print nothing
+  if (h && (h.crossing_output === "parent-unresolved" || h.crossing_output === "no-maker")) return { reason: "filing-held-unfileable",
+    detail: `the sealed registry holds ${slug}, and the write-down held it (${h.crossing_output}): ${h.crossing_output === "parent-unresolved"
+      ? `it declares parent ${h.declared_parent ?? "(unnamed)"}, which could not be found, so it has no filing` : "it has no maker, so it has no filing"}. Printing it would file it where nobody said it belongs, so nothing was printed (POS-1212: a named hold, never a guess)` };
   if (h) return { reason: "filing-held-by-another-id",
     detail: `the sealed registry holds ${slug}, and the write-down held it (${h.crossing_output}): its filing ${h.path ?? "(none)"} is ${h.held_by_filing_of}'s published file${h.depends_on ? `, and it files under ${h.depends_on}` : ""}. Printing it would overwrite that file or hang it under another's mark, so nothing was printed (WLD-230; the filing layout that keeps both is the class fix)` };
   return { reason: "registry-unprintable", detail: `the sealed registry holds ${slug} and neither this printout nor main files it: a row the file cannot say where it stands` };
