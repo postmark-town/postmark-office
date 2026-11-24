@@ -448,6 +448,26 @@ test("PROD CONTROL: the admission replay, with no STAMP_UAT_TRUST, hands its chi
   assert.deepEqual(calls(s.probe), Array.from({ length: 3 }, () => ({ keys: ["pubkeyPem"], opts: { pubkeyPem: BASE.pub } })));
 });
 
+test("WITH THE TOWN'S HANDOFF (as pinned): the admission replay, the real engine and verifier, takes a UAT-signed key line only with the trust", { skip: needsHandoff }, async () => {
+  // A base-signed ledger whose trusted seal is its last line, and the house's key line signed by UAT's key after it,
+  // as a UAT office's pen signs it. With the trust, the new line verifies under UAT's key; without it, under the base
+  // key, it is a fresh signature failure, so the admission refuses for today (house-key § THE DATING RULE, step 2).
+  const m = mixedTown(6, 6);
+  copyTownModule(HANDOFF_TOWN, m.town, "stamp-verify.mjs");
+  const canonical = "- 2026-06-17 · registry: ada = hh:ada-house";
+  const seal = ENGINE.sha256hex(m.seals.at(-1) + canonical);
+  const args = { signed: [`${canonical} · sig: ${ENGINE.signSeal(seal, UAT.priv)}`], handles: ["ada"], date: "2026-06-17" };
+  const sigFresh = (r) => r.fresh.filter((p) => /SIGNATURE|UNSIGNED|handoff:/.test(p));
+  await withPins({ pins: pinTown(m.town), probe: join(scratch, "unused.jsonl") }, () => {
+    const uat = replayHolds(m.town, { ...args, env: uatEnv(m.seals.at(-1)) });
+    assert.equal(uat.checked, "verified", "ada is active on the day, so the replay ran");
+    assert.deepEqual(sigFresh(uat), [], "UAT's line, past the trusted seal, verifies under UAT's key");
+    const prod = replayHolds(m.town, { ...args, env: {} });
+    assert.equal(prod.holds, false);
+    assert.deepEqual(sigFresh(prod).map((p) => p.slice(0, 31)), ["line 7: SIGNATURE FAILS — first"], "without the trust, production's verdict on that line");
+  });
+});
+
 // ── the fifth caller (Rivet's settlement, confirmed by Wright): stamp-mint-parity's control, the rehearsal's gate ──
 // tools/dev-rehearsal.mjs:538 runs world2/tools/stamp-mint-parity.mjs; its main's control (§ parityControl) folds into
 // its exit 1. "Give it the same shared loader and options, plus a neutral (production) control test."
