@@ -23,11 +23,13 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { changedBetween, checkRequest, ferry, fingerprint, killStragglers, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
+import { changedBetween, checkRequest, ferry, fingerprint, killStragglers, runTool, sandboxTrustEnv, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
+import { UAT_TRUST_PATH } from "../src/stamp-trust.mjs";
 import { DECOY_ENV } from "./helpers/town-tool-socket.mjs";
 import { pinTown } from "./helpers/pinned-town.mjs";
 
@@ -84,6 +86,54 @@ test("the sandbox unit: meepo with no environment, no network, and only the clon
   for (const word of etc.replace(/^BindReadOnlyPaths=/, "").split(/\s+/)) {
     assert.match(word, /^-?\/etc\/(passwd|group|nsswitch\.conf|ld\.so\.cache|localtime)$/, `${word} is not on /etc's allowlist`);
   }
+});
+
+// ── UAT's stamp trust (POS-1214) ────────────────────────────────────────────
+// LAW (Wright, 2026-11-24 14:32:35Z on POS-1213): "with no UAT file bound, every path behaves exactly as today, byte
+// for byte." The contract: "The sandbox needs only the controlled path, not PEM bytes in environment."
+
+const DROPIN = "postmark-town-tool@.service-dropin-uat-stamp-trust.conf";
+
+test("the UAT drop-in: one fixed path, bound read-only with the trust policy, and nothing else; no other deploy file asks for UAT's trust", () => {
+  const text = unit(DROPIN);
+  assert.match(text, /^# \/etc\/systemd\/system\/postmark-town-tool@\.service\.d\/uat-stamp-trust\.conf$/m, "it names where it would go");
+  assert.match(text, /^# UAT ONLY\. NEVER INSTALLED ON PROD\./m);
+  assert.ok(text.split("\n").includes("[Service]"));
+  assert.deepEqual(settings(text), [
+    `Environment=STAMP_UAT_TRUST=${UAT_TRUST_PATH}`,
+    `BindReadOnlyPaths=${UAT_TRUST_PATH}`,
+    "BindReadOnlyPaths=/srv/postmark-office/src/stamp-trust.mjs",
+  ], "the path, the file at that path, and the policy the runner imports for it: read-only, no key bytes, no writable path");
+  const others = readdirSync(join(OFFICE, "deploy")).filter((f) => f !== DROPIN && !/\.md$/.test(f));
+  assert.ok(others.includes("postmark-town-tool@.service") && others.includes("postmark-ferry.service"), `read ${others.length} deploy files`);
+  for (const f of others) {
+    let body;
+    try { body = readFileSync(join(OFFICE, "deploy", f), "utf8"); } catch { continue; } // a folder
+    assert.doesNotMatch(body, /STAMP_UAT_TRUST/, `${f} is prod's: nothing there asks for UAT's trust`);
+  }
+});
+
+test("PROD CONTROL: with no STAMP_UAT_TRUST in the unit, the sandbox adds nothing to the verifier's environment", async () => {
+  assert.deepEqual(await sandboxTrustEnv({}, scratch), {});
+  assert.deepEqual(await sandboxTrustEnv({ ...DECOY_ENV, STAMP_UAT_TRUST_PATH: UAT_TRUST_PATH }, scratch), {}, "only the one name asks");
+});
+
+test("the sandbox passes the verifier only its fixed trust PATH, after the trust policy has read it; anything else refuses", async () => {
+  const dir = join(scratch, "uat-trust");
+  mkdirSync(dir, { recursive: true });
+  const fixed = join(dir, "stamp-trust.json");
+  const uat = generateKeyPairSync("ed25519");
+  const write = (doc) => { writeFileSync(fixed, JSON.stringify(doc)); if (process.platform !== "win32") chmodSync(fixed, 0o644); };
+  write({ pubkeyPem: uat.publicKey.export({ type: "spki", format: "pem" }), afterSeal: "9".repeat(64) });
+  const clone = join(scratch, "uat-trust-clone");
+  mkdirSync(clone, { recursive: true });
+  assert.deepEqual(await sandboxTrustEnv({ STAMP_UAT_TRUST: fixed }, clone, { fixedPath: fixed }), { STAMP_UAT_TRUST: fixed }, "a path, never the key's bytes");
+  await assert.rejects(sandboxTrustEnv({ STAMP_UAT_TRUST: join(dir, "elsewhere.json") }, clone, { fixedPath: fixed }),
+    (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && e.message.includes(`reads UAT's trust only at ${fixed}`));
+  assert.ok((await sandboxTrustEnv({ STAMP_UAT_TRUST: "" }, clone).catch((e) => e)).message.includes(`reads UAT's trust only at ${UAT_TRUST_PATH}`),
+    "the box's fixed path is the default");
+  write({ pubkeyPem: uat.privateKey.export({ type: "pkcs8", format: "pem" }), afterSeal: "9".repeat(64) });
+  await assert.rejects(sandboxTrustEnv({ STAMP_UAT_TRUST: fixed }, clone, { fixedPath: fixed }), /a private key is never trust/);
 });
 
 test("the socket: the box's path, one unit per connection, meepo's alone", () => {
@@ -226,10 +276,10 @@ test("symlinksUnder and fingerprint see what a tool left behind", () => {
 const posix = process.platform === "win32" ? "the exchange needs a POSIX socket: a file descriptor and a half-close" : false;
 
 /** One serve over `clone`, wired with pipes, sent `request`; resolves its answer and exit. */
-function serveOnce(clone, request, { pinsDir = "" } = {}) {
+function serveOnce(clone, request, { pinsDir = "", unitEnv = {} } = {}) {
   return new Promise((resolve, reject) => {
     // POS-994: serve checks verify and quests against the office's pins; a fixture names its own
-    const env = pinsDir ? { ...DECOY_ENV, TOWN_PINS_DIR: pinsDir } : DECOY_ENV;
+    const env = { ...(pinsDir ? { ...DECOY_ENV, TOWN_PINS_DIR: pinsDir } : DECOY_ENV), ...unitEnv };
     const child = spawn(process.execPath, [TOOL, "serve", "--clone", clone], { stdio: ["pipe", "pipe", "pipe"], env });
     let out = "", err = "";
     child.stdout.on("data", (c) => { out += c; });
@@ -281,6 +331,25 @@ test("serve refuses another tool, another clone, another env value, or no JSON, 
     assert.deepEqual([r.answer.ok, r.answer.stage], [false, "sandbox"]);
   }
   assert.equal(existsSync(marker), false, "the mint was never run");
+});
+
+test("a unit whose STAMP_UAT_TRUST isn't the fixed path refuses the verify, visibly, and runs nothing; the ferry is untouched (POS-1214)", { skip: posix }, async () => {
+  const marker = join(scratch, `verify-ran-${Math.random().toString(36).slice(2)}`);
+  const t = town({
+    "tools/stamp-verify.mjs": `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");\n` + VERIFY_LIB,
+    "tools/ferry.mjs": ENV_STUB,
+  });
+  const clone = realpathSync(t.clone);
+  const pinsDir = pinTown(t.clone);
+  const unitEnv = { STAMP_UAT_TRUST: join(scratch, "not-the-fixed-path.json") };
+  const v = await serveOnce(clone, { tool: "verify", clone }, { pinsDir, unitEnv });
+  assert.equal(v.code, 1, v.err);
+  assert.deepEqual([v.answer.ok, v.answer.stage], [false, "sandbox"]);
+  assert.ok(v.answer.why.includes(`reads UAT's trust only at ${UAT_TRUST_PATH}`), v.answer.why);
+  assert.equal(existsSync(marker), false, "the verifier never ran");
+  const f = await serveOnce(clone, { tool: "ferry", clone }, { pinsDir, unitEnv });
+  assert.equal(f.code, 0, f.err);
+  assert.deepEqual(JSON.parse(Buffer.from(f.answer.out, "base64").toString()).env, ["HOME", "PATH"], "the ferry gets no trust and no path");
 });
 
 test("serve passes a tool's own refusal through as ok:false with its exit", { skip: posix }, async () => {

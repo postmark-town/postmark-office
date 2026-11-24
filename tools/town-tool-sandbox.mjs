@@ -104,6 +104,13 @@
 // file, the clone, and the three read-only paths that check needs:
 // src/town-tool.mjs, src/stamp-verify-pinned.mjs and src/town-pins
 // (deploy/postmark-town-tool@.service).
+//
+// ── UAT'S STAMP TRUST (POS-1214) ────────────────────────────────────────────
+// On UAT only, the unit's drop-in sets STAMP_UAT_TRUST to one fixed path and
+// binds that file and src/stamp-trust.mjs read-only. serve then passes the
+// verify tool that PATH (sandboxTrustEnv), never the key's bytes and never
+// anything from the client; src/stamp-trust.mjs is imported only then. Without
+// it, as in production, nothing here changes.
 
 import { createConnection, Socket } from "node:net";
 import { spawnSync } from "node:child_process";
@@ -166,6 +173,30 @@ export function checkRequest(req, ownClone) {
     if (typeof v !== "string" || !ENV_VALUE.test(v)) throw new Error(`env ${k} is not a plain value`);
   }
   return { tool: req.tool, env };
+}
+
+/**
+ * THE UAT TRUST'S TRANSPORT (POS-1214): what the sandbox adds to the verifier's
+ * environment. Production's unit sets no STAMP_UAT_TRUST, and this answers {}:
+ * the verifier's environment is exactly PATH, HOME and TOWN_TZ, as before. UAT's
+ * drop-in (deploy/postmark-town-tool@.service-dropin-uat-stamp-trust.conf) sets
+ * it to the one fixed path it binds read-only, src/stamp-trust.mjs §
+ * UAT_TRUST_PATH, and binds src/stamp-trust.mjs beside the runner. Only that
+ * path is passed, never the key's bytes, and only from this unit's own
+ * environment: the client's request carries TOWN_TZ alone (checkRequest). The
+ * file is checked here by the office's one policy before the verifier runs (the
+ * runner checks it again), so a set but unusable trust refuses the request,
+ * visibly, and runs nothing. The trust module is imported only when asked for,
+ * since production's unit doesn't bind it. `fixedPath` is the test's seam.
+ */
+export async function sandboxTrustEnv(unitEnv, ownClone, { fixedPath = null } = {}) {
+  if (unitEnv?.STAMP_UAT_TRUST === undefined) return {};
+  const { UAT_TRUST_ENV, UAT_TRUST_PATH, uatHandoff, StampTrustUnusable } = await import("../src/stamp-trust.mjs");
+  const path = fixedPath ?? UAT_TRUST_PATH;
+  const asked = unitEnv[UAT_TRUST_ENV];
+  if (asked !== path) throw new StampTrustUnusable(asked, `the town-tool sandbox reads UAT's trust only at ${path}, the path its UAT drop-in binds read-only`);
+  uatHandoff({ env: { [UAT_TRUST_ENV]: path }, clone: ownClone });
+  return { [UAT_TRUST_ENV]: path };
 }
 
 /**
@@ -241,8 +272,11 @@ export async function serve(cloneArg, { inUnit = false } = {}) {
     const argv = TOOLS[tool].pinned
       ? townToolArgv(ownClone, TOOLS[tool].pinned, TOOLS[tool].args)
       : TOOLS[tool].argv.map((a) => (a === REPORT_SLOT ? report : a));
+    // UAT only (POS-1214): the verifier gets the trust file's fixed PATH from this unit's own
+    // environment, never from the client and never as key bytes. In production it is {}.
+    const trust = tool === "verify" ? await sandboxTrustEnv(process.env, ownClone) : {};
     const r = spawnSync(process.execPath, argv, {
-      cwd: ownClone, env: { PATH: "/usr/bin:/bin", HOME: dir, ...env }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: ownClone, env: { PATH: "/usr/bin:/bin", HOME: dir, ...env, ...trust }, stdio: ["ignore", "pipe", "pipe"],
       timeout: STEP_MS, killSignal: "SIGKILL", maxBuffer: MAX_OUTPUT,
     });
     const exit = r.status ?? 1;
