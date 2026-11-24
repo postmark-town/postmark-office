@@ -190,6 +190,7 @@ export function planDrain(rows, { publishedPathOf = null, toFileFrame = null } =
     });
   };
 
+  const held = [];
   const byHousehold = new Map();
   const bucket = (h) => {
     if (!byHousehold.has(h)) byHousehold.set(h, { household: h, upserts: [], removals: [] });
@@ -212,6 +213,8 @@ export function planDrain(rows, { publishedPathOf = null, toFileFrame = null } =
     }
     const p = row.payload ?? {};
     const path = pathOf(id);
+    // POS-1212: a mark with no filing (a declared parent that cannot be found; no maker) is HELD BY NAME, never filed at the root or at a guessed id
+    if (!path) { held.push({ id, household, why: p.parent_id ? "parent-unresolved" : "no-maker", declared_parent: p.parent_id ?? null }); continue; }
     const nested = isNestedFiling(path);
     // THE ONE CONVERSION, and only where the file frame differs from the world
     // frame: a nested record's at/points are offsets from its parent's centre.
@@ -253,6 +256,7 @@ export function planDrain(rows, { publishedPathOf = null, toFileFrame = null } =
   return {
     head,
     households: [...byHousehold.values()].sort((a, b) => a.household.localeCompare(b.household)),
+    held,
     logs: [...logs.entries()].map(([crossing, lines]) => ({ crossing, lines })).sort((a, b) => a.crossing - b.crossing),
     counts: {
       rows: rows.length,

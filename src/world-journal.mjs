@@ -918,27 +918,42 @@ export function journalHead(db) {
  * resolve a published mark's directory — the answer is the id path, and
  * `writeDownHousehold` is the backstop that keeps the file where it already is.
  *
- * A nested record whose parent is not itself in the journal takes the root-level
- * fallback, which is exactly what the git path does when the parent is a
- * published mark whose directory this door cannot cheaply resolve.
+ * ── THE ROOT FALLBACK IS GONE (POS-1212; Darko, 2026-11-24 07:59 EST) ───────
+ *
+ * "A mark with no parent files at its own id, `<maker>/<slug>`, whatever its
+ * kind." The old last line filed anything neither sited nor nested at
+ * `ROOT_PREFIX/<slug>/`, which drops the maker and reads to the World as a child of
+ * the root mark, a claim nobody made (window 330's refusal). Now:
+ *   · an existing filing wins, for every kind (gate A, `publishedPathOf`);
+ *   · a record that declares `parent_id`, with a resolver that cannot find it, has NO
+ *     filing (`null`): the planner holds it by name (Wright, 2026-11-24 13:21Z);
+ *     a caller with no resolver at all is no evidence of a bad parent and gets the id path;
+ *   · every other record files at `WORLD/marks/<maker>/<slug>/mark.md`;
+ *   · a record with no maker has no filing (`null`): held by name, never the root.
  */
 export function pathFor(record, { parentPathOf = null, publishedPathOf = null } = {}) {
   const { by, slug } = idPartsOf(record);
   if (!slug) return null;
 
-  if (isSited(record, classExtendsOf())) {
-    // GATE A: an existing filing never moves.
-    const filed = record?.id && typeof publishedPathOf === "function" ? publishedPathOf(record.id) : null;
-    if (filed) return filed;
-    // GATE B: a new mark files at its id. A record with no `by` and no id to
-    // read one from cannot — it takes the root fallback rather than landing at
-    // `WORLD/marks/undefined/`.
-    if (by) return `${MARKS_PREFIX}/${by}/${slug}/mark.md`;
+  // GATE A, for EVERY kind (POS-1212): an existing filing never moves.
+  const filed = record?.id && typeof publishedPathOf === "function" ? publishedPathOf(record.id) : null;
+  if (filed) return filed;
+
+  // A MARK THAT DECLARES A PARENT FILES UNDER IT (a predicate, a naming mark: its parent continued). When the caller can resolve a parent's directory and
+  // this one's cannot be found, there is NO filing: the mark told us where it belongs, and filing it at its maker's id would be a guess (Wright, 2026-11-24
+  // 13:21Z). `null` is the answer, and the planner HOLDS the mark by name (store-writedown.mjs § filingHolds, world-drain.mjs § planDrain). A caller that has
+  // no resolver at all (the resident-facing `dir` of a preview) cannot say where a parent is, and is no evidence of a bad parent: it gets the id path.
+  if (!isSited(record, classExtendsOf()) && record?.parent_id && typeof parentPathOf === "function") {
+    const parentDir = parentPathOf(record.parent_id);
+    return parentDir ? `${parentDir}/${slug}/mark.md` : null;
   }
 
-  const parentDir = record?.parent_id && typeof parentPathOf === "function"
-    ? parentPathOf(record.parent_id) : null;
-  return `${parentDir ?? ROOT_PREFIX}/${slug}/mark.md`;
+  // EVERY OTHER MARK FILES AT ITS MAKER'S ID, `WORLD/marks/<maker>/<slug>/mark.md`, whatever its kind (Darko, 2026-11-24 07:59 EST: "A mark with no parent files at
+  // its own id ... The root fallback goes"). Sited, a parcel, a spark and any other unparented record are one rule now, not a list of kinds. A record with no `by`
+  // and no id to read one from has no maker and no filing: `null`, never `WORLD/marks/undefined/` and never the root (which reads to the World as a parent nobody
+  // declared, and which the lint refuses, window 330).
+  if (by) return `${MARKS_PREFIX}/${by}/${slug}/mark.md`;
+  return null;
 }
 
 /**

@@ -701,7 +701,8 @@ test("convert ONCE — the file frame is applied at write-down and nowhere else"
   }];
   // `publishedPathOf` answers where the mark WITH THAT ID sits. The parent here
   // is `the-town/town-square`, a pre-freeze fossil one level under the root.
-  const nestedPath = (id) => `WORLD/marks/let-there-be-light/${String(id).split("/")[1]}/mark.md`;
+  // (POS-1212: gate A now answers for every kind, so the stub answers only for the parent, never for the new child)
+  const nestedPath = (id) => (String(id) === "the-town/town-square" ? `WORLD/marks/let-there-be-light/${String(id).split("/")[1]}/mark.md` : null);
 
   const converted = planDrain(rows, {
     publishedPathOf: nestedPath,
