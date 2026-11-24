@@ -45,6 +45,7 @@ import { renamedRow, DOOR_FIELDS, withRefused } from "./one-contract.mjs"; // PO
 import { actUnderNonce, nonceDefect } from "./act-nonce.mjs"; // POS-246: a world act's retry key
 import { noteActWritten } from "./act-watch.mjs"; // POS-637: the crossing pass's row, told to the act door's creatures
 import { actSpan } from "./read-timing.mjs"; // POS-1110: the act's phases, timed under its request (measurement only)
+import { callOnWorker, onCall, workerCallable } from "./read-workers.mjs"; // POS-1219: an act's look is read on a worker
 import { readFileSync, readdirSync } from "node:fs";
 import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household grain is the store's identities
 import { refShaFromDisk } from "./world-branches.mjs";
@@ -3249,6 +3250,75 @@ export async function dispatchCreatureVerb(action, args, key, { kept = null, doo
   }
 }
 
+// ── THE ACT'S LOOK, READ ON A WORKER (POS-1219) ──────────────────────────────
+//
+// Every world act gathers its law from where its caller stands: `worldOrient` (the
+// standpoint and the spine it is within) and then `worldEyes` (what is in reach), the
+// same two reads a worker answers as GET /world/orient and /world/eyes. On prod they
+// ran on the main thread for every act, a whole world look per say (2026-11-24,
+// 15–16Z: 154 MCP says, orient 351 s and eyes 405 s of their segments), while the
+// main thread admits every request, keeps every write and holds every listen. So the
+// look is asked of a read worker, and the act itself (its law, its verb, its write)
+// stays here. Neither read touches the main thread's own memory (docs/read-workers.md:
+// presence reads the positions projection, which every worker keeps by message, and an
+// announced write is applied before a call that follows it on the same port).
+//
+// Same answer, same order: orient, and eyes only when orient did not refuse. When no
+// worker answers (no pool, the office's own workers off, none ready, a key or an answer
+// that cannot be cloned, a worker that stopped, a read that threw there) the act reads
+// both here exactly as before, so an exception is still this thread's own. The segment
+// is `look` when a worker read it, and `orient` and `eyes` when this thread did.
+const ACT_LOOK = "act-look";
+async function lookHere(args, key, ctx) {
+  const oriented = await actSpan("orient", () => worldOrient(args, key, { roll: ctx.roll ?? [], note: false })); // DEC-11: the town roll rides into `present`
+  if (oriented?.error) return { oriented };
+  // no porch lights: this answer shows no houses (WLD-29)
+  const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
+  return { oriented, seen };
+}
+// THE WAIT IS BOUNDED. A worker that never answers, or answers too late, must not hold the act: past this the act reads its look here, as it did before
+// POS-1219, and the deadline on the call (below) tells the worker to read nothing once it is past. Set at about the worker look's p99 on prod (w48.7,
+// 18:48–19:03Z, 53 acts: look p50 2.0 s, p90 6.6 s, p99 12.6 s, none falling back): lower, and the acts past it would read their look on the main thread,
+// which is the load this change exists to take off it; a late answer is dropped.
+const ACT_LOOK_WAIT_MS = 13_000;
+let askSeam = null;
+let lookWaitMs = ACT_LOOK_WAIT_MS;
+/** Test seam (POS-1219): who an act's look is asked of, `(name, payload) → answer | null`, and how long the act waits for it; null restores the read pool and the bound. */
+export const __setActLookCallerForTest = (fn, { waitMs = ACT_LOOK_WAIT_MS } = {}) => { askSeam = fn ?? null; lookWaitMs = waitMs; };
+const answeredWithin = (p, ms) => {
+  let timer = null;
+  const late = new Promise((ok) => { timer = setTimeout(() => ok(null), ms); }); // not unref'd: the act is waiting on it (and it is cleared the moment either side settles)
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+};
+async function actLook(args, key, ctx = {}) {
+  const ask = askSeam ?? (workerCallable() ? callOnWorker : null);
+  if (ask) {
+    let handed = null;
+    // THE DEADLINE RIDES WITH THE CALL (POS-1219, Truey's N2): the instant past which this act no longer waits. A worker that picks the call up after it
+    // reads nothing and answers null, so a saturated pool never spends a look nobody will use. One process, one clock: the workers read the same Date.now.
+    const deadline = Date.now() + lookWaitMs;
+    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [], deadline }), lookWaitMs)); }
+    catch { handed = null; }
+    if (handed && typeof handed === "object" && handed.oriented !== undefined) return handed;
+  }
+  return lookHere(args, key, ctx);
+}
+const pastDeadline = (deadline) => Number.isFinite(deadline) && Date.now() > deadline;
+// The worker's side: the same two reads, in the same order, on the args, key and roll the act was given; nothing at all once the act stopped waiting.
+// ⚑ (Truey's N1) THE WORKER'S LAW AND WORLD ARE ITS OWN COPIES: its act law, world graph snapshot and fold are each kept fresh on that thread by stamp or
+// message (docs/read-workers.md), not shared with the main thread, so a look read here can trail one the main thread would read by that one hop.
+async function actLookRead({ args, key, roll, deadline = null }) {
+  if (pastDeadline(deadline)) return null; // the act stopped waiting before this worker reached it: it reads its own look
+  const oriented = await worldOrient(args, key, { roll: roll ?? [], note: false });
+  if (oriented?.error) return { oriented };
+  if (pastDeadline(deadline)) return null; // passed while orient was read: eyes would be read for nobody
+  const seen = await worldEyes(args, key, { lights: false });
+  return { oriented, seen };
+}
+onCall(ACT_LOOK, actLookRead);
+/** Test seam (POS-1219): the worker's read itself, so a test can run it and cross it through a structured clone the way a port does. */
+export const __actLookReadForTest = actLookRead;
+
 async function apexDo(args, key, ctx = {}) {
   const action = String(args.do ?? "").trim();
 
@@ -3293,10 +3363,8 @@ async function apexDo(args, key, ctx = {}) {
       : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
-  const oriented = await actSpan("orient", () => worldOrient(args, key, { roll: ctx.roll ?? [], note: false })); // DEC-11: the town roll rides into `present`
+  const { oriented, seen } = await actLook(args, key, ctx);
   if (oriented?.error) return oriented;
-  // no porch lights: this answer shows no houses (WLD-29)
-  const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
   if (seen?.error) return seen;
 
   const spine = oriented.you?.within ?? [];
