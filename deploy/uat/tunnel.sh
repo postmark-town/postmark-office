@@ -40,6 +40,7 @@ Wants=network-online.target
 [Service]
 Type=notify
 Slice=uat.slice
+OOMScoreAdjust=500
 EnvironmentFile=/etc/cloudflared/uat.env
 ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
 Restart=on-failure

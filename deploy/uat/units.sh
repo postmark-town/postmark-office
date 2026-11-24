@@ -79,6 +79,8 @@ for f in "$SRC"/postmark-*.service "$SRC"/postmark-*.socket; do
         # unit can't write unless they are named (crossing-save, 2026-11-24 00:00Z: "unable to create
         # temporary object directory"). The leading - ignores the path on a box without stubs.
         echo "ReadWritePaths=-/srv/uat-stubs"
+        # Under memory pressure UAT is stopped, never the meeps beside it (CORE-72, Darko 2026-11-24 08:33 EST).
+        echo "OOMScoreAdjust=500"
         if grep -q '^User=meepo' "$f"; then echo "User=$UAT_USER"; echo "Group=$UAT_USER"; fi
       } > "$d/uat.conf" ;;
   esac

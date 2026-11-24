@@ -25,9 +25,11 @@ uat_refuse_prod
 
 uat_say "the slice first, so Postgres and nginx start inside it"
 install -m 0644 "$HERE/uat.slice" /etc/systemd/system/uat.slice
+# OOMScoreAdjust=500: under memory pressure UAT is stopped, never the meeps beside it (CORE-72, Darko 2026-11-24 08:33 EST);
+# postgres's package ships -900, which this overrides.
 for svc in postgresql@16-main nginx; do
   install -d /etc/systemd/system/$svc.service.d
-  printf '[Service]\nSlice=%s\n' "$UAT_SLICE" > /etc/systemd/system/$svc.service.d/uat-slice.conf
+  printf '[Service]\nSlice=%s\nOOMScoreAdjust=500\n' "$UAT_SLICE" > /etc/systemd/system/$svc.service.d/uat-slice.conf
 done
 systemctl daemon-reload
 
