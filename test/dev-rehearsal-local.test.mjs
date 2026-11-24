@@ -29,18 +29,9 @@ import assert from "node:assert/strict";
 
 import { localDevTarget } from "./helpers/dev-target.mjs";
 import { join } from "node:path";
-import { appendFileSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-// ITS OWN TOWN LOCK (2026-11-24, office #1219). The rehearsal's pens hold the town lock through long steps, and
-// without TOWN_LOCK every file in the checkout shares the repo's one town.lock (src/town-lock.mjs § townLockPath).
-// On CI's shards, which run four files at once with real flock, a file sharing this shard then waited past
-// flock's 30 s and answered "the office pen is busy" (wld74-reader-boundary, after a reshuffle put it beside this
-// file). Read lazily by townLockPath, so setting it here covers every pen this file starts; the pattern is
-// hearth-joins.test.mjs's.
-process.env.TOWN_LOCK = join(mkdtempSync(join(tmpdir(), "dev-rehearsal-lock-")), "town.lock");
 
 import { PROD_DB, groundOf, groundTakenIn, mistsSafeBox, runRehearsal, renderReport, storeClients, targetFromFiles } from "../tools/dev-rehearsal.mjs";
 import { OVERLAP } from "../world2/tools/overlap.mjs";

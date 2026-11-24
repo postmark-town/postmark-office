@@ -31,6 +31,14 @@ import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { markRecord } from "../src/mark-record.mjs";
 
+// ITS OWN TOWN LOCK (2026-11-24, office #1219). Every file without TOWN_LOCK shares the repo's one town.lock
+// (src/town-lock.mjs § townLockPath). On CI's shards (four files at once, real flock) a reshuffle put this file
+// beside dev-rehearsal-local, whose crossing holds that lock through long steps, and this file's pens waited past
+// flock's 30 s: "the office pen is busy". This file spawns no drain or flock child of its own (only git), so a
+// scratch lock read lazily by townLockPath keeps every pen here consistent: hearth-joins.test.mjs's pattern.
+// (The rehearsal can't take the scratch lock instead: its drain checks that its caller holds the lock it names.)
+process.env.TOWN_LOCK = join(tempDir("wld74-lock-"), "town.lock");
+
 const WORLD = worldClone();
 const store = await startStore({ db: "wld74_reader_boundary" });
 const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
