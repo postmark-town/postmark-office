@@ -62,6 +62,11 @@ done
 # /var/www is the office user's on prod (meepo there, uat here): the site refresh makes .postmark-town-site.next
 # BESIDE the webroot and renames that symlink over it, so /var/www/postmark-town-site must NOT exist as a directory.
 chown "$UAT_USER":root /var/www
+# uat's git identity, as prod's meepo has its own (~/.gitconfig): the ferry's town tools commit with it, and
+# with none git refuses ("unable to auto-detect email address", 2026-11-24 00:00Z). Never a real address: UAT
+# pushes only to its stubs.
+sudo -u "$UAT_USER" -H git config --global user.name "uat (postmark UAT box)"
+sudo -u "$UAT_USER" -H git config --global user.email "uat@uat.postmark.town.invalid"
 [ -d /var/www/postmark-town-site ] && [ ! -L /var/www/postmark-town-site ] && rmdir /var/www/postmark-town-site 2>/dev/null || true
 # the meeps' home stays closed to UAT (750, and only rei's ACL besides): say so rather than assume it
 if sudo -n -u "$UAT_USER" test -r /home/meepo 2>/dev/null; then uat_die "$UAT_USER can read /home/meepo; close it before going on."; fi

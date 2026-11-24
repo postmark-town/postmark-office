@@ -13,7 +13,8 @@
 #   · every service runs in uat.slice (4 cores, 16 GB: prod's size, and the meeps' protection);
 #   · PATH puts /usr/bin first, so every bare `node` in prod's scripts is Node 22 (prod's), never the meeps'
 #     /usr/local/bin/node (v25);
-#   · a socket written for meepo belongs to uat.
+#   · a socket written for meepo belongs to uat;
+#   · the stubs (/srv/uat-stubs) are writable, since UAT's pushes land there, not on GitHub.
 # UAT keeps prod's schedule: the ferry's crossings at 00:00 and 12:00 UTC are town law (the crossing is named by its
 # hour), and that clock is part of what UAT tests.
 
@@ -74,6 +75,10 @@ for f in "$SRC"/postmark-*.service "$SRC"/postmark-*.socket; do
         echo "[Service]"
         echo "Slice=$UAT_SLICE"
         echo "Environment=PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/sbin"
+        # prod pushes to GitHub over the network; UAT pushes to its local stubs, which a ProtectSystem=strict
+        # unit can't write unless they are named (crossing-save, 2026-11-24 00:00Z: "unable to create
+        # temporary object directory"). The leading - ignores the path on a box without stubs.
+        echo "ReadWritePaths=-/srv/uat-stubs"
         if grep -q '^User=meepo' "$f"; then echo "User=$UAT_USER"; echo "Group=$UAT_USER"; fi
       } > "$d/uat.conf" ;;
   esac
