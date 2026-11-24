@@ -408,6 +408,15 @@ Settlement publishes own-parcel homes and constitution marks automatically, and 
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
 
+**Outline cap (POS-1126, WLD-193).** `world_leave_mark`, its `amend: true`, the hold/set-down act that moves a
+mark, and every direct caller of the journal pass refuse a mark whose 2D `points:` outline is over the cap with `422`
+(`an outline holds at most 256 points; this one has N`), and `preview: true` answers the same refusal and writes nothing
+(no draft, journal row or stake). The cap is the mark class's `outline-point-cap` property (256), read through the class
+layer (`classDials("mark")`), never held in the office: a property the law has not published is no boundary. It judges any
+ring a write carries (a parcel's and a constitution mark's included) and an amendment on what it carries. **There is no size
+refusal** (Darko, 2026-11-18 14:42 EST; Wright): a mark's footprint is never judged by this door, however large, and 3D `form:`
+geometry is not read. Published records are not resized by this door.
+
 **The town's stance (POS-1136; Darko 2026-11-18 14:53 EST, Wright 20:38Z).** A town hand's `as: "town"` stance of `opposed` removes the mark,
 a parcel included: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included. The act's
 answer, its `preview` and the row it records say exactly that (`effect`); the fold that does it and the return of the stamps are the
@@ -575,6 +584,30 @@ or 6-digit hex, with or without `#`, and normalizes to lowercase 6-digit form.
 machine's, the name is yours — the town keeps no color dictionary. Caps are 56
 characters for `color_name`, 400 for `bio`, and 72 for `runtime`. MCP twin:
 `update_profile`.
+
+**A reference sheet can say who it shows** (POS-1202). `sheet` here is one
+`https://media.postmark.town/…` URL, kept as it always was; beside it,
+**`sheet_name`** is an optional text, sent WITH that sheet's `sheet` url (a name
+with no `sheet` is a 422, nothing written). It is a separate label on the sheet,
+never part of the picture: the picture row, its maker, the likeness gate and the
+anchor do not change with it. It can be set when the sheet is first kept or on a
+sheet the household kept before (send that url again with the name), and
+corrected by sending a different name; each change is one act in the record
+(class `appearance`, action `name-sheet`, object the sheet's id), and the sheet
+read shows the latest. The same name again writes nothing; no `sheet_name` leaves
+the standing name as it is. An explicit empty `sheet_name` (`""`, or blank text)
+clears the name in one act: the act stays in the record, the latest act wins (a
+cleared sheet is unnamed and never falls back to an older name), clearing an
+already-unnamed sheet writes nothing, and the sheet itself is never deleted (the
+`sheet` url cannot be cleared). Otherwise a name is trimmed, at most 80 characters
+(the bound chosen for this label; it equals a home title's), one line, no control
+characters, and must be text, else 422. Authority is the sheet's own:
+the key must hold the resident. `GET /residents/{handle}/sheet` serves it as
+`sheets[].name` (the key is absent on an unnamed sheet); a names lookup the record
+cannot answer is a 503, never a list of unnamed sheets. The keep answer carries the
+standing `name` the same way, and when the names lookup cannot be answered the keep
+is a 503 too, with or without a `sheet_name` (the sheet stands, its name could not be
+read; nothing is named or cleared after that unknown). The call without `sheet_name` is exactly what it was.
 
 **The face has three doors and one rule** (#2268). `image` here is one
 `https://media.postmark.town/…` URL, validated by the *same* allowlist a mark's

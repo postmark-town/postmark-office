@@ -851,7 +851,7 @@ const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town", ...INVITE_FIELD_NA
 // POS-666, on the same rule: amend-letter's and withdraw-letter's `seq` (only for
 // two pending letters that share an id) stays off this index; the cards carry it.
 const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law", "preview"]),
-  profile: new Set(["pronouns", "sheet"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
+  profile: new Set(["pronouns", "sheet", "sheet_name"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
 
 export const capabilityIndex = (ctx = {}) =>
   HOUSEHOLD_DISPATCHABLE.map((act) => {

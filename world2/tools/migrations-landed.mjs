@@ -164,6 +164,8 @@ export const LANDED = {
   "097_town_discovery.sql":        { probe: `${rel("town_discovery_chunks")} AND ${rel("town_letter_edges")} AND ${rel("town_letter_edges_walk")} AND EXISTS (SELECT 1 FROM registry WHERE object = 'town_letter_edges')` },
   // 101 (POS-721, small; carried by POS-1131; was 091, then 098, until 098–100 landed first): the household's human's town name, short line and pronouns, on its row.
   "101_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
+  // 103 (POS-1203, CORE-170): the fixed record of a closed room, its says, an ended event's window membership; office_api's INSERT only, no UPDATE or DELETE.
+  "103_durable_rooms.sql": { probe: `${rel("durable_rooms")} AND ${rel("durable_room_says")} AND ${rel("durable_event_memberships")} AND ${rel("durable_event_rooms")} AND ${rel("durable_event_room_says")} AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'durable_event_rooms' AND column_name = 'frame_flag') AND has_table_privilege('office_api', 'durable_rooms', 'INSERT') AND NOT has_table_privilege('office_api', 'durable_rooms', 'UPDATE') AND NOT has_table_privilege('office_api', 'durable_rooms', 'DELETE')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

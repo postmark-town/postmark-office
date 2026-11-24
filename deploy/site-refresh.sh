@@ -277,13 +277,19 @@ MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
 # and no report was written. Another pass starts only when the run's elapsed time
 # plus the last pass's duration still fits inside this many minutes.
 MAX_MINUTES="${SITE_REFRESH_MAX_MINUTES:-40}"
+# THE INCREMENTAL BUILD (POS-1191: site #451's tools/incremental-build.mjs, keyed on the season since site #484).
+# On by default whenever the release carries the tool. SITE_REFRESH_INCREMENTAL=0 builds every page the old way;
+# SITE_REFRESH_FULL=1 asks the tool for a full build (the build on demand) and still writes the next manifest.
+INCREMENTAL="${SITE_REFRESH_INCREMENTAL:-1}"
+FULL_BUILD="${SITE_REFRESH_FULL:-0}"
 
-TOWN="$ROOT/town"          # our own town clone — never the office's, never locked
+TOWN="$ROOT/town"         # our own town clone — never the office's, never locked
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # where this script and its helpers live (POS-601)
 SITE="$ROOT/site"          # the extract tree: site @ origin/main, runs the extractors
 BUILD="$ROOT/build"        # the build tree: a worktree of SITE, detached at the tag
 RELEASES="$ROOT/releases"
 STATE="$ROOT/state.json"
+MANIFESTS="$ROOT/manifests" # one incremental-build manifest per release, named for it; never inside the served tree
 LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -500,6 +506,61 @@ crossing_now() {
     2>/dev/null || true
 }
 
+# ── THE EVENTS ARCHIVE (POS-1203, with CORE-174; the Office publisher half) ─────────────────────────────
+# The site's events feed is capped, and this script resets and cleans $SITE at the top of every pass, so src/data/postmark/events.json goes back to the
+# empty COMMITTED file before every fetch. The site (CORE-174) keeps the events it has seen in an archive it reads, merges and writes atomically itself, at
+# POSTMARK_EVENTS_ARCHIVE; this script's part is only WHERE that file lives and that it is there, never wiped:
+#   · it is $ROOT/events-archive.json by default, beside letter-cache.json, OUTSIDE $SITE, $BUILD and $TOWN (a path inside any of them is refused: they are
+#     reset and cleaned), and an explicitly configured POSTMARK_EVENTS_ARCHIVE is respected;
+#   · it is handed to tools/fetch-town.mjs beside POSTMARK_LETTER_CACHE;
+#   · SEEDED, once, only when it does not exist, from the events input a previous pass left in the extract tree, BEFORE this pass's reset takes it. The bytes are
+#     copied as they are (the input's own evidence and provenance stay with it: it is never restamped as newly read) and the source is named in a note beside
+#     the archive. An existing archive is never touched, and an input that is empty or is the committed file is no seed. The extract tree's input is a
+#     retained pre-reset one, not a verified last-PUBLISHED snapshot (a release holds dist-town, not the raw input; the build tree's overlaid copy can be a failed
+#     attempt's), and the note says so. With none to seed from the pass says so and does not call the archive's start lossless. Nothing is rebuilt from rendered HTML.
+# One pass holds $LOCK (fd 9), so the seed has one writer; it lands by a temporary file and a no-clobber rename.
+EVENTS_ARCHIVE="${POSTMARK_EVENTS_ARCHIVE:-$ROOT/events-archive.json}"
+EVENTS_INPUT_REL="src/data/postmark/events.json"
+
+# 0 when $1 is valid JSON holding at least one event (a non-empty array, or an object with a non-empty array in it)
+events_input_usable() {
+  node -e '
+    const v = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const some = (a) => Array.isArray(a) && a.length > 0;
+    process.exit(some(v) || (v && typeof v === "object" && Object.values(v).some(some)) ? 0 : 1);
+  ' "$1" 2>/dev/null
+}
+
+seed_events_archive() {
+  case "$EVENTS_ARCHIVE" in
+    "$SITE"/*|"$BUILD"/*|"$TOWN"/*) die "POSTMARK_EVENTS_ARCHIVE ($EVENTS_ARCHIVE) is inside a tree this script resets; it belongs beside letter-cache.json" ;;
+  esac
+  [ -e "$EVENTS_ARCHIVE" ] && return 0
+  mkdir -p "$(dirname "$EVENTS_ARCHIVE")"
+  local src="" what="" dir f
+  for dir in "$SITE" "$BUILD"; do
+    f="$dir/$EVENTS_INPUT_REL"
+    [ -f "$f" ] || continue
+    # the committed file is no retained input (it is what the reset restores)
+    if git -C "$dir" show "HEAD:$EVENTS_INPUT_REL" 2>/dev/null | cmp -s - "$f"; then continue; fi
+    events_input_usable "$f" || continue
+    src="$f"
+    if [ "$dir" = "$SITE" ]; then what="the extract tree's events input as the previous pass's fetch left it, retained before this pass's reset (not a verified last-published snapshot)"
+    else what="the build tree's overlaid copy of an earlier pass's events input, which can be a failed attempt's (not a verified last-published snapshot)"; fi
+    break
+  done
+  if [ -z "$src" ]; then
+    say "events archive: nothing to seed from (no retained events input in $SITE or $BUILD): the archive starts empty, and events that already left the capped feed are NOT in it — a bootstrap coverage limit, not proof nothing was lost"
+    return 0
+  fi
+  cp "$src" "$EVENTS_ARCHIVE.seed.$$" && mv -n "$EVENTS_ARCHIVE.seed.$$" "$EVENTS_ARCHIVE" || { rm -f "$EVENTS_ARCHIVE.seed.$$"; die "could not seed the events archive at $EVENTS_ARCHIVE"; }
+  rm -f "$EVENTS_ARCHIVE.seed.$$"
+  local sum; sum="$(sha256sum "$EVENTS_ARCHIVE" | cut -d' ' -f1)"
+  printf '{"seeded_at":"%s","source":"%s","source_kind":"retained pre-reset input","source_note":"%s","sha256":"%s","bytes_copied_as_they_were":true}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$src" "$what" "$sum" > "$EVENTS_ARCHIVE.seed-note.json.$$" && mv -f "$EVENTS_ARCHIVE.seed-note.json.$$" "$EVENTS_ARCHIVE.seed-note.json" || true
+  say "events archive: seeded $EVENTS_ARCHIVE from $what"
+}
+
 # ── one build pass ──────────────────────────────────────────────────────────
 build_once() {
   PASSES=$((PASSES + 1))
@@ -512,6 +573,9 @@ build_once() {
   # mid-extract cannot smear two town states into one page.
   git -C "$TOWN" checkout -qf --detach "$TOWN_SHA"
   git -C "$TOWN" clean -qfd
+
+  # THE EVENTS ARCHIVE is seeded BEFORE the first reset of the extract tree below takes the retained events input with it (§ the events archive, above)
+  seed_events_archive
 
   # ── the extract tree: site @ main, exactly what sync-atlas.yml checks out ──
   git -C "$SITE" checkout -qf -B refresh-main "$SITE_MAIN"
@@ -555,8 +619,8 @@ build_once() {
   # keeps this file's floor fields and re-derives world_installed from the BUILD
   # tree, the same answer /build.json's world_sha gives — see "the pin".)
   # The letter cache lives beside the clones, outside the extract tree that is
-  # reset every pass: the next pass reads only the letters that moved.
-  ( cd "$SITE" && POSTMARK_API="$API" POSTMARK_LETTER_CACHE="$ROOT/letter-cache.json" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
+  # reset every pass: the next pass reads only the letters that moved. The events archive lives there too (POSTMARK_EVENTS_ARCHIVE).
+  ( cd "$SITE" && POSTMARK_API="$API" POSTMARK_LETTER_CACHE="$ROOT/letter-cache.json" POSTMARK_EVENTS_ARCHIVE="$EVENTS_ARCHIVE" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
     || die "fetch-town.mjs tripped"
   say "extract: approved renditions"
   ( cd "$SITE" && node tools/sync-renditions.mjs --town "$TOWN" ) \
@@ -678,10 +742,19 @@ build_once() {
     # the 2026-09-10 receipt lie by a different route. So: install when the
     # worlds differ, OR whenever the decision is advance. A hold that already
     # agrees stays the one-file-read no-op.
+    # THE RE-LOCK WITHOUT AN INSTALL (POS-1191). When node_modules already carries `want`, the install above
+    # fetched nothing; it only re-wrote the lockfile's and package.json's world lines (~80 s a tick).
+    # site-refresh-relock.mjs writes those lines from npm's installed record instead, and refuses (and the
+    # install runs, as before) unless that record names exactly `want`. The verify below reads the same files.
     if [ -n "$want" ] && { [ "$want" != "$have" ] || [ "$decision" = "advance" ]; }; then
-      say "world: node_modules carries ${have:-nothing}, this build wants $(echo "$want" | cut -c1-8) — installing"
-      ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:postmark-town/postmark-world#$want" ) \
-        || die "the world this build decided on would not install"
+      if [ "$want" = "$have" ] && [ -f "$SELF_DIR/site-refresh-relock.mjs" ] \
+        && node "$SELF_DIR/site-refresh-relock.mjs" --tree "$BUILD" --sha "$want"; then
+        say "world: node_modules already carries $(echo "$want" | cut -c1-8); re-locked without an install"
+      else
+        say "world: node_modules carries ${have:-nothing}, this build wants $(echo "$want" | cut -c1-8) — installing"
+        ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:postmark-town/postmark-world#$want" ) \
+          || die "the world this build decided on would not install"
+      fi
     fi
 
     # deploy.yml's verify, WIDENED to the failure that actually happened: a build
@@ -694,17 +767,50 @@ build_once() {
       have="$(world_sha_of "$BUILD/node_modules/.package-lock.json")"
       [ "$want" = "$have" ] \
         || die "world pin mismatch — refusing to ship the wrong world: this build decided on $want, node_modules carries ${have:-nothing}"
+      # and the lockfile the stamp reads names the same world (the re-lock above writes it without an install)
+      local locked; locked="$(world_sha_of "$BUILD/package-lock.json")"
+      [ "$want" = "$locked" ] \
+        || die "world pin mismatch — the build tree's package-lock.json names ${locked:-nothing}, this build decided on $want"
     fi
   fi
 
-  say "build: astro, release channel"
   # BUILD_CROSSING rides into the build too, not only the stamp: pages that key
   # what they show to the crossing (the season's line under the ferry clock)
   # read it at build time, and an unset one renders them as if no crossing were
   # known. The SAME number the extract and the stamp get, asked once above;
   # empty when the office did not answer, never a guess.
-  ( cd "$BUILD" && PUBLIC_CHANNEL=release PUBLIC_BUILD_SHA="$(git -C "$BUILD" rev-parse HEAD)" BUILD_CROSSING="$crossing" npm run build --silent ) \
-    | quiet_build_log || die "the site build tripped"
+  #
+  # INCREMENTAL (POS-1191). The release's tools/incremental-build.mjs renders only the routes whose inputs
+  # moved and carries the rest from the release being SERVED, by that release's manifest
+  # ($MANIFESTS/<release>.json). It builds in full, and says why, whenever it can't be sure: no previous
+  # manifest, a moved global key (code, packages, build env, calendar, season), a failed check. It needs two
+  # things from here. First, an EMPTY outDir: it refuses to carry into a dirty one and deletes nothing, and
+  # dist-town is git-ignored, so the clean above keeps it. Second, the serving release as --prev-dir: the
+  # same release the publish below links against. A release that predates the tool builds every page.
+  rm -rf "$BUILD/dist-town"
+  mkdir -p "$MANIFESTS"
+  NEW_MANIFEST="$MANIFESTS/.building.json"; rm -f "$NEW_MANIFEST"
+  local build_env=(PUBLIC_CHANNEL=release "PUBLIC_BUILD_SHA=$(git -C "$BUILD" rev-parse HEAD)" "BUILD_CROSSING=$crossing")
+  if [ "$INCREMENTAL" = 1 ] && [ -f "$BUILD/tools/incremental-build.mjs" ]; then
+    local serving from="none: a full build"
+    local incr_args=(--config astro.config.town.mjs --out-manifest "$NEW_MANIFEST" --step "pass $PASSES")
+    serving="$(readlink -f "$WEBROOT" 2>/dev/null || true)"
+    case "$serving" in
+      "$RELEASES"/*)
+        if [ -d "$serving" ] && [ -f "$MANIFESTS/$(basename "$serving").json" ]; then
+          incr_args+=(--prev-manifest "$MANIFESTS/$(basename "$serving").json" --prev-dir "$serving")
+          from="$(basename "$serving")"
+        fi ;;
+    esac
+    [ "$FULL_BUILD" = 1 ] && incr_args+=(--full) && from="SITE_REFRESH_FULL=1"
+    say "build: astro, release channel, incremental (previous release: $from)"
+    ( cd "$BUILD" && env "${build_env[@]}" node tools/incremental-build.mjs "${incr_args[@]}" ) \
+      | quiet_build_log || die "the site build tripped"
+  else
+    say "build: astro, release channel, every page ($( [ "$INCREMENTAL" = 1 ] && echo "the release predates tools/incremental-build.mjs" || echo "SITE_REFRESH_INCREMENTAL=0" ))"
+    ( cd "$BUILD" && env "${build_env[@]}" npm run build --silent ) \
+      | quiet_build_log || die "the site build tripped"
+  fi
 
   # ── the stamp: what this page was built from, in its own bytes ────────────
   # BUILD_TOWN_SHA and BUILD_CROSSING are new (postmark-site
@@ -812,6 +918,8 @@ build_once() {
   mv -Tf "$tmplink" "$link"
   PUBLISHED="$rel"
   say "published: $link -> $rel ($(du -sh "$rel" | cut -f1))"
+  # the manifest the NEXT pass carries from: named for the release it describes, beside it, never inside it
+  [ -f "$NEW_MANIFEST" ] && mv -f "$NEW_MANIFEST" "$MANIFESTS/$(basename "$rel").json"
 
   printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "index_as_of": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
     "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$index_seen" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
@@ -824,6 +932,11 @@ build_once() {
     old="${old%/}"
     [ "$old" = "$current" ] && continue
     rm -rf "$old"
+  done
+  # a manifest whose release was pruned describes nothing a pass can carry from
+  for m in "$MANIFESTS"/*.json; do
+    [ -e "$m" ] || continue
+    [ -d "$RELEASES/$(basename "$m" .json)" ] || rm -f "$m"
   done
 }
 

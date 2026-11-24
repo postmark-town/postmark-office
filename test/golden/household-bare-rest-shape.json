@@ -115,6 +115,10 @@
     "sheet": {
      "description": "string",
      "type": "string"
+    },
+    "sheet_name": {
+     "description": "string",
+     "type": "string"
     }
    },
    "teaches": "string"
