@@ -111,6 +111,7 @@ export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
+import { footprintCaps, footprintRefusal } from "./mark-footprint.mjs"; // POS-1126: the ruled footprint caps, read from the law's mark properties
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
@@ -4737,6 +4738,22 @@ export async function markStandsOnOwnGround(clean, canon = null) {
 // insert and every guard in it, never a door. journalWithdraw is exported the same way.
 // `plan` (POS-1035): every read, judgement and guard of a real leave, then the entry it would write handed back instead of written
 // — for an act that must land with others in ONE transaction (the event's completion: world-journal § prepareActFlipped).
+/**
+ * THE OUTLINE CAP, AT EVERY DOOR THAT WRITES A MARK (POS-1126, WLD-193; mark-footprint.mjs is the rule).
+ * Darko, 2026-11-17: "yeah 256 is good": a mark's 2D `points:` outline holds at most 256 points. The number is the mark class's
+ * `outline-point-cap` property, read here through classDials and nowhere held; a dial the law has not published is no boundary.
+ * Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it answers the same refusal as the write. The cap
+ * judges any ring a write carries (a parcel's, a constitution mark's); it never judges a footprint's size: Darko, 2026-11-18 14:42 EST,
+ * "I'm actually just going to err on not having a cap for now", Wright: "There's no size refusal." An amendment is judged on what it carries.
+ */
+export function footprintGate(clean) {
+  if (clean?.points === undefined) return;
+  const caps = footprintCaps(classDials("mark"));
+  if (caps.points == null) return;
+  const r = footprintRefusal(clean, { caps });
+  if (r) throw Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, hint: r.hint });
+}
+
 export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null, plan = false } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
@@ -4762,6 +4779,10 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         "a slug is unique per author — pass amend: true to supersede it (a newer declaration on your own node, edit-law's revision family), or pick another slug");
     if (clean.amend === true && !exists)
       throw bounce(404, `no mark "${id}" to amend`, "ids are <by>/<slug> — leave it first, or drop amend: true");
+
+    // ── THE OUTLINE CAP (POS-1126): before the preview answers and before any write, for every caller of this pass —
+    // the public door, the event's spark, the town's own amend tools. An amendment is judged against what it supersedes.
+    footprintGate(clean);
 
     // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
@@ -5921,6 +5942,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
+  // THE OUTLINE CAP on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
+  // the canon's declaration, before the exec or a preview of it. The journal pass below asks it itself, against the live layer.
+  if (!singleLogEnabled()) footprintGate(clean);
   if (singleLogEnabled()) {
     // POS-5 slice 1. The journal door throws its bounces directly (they are the
     // same grammar the exec answers with, one process earlier), so only the

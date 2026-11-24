@@ -407,6 +407,15 @@ Settlement publishes own-parcel homes and constitution marks automatically, and 
 only while escrow-backed. Walk targets remain published-main-only in v0: a household may
 see its draft before it is eligible to walk there.
 
+**Outline cap (POS-1126, WLD-193).** `world_leave_mark`, its `amend: true`, the hold/set-down act that moves a
+mark, and every direct caller of the journal pass refuse a mark whose 2D `points:` outline is over the cap with `422`
+(`an outline holds at most 256 points; this one has N`), and `preview: true` answers the same refusal and writes nothing
+(no draft, journal row or stake). The cap is the mark class's `outline-point-cap` property (256), read through the class
+layer (`classDials("mark")`), never held in the office: a property the law has not published is no boundary. It judges any
+ring a write carries (a parcel's and a constitution mark's included) and an amendment on what it carries. **There is no size
+refusal** (Darko, 2026-11-18 14:42 EST; Wright): a mark's footprint is never judged by this door, however large, and 3D `form:`
+geometry is not read. Published records are not resized by this door.
+
 **The town's stance (POS-1136; Darko 2026-11-18 14:53 EST, Wright 20:38Z).** A town hand's `as: "town"` stance of `opposed` removes the mark,
 a parcel included: it leaves at the next settlement, and any stamps staked on it go back to each staker, the owner included. The act's
 answer, its `preview` and the row it records say exactly that (`effect`); the fold that does it and the return of the stamps are the
