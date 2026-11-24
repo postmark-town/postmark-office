@@ -3276,14 +3276,24 @@ async function lookHere(args, key, ctx) {
   const seen = await actSpan("eyes", () => worldEyes(args, key, { lights: false }));
   return { oriented, seen };
 }
+// THE WAIT IS BOUNDED. A worker that never answers (hung, or its loop stuck) must not hang the act: past this the act reads its look here, as it did before
+// this change. It is set far above a worker's look (about 1.7 s in prod's quiet hours, worker reads p90 7–9 s in its busy ones), so it fires only for a
+// worker that is not answering at all; a late answer is dropped.
+const ACT_LOOK_WAIT_MS = 20_000;
 let askSeam = null;
-/** Test seam (POS-1219): who an act's look is asked of, `(name, payload) → answer | null`; null restores the read pool. */
-export const __setActLookCallerForTest = (fn) => { askSeam = fn ?? null; };
+let lookWaitMs = ACT_LOOK_WAIT_MS;
+/** Test seam (POS-1219): who an act's look is asked of, `(name, payload) → answer | null`, and how long the act waits for it; null restores the read pool and the bound. */
+export const __setActLookCallerForTest = (fn, { waitMs = ACT_LOOK_WAIT_MS } = {}) => { askSeam = fn ?? null; lookWaitMs = waitMs; };
+const answeredWithin = (p, ms) => {
+  let timer = null;
+  const late = new Promise((ok) => { timer = setTimeout(() => ok(null), ms); timer.unref?.(); });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+};
 async function actLook(args, key, ctx = {}) {
   const ask = askSeam ?? (workerCallable() ? callOnWorker : null);
   if (ask) {
     let handed = null;
-    try { handed = await actSpan("look", () => ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [] })); }
+    try { handed = await actSpan("look", () => answeredWithin(ask(ACT_LOOK, { args, key, roll: ctx.roll ?? [] }), lookWaitMs)); }
     catch { handed = null; }
     if (handed && typeof handed === "object" && handed.oriented !== undefined) return handed;
   }

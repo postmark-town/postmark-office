@@ -18,6 +18,7 @@
 //   · world-apex.mjs § actLook: return `handed` even when it is null               → 2 reds (the act answers the orient refusal's TypeError / a 500)
 //   · world-apex.mjs § actLookRead: return { oriented } without eyes                → 1 reds (the apex reads `seen.objects` of undefined)
 //   · world-apex.mjs § actLookRead / lookHere: read eyes even when orient refused   → 3 reds
+//   · world-apex.mjs § actLook: ask without `answeredWithin` (no bound)             → 2's "never answers" reds by the runner's timeout (a hang)
 //   node --import ./test/helpers/sparse-guard.mjs --test test/pos-1219-act-look.test.mjs
 
 import test, { after } from "node:test";
@@ -206,6 +207,18 @@ for (const [why, fn] of [
     sameBytes(here.out, fell.out, `a worker that ${why}`);
   });
 }
+
+test("2 · a worker that never answers: the act waits only its bound, then reads both here, and the answer is byte-identical", async () => {
+  const here = await control({ do: "say" }, KEY_GAMMA);
+  const t0 = performance.now();
+  const fell = await pinned(() => { __setActLookCallerForTest(() => new Promise(() => {}), { waitMs: 150 }); return within(() => worldApex({ do: "say" }, KEY_GAMMA)); });
+  const took = performance.now() - t0;
+  __setActLookCallerForTest(null);
+  assert.ok(fell.seg.look?.n === 1 && fell.seg.look.sum_ms >= 140, `the act waited its bound for the worker: ${JSON.stringify(fell.seg.look)}`);
+  assert.ok(fell.seg.orient?.n === 1 && fell.seg.eyes?.n === 1, `and then read the look here: ${JSON.stringify(fell.seg)}`);
+  assert.ok(took < 10_000, `the act did not hang (${Math.round(took)} ms)`);
+  sameBytes(here.out, fell.out, "a worker that never answers");
+});
 
 test("3 · orient refuses: eyes is never read, on the worker's side or here, and the refusal is the act's answer, byte-identical", async () => {
   const worker = await pinned(() => __actLookReadForTest({ args: { do: "say" }, key: KEY_TWO, roll: [] }));
