@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { __setPoolForTest } from "../src/world2-pen.mjs";
+import { PLAIN_REASONS } from "../src/fault-words.mjs";
 
 const store = await startStore({ db: "pos1204_door" });
 const skip = store.skip ?? false;
@@ -63,6 +64,8 @@ test("a lookup that FAILS is a 503 'could not be checked', never 'names no event
   await owner.query("ALTER TABLE posts RENAME TO posts_away");
   try {
     await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, spark("host/long-over"), KEY),
-      (e) => e.code === 503 && /could not be checked/.test(e.defect) && !/names no event/.test(e.defect) && /nothing was written/.test(e.hint));
+      (e) => e.code === 503 && /could not be checked/.test(e.defect) && !/names no event/.test(e.defect) && /nothing was written/.test(e.hint)
+        // the safe record-read reason (fault-words § PLAIN_REASONS.record), never the store's own text; the raw error goes to the log
+        && e.hint.includes(`(${PLAIN_REASONS.record})`) && !/relation|posts|does not exist|sql/i.test(`${e.defect} ${e.hint}`));
   } finally { await owner.query("ALTER TABLE posts_away RENAME TO posts"); }
 });

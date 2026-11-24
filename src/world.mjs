@@ -3370,7 +3370,7 @@ export async function markImageBytes(url, { fetchImpl = null, maxBytes = INVESTI
   // under a mimeType it guessed from a url would be the one place that didn't.
   let sniffed;
   try { sniffed = imageFormat(bytes, MEDIA_FORMATS); }
-  catch (e) { return { bytes: bytes.length, note: `not inlined: what the media host returned is not an image the office recognizes (${plainReason(e, "record", "the calendar, for a spark's event")}). The url stands.` }; }
+  catch (e) { return { bytes: bytes.length, note: `not inlined: what the media host returned is not an image the office recognizes (${String(e?.defect ?? e?.message ?? e).slice(0, 120)}). The url stands.` }; }
 
   return {
     bytes: bytes.length,
@@ -6457,7 +6457,7 @@ async function requireKnownEvent(id) {
   let row;
   try { row = await (await import("./events-store.mjs")).eventRowAtOffice(id); }
   catch (e) {
-    throw bounce(503, "the event could not be checked just now", `the calendar lives in the office's record, which could not be read (${String(e?.defect ?? e?.message ?? e).slice(0, 120)}); nothing was written — ask again shortly`);
+    throw bounce(503, "the event could not be checked just now", `the calendar lives in the office's record, which could not be read (${plainReason(e, "record", "the calendar, for a spark's event")}); nothing was written — ask again shortly`);
   }
   if (!row)
     throw bounce(422, `properties.event ${JSON.stringify(String(id).slice(0, 60).replace(/[^ -~]/g, "?"))} names no event`, "an event's id is <host>/<slug>, as town { read: \"calendar\" } lists it (an event that has ended is fine); nothing was written");
