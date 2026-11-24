@@ -293,6 +293,25 @@ test("PROD CONTROL: the runner, with no STAMP_UAT_TRUST, hands the town verifier
   }
 });
 
+test("PROD CONTROL: the runner alone, as prod's sandbox binds it (no src/stamp-trust.mjs beside it), runs unset or empty", () => {
+  // deploy/postmark-town-tool@.service binds src/stamp-verify-pinned.mjs, src/town-tool.mjs and the pins, not the
+  // trust module: the runner may import it only when a file is bound (the UAT drop-in binds it beside the runner)
+  const alone = join(fresh("sandbox-srv"), "src");
+  mkdirSync(alone, { recursive: true });
+  writeFileSync(join(alone, "stamp-verify-pinned.mjs"), readFileSync(RUNNER));
+  const pinned = stubPinned(), repo = fresh("repo");
+  const run = (env) => spawnSync(process.execPath, [join(alone, "stamp-verify-pinned.mjs"), "--pinned", pinned, "--repo", repo], { encoding: "utf8", env });
+  for (const env of [childEnv(), childEnv({ [UAT_TRUST_ENV]: "" })]) {
+    const r = run(env);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.split("\n")[0], GREEN, "it ran, without the trust module");
+  }
+  // the control that the copy is truly alone: a bound file makes it reach for the module, which isn't there
+  const r = run(childEnv({ [UAT_TRUST_ENV]: trustFile({ pubkeyPem: UAT.pub, afterSeal: "c".repeat(64) }) }));
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /NOT verified: .*stamp-trust\.mjs/);
+});
+
 test("the runner hands the town verifier UAT's handoff from the trust file, mapped field for field", () => {
   const pinned = stubPinned(), repo = fresh("repo"), afterSeal = "2".repeat(64);
   const r = runRunner(pinned, repo, childEnv({ [UAT_TRUST_ENV]: trustFile({ pubkeyPem: UAT.pub, afterSeal }) }));
