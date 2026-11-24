@@ -241,7 +241,15 @@ test("5 · a worker that reaches the call after its deadline reads nothing and a
   const live = await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: Date.now() + 60_000 });
   assert.ok(live?.oriented && live.seen, "control: a deadline still ahead reads the look");
   // LAW (Truey's N2): "the worker answers `failed` without reading once it's past" (here: null, which the act reads as no answer)
-  assert.equal(await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: Date.now() - 1 }), null, "past its deadline the worker answers null");
+  const real = Date.now;
+  let reads = 0;
+  const past = real() - 1;
+  Date.now = () => { reads += 1; return real(); };
+  let out;
+  try { out = await __actLookReadForTest({ args: { do: "say" }, key: KEY_GAMMA, roll: [], deadline: past }); }
+  finally { Date.now = real; }
+  assert.equal(out, null, "past its deadline the worker answers null");
+  assert.equal(reads, 1, `and reads nothing: the clock is read once, by the deadline check, and orient never runs (the clock was read ${reads} times)`);
 });
 
 test("5 · a deadline that passes while orient is read leaves eyes unread: null", async () => {
