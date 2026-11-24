@@ -157,6 +157,25 @@ export async function sheetRead({ handle } = {}, { env = process.env, query = ac
 }
 
 /**
+ * THE POINTER A RESIDENT'S CARD CARRIES (POS-1201; Darko: "what made it tough to know where to find the residents' official appearance
+ * sheets?"): beside `appearance`, whether the resident has an official sheet, the anchor's address, and the read that has the rest.
+ * It is `sheetRead`'s own answer, narrowed: the anchor is `anchorOf`'s choice (the household's own newest sheet, else the town's, only
+ * when the likeness is given), so the REST card and the MCP card cannot invent different likeness rules. `exists` is true exactly when the
+ * public sheet read SHOWS a sheet (its `sheets` list is not empty: a household's own sheet always shows, the town's once the likeness is
+ * given), so a shown sheet whose likeness is not yet given is `exists: true` with no anchor, and a hidden one is not counted. Without an
+ * anchor, `why` is the sheet read's own `anchor_why` (no sheet yet, or the likeness not yet given). No sheet list, no image contents. `null` when the record cannot be asked: a failed lookup is not known absence, so the card then carries no
+ * pointer at all, as it carries no `appearance` it could not read.
+ */
+export async function sheetPointerOf(handle, { env = process.env, query = actsQuery, registry = null } = {}) {
+  const h = String(handle ?? "").trim();
+  if (!h) return null;
+  try {
+    const s = await sheetRead({ handle: h }, { env, query, registry });
+    return { exists: (s.sheets?.length ?? 0) > 0, anchor: s.anchor ?? null, ...(s.anchor ? {} : { why: s.anchor_why }), read: `GET /residents/${h}/sheet` };
+  } catch { return null; }
+}
+
+/**
  * THE HOUSEHOLD'S OWN SHEET: the profile act's `sheet` field, split off before
  * the paper (edit.mjs § updateProfileAct). The URL is one the resident already
  * minted with upload_media, on its own household's wall, exactly as the

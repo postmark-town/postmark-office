@@ -277,13 +277,19 @@ MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
 # and no report was written. Another pass starts only when the run's elapsed time
 # plus the last pass's duration still fits inside this many minutes.
 MAX_MINUTES="${SITE_REFRESH_MAX_MINUTES:-40}"
+# THE INCREMENTAL BUILD (POS-1191: site #451's tools/incremental-build.mjs, keyed on the season since site #484).
+# On by default whenever the release carries the tool. SITE_REFRESH_INCREMENTAL=0 builds every page the old way;
+# SITE_REFRESH_FULL=1 asks the tool for a full build (the build on demand) and still writes the next manifest.
+INCREMENTAL="${SITE_REFRESH_INCREMENTAL:-1}"
+FULL_BUILD="${SITE_REFRESH_FULL:-0}"
 
-TOWN="$ROOT/town"          # our own town clone — never the office's, never locked
+TOWN="$ROOT/town"         # our own town clone — never the office's, never locked
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # where this script and its helpers live (POS-601)
 SITE="$ROOT/site"          # the extract tree: site @ origin/main, runs the extractors
 BUILD="$ROOT/build"        # the build tree: a worktree of SITE, detached at the tag
 RELEASES="$ROOT/releases"
 STATE="$ROOT/state.json"
+MANIFESTS="$ROOT/manifests" # one incremental-build manifest per release, named for it; never inside the served tree
 LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -736,10 +742,19 @@ build_once() {
     # the 2026-09-10 receipt lie by a different route. So: install when the
     # worlds differ, OR whenever the decision is advance. A hold that already
     # agrees stays the one-file-read no-op.
+    # THE RE-LOCK WITHOUT AN INSTALL (POS-1191). When node_modules already carries `want`, the install above
+    # fetched nothing; it only re-wrote the lockfile's and package.json's world lines (~80 s a tick).
+    # site-refresh-relock.mjs writes those lines from npm's installed record instead, and refuses (and the
+    # install runs, as before) unless that record names exactly `want`. The verify below reads the same files.
     if [ -n "$want" ] && { [ "$want" != "$have" ] || [ "$decision" = "advance" ]; }; then
-      say "world: node_modules carries ${have:-nothing}, this build wants $(echo "$want" | cut -c1-8) — installing"
-      ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:postmark-town/postmark-world#$want" ) \
-        || die "the world this build decided on would not install"
+      if [ "$want" = "$have" ] && [ -f "$SELF_DIR/site-refresh-relock.mjs" ] \
+        && node "$SELF_DIR/site-refresh-relock.mjs" --tree "$BUILD" --sha "$want"; then
+        say "world: node_modules already carries $(echo "$want" | cut -c1-8); re-locked without an install"
+      else
+        say "world: node_modules carries ${have:-nothing}, this build wants $(echo "$want" | cut -c1-8) — installing"
+        ( cd "$BUILD" && npm install --no-audit --no-fund --silent "postmark-world@github:postmark-town/postmark-world#$want" ) \
+          || die "the world this build decided on would not install"
+      fi
     fi
 
     # deploy.yml's verify, WIDENED to the failure that actually happened: a build
@@ -752,17 +767,50 @@ build_once() {
       have="$(world_sha_of "$BUILD/node_modules/.package-lock.json")"
       [ "$want" = "$have" ] \
         || die "world pin mismatch — refusing to ship the wrong world: this build decided on $want, node_modules carries ${have:-nothing}"
+      # and the lockfile the stamp reads names the same world (the re-lock above writes it without an install)
+      local locked; locked="$(world_sha_of "$BUILD/package-lock.json")"
+      [ "$want" = "$locked" ] \
+        || die "world pin mismatch — the build tree's package-lock.json names ${locked:-nothing}, this build decided on $want"
     fi
   fi
 
-  say "build: astro, release channel"
   # BUILD_CROSSING rides into the build too, not only the stamp: pages that key
   # what they show to the crossing (the season's line under the ferry clock)
   # read it at build time, and an unset one renders them as if no crossing were
   # known. The SAME number the extract and the stamp get, asked once above;
   # empty when the office did not answer, never a guess.
-  ( cd "$BUILD" && PUBLIC_CHANNEL=release PUBLIC_BUILD_SHA="$(git -C "$BUILD" rev-parse HEAD)" BUILD_CROSSING="$crossing" npm run build --silent ) \
-    | quiet_build_log || die "the site build tripped"
+  #
+  # INCREMENTAL (POS-1191). The release's tools/incremental-build.mjs renders only the routes whose inputs
+  # moved and carries the rest from the release being SERVED, by that release's manifest
+  # ($MANIFESTS/<release>.json). It builds in full, and says why, whenever it can't be sure: no previous
+  # manifest, a moved global key (code, packages, build env, calendar, season), a failed check. It needs two
+  # things from here. First, an EMPTY outDir: it refuses to carry into a dirty one and deletes nothing, and
+  # dist-town is git-ignored, so the clean above keeps it. Second, the serving release as --prev-dir: the
+  # same release the publish below links against. A release that predates the tool builds every page.
+  rm -rf "$BUILD/dist-town"
+  mkdir -p "$MANIFESTS"
+  NEW_MANIFEST="$MANIFESTS/.building.json"; rm -f "$NEW_MANIFEST"
+  local build_env=(PUBLIC_CHANNEL=release "PUBLIC_BUILD_SHA=$(git -C "$BUILD" rev-parse HEAD)" "BUILD_CROSSING=$crossing")
+  if [ "$INCREMENTAL" = 1 ] && [ -f "$BUILD/tools/incremental-build.mjs" ]; then
+    local serving from="none: a full build"
+    local incr_args=(--config astro.config.town.mjs --out-manifest "$NEW_MANIFEST" --step "pass $PASSES")
+    serving="$(readlink -f "$WEBROOT" 2>/dev/null || true)"
+    case "$serving" in
+      "$RELEASES"/*)
+        if [ -d "$serving" ] && [ -f "$MANIFESTS/$(basename "$serving").json" ]; then
+          incr_args+=(--prev-manifest "$MANIFESTS/$(basename "$serving").json" --prev-dir "$serving")
+          from="$(basename "$serving")"
+        fi ;;
+    esac
+    [ "$FULL_BUILD" = 1 ] && incr_args+=(--full) && from="SITE_REFRESH_FULL=1"
+    say "build: astro, release channel, incremental (previous release: $from)"
+    ( cd "$BUILD" && env "${build_env[@]}" node tools/incremental-build.mjs "${incr_args[@]}" ) \
+      | quiet_build_log || die "the site build tripped"
+  else
+    say "build: astro, release channel, every page ($( [ "$INCREMENTAL" = 1 ] && echo "the release predates tools/incremental-build.mjs" || echo "SITE_REFRESH_INCREMENTAL=0" ))"
+    ( cd "$BUILD" && env "${build_env[@]}" npm run build --silent ) \
+      | quiet_build_log || die "the site build tripped"
+  fi
 
   # ── the stamp: what this page was built from, in its own bytes ────────────
   # BUILD_TOWN_SHA and BUILD_CROSSING are new (postmark-site
@@ -870,6 +918,8 @@ build_once() {
   mv -Tf "$tmplink" "$link"
   PUBLISHED="$rel"
   say "published: $link -> $rel ($(du -sh "$rel" | cut -f1))"
+  # the manifest the NEXT pass carries from: named for the release it describes, beside it, never inside it
+  [ -f "$NEW_MANIFEST" ] && mv -f "$NEW_MANIFEST" "$MANIFESTS/$(basename "$rel").json"
 
   printf '{\n "key": "%s",\n "built_at": "%s",\n "town_sha": "%s",\n "index_as_of": "%s",\n "site_main": "%s",\n "release_tag": "%s",\n "release_dir": "%s"\n}\n' \
     "$KEY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TOWN_SHA" "$index_seen" "$SITE_MAIN" "$TAG" "$rel" > "$STATE"
@@ -882,6 +932,11 @@ build_once() {
     old="${old%/}"
     [ "$old" = "$current" ] && continue
     rm -rf "$old"
+  done
+  # a manifest whose release was pruned describes nothing a pass can carry from
+  for m in "$MANIFESTS"/*.json; do
+    [ -e "$m" ] || continue
+    [ -d "$RELEASES/$(basename "$m" .json)" ] || rm -f "$m"
   done
 }
 
