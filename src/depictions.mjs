@@ -122,7 +122,61 @@ const shape = (r, household) => ({
   id: r.id, url: r.url, made_by: r.made_by, made_at: r.made_at instanceof Date ? r.made_at.toISOString() : r.made_at,
   ...(r.source ? { source: r.source } : {}), own: r.made_by === household,
   ...(r.made_by === TOWN ? { note: TOWN_SHEET_NOTE } : {}),
+  // POS-1202: who the sheet shows, when the record holds a name for it (the latest naming act); an unnamed or older sheet has none, and none is made up
+  ...(typeof r.name === "string" && r.name !== "" ? { name: r.name } : {}),
 });
+
+// ── WHO A SHEET SHOWS (POS-1202; Darko 11-23, Wright 11-24 04:26Z) ───────────
+//
+// One resident can be several characters (little-bird: three men and a dog), and its sheets say nothing of who each shows. The name is a
+// SEPARATE LABEL beside the immutable picture: the household sets it, on a sheet it is keeping now or on one kept before this, and may
+// change it. Each setting is an ACT in the record (`acts`, class `appearance`, action `name-sheet`, object the depiction's id, payload the
+// name), written through the acts pen like a describe; the sheet read shows the LATEST act for each sheet. The picture row, its author
+// and the anchor are never touched, and no rename service exists: a name is set the way every other appearance word is.
+export const SHEET_NAME_CLASS = "appearance";
+export const SHEET_NAME_ACTION = "name-sheet";
+// "a name, not a sentence": the 80-character bound chosen for this label (the same number edit.mjs § HOME_TITLE_MAX gives a house's name); settled technically, not a pre-existing label ruling
+export const SHEET_NAME_MAX = 80;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * A sheet's name as text: trimmed, one line, at most SHEET_NAME_MAX characters. An EXPLICIT empty (or blank) text is the household clearing
+ * the label: it returns "" and the caller writes it as one act. Anything that is not text is the door's 422. Pure; the value is never echoed.
+ */
+export function sheetNameOf(raw) {
+  if (typeof raw !== "string") throw bounce(422, "a sheet's name is who it shows, in a few words", `send sheet_name as text, at most ${SHEET_NAME_MAX} characters on one line (empty text clears the name), with the sheet's url as sheet. Nothing was written`);
+  const t = raw.trim();
+  if ([...t].length > SHEET_NAME_MAX || CONTROL_CHARS.test(t))
+    throw bounce(422, `a sheet's name is a name, not a sentence: at most ${SHEET_NAME_MAX} characters, on one line`, "shorten it and send the same call again. Nothing was written");
+  return t;
+}
+
+/** The latest name for each of these sheets (depiction ids), as `Map id → name`; null when the record cannot be asked. */
+export async function sheetNames(ids, { env = process.env, query = actsQuery } = {}) {
+  const want = [...new Set((ids ?? []).map(String))];
+  if (!want.length) return new Map();
+  const rows = await query(
+    `SELECT DISTINCT ON (object) object, payload->>'name' AS name FROM acts
+      WHERE class = $1 AND action = $2 AND object = ANY($3::text[]) ORDER BY object, id DESC`,
+    [SHEET_NAME_CLASS, SHEET_NAME_ACTION, want], env);
+  if (rows === null) return null;
+  return new Map(rows.filter((r) => typeof r.name === "string" && r.name !== "").map((r) => [String(r.object), r.name]));
+}
+
+/** The act: one row in `acts` through the acts pen (world-journal.mjs § appendActFlipped), refused whole when the record cannot be reached. */
+async function nameSheetAct({ actor, id, subject, name, household }) {
+  const { appendActFlipped } = await import("./world-journal.mjs");
+  const { currentCrossing } = await import("./crossings.mjs");
+  try {
+    const out = await appendActFlipped(null, { actor, action: SHEET_NAME_ACTION, object: String(id), payload: { subject, name }, household, cls: SHEET_NAME_CLASS, crossing: currentCrossing() });
+    return out?.actId == null ? null : String(out.actId);
+  } catch (e) {
+    if (e?.name === "PenUnreachableError" || e?.name === "NoRecordError")
+      throw bounce(503, "the office's record cannot be reached — the name was not kept", "the sheet itself stands; send the same call again");
+    throw e;
+  }
+}
 
 /**
  * One resident's sheets (GET /residents/{h}/sheet): its household's own, shown
@@ -133,8 +187,12 @@ export async function sheetRead({ handle } = {}, { env = process.env, query = ac
   const h = String(handle ?? "").trim();
   if (!h) throw bounce(422, "whose sheet?", "pass handle: a resident's handle");
   const reg = registry ?? (await likenessRegistry(env));
-  const rows = await depictionsOf(h, "sheet", env, query);
-  if (rows === null || !reg) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  const kept = await depictionsOf(h, "sheet", env, query);
+  if (kept === null || !reg) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  // POS-1202: each sheet's name, from the latest naming act; a record that cannot be asked is no read, never "unnamed"
+  const names = await sheetNames(kept.map((r) => r.id), { env, query });
+  if (names === null) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  const rows = kept.map((r) => (names.has(String(r.id)) ? { ...r, name: names.get(String(r.id)) } : r));
   const household = reg.houseOf(h);
   const likeness = household ? likenessOfHouse(reg.houses[household]) : "not given";
   const given = likeness === "given";
@@ -183,18 +241,31 @@ export async function sheetPointerOf(handle, { env = process.env, query = actsQu
  * for a resident of the same household (Postmark governs between households).
  * A sheet is never cleared: a newer one supersedes it.
  */
-export async function keepSheet({ handle, url } = {}, key = null, { env = process.env, keep = keepDepiction, registry = null, urlOk = null } = {}) {
+export async function keepSheet({ handle, url, name = null } = {}, key = null, { env = process.env, keep = keepDepiction, registry = null, urlOk = null, namesOf = sheetNames, nameAct = nameSheetAct } = {}) {
   const h = String(handle ?? "").trim();
   if (!key?.handles?.has(h)) throw bounce(403, `"${h}" is not one of your residents`, `a resident's sheet is its own household's to give; this key acts for: ${[...(key?.handles ?? [])].join(", ") || "(none)"}`);
   const u = typeof url === "string" ? url.trim() : "";
   const ok = urlOk ?? (await import("./media.mjs")).mediaUrlOk;
   if (!u) throw bounce(422, "a sheet is kept, never cleared", "a newer sheet supersedes the one before it; send its media-door URL");
   if (!ok(u)) throw bounce(422, "a sheet is a media-door URL", "upload the image first (upload_media) and pass the url it hands back as sheet; nothing was written");
+  const label = name == null ? null : sheetNameOf(name);   // judged before anything is kept, so a bad name refuses the whole call
   const reg = registry ?? (await likenessRegistry(env));
   const household = reg?.houseOf(h) ?? null;
   if (!household) throw bounce(409, `no household holds "${h}" on the record`, "a sheet is kept against a resident of a household; move in first (postmark.town/join)");
   const row = await keep({ subject: h, kind: "sheet", url: u, made_by: household, source: "the household's own" }, env);
   if (!row) throw bounce(503, "the office's record cannot be reached", "nothing was kept; send the same call again");
+  // POS-1202: the name is a label beside the picture, which the keep above left exactly as it was. A name the household sends is set now (on
+  // this sheet, new or kept before); the same name again writes nothing; a different one is a correction, one more act; an explicit empty
+  // one clears it, also one act (the latest act wins, so a cleared sheet is unnamed and never falls back to an older label; the history stays).
+  // No name sent: the answer shows the name that stands, and nothing is written. A names lookup the record cannot answer is UNKNOWN, not
+  // unnamed: the answer is a 503 either way and nothing is appended after it (the sheet itself stands).
+  const names = await namesOf([row.id], { env });
+  if (names === null) throw bounce(503, "the sheet stands, but its name could not be read: the office's record cannot be reached", "nothing was named or cleared; send the same call again");
+  const standing = names.get(String(row.id)) ?? "";
+  if (label !== null && label !== standing) {
+    await nameAct({ actor: h, id: row.id, subject: h, name: label, household: String(key?.household ?? "").trim() || household });
+    row.name = label;
+  } else row.name = standing;
   return { ...shape(row, household), canon: "at once: your household's own sheet is the one used first", ...(row.kept === false ? { already: true } : {}) };
 }
 
