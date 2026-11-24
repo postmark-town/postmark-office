@@ -354,17 +354,26 @@ export async function eventSparksOf(q, row) {
  * store's: a standing mark. So: the standing sparks whose room is one of the event's, in the order they were accepted. Coverage
  * is literal, every room the event formed (beyond the automatic cap too):
  *   · `{ rooms: [the room ids covered], sparks: [spark…] }` — an empty `sparks` is KNOWN none in those rooms (no rooms: none);
+ *
+ * A SPARK MAY NAME ITS EVENT (POS-1204, Darko CORE-163/d 2026-11-23 19:25 EST: "yes", so a picture joins the album without a conversation;
+ * Wright 2026-11-24 01:20Z: a known event that has ENDED is allowed, "a picture that arrives later still joins the album"). The gallery is
+ * the UNION of the standing sparks that name this event (`data.event`, the World's own `event` property) and the room-derived ones, each
+ * once (one query, one OR: a spark that does both appears once), in the order accepted, with the same root exclusion. It needs no room, so
+ * an event with none still shows its named sparks. It changes neither the event's fixed rooms, nor when its sparks are made, nor its stake:
+ * `rooms` stays exactly the rooms the event formed. `event` is the event's id, passed by the one-event read.
  *   · `gallery: null` with `gallery_note` — the rooms cannot be told (unknown history), so neither can the gallery.
  * While the event is still on, the rooms covered are those so far (`window.as_of`).
  */
-export async function eventGalleryOf(q, evidence, { roots = [] } = {}) {
+export async function eventGalleryOf(q, evidence, { roots = [], event = null } = {}) {
   if (evidence?.room_history !== "complete")
     return { gallery: null, gallery_note: "the event's rooms cannot be told (its window opens before the settlements this office has read), so neither can its gallery — unknown, not none" };
   const rooms = evidence.rooms.map((r) => String(r.id));
-  if (!rooms.length) return { gallery: { rooms: [], sparks: [] } };
+  const named = event == null ? null : String(event);
+  // no rooms and no event named: known none, nothing to ask (as before)
+  if (!rooms.length && named === null) return { gallery: { rooms: [], sparks: [] } };
   const { rows } = await q.query(
-    `${STANDING_SPARKS_SQL} AND ${SPARK_ROOM_IN_SQL} AND NOT (slug = ANY($2::text[])) ORDER BY locked_window, slug`,
-    [rooms, [...(roots ?? [])].map(String)]);
+    `${STANDING_SPARKS_SQL} AND (${SPARK_ROOM_IN_SQL} OR data->>'event' = $3::text) AND NOT (slug = ANY($2::text[])) ORDER BY locked_window, slug`,
+    [rooms, [...(roots ?? [])].map(String), named]);
   return { gallery: { rooms, sparks: rows.map(sparkView) } };
 }
 

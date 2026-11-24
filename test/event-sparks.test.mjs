@@ -950,3 +950,40 @@ test("the pass never signs onto a RED ledger: an event due meets its completion'
   assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
   assert.equal((await postRow("wright/red-ledger-night")).fields.completed, undefined, "the event waits for a green ledger");
 });
+
+test("POS-1204 (the falsifier): an ENDED event with zero rooms still reads its standing, directly named Sparks — beside the room-derived ones once each; another event's, a non-standing one and its root stay out", async () => {
+  await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1204, now() - interval '3 days', now() - interval '2 days', 'closed') ON CONFLICT DO NOTHING");
+  const mark = (slug, data, status = "standing") => owner.query(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+     VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), $6, 1204, $7)`,
+    [slug, slug.split("/")[0], `${slug.split("/")[0]}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), status, JSON.stringify(data)]);
+  const base = { kind: "spark", recounting: "r", experienced_at: "2026-11-14T20:00:00.000Z" };
+  const EV = "pica/album-night";
+  await event(EV, 5000, 5120, { doors: 4970 });                                                  // ended, and nobody said a word there (its own hours: the store is shared)
+  await mark("amia/a-picture", { ...base, event: EV });
+  await mark("seth/b-picture", { ...base, event: EV });
+  await mark("liv/elsewhere", { ...base, event: "pica/another-night" });
+  await mark("noe/retired", { ...base, event: EV }, "retired");
+  await mark("pica/album-night-root", { ...base, event: EV });
+  await owner.query("UPDATE posts SET fields = fields || $2::jsonb WHERE id = $1", [EV, JSON.stringify({ completed: { act: 1, sparks: ["pica/album-night-root"], at: new Date(min(5121)).toISOString() } })]);   // the completion's own root
+  const read = async () => (await calendarAtOffice({ event: EV }, { now: NOW, env: ENV, settlements: () => [min(-600)] })).event.evidence;
+  let ev = await read();
+  assert.equal(ev.complete, true);
+  assert.deepEqual(ev.rooms, [], "no conversation, no rooms — and still an album");
+  assert.deepEqual(ev.gallery.rooms, []);
+  assert.deepEqual(ev.gallery.sparks.map((s) => s.id), ["amia/a-picture", "seth/b-picture"], "the standing, directly named Sparks, in accepted order; never another event's, a retired one, or a completion root");
+  // a room-derived Spark and a dual match (named AND in the room) — once each
+  await act("say", "pica", 4980, 100, 200, "pica-house", { text: "Welcome!", place: "the cave" });
+  await act("say", "seth", 5010, 131, 200, "seth-house", { text: "Hello!", place: "the cave", reply_to: 1 });
+  ev = await read();
+  assert.equal(ev.rooms.length, 1);
+  const room = ev.rooms[0].id;
+  await mark("dee/room-only", { ...base, rooms: [room], circle: 1, circle_path: [1] });
+  await mark("fay/dual", { ...base, event: EV, rooms: [room], circle: 1, circle_path: [1] });
+  ev = await read();
+  assert.deepEqual(ev.gallery.sparks.map((s) => s.id), ["amia/a-picture", "dee/room-only", "fay/dual", "seth/b-picture"], "named and room-derived as one list in accepted order, the dual match once");
+  // unknown rooms stay unknown, even with Sparks naming the event
+  const lost = (await calendarAtOffice({ event: EV }, { now: NOW, env: ENV, settlements: () => [min(6000)] })).event.evidence;
+  assert.equal(lost.room_history, "unavailable");
+  assert.equal(lost.gallery, null, "rooms that cannot be told: the gallery is unknown, not none");
+});
