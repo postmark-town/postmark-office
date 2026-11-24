@@ -264,6 +264,20 @@ test("5 · a deadline that passes while orient is read leaves eyes unread: null"
   assert.equal(out, null, "the deadline passed during orient, so eyes was not read and nothing was answered");
 });
 
+test("5 · a saturated worker (answering 20× past the bound) cannot make the act wait longer than its bound; its late answer is dropped", async () => {
+  const here = await control({ do: "say" }, KEY_GAMMA);
+  const slow = async (name, payload) => { await new Promise((r) => setTimeout(r, 2000)); return structuredClone(await __actLookReadForTest({ ...payload, deadline: Infinity })); };
+  const t0 = performance.now();
+  const fell = await pinned(() => { __setActLookCallerForTest(slow, { waitMs: 100 }); return within(() => worldApex({ do: "say" }, KEY_GAMMA)); });
+  const took = performance.now() - t0;
+  __setActLookCallerForTest(null);
+  // LAW (Truey's N2): "a saturated pool can't make an act wait 20 s and then pay the main-thread cost anyway" — the act waits its bound, not the worker
+  assert.ok(fell.seg.look?.n === 1 && fell.seg.look.sum_ms < 1000, `the act's wait for the worker was its bound, not the worker's 2 s: ${JSON.stringify(fell.seg.look)}`);
+  assert.ok(took < 1900, `the act answered before the saturated worker did (${Math.round(took)} ms)`);
+  assert.ok(fell.seg.orient?.n === 1 && fell.seg.eyes?.n === 1, "and read its look itself");
+  sameBytes(here.out, fell.out, "a saturated worker");
+});
+
 test("5 · end to end: a worker too late answers null, and the act reads its look here, byte-identical", async () => {
   const here = await control({ do: "say" }, KEY_GAMMA);
   const late = async (name, payload) => { await new Promise((r) => setTimeout(r, 60)); return __actLookReadForTest(payload); }; // reaches the call after a 40 ms deadline
