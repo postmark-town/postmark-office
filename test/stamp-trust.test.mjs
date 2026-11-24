@@ -18,12 +18,16 @@
 // The town's own handoff (POS-1213) isn't in the pins yet: the arms that need the town's verifier to honour it run
 // only with OFFICE_HANDOFF_TOWN naming a town checkout that has it, and say so in their titles.
 //
-// THE CAN-FAIL FLIPS (each reds the named test):
-//   · stamp-lines § stampRowsPast: verify every line under `key` (drop the `i > anchor` choice) → "the writer keeps
-//     the town's boundary" goes red (the UAT suffix refuses);
-//   · stamp-lines § stampRowsPast: verify every line past head under uatKey → the "prefix line signed by UAT" arm;
-//   · stamp-verify-pinned: always add `handoff` (even null) → "PROD CONTROL: the runner" goes red on its key list;
-//   · stamp-trust § uatHandoff: drop the PRIVATE KEY refusal → the verdict map goes red on "a private key".
+// THE CAN-FAIL FLIPS (each run on a copy of the lane's head, each redding the named test):
+//   · stamp-lines § stampRowsPast: verify every line under `key` (drop the `i > anchor` choice), or every new line
+//     under UAT's key → "the writer keeps the town's boundary";
+//   · stamp-lines § verifyStampLinesVia: never set pastAnchor → "the verifier keeps the same boundary";
+//   · stamp-verify-pinned: always add `handoff` (even undefined) → "PROD CONTROL: the runner"; never add it → "the
+//     runner hands the town verifier UAT's handoff";
+//   · stamp-trust § uatHandoff: take any PEM createPublicKey accepts (a private PEM derives a public key), drop the
+//     equal-key refusal, or drop the clone refusal → the verdict map;
+//   · stamp-mint-run § pinnedVerifier: drop withHandoff → "the mint pass's verifier hands over UAT's handoff";
+//   · house-key § replayHolds: never hand the child the handoff → its UAT arm; always hand one → its PROD CONTROL.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -294,7 +298,8 @@ test("PROD CONTROL with the town's real verifier: no trust, and a UAT suffix fai
 test("WITH THE TOWN'S HANDOFF (POS-1213): valid mixed history verifies; a suffix line signed by the base key fails", { skip: needsHandoff }, () => {
   const m = mixedTown(6, 3);
   const ok = runRunner(realVerifierTown(m, HANDOFF_TOWN), m.town, childEnv(uatEnv(m.afterSeal)));
-  assert.doesNotMatch(ok.stdout + ok.stderr, /SIGNATURE FAILS/, ok.stdout + ok.stderr);
+  assert.match(ok.stdout + ok.stderr, /stamp-ledger/, "the town's verifier ran");
+  assert.doesNotMatch(ok.stdout + ok.stderr, /SIGNATURE FAILS|UNSIGNED|handoff: /, "no signature problem and no handoff problem (what replay finds in this mail-less town is not this test's)");
   const bad = mixedTown(6, 3, { signer: (i) => (i < 4 ? BASE : UAT) });
   const r = runRunner(realVerifierTown(bad, HANDOFF_TOWN), bad.town, childEnv(uatEnv(bad.afterSeal)));
   assert.equal(r.status, 1, r.stdout + r.stderr);
