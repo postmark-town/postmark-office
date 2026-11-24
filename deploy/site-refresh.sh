@@ -547,11 +547,11 @@ seed_events_archive() {
     say "events archive: nothing to seed from (no retained events input in $SITE or $BUILD): the archive starts empty, and events that already left the capped feed are NOT in it — a bootstrap coverage limit, not proof nothing was lost"
     return 0
   fi
-  cp "$src" "$EVENTS_ARCHIVE.seed.$" && mv -n "$EVENTS_ARCHIVE.seed.$" "$EVENTS_ARCHIVE" || { rm -f "$EVENTS_ARCHIVE.seed.$"; die "could not seed the events archive at $EVENTS_ARCHIVE"; }
-  rm -f "$EVENTS_ARCHIVE.seed.$"
+  cp "$src" "$EVENTS_ARCHIVE.seed.$$" && mv -n "$EVENTS_ARCHIVE.seed.$$" "$EVENTS_ARCHIVE" || { rm -f "$EVENTS_ARCHIVE.seed.$$"; die "could not seed the events archive at $EVENTS_ARCHIVE"; }
+  rm -f "$EVENTS_ARCHIVE.seed.$$"
   local sum; sum="$(sha256sum "$EVENTS_ARCHIVE" | cut -d' ' -f1)"
   printf '{"seeded_at":"%s","source":"%s","source_kind":"retained pre-reset input","source_note":"%s","sha256":"%s","bytes_copied_as_they_were":true}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$src" "$what" "$sum" > "$EVENTS_ARCHIVE.seed-note.json.$" && mv -f "$EVENTS_ARCHIVE.seed-note.json.$" "$EVENTS_ARCHIVE.seed-note.json" || true
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$src" "$what" "$sum" > "$EVENTS_ARCHIVE.seed-note.json.$$" && mv -f "$EVENTS_ARCHIVE.seed-note.json.$$" "$EVENTS_ARCHIVE.seed-note.json" || true
   say "events archive: seeded $EVENTS_ARCHIVE from $what"
 }
 

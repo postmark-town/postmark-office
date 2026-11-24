@@ -94,6 +94,9 @@ export function roomRecordOf(room, { edges, nowMs, earshotM, source = "live" }) 
 
 // ── THE STORE: the tables are asked for before they are used, so a store without migration 103 answers as it always did ──
 
+/** Test seam: a hook called as a composition begins (event-sparks.mjs § composeEventEvidence, durable-keep.mjs § composeDurablePlan), so a test can see whether a pen lease is held. */
+export const composeProbe = { hook: null };
+
 let landed = false;
 /** Are migration 103's five tables there? True once seen (a table does not leave); asked with to_regclass, which never aborts a transaction. */
 export async function durableLanded(client) {
@@ -101,7 +104,8 @@ export async function durableLanded(client) {
   const { rows: [r] } = await client.query(
     `SELECT to_regclass('public.durable_rooms') IS NOT NULL AND to_regclass('public.durable_room_says') IS NOT NULL
         AND to_regclass('public.durable_event_memberships') IS NOT NULL AND to_regclass('public.durable_event_rooms') IS NOT NULL
-        AND to_regclass('public.durable_event_room_says') IS NOT NULL AS ok`);
+        AND to_regclass('public.durable_event_room_says') IS NOT NULL
+        AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'durable_event_rooms' AND column_name = 'frame_flag') AS ok`);
   landed = r?.ok === true;
   return landed;
 }
@@ -263,20 +267,45 @@ export async function frozenEventRooms(client, eventId) {
 }
 
 /**
- * The fixed CLOSED rooms an ongoing window already holds: every fixed room with a say spoken in [from, to] within `earshotM` of `place` (the same
- * place-membership rule as event-sparks.mjs § eventRoomFrom), as the thread headers the event read lists (same keys, same order, `live: false`), oldest first.
- * A closed room is final, so this is the room as it will always be. [] when the tables have not landed.
+ * The fixed CLOSED rooms a window already holds, as ROWS (inputs only: nothing here composes, so the caller can release its connection first): every fixed
+ * room with a say spoken in [from, to] within `earshotM` of `place` (the same place-membership rule as event-sparks.mjs § eventRoomFrom), oldest first, and
+ * `says`: Map(room id → its stored says up to `to`, in order) for the rooms a caller needs them for (`withSays`: every room; otherwise only a room that
+ * kept talking after `to`). [] when the tables have not landed.
  */
-export async function archivedRoomsInWindow(client, { from, to, place, earshotM }) {
-  if (!(await durableLanded(client))) return [];
-  const { rows } = await client.query(
+export async function archivedRoomRows(client, { from, to, place, earshotM, withSays = false }) {
+  if (!(await durableLanded(client))) return { rooms: [], says: new Map() };
+  const { rows: rooms } = await client.query(
     `SELECT r.* FROM durable_rooms r WHERE r.id IN (SELECT room_id FROM durable_room_says WHERE at >= $1 AND at <= $2
         AND sqrt((x - $3::float8) * (x - $3::float8) + (y - $4::float8) * (y - $4::float8)) <= $5::float8) ORDER BY r.first_at, r.id`,
     [iso(from), iso(to), place.x, place.y, earshotM]);
-  return rows.map((r) => headerOf({
-    id: r.id, ...(r.place_mark ? { place_mark: r.place_mark } : {}), live: false, place: r.place ?? null, at: { x: r.last_x, y: r.last_y }, aboard: r.aboard,
-    extent: { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1, span_m: r.span_m }, started: new Date(r.first_at).toISOString(), latest: new Date(r.latest_at).toISOString(),
-    participants: r.participants, voice_count: r.voice_count }));
+  const need = rooms.filter((r) => withSays || new Date(r.latest_at).getTime() > to).map((r) => r.id);
+  const says = new Map();
+  if (need.length) {
+    const { rows } = await client.query("SELECT room_id, act_id, at, handle, x, y, place, aboard, say_id, reply_to, era, root, place_mark FROM durable_room_says WHERE room_id = ANY($1::text[]) AND at <= $2 ORDER BY room_id, ord", [need, iso(to)]);
+    for (const r of rows) { if (!says.has(r.room_id)) says.set(r.room_id, []); says.get(r.room_id).push(r); }
+  }
+  return { rooms, says };
+}
+
+/**
+ * PURE. A fixed room as an event's window sees it: `{ header, members }`. The header is the thread header the event read lists (same keys, same order,
+ * `live: false`) AS THE ROOM STOOD at `to`: the stored one when the room said nothing after `to`, else the very same `threadOf` over its stored says up to `to`
+ * (a room that carried on after an event ended is never that event's later talk). `members` are those says with whether each fell inside [from, to].
+ */
+export function archivedRoomView(row, says, { from, to }) {
+  const latest = new Date(row.latest_at).getTime();
+  const upto = (says ?? []).filter((s) => new Date(s.at).getTime() <= to);
+  const members = upto.map((s) => ({ act_id: Number(s.act_id), in_window: new Date(s.at).getTime() >= from && new Date(s.at).getTime() <= to }));
+  if (latest <= to || !upto.length) {
+    return { members, header: headerOf({
+      id: row.id, ...(row.place_mark ? { place_mark: row.place_mark } : {}), live: false, place: row.place ?? null, at: { x: row.last_x, y: row.last_y }, aboard: row.aboard,
+      extent: { x0: row.x0, y0: row.y0, x1: row.x1, y1: row.y1, span_m: row.span_m }, started: new Date(row.first_at).toISOString(), latest: new Date(row.latest_at).toISOString(),
+      participants: row.participants, voice_count: row.voice_count }) };
+  }
+  const voices = upto.map((s) => ({ act_id: Number(s.act_id), at: new Date(s.at).getTime(), handle: s.handle, x: s.x, y: s.y, place: s.place, aboard: s.aboard,
+    id: s.say_id, reply_to: s.reply_to, era: s.era, root: s.root, place_mark: s.place_mark, root_place_mark: row.place_mark, said: "", text: "" }));
+  const { voices: _lines, ...thread } = talk.threadOf({ root: row.id, voices }, { live: false, voiceCap: 1 });
+  return { members, header: headerOf(thread) };
 }
 
 /** The ended events (ids) that already have a fixed membership, among `ids`: the recurring producer reconstructs only the others. */

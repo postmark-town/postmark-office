@@ -142,10 +142,12 @@ CREATE TABLE IF NOT EXISTS durable_event_rooms (
   room_id  text    NOT NULL,
   header   jsonb   NOT NULL,
   frame    jsonb   NOT NULL,
-  frame_flag text,
   PRIMARY KEY (event_id, room_id),
   UNIQUE (event_id, ord)
 );
+
+-- the flag an event's frozen room carries (POS-1203): added by ALTER, so a store that applied an earlier 103 gets it on re-apply; the CURRENT 103 is this file
+ALTER TABLE durable_event_rooms ADD COLUMN IF NOT EXISTS frame_flag text;
 
 CREATE TABLE IF NOT EXISTS durable_event_room_says (
   event_id  text   NOT NULL REFERENCES durable_event_memberships (event_id),

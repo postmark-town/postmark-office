@@ -676,3 +676,105 @@ test("THE COMPLETION'S SETTLEMENTS are every published one (deploy/event-sparks-
   assert.match(text, /const edges = await completionEdges\(world, createHearingWindow\);/);
   assert.doesNotMatch(text, /h\.settlements\(\)/);
 });
+
+// ═══ composition outside the held pen; an ended event not yet fixed reads only what it needs ═══
+test("COMPOSITION RUNS WITH NO PEN LEASE HELD: the producer, the completion's evidence and the calendar read compose after their lease is released (a control holds it and is seen)", async (t) => {
+  if (skip) return t.skip(skip);
+  const pen = await import("../src/world2-pen.mjs");
+  const { eventEvidenceInputs, composeEventEvidence, eventEvidenceReleased } = await import("../src/event-sparks.mjs");
+  const { keepDurable } = await import("../src/durable-keep.mjs");
+  const { rowOf, POST_COLUMNS } = await import("../src/events-store.mjs");
+  const env = { ...process.env, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") };
+  const edges = [S1, S2, S3, S4];
+  const id = "quill/lantern-unfixed";
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', 'Lantern night, unfixed', '', 'quill', 'quill-house', NULL, $2, 0, $3, $4, 'announced', $5, 0, 1, 1)`, [id, LANTERN_X, iso(EVENT_FROM), iso(EVENT_TO), JSON.stringify({ doors_open: iso(EVENT_FROM) })]);
+  const row = rowOf((await owner.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1`, [id])).rows[0]);
+  const probes = [];
+  // the pen marks the call chain that holds a connection (store-pool.mjs § penHeld, the same marker that refuses a nested ask): at the moment a composition begins,
+  // is this chain holding a pen lease? Deterministic and in-process: no timing, no second connection
+  const { penHeld } = await import("../src/store-pool.mjs");
+  D.composeProbe.hook = (what) => probes.push({ what, n: penHeld() ? 1 : 0 });
+  const held = async () => probes.splice(0);
+  try {
+    await keepDurable({ edges, nowMs: N2, env });
+    const produced = await held();
+    assert.ok(produced.some((p) => p.what === "rooms") && produced.every((p) => p.n === 0), "the producer composed (its rooms and each event) with its lease released");
+    await eventEvidenceReleased(pen, row, { now: N2, edges, env });
+    assert.deepEqual((await held()).map((p) => [p.what, p.n]), [["event", 0]], "the completion's evidence composed with its lease released");
+    await calendarAtOffice({ event: id }, { now: N2, env, settlements: async () => edges });
+    assert.deepEqual((await held()).map((p) => [p.what, p.n]), [["event", 0]], "the office's own calendar read composed with its lease released");
+    // the control: the same composition INSIDE a lease is seen
+    await pen.officeRead(async (q) => { composeEventEvidence(await eventEvidenceInputs(q, row, { now: N2, edges })); }, { env });
+    const inside = await held();
+    assert.equal(inside.length, 1);
+    assert.equal(inside[0].n, 1, "inside a lease the chain holds the pen while it composes: the detector sees it");
+  } finally { D.composeProbe.hook = null; }
+  // and the shipped callers use the released path
+  const sparks = readFileSync(join(HERE, "..", "src", "event-sparks.mjs"), "utf8");
+  assert.equal((sparks.match(/await eventEvidenceReleased\(pen, row,/g) ?? []).length, 2, "both completions (staked and free)");
+  assert.doesNotMatch(sparks, /officeRead\(\(q\) => eventEvidence\(/);
+});
+
+test("AN ENDED EVENT NOT YET FIXED reads the fixed rooms plus only the unfixed says, and answers what the whole-record derivation answers, with the late talk of a carried room cut off", async (t) => {
+  if (skip) return t.skip(skip);
+  const { eventEvidence } = await import("../src/event-sparks.mjs");
+  const { rowOf, POST_COLUMNS } = await import("../src/events-store.mjs");
+  // a second event over the same window that nobody has fixed (the first was fixed by the producer's tick above)
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ('quill/lantern-unfixed-2', 'event', 'Unfixed, again', '', 'quill', 'quill-house', NULL, $1, 0, $2, $3, 'announced', $4, 0, 1, 1)`, [LANTERN_X, iso(EVENT_FROM), iso(EVENT_TO), JSON.stringify({ doors_open: iso(EVENT_FROM) })]);
+  const row = rowOf((await owner.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = 'quill/lantern-unfixed-2'`)).rows[0]);
+  const edges = [S1, S2, S3, S4];
+  D.__forgetLandedForTest();
+  const seen = [];
+  const spy = { query: (sql, params) => { seen.push(sql); return office.query(sql, params); } };
+  const viaArchive = {};
+  const a = await eventEvidence(spy, row, { now: N2, edges, collect: viaArchive });
+  D.__forgetLandedForTest();
+  const blind = { query: (sql, params) => (/to_regclass|information_schema/.test(sql) ? Promise.resolve({ rows: [{ ok: false }] }) : office.query(sql, params)) };
+  const viaWhole = {};
+  const w = await eventEvidence(blind, row, { now: N2, edges, collect: viaWhole });
+  D.__forgetLandedForTest();
+  assert.ok(seen.some((q) => /NOT EXISTS \(SELECT 1 FROM durable_room_says/.test(q)), "the say read leaves out every say a fixed room holds");
+  assert.equal(a.complete, true);
+  assert.deepEqual(a.rooms, w.rooms, "the same rooms, header for header");
+  assert.deepEqual(viaArchive.membership, viaWhole.membership, "and the same membership to fix, says and in-window flags");
+  const b = a.rooms.find((r) => r.id === derived["b1,b2"].id);
+  assert.equal(b.voice_count, 2, "the carried room, as it stood at the window's end: b3 (said after) is not this event's");
+  assert.equal(b.latest, iso(S2 + 30 * MIN));
+  assert.deepEqual(viaArchive.membership.members.find((m) => m.id === b.id).says.map((x) => x.act_id), [ID.b1, ID.b2]);
+});
+
+test("A STORE THAT TOOK AN EARLIER 103 is brought current by re-applying it: the flag column is added, and the landed probes read it", async (t) => {
+  if (skip) return t.skip(skip);
+  const { LANDED } = await import("../world2/tools/migrations-landed.mjs");
+  const sql = readFileSync(join(HERE, "..", "world2", "schema", "103_durable_rooms.sql"), "utf8");
+  const probe = `SELECT (${LANDED["103_durable_rooms.sql"].probe}) AS ok`;
+  await owner.query("BEGIN");
+  try {
+    await owner.query("ALTER TABLE durable_event_rooms DROP COLUMN frame_flag");
+    assert.equal((await owner.query(probe)).rows[0].ok, false, "an earlier 103 (no flag column) is not landed");
+    D.__forgetLandedForTest();
+    assert.equal(await D.durableLanded(owner), false, "and the producer says so, instead of failing every event write");
+    await owner.query(sql);
+    assert.equal((await owner.query(probe)).rows[0].ok, true);
+    D.__forgetLandedForTest();
+    assert.equal(await D.durableLanded(owner), true);
+  } finally { await owner.query("ROLLBACK"); D.__forgetLandedForTest(); }
+});
+
+test("THE RUNBOOK'S ORDER: the first historical write is the operator's replay from a STAGED, non-serving tree, after the dry run and the lead's judgment, before the train PR is approved; the keeper never writes history first", () => {
+  const text = readFileSync(join(HERE, "..", "deploy", "DEPLOY.md"), "utf8");
+  const sec = text.slice(text.indexOf("## 103: durable rooms"));
+  const at = (re) => { const m = sec.search(re); assert.ok(m >= 0, `the runbook lost: ${re}`); return m; };
+  const migration = at(/\n1\. \*\*Apply 103 BEFORE the code/), stage = at(/\n2\. \*\*Stage the reviewed code/), dry = at(/\n3\. \*\*The dry run, from the staged tree/);
+  const judged = at(/RETURN `suspect_frames`[^\n]*to the lead for judgment BEFORE any `--apply`/), apply = at(/\n4\. \*\*Apply, from the same staged tree, only once the lead has judged/);
+  const approve = at(/Then approve the train PR: the deploy/);
+  assert.ok(migration < stage && stage < dry && dry < judged && judged < apply && apply < approve, "migrate, stage, dry run, judgment, apply, then the deploy");
+  assert.match(sec, /migration-landed is not approval to write data/);
+  assert.match(sec, /HOLD: if the report is unreadable, errors, or the judgment is not given, STOP/);
+  // every replay command runs from the staged tree, never from the serving release a keeper launches
+  const cmds = sec.split("\n").filter((l) => /replay-rooms\.mjs/.test(l) && /node world2/.test(l));
+  assert.ok(cmds.length >= 2);
+  for (const c of cmds) { assert.match(c, /cd \/srv\/postmark-office-durable-stage/, c); assert.doesNotMatch(c, /cd \/srv\/postmark-office &&/, c); }
+});

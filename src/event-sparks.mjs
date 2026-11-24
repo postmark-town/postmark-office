@@ -17,7 +17,7 @@
 
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { frozenEventRooms, writeEventMembership, frameFlagOf, durableLanded, archivedRoomsInWindow } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
+import { frozenEventRooms, writeEventMembership, frameFlagOf, durableLanded, archivedRoomRows, archivedRoomView, composeProbe } from "./durable-rooms.mjs"; // POS-1203: an ended event's rooms, fixed to its own window
 import { faultLogged } from "./fault-words.mjs"; // the log's own reader of an error (POS-1203: a failed freeze is logged and never throws)
 import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
@@ -259,10 +259,18 @@ export function presentFrom(rows, { window, place }) {
 }
 
 /**
- * THE EVIDENCE, read from the record in one read-only transaction (`client`). `event` is a posts row; `edges` the published
- * settlements. Answers `{ window, room, present, evidence }`; while the event is still on, `as_of` is now and `complete` false.
+ * THE EVIDENCE, in two halves so a held connection never carries the composition (POS-1203; the pen's idle-in-transaction bound is 30 s, and grouping history is CPU):
+ *   · `eventEvidenceInputs(client, event, …)` is QUERIES ONLY: the fixed record, the says nobody has fixed, the marks, the presence acts, the fixed closed rooms of the window.
+ *   · `composeEventEvidence(inputs, { collect })` is PURE: voices, rooms (the one grouping, rooms.mjs § roomsOf), the merge with the fixed rooms, the answer.
+ * A caller that holds the pen asks the first inside its lease and the second after it is released. `eventEvidence(client, …)` is both, for a caller with no lease to release.
+ *
+ * WHAT IS READ. An event whose own window was fixed answers from that record. Otherwise (an event still on, or one that ended and is not yet fixed) the fixed
+ * CLOSED rooms with a say in the window near its place come from the archive, each as the room stood at the window's end (a room that carried on later is cut back to
+ * it: the late-talk control), and only the says no fixed room holds are grouped (the open and carried portion, and any closed room not yet fixed), so the closed history is
+ * never reclustered per read. With no archive (103 not landed) everything is derived, as before. `sayRows` may be handed in already read (the producer reads the unfixed says once for
+ * every event), with `archive` saying whether they are only the unfixed ones.
  */
-export async function eventEvidence(client, event, { now = Date.now(), edges = [], collect = null } = {}) {
+export async function eventEvidenceInputs(client, event, { now = Date.now(), edges = [], sayRows: given = null, archive: archiveGiven = null } = {}) {
   const window = eventWindow(event);
   if (!window) return null;
   const place = { x: Number(event.place_x), y: Number(event.place_y) };
@@ -270,25 +278,31 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   if (until < window.from) return null; // doors not open yet: nothing to tell
   const scoped = { from: window.from, to: until };
   // POS-1203: an ENDED event whose rooms were fixed to its own window answers from that record, whatever the settlements this office has read
-  // since (the 60-settlement history is the ear's and the live read's, not the archive's). It is the event's own window: the said record of
-  // that moment, never the room's whole later life. A stored window that is not the event's window now (an amended event) is not used.
+  // since. A stored window that is not the event's window now (an amended event) is not used.
   const fixed = until === window.to ? await frozenEventRooms(client, event.id) : null;
   const useFixed = fixed && fixed.window.from === window.from && fixed.window.to === window.to ? fixed : null;
-  // one client, one query at a time (pg queues concurrent queries on a client, and is retiring that). The says are the record as the
-  // conversations page groups it (from the oldest published settlement), up to the instant asked: the rooms are the page's own.
   const oldest = [...edges].filter(Number.isFinite).sort((a, b) => a - b)[0];
-  // POS-1203: an ONGOING window (an event still on, which may be a season older than the ear) reads the fixed closed rooms from the archive and derives
-  // only what is not yet fixed (the open and carried rooms, and any closed room the producer has not reached): the says no fixed room holds. So the
-  // read never reclusters the closed history, and the open portion is the derivation's own. An ended event is fixed whole, or derived as ever.
-  const archive = !useFixed && until < window.to && await durableLanded(client);
-  const sayRows = useFixed ? [] : (await client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+  const archive = !useFixed && (archiveGiven ?? await durableLanded(client));
+  let sayRows = [];
+  if (!useFixed) {
+    sayRows = given
+      ? given.filter((r) => ms(r.at) <= scoped.to && (!Number.isFinite(oldest) || ms(r.at) >= oldest))
+      : (await client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                    WHERE action = ANY($1) AND at <= $2 ${Number.isFinite(oldest) ? "AND at >= $3" : ""}
                    ${archive ? "AND NOT EXISTS (SELECT 1 FROM durable_room_says d WHERE d.act_id = acts.id)" : ""} ${talk.VOICE_ORDER_SQL}`,
-    [talk.VOICE_ACTIONS, iso(scoped.to), ...(Number.isFinite(oldest) ? [iso(oldest)] : [])])).rows;
+        [talk.VOICE_ACTIONS, iso(scoped.to), ...(Number.isFinite(oldest) ? [iso(oldest)] : [])])).rows;
+  }
   const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
   const { rows: actRows } = await client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
                    WHERE action = ANY($1) AND household IS NOT NULL AND at >= $2 AND at <= $3 AND ${publicActSql()}
                    ORDER BY at, id`, [PRESENCE_ACTS, iso(scoped.from), iso(scoped.to)]);
+  const archived = archive ? await archivedRoomRows(client, { from: scoped.from, to: scoped.to, place, earshotM: talk.SAY_DIAL_SPEC.earshot_m[0], withSays: until === window.to }) : { rooms: [], says: new Map() };
+  return { event, window, place, until, scoped, edges, useFixed, sayRows, markRows, actRows, archived };
+}
+
+export function composeEventEvidence(inputs, { collect = null } = {}) {
+  composeProbe.hook?.("event");
+  const { window, place, until, scoped, edges, useFixed, sayRows, markRows, actRows, archived } = inputs;
   const centres = talk.anchorCentres(markRows);
   const centreOf = (id) => centres.get(id) ?? null;
   // WLD-74: a say spoken inside a dungeon room is not on a public read, and so not in an event's public room either
@@ -296,10 +310,11 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const { voices, unplaced } = talk.voiceRecords(spoken, { centreOf, strict: false });
   // POS-1203: the fixed record stands in for the derivation (same fields, same order); otherwise the derivation, as it always was
   const found = useFixed ? { rooms: useFixed.rooms.map(({ frame: _f, ...header }) => header), history: "complete" } : eventRoomFrom(voices, { window: scoped, place, edges });
-  if (archive && found.history === "complete") {
-    // the fixed closed rooms with a say in the window near the place, joined with the derived open ones in the order the rooms began
-    const closed = await archivedRoomsInWindow(client, { from: scoped.from, to: scoped.to, place, earshotM: talk.SAY_DIAL_SPEC.earshot_m[0] });
-    found.rooms = [...closed, ...found.rooms].sort((a, b) => Date.parse(a.started) - Date.parse(b.started) || (a.id < b.id ? -1 : 1));
+  if (!useFixed && found.history === "complete" && archived.rooms.length) {
+    // the fixed closed rooms with a say in the window near the place, as they stood at its end, joined with the derived ones in the order the rooms began
+    const views = archived.rooms.map((r) => archivedRoomView(r, archived.says.get(r.id), scoped));
+    found.rooms = [...views.map((v) => v.header), ...found.rooms].sort((a, b) => Date.parse(a.started) - Date.parse(b.started) || (a.id < b.id ? -1 : 1));
+    found.members = [...views.map((v) => ({ id: v.header.id, says: v.members })), ...(found.members ?? [])];
   }
   // the says this read could not place, counted for the event's own window (the read reaches further back, for the rooms' sake)
   const windowActs = new Set(spoken.filter((r) => ms(r.at) >= scoped.from && ms(r.at) <= scoped.to).map((r) => String(r.id)));
@@ -323,6 +338,18 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
     present_basis: `households with a public act (${PRESENCE_ACTS.join(", ")}) within ${EVENT_PLACE_M} m of the event's place inside its window — never RSVPs, never who is there now`,
     ...(unplacedInWindow ? { unplaced_says: unplacedInWindow } : {}),
   };
+}
+
+/** Both halves, for a caller holding no lease (the replay's own connection; tests). */
+export async function eventEvidence(client, event, opts = {}) {
+  const inputs = await eventEvidenceInputs(client, event, opts);
+  return inputs ? composeEventEvidence(inputs, { collect: opts.collect ?? null }) : null;
+}
+
+/** The pen's way: the inputs inside ONE short read lease, released; the composition after it. */
+export async function eventEvidenceReleased(pen, event, { now, edges, collect = null, env = process.env }) {
+  const inputs = await pen.officeRead((q) => eventEvidenceInputs(q, event, { now, edges }), { env, by: "eventEvidence" });
+  return inputs ? composeEventEvidence(inputs, { collect }) : null;
 }
 
 // ── THE SPARK, AS THE SITE READS IT (POS-1035 → CORE-82: identity, accepted children, picture and credit) ──
@@ -795,7 +822,7 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
 
     // 1 · the evidence, read whole (no transaction)
     const collect = {};
-    const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges, collect }), { env });
+    const evidence = await eventEvidenceReleased(pen, row, { now, edges, collect, env });   // the composition runs after the pen is released (POS-1203)
     if (!evidence?.complete) return held("its window is not over yet");
     if (evidence.room_history !== "complete") return held("its rooms cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
     // POS-1203: the event has ended and its rooms are told: fix them to its own window now, best effort and before anything is signed, so the
@@ -920,7 +947,7 @@ async function completeFreeEvent(row, { env, now, edges, planLeave, roomsPlace, 
   const store = await import("./events-store.mjs");
   const journal = await import("./world-journal.mjs");
   const collect = {};
-  const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges, collect }), { env });
+  const evidence = await eventEvidenceReleased(pen, row, { now, edges, collect, env });   // the composition runs after the pen is released (POS-1203)
   if (!evidence?.complete) return held("its window is not over yet");
   if (evidence.room_history !== "complete") return held("its rooms cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
   await freezeEventRooms(row, collect, { env });      // POS-1203, as completeEvent does
