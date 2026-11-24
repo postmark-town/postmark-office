@@ -232,6 +232,36 @@ export function onAnnounce(kind, fn) {
   listeners.get(kind).push(fn);
 }
 
+// ── CALLS: a read the main thread asks of a worker mid-request (POS-1219) ────
+//
+// A handover (`forward`) gives a worker a whole request. A CALL gives it one named
+// read inside a request the main thread keeps: today an act's look (world-apex.mjs §
+// actLook), the orient and eyes reads every world act gathers before its law, which
+// are the same functions a worker already answers as GET /world/orient and /world/eyes.
+// The answer comes back as a structured clone. `callOnWorker` answers null whenever no
+// worker gave one (no pool, none ready, a payload that cannot be cloned, a worker that
+// stopped, a handler that threw or an answer that cannot be cloned), and the caller
+// then does the read itself, on its own thread, exactly as before: a call never
+// refuses, and it never answers what the caller could not have answered itself.
+
+const callHandlers = new Map(); // name -> fn (in a worker)
+let caller = null;              // set on the main thread by a running pool
+
+/** Main thread: ask a worker for the read named `name`. Resolves to its answer, or null when no worker answered (the caller reads it itself). */
+export function callOnWorker(name, payload) {
+  if (!caller || IN_READ_WORKER) return Promise.resolve(null);
+  return caller(name, payload);
+}
+
+/** Main thread: is there a running pool to ask at all? (False with the workers off, in a worker, and once the pool stopped.) */
+export const workerCallable = () => caller != null && !IN_READ_WORKER;
+
+/** In a worker: answer the call named `name` with `fn(payload)`. Inert on the main thread. */
+export function onCall(name, fn) {
+  if (!IN_READ_WORKER) return;
+  callHandlers.set(name, fn);
+}
+
 // ── THE WORKER'S SIDE ────────────────────────────────────────────────────────
 
 /** A response a handler can write to as if it were http.ServerResponse, collected for the port. */
@@ -283,6 +313,14 @@ export function serveReadsInWorker(handle) {
       }
       return;
     }
+    if (msg?.type === "call") { // POS-1219: one named read; the answer is the handler's value, or `failed` (the main thread then reads it itself)
+      const fn = callHandlers.get(msg.name);
+      const failed = (e) => { faultLogged("a read worker's call tripped (the main thread reads it itself)", e); parentPort.postMessage({ type: "answer", id: msg.id, failed: true }); };
+      Promise.resolve()
+        .then(() => { if (!fn) throw new Error(`this worker answers no call named ${msg.name}`); return fn(msg.payload); })
+        .then((value) => { try { parentPort.postMessage({ type: "answer", id: msg.id, value }); } catch (e) { failed(e); } }, failed);
+      return;
+    }
     if (msg?.type !== "read") return;
     const { id, method, url, headers, ip, body = null, mcp = false, earshot = null, worldWrites = null, timing = null } = msg;
     // POS-1064/b: the instant this worker picked the read up, and a context of its own for the leases and bundles it runs (the main thread's rid joins them)
@@ -326,8 +364,9 @@ export function serveReadsInWorker(handle) {
  * is safe to ask again), else answered 503.
  */
 export function startReadPool({ size, entry, argv = [], env = process.env, respawnMs = 250, log = console } = {}) {
-  const workers = []; // by slot: { w, ready, inflight: Set<id>, slot, served, cause }
+  const workers = []; // by slot: { w, ready, inflight: Set<id>, slot, served, called, cause }
   const pending = new Map(); // id -> { res, msg, tries }
+  const calls = new Map();   // id -> { resolve } (POS-1219: a call held by a worker)
   let nextId = 1;
   const bootFailures = new Array(size).fill(0); // per slot: exits before ready, in a row
   const down = new Array(size).fill(null);      // per slot: why it was given up, once it was
@@ -348,11 +387,19 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
       env: { ...env, OFFICE_ROLE: "read" },
       workerData: { readWorker: true, slot },
     });
-    const rec = { w, ready: false, inflight: new Set(), slot, served: 0, cause: null };
+    const rec = { w, ready: false, inflight: new Set(), slot, served: 0, called: 0, cause: null };
     workers[slot] = rec;
     w.on("message", (msg) => {
       if (msg?.type === "ready") { rec.ready = true; bootFailures[slot] = 0; return; }
       if (msg?.type !== "answer") return;
+      const c = calls.get(msg.id);
+      if (c) { // POS-1219: a call's answer, or null for the caller to read itself
+        calls.delete(msg.id);
+        rec.inflight.delete(msg.id);
+        rec.called++;
+        c.resolve(msg.failed != null ? null : msg.value ?? null);
+        return;
+      }
       const p = pending.get(msg.id);
       rec.inflight.delete(msg.id);
       if (!p) return;
@@ -368,7 +415,10 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
       rec.ready = false;
       if (workers[slot] === rec) workers[slot] = null;
       // What it was holding goes to another worker once, or is refused plainly.
+      // A call it was holding is answered null, and its caller reads it itself (POS-1219).
       for (const id of rec.inflight) {
+        const c = calls.get(id);
+        if (c) { calls.delete(id); c.resolve(null); continue; }
         const p = pending.get(id);
         if (!p) continue;
         pending.delete(id);
@@ -384,7 +434,7 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         const left = down.filter((d) => d == null).length;
         log.error(`[read-workers] worker ${slot} could not start, three times running (${why}) — it is given up and the main thread answers its reads`
           + (left ? `; ${left} other slot${left === 1 ? " is" : "s are"} still in the pool` : "; no worker is left, the main thread answers every read"));
-        if (!left) { stopped = true; broadcast = null; }
+        if (!left) { stopped = true; broadcast = null; caller = null; }
         return;
       }
       log.error(`[read-workers] worker ${slot} ${wasReady ? "stopped" : "could not start"} (${why}); respawning`);
@@ -434,6 +484,19 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
     for (const r of workers) if (r) r.w.postMessage({ type: "announce", kind, payload });
   };
 
+  // POS-1219: a call rides the same port as the announcements, so a worker answers it after every write announced before it.
+  // Null, never a refusal, when there is no worker to ask or the payload cannot be cloned: the caller reads it itself.
+  caller = (name, payload) => new Promise((resolve) => {
+    if (stopped) return resolve(null);
+    const r = pick();
+    if (!r) return resolve(null);
+    const id = nextId++;
+    calls.set(id, { resolve });
+    r.inflight.add(id);
+    try { r.w.postMessage({ type: "call", id, name, payload }); }
+    catch { calls.delete(id); r.inflight.delete(id); resolve(null); }
+  });
+
   for (let i = 0; i < size; i++) spawn(i);
 
   return {
@@ -469,12 +532,17 @@ export function startReadPool({ size, entry, argv = [], env = process.env, respa
         down: [...down],
       };
     },
+    /** POS-1219: the calls each worker answered, by slot (not in `disclose`, which /release publishes). */
+    called() { return workers.map((r) => r?.called ?? 0); },
     /** The workers' thread ids, for the kill falsifier. */
     threads() { return workers.map((r) => (r?.ready ? r.w.threadId : null)); },
     kill(slot) { return workers[slot]?.w.terminate(); },
     async close() {
       stopped = true;
       broadcast = null;
+      caller = null;
+      for (const c of calls.values()) c.resolve(null);
+      calls.clear();
       await Promise.all(workers.map((r) => r?.w.terminate()));
     },
   };
