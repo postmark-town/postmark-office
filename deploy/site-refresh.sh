@@ -506,6 +506,61 @@ crossing_now() {
     2>/dev/null || true
 }
 
+# ── THE EVENTS ARCHIVE (POS-1203, with CORE-174; the Office publisher half) ─────────────────────────────
+# The site's events feed is capped, and this script resets and cleans $SITE at the top of every pass, so src/data/postmark/events.json goes back to the
+# empty COMMITTED file before every fetch. The site (CORE-174) keeps the events it has seen in an archive it reads, merges and writes atomically itself, at
+# POSTMARK_EVENTS_ARCHIVE; this script's part is only WHERE that file lives and that it is there, never wiped:
+#   · it is $ROOT/events-archive.json by default, beside letter-cache.json, OUTSIDE $SITE, $BUILD and $TOWN (a path inside any of them is refused: they are
+#     reset and cleaned), and an explicitly configured POSTMARK_EVENTS_ARCHIVE is respected;
+#   · it is handed to tools/fetch-town.mjs beside POSTMARK_LETTER_CACHE;
+#   · SEEDED, once, only when it does not exist, from the events input a previous pass left in the extract tree, BEFORE this pass's reset takes it. The bytes are
+#     copied as they are (the input's own evidence and provenance stay with it: it is never restamped as newly read) and the source is named in a note beside
+#     the archive. An existing archive is never touched, and an input that is empty or is the committed file is no seed. The extract tree's input is a
+#     retained pre-reset one, not a verified last-PUBLISHED snapshot (a release holds dist-town, not the raw input; the build tree's overlaid copy can be a failed
+#     attempt's), and the note says so. With none to seed from the pass says so and does not call the archive's start lossless. Nothing is rebuilt from rendered HTML.
+# One pass holds $LOCK (fd 9), so the seed has one writer; it lands by a temporary file and a no-clobber rename.
+EVENTS_ARCHIVE="${POSTMARK_EVENTS_ARCHIVE:-$ROOT/events-archive.json}"
+EVENTS_INPUT_REL="src/data/postmark/events.json"
+
+# 0 when $1 is valid JSON holding at least one event (a non-empty array, or an object with a non-empty array in it)
+events_input_usable() {
+  node -e '
+    const v = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const some = (a) => Array.isArray(a) && a.length > 0;
+    process.exit(some(v) || (v && typeof v === "object" && Object.values(v).some(some)) ? 0 : 1);
+  ' "$1" 2>/dev/null
+}
+
+seed_events_archive() {
+  case "$EVENTS_ARCHIVE" in
+    "$SITE"/*|"$BUILD"/*|"$TOWN"/*) die "POSTMARK_EVENTS_ARCHIVE ($EVENTS_ARCHIVE) is inside a tree this script resets; it belongs beside letter-cache.json" ;;
+  esac
+  [ -e "$EVENTS_ARCHIVE" ] && return 0
+  mkdir -p "$(dirname "$EVENTS_ARCHIVE")"
+  local src="" what="" dir f
+  for dir in "$SITE" "$BUILD"; do
+    f="$dir/$EVENTS_INPUT_REL"
+    [ -f "$f" ] || continue
+    # the committed file is no retained input (it is what the reset restores)
+    if git -C "$dir" show "HEAD:$EVENTS_INPUT_REL" 2>/dev/null | cmp -s - "$f"; then continue; fi
+    events_input_usable "$f" || continue
+    src="$f"
+    if [ "$dir" = "$SITE" ]; then what="the extract tree's events input as the previous pass's fetch left it, retained before this pass's reset (not a verified last-published snapshot)"
+    else what="the build tree's overlaid copy of an earlier pass's events input, which can be a failed attempt's (not a verified last-published snapshot)"; fi
+    break
+  done
+  if [ -z "$src" ]; then
+    say "events archive: nothing to seed from (no retained events input in $SITE or $BUILD): the archive starts empty, and events that already left the capped feed are NOT in it — a bootstrap coverage limit, not proof nothing was lost"
+    return 0
+  fi
+  cp "$src" "$EVENTS_ARCHIVE.seed.$$" && mv -n "$EVENTS_ARCHIVE.seed.$$" "$EVENTS_ARCHIVE" || { rm -f "$EVENTS_ARCHIVE.seed.$$"; die "could not seed the events archive at $EVENTS_ARCHIVE"; }
+  rm -f "$EVENTS_ARCHIVE.seed.$$"
+  local sum; sum="$(sha256sum "$EVENTS_ARCHIVE" | cut -d' ' -f1)"
+  printf '{"seeded_at":"%s","source":"%s","source_kind":"retained pre-reset input","source_note":"%s","sha256":"%s","bytes_copied_as_they_were":true}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$src" "$what" "$sum" > "$EVENTS_ARCHIVE.seed-note.json.$$" && mv -f "$EVENTS_ARCHIVE.seed-note.json.$$" "$EVENTS_ARCHIVE.seed-note.json" || true
+  say "events archive: seeded $EVENTS_ARCHIVE from $what"
+}
+
 # ── one build pass ──────────────────────────────────────────────────────────
 build_once() {
   PASSES=$((PASSES + 1))
@@ -518,6 +573,9 @@ build_once() {
   # mid-extract cannot smear two town states into one page.
   git -C "$TOWN" checkout -qf --detach "$TOWN_SHA"
   git -C "$TOWN" clean -qfd
+
+  # THE EVENTS ARCHIVE is seeded BEFORE the first reset of the extract tree below takes the retained events input with it (§ the events archive, above)
+  seed_events_archive
 
   # ── the extract tree: site @ main, exactly what sync-atlas.yml checks out ──
   git -C "$SITE" checkout -qf -B refresh-main "$SITE_MAIN"
@@ -561,8 +619,8 @@ build_once() {
   # keeps this file's floor fields and re-derives world_installed from the BUILD
   # tree, the same answer /build.json's world_sha gives — see "the pin".)
   # The letter cache lives beside the clones, outside the extract tree that is
-  # reset every pass: the next pass reads only the letters that moved.
-  ( cd "$SITE" && POSTMARK_API="$API" POSTMARK_LETTER_CACHE="$ROOT/letter-cache.json" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
+  # reset every pass: the next pass reads only the letters that moved. The events archive lives there too (POSTMARK_EVENTS_ARCHIVE).
+  ( cd "$SITE" && POSTMARK_API="$API" POSTMARK_LETTER_CACHE="$ROOT/letter-cache.json" POSTMARK_EVENTS_ARCHIVE="$EVENTS_ARCHIVE" PUBLIC_CHANNEL=release BUILD_CODE_REF="$TAG" node tools/fetch-town.mjs --town "$TOWN" ) \
     || die "fetch-town.mjs tripped"
   say "extract: approved renditions"
   ( cd "$SITE" && node tools/sync-renditions.mjs --town "$TOWN" ) \
