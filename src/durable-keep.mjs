@@ -4,7 +4,8 @@
 // recurring work, whatever else the tick does. Two callers, one derivation:
 //
 //   · `keepDurable` (deploy/durable-rooms-pass.mjs, a step of the existing keeping tick, deploy/office-keep.sh): NEW ONLY. The reads and the whole
-//     reconstruction run in the pen's read-only transaction, outside every write; the records already stored are filtered out BEFORE any write; the
+//     reconstruction run OUTSIDE every write: the inputs (the says no fixed room holds, the ended events not yet fixed) are read in one short read-only
+//     lease that is RELEASED, and the unfixed talk is composed with no connection held; the records already stored are never handed to a write; the
 //     rooms are written in one small transaction (each room whole or not at all) and each event in its own, so a tick's write never grows with the
 //     history and one failure holds up nothing else. A failed write is REPORTED and asked again by the next tick: the producer decides nothing
 //     it cannot recompute, and it needs no cursor, because "not yet stored" is the cursor.
@@ -152,8 +153,8 @@ export const fixEvent = (client, { row, m }, source) => writeEventMembership(cli
   eventId: row.id, window: m.window, unplaced: m.unplaced, source, rooms: membershipRows(m), basis: EVENT_BASIS });
 
 /**
- * THE RECURRING PRODUCER. Fixes every room that has truly closed and every ended event, NEW ONLY, from the pen (`office_api`). Reads (and the whole
- * reconstruction) are in the pen's read-only transaction; the rooms land in one small transaction and each event in its own. Never throws for a
+ * THE RECURRING PRODUCER. Fixes every room that has truly closed and every ended event, NEW ONLY, from the pen (`office_api`). The inputs are read in one
+ * short read-only lease that is released, and the unfixed talk is composed after it, with no connection held; the rooms land in one small transaction and each event in its own. Never throws for a
  * write: a failure is in the report (`rooms.failed`, `events.failed`) and the next tick asks again. A store without migration 103 answers
  * `{ landed: false }` and writes nothing. `edges` are the published settlements (ms); with none known nothing can be told, and nothing is written.
  */
