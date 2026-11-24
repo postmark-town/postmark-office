@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { callOnWorker, startReadPool, workerCallable } from "../src/read-workers.mjs";
+import { newTiming, runTiming, timingLine } from "../src/read-timing.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
@@ -89,10 +90,23 @@ test("B · the pool's call: a real worker answers the act's look; every way of n
     assert.ok(Array.isArray(look.oriented.you?.within) && look.oriented.you.within.length >= 1, "the spine the act's law reads crossed");
     assert.ok(Array.isArray(look.seen?.objects), "eyes' objects crossed");
     assert.deepEqual(pool.called(), [1], "the worker counted the call");
+    // POS-1219 (measurement only): a call made under a request's timing records the worker it went to and the worker's own report of the look
+    const tm = newTiming();
+    const timed = await runTiming(tm, () => bounded(callOnWorker("act-look", LOOK), 60_000, "a timed act-look call"));
+    assert.ok(timed?.oriented, "control: the timed call answered the look");
+    const seen = tm.calls?.["act-look"];
+    assert.equal(seen?.slot, 0, `the call names its worker: ${JSON.stringify(seen)}`);
+    assert.ok(Number.isFinite(seen.answer?.taken) && Number.isFinite(seen.answer?.done) && seen.answer.done >= seen.answer.taken, "the worker reported when it took the call and when it was done");
+    assert.equal(seen.answer.rid, tm.rid, "the worker's report is joined to the request by its rid");
+    const onLine = timingLine(tm, { door: "mcp-act", status: 200 }).act.look;
+    assert.equal(onLine.worker, 0);
+    assert.equal(onLine.answered, true);
+    for (const k of ["queue_ms", "exec_ms", "return_ms"]) assert.ok(Number.isFinite(onLine[k]) && onLine[k] >= 0, `${k} is measured: ${JSON.stringify(onLine)}`);
+    assert.deepEqual(pool.called(), [2], "and the worker counted it");
     assert.equal(await bounded(callOnWorker("no-such-call", {}), 60_000, "an unnamed call"), null, "a call no worker answers by that name is null");
-    assert.deepEqual(pool.called(), [2], "and it was answered (as failed), not dropped");
+    assert.deepEqual(pool.called(), [3], "and it was answered (as failed), not dropped");
     assert.equal(await callOnWorker("act-look", { ...LOOK, key: { ...LOOK.key, sign: () => "a function cannot cross a port" } }), null, "a payload that cannot be cloned is null");
-    assert.deepEqual(pool.called(), [2], "and it never reached the worker");
+    assert.deepEqual(pool.called(), [3], "and it never reached the worker");
     // a worker killed while it holds a call: the call is answered null (its caller then reads it itself)
     const held = callOnWorker("act-look", LOOK);
     const killed = pool.kill(0);
@@ -142,7 +156,7 @@ async function officeSays(workers) {
     const answer = JSON.parse(text);
     await until("the access line", () => existsSync(logDir) && readdirSync(logDir).some((f) => readFileSync(join(logDir, f), "utf8").includes('"mcp-act"')), 10_000);
     const line = readdirSync(logDir).flatMap((f) => readFileSync(join(logDir, f), "utf8").split("\n")).filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.timing?.door === "mcp-act");
-    return { answer, seg: line.timing.act.seg, reader: res.headers.get("x-pm-reader") };
+    return { answer, seg: line.timing.act.seg, look: line.timing.act.look, reader: res.headers.get("x-pm-reader") };
   } finally {
     proc.kill();
     await gone;
@@ -163,6 +177,11 @@ test("C · a real office: the say lands, its look is timed as `look` with one wo
   assert.equal(on.seg.orient, undefined, "orient was not read on the main thread");
   assert.equal(on.seg.eyes, undefined, "eyes was not read on the main thread");
   assert.ok(on.seg.handler?.n === 1, "the act's verb ran on the main thread");
+  // POS-1219 (measurement only): the act's access line says which worker read its look and how long each part took
+  assert.equal(on.look?.worker, 0, `the act's line names the worker that read its look: ${JSON.stringify(on.look)}`);
+  assert.equal(on.look.answered, true);
+  for (const k of ["queue_ms", "exec_ms", "return_ms"]) assert.ok(Number.isFinite(on.look[k]) && on.look[k] >= 0, `${k} is on the line: ${JSON.stringify(on.look)}`);
+  assert.equal(off.look, undefined, "with its workers off, no look is on the line");
   // LAW (POS-1219): "answers byte-identical to today's" — the parts of the answer the look decides (the clocked voices differ run to run and are not the look's)
   const law = (a) => JSON.stringify({ did: a.did, via: a.via, from: a.from, dispatched_to: a.dispatched_to, terms: a.terms, channel: a.channel ?? null });
   assert.equal(law(on.answer), law(off.answer), "the act's law is the same, read on a worker or here");
