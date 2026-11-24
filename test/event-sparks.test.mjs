@@ -305,9 +305,7 @@ test("the calendar's one-event read names who was there: two actors of one house
   const read = (id, now) => calendarAtOffice({ event: id }, { now, env: ENV, settlements: () => [min(-600)] });
   const { event: ended } = await read("pica/lantern-walk", NOW);
   const ev = ended.evidence;
-  assert.deepEqual(asked, [false], "the registry was asked once, outside the pen's leases");
-  await pen.officeRead(async () => { sp.forgetSpeakerBook(); await sp.speakerBook(); }, { env: ENV });
-  assert.deepEqual(asked, [false, true], "control: inside a lease the same ask is seen holding it");
+  const askedByTheRead = [...asked];
 
   assert.deepEqual(ev.participants.map((p) => p.handle), [...HANDLES, "walker90"].sort(), "the actors of the qualifying acts, sorted: not RSVPs, members, drafts, the far, the early, the late or the companion");
   const by = Object.fromEntries(ev.participants.map((p) => [p.handle, p]));
@@ -324,6 +322,9 @@ test("the calendar's one-event read names who was there: two actors of one house
   assert.deepEqual(by.maker1, { handle: "maker1", household: "maker-house" }, "a put-forward mark is a public act");
   assert.equal("drafter" in by, false, "a private draft is not");
   assert.match(ev.participants_basis, /never RSVPs, never a household's members/);
+  assert.deepEqual(askedByTheRead, [false], "the registry was asked once, outside the pen's leases");
+  await pen.officeRead(async () => { sp.forgetSpeakerBook(); await sp.speakerBook(); }, { env: ENV });
+  assert.deepEqual(asked, [false, true], "control: inside a lease the same ask is seen holding it");
   // and the household read is the one it always was
   assert.deepEqual(ev.present, ["blank-house", "ghost", "late-house", "maker-house", "otter-house", "pica-house", "starforge"],
     "present: the households, untouched — including the one whose act had no actor, who lists no participant");
