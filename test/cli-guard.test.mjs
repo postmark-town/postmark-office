@@ -237,6 +237,8 @@ const ROSTER = {
   // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
   "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
   "deploy/durable-rooms-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/durable-rooms-pass.mjs" },
+  // STAR-237: the keep tick's Hearth joins and queued entry pay — no arguments, so it answers its usage and touches nothing
+  "deploy/hearth-joins.mjs": { args: [], code: 2, needle: "usage: node deploy/hearth-joins.mjs" },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
