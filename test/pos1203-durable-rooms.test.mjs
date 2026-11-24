@@ -280,6 +280,27 @@ test("THE GALLERY OUTLIVES THE 60-SETTLEMENT WINDOW: the same read that answered
   assert.equal(ev.complete, true);
 });
 
+test("POS-1204 × THE DURABLE ROOMS: past the 60-settlement window the gallery is still the UNION — a Spark that NAMES the event, the room-derived ones, a dual match once; another event's and a retired one stay out", async (t) => {
+  if (skip) return t.skip(skip);
+  await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1204, now() - interval '3 days', now() - interval '2 days', 'closed') ON CONFLICT DO NOTHING");
+  const room = derived["b1,b2"].id;
+  const mark = (slug, data, status = "standing") => owner.query(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+     VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), $6, 1204, $7)`,
+    [slug, slug.split("/")[0], `${slug.split("/")[0]}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), status, JSON.stringify(data)]);
+  const base = { kind: "spark", recounting: "r", experienced_at: "2026-11-14T20:00:00.000Z" };
+  await mark("amia/named-only", { ...base, event: EVENT });
+  await mark("dee/room-only", { ...base, rooms: [room], circle: 1, circle_path: [1] });
+  await mark("fay/dual", { ...base, event: EVENT, rooms: [room], circle: 1, circle_path: [1] });
+  await mark("liv/other-event", { ...base, event: "quill/some-other-night" });
+  await mark("noe/retired-named", { ...base, event: EVENT }, "retired");
+  const ev = (await calendar([S3, S4], N2)).event.evidence;
+  assert.equal(ev.room_history, "complete", "the durable rooms still answer past the settlements this office has read");
+  assert.deepEqual(ev.gallery.rooms, [room]);
+  assert.deepEqual(ev.gallery.sparks.map((x) => x.id), ["amia/named-only", "dee/room-only", "fay/dual"], "named and room-derived, once each, in accepted order");
+  assert.equal(ev.gallery_note, undefined);
+});
+
 test("A CARRIED ROOM KEEPS ITS ID WHEN IT CLOSES, and the event that ended before it closed keeps only its own window", async (t) => {
   if (skip) return t.skip(skip);
   // the third settlement has passed, and somebody speaks in the room within its hour: the room carries on, under the same id

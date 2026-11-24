@@ -1222,7 +1222,7 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         const note = evidence.sparks ? sparkNoteOf(first.row, evidence, { now }) : undefined;
         if (note) evidence.spark_note = note;
         // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
-        try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(first.row) })); }
+        try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(first.row), event: first.row.id })); }
         catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
       }, env);
       first.view.evidence = evidence;

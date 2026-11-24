@@ -5907,6 +5907,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       const problems = w.sp.sparkProblems({ ...clean, id: `${by}/${slug}` }, { radiusM, isDate });
       if (problems.length) throw bounce(422, problems[0], problems.length > 1 ? `and: ${problems.slice(1).join("; ")}` : "the World's spark class says what a spark carries (tools/spark.mjs)");
     }
+    // A SPARK MAY NAME ITS EVENT (POS-1204; Darko CORE-163/d 2026-11-23 19:25 EST; Wright 2026-11-24 01:20Z). The World owns the property (its `event`, text);
+    // this door owns whether the event exists: a name that is no event is refused with the reason BEFORE anything is written. A KNOWN event is enough: an ended
+    // one too ("a picture that arrives later still joins the album"), with no live-now, attendance or room requirement, and a lookup that FAILS is never read
+    // as "no such event". The event's gallery then takes the spark once it stands (event-sparks.mjs § eventGalleryOf).
+    if (typeof clean.event === "string" && clean.event !== "") await requireKnownEvent(clean.event);
   }
 
   // ── THE MISTS ON THE PLACEMENT RECEIPT (WLD-38; was POS-468 B's veto) ─────
@@ -6467,6 +6472,19 @@ async function nestingParent(candidate, marks) {
   if (typeof engine.placementParent === "function")
     return candidate._parentMarkId ?? engine.placementParent(candidate, all) ?? engine.worldRootOf?.(all)?.id ?? null;
   return null;
+}
+
+// POS-1204: a spark's `event` must name an event the office's record holds (any phase, an ended or cancelled one included). Three outcomes, never conflated:
+// the row (known: nothing to say), no row (422, by name), or a read that could not be answered (503: the event could not be checked; it is NOT "no such event").
+async function requireKnownEvent(id) {
+  const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
+  let row;
+  try { row = await (await import("./events-store.mjs")).eventRowAtOffice(id); }
+  catch (e) {
+    throw bounce(503, "the event could not be checked just now", `the calendar lives in the office's record, which could not be read (${plainReason(e, "record", "the calendar, for a spark's event")}); nothing was written — ask again shortly`);
+  }
+  if (!row)
+    throw bounce(422, `properties.event ${JSON.stringify(String(id).slice(0, 60).replace(/[^ -~]/g, "?"))} names no event`, "an event's id is <host>/<slug>, as town { read: \"calendar\" } lists it (an event that has ended is fine); nothing was written");
 }
 
 // WHAT THE PLACEMENT OVERLAPS AND CONTAINS (POS-1156): the two lists beside `parent`,
