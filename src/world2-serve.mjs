@@ -101,6 +101,7 @@ import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, settlementsRecorded, heldPlaced } from "./world.mjs";
 import { hearable, roomOpen, ROOM_GRACE_MS } from "./hearing-window.mjs";
+import { storedRoomFor } from "./durable-rooms.mjs"; // POS-1203: a closed room is a fixed record, looked up
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -1098,13 +1099,26 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     ix = await roomsKept(p, known, edges.length ? edges[0] : null);
     if (find) {
       // the one room asked for: by its id (an exact id first, then the same handle in the same second, POS-1183), or the room holding the say
+      // POS-1203: a CLOSED room is a fixed record in the store (src/durable-rooms.mjs), looked up by the id it was issued under, an alias, or a say in it,
+      // never worked out again; the kept rooms below answer for every room not (yet) fixed. A store without migration 103, or a room not fixed, answers as before.
+      let fixed = null;
+      try { fixed = await storedRoomFor(p, find); } catch { fixed = null; }
       const say = sayIdOf(find.circle);
-      const ordered = find.circle == null ? roomsInOrder(ix) : [];
-      const entry = find.circle != null
+      const ordered = fixed || find.circle != null ? [] : roomsInOrder(ix);
+      const entry = fixed ? fixed.entry : find.circle != null
         ? (say == null ? null : ix.roomOfSay.get(String(say)) ?? null)
         : ordered.find((r) => r.root === String(find.room)) ?? (roomKeyOf(find.room) == null ? null : ordered.find((r) => roomKeyOf(r.root) === roomKeyOf(find.room))) ?? null;
       read = await readRooms(p, entry ? [entry] : []);
-      body = talk.conversationFound([...read.rooms.values()], find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap });
+      // the fixed room reads as it was when it closed: each say's place is the one recorded, not what its anchor's mark composes to today
+      if (fixed) {
+        const placed = new Map(fixed.says.map((r) => [String(r.act_id), r]));
+        for (const room of read.rooms.values()) for (const v of room.voices) {
+          const r = placed.get(String(v.act_id));
+          if (r) { v.x = r.x; v.y = r.y; v.place = r.place; v.aboard = r.aboard; }
+        }
+      }
+      // a fixed room found by an ALIAS is looked up in the thread by its own id (the answer carries the room's own header, as a room read always does)
+      body = talk.conversationFound([...read.rooms.values()], fixed && find.circle == null ? { ...find, room: fixed.id } : find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap });
     } else {
       // THE CEILINGS (§ above): a page's closed rooms and a read's open rooms are bounded, so no read fetches the whole record
       const askedClosed = n("closed", 40);

@@ -3717,3 +3717,44 @@ Darko, 2026-11-13: "Printout only", and three answers the same evening: **/a "Ev
 4. Confirm it with the roll-call, whose manifest is the old release's again.
 
 While rolled back, the store's registry no longer follows the sweep's file, so a later cutover's seed refuses by name if they differ; that registry is reconciled by a person before the seed runs again. After a printout is tagged, there is no rollback to the sweep: the store numbers seals and the keeper no longer tags, so the old crossing and the new numbers would disagree. Stop `postmark-settlement.timer` and fix forward; a tag is never moved or deleted.
+
+## 103: durable rooms, and each ended event's own window (POS-1203, CORE-170)
+
+Darko, 2026-11-23 18:35 EST: "sparks, galleries, conversations, they should all be durable". Until this, an event's rooms and gallery were worked out again on every read from the settlements this office remembers (60 of them, the ear's), so every event's gallery went blank about a month after it began, and the conversations page re-derived every room at each start. Now a **closed room is a fixed record in the store**, an **ended event's rooms are fixed to its own window**, and the replay writes both back to the first say. The settlement an event's window is older than no longer matters once it is fixed. **Live hearing is not touched** (`hearing-window.mjs` keeps its window and its 60); no permission, money, stake or completion rule changes. Everything stored is already public on the conversations page and the event page; a say spoken inside a dungeon's walls is never stored.
+
+- **A room is fixed only when it truly closes:** a settlement passed and the hour after it ran out with no say in the room (`hearing-window.mjs § roomOpen`, the one rule). A room carried across a settlement by a say in that hour, and an open room, keep their ids and are **not** stored yet; when they close, they are fixed under the same id. Old talk with no reply links is a timeline (`has_replies` false) and stays one; a say with no place, or older than the oldest settlement world main holds, is counted and left out, never invented.
+- **An ended event keeps the rooms and says of its own window** (`durable_event_*`): the rooms with a say inside the window near its place, as they stood at the window's end, each with its says up to then. Talk that carries on in one of those rooms later is never the event's attendance, and neither making its sparks nor returning its stake changes the record. The event's completion fixes it as it ends (best effort, never holding the completion: `event-sparks.mjs § freezeEventRooms`); the replay below fixes every ended event the completion did not.
+- **The conversations door** answers `?room=` (by the id it was issued under, an alias, or the same handle in the same second) and `?circle=` (a say's id) for a fixed room from the store, with each say's recorded place; every room not (yet) fixed answers as before from the kept rooms. A store without 103 answers as before.
+
+**The order, Darko's go first (SHIPPING § 1: a store migration).**
+
+1. **Apply 103 BEFORE the code.** Additive, idempotent, `office_api` gets INSERT and SELECT on five new tables and nothing else (no UPDATE, no DELETE, nothing to `snapshot_reader`). The release before this one ignores them; the new code reads around their absence and its writers refuse by name until they land.
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f /srv/postmark-office/world2/schema/103_durable_rooms.sql
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('durable_rooms') IS NOT NULL AND to_regclass('durable_room_says') IS NOT NULL AND to_regclass('durable_event_memberships') IS NOT NULL AND to_regclass('durable_event_rooms') IS NOT NULL AND to_regclass('durable_event_room_says') IS NOT NULL, has_table_privilege('office_api', 'durable_rooms', 'INSERT'), has_table_privilege('office_api', 'durable_rooms', 'UPDATE')"   # t|t|f
+   ```
+2. **Ship the code** (the release carrying POS-1203). From then on a completing event fixes its own rooms as it ends.
+3. **A dry run of the replay, read it, then run it.** It connects as the pg environment says; use the office's own role (`office_api`), the only one holding INSERT. The dry run writes nothing and reports; `--apply` writes what is not yet written, in one transaction. It is idempotent: a second `--apply` writes nothing new and moves no id.
+   ```sh
+   sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node world2/tools/replay-rooms.mjs --world "$WORLD_CLONE"'            # the report, nothing written
+   sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node world2/tools/replay-rooms.mjs --world "$WORLD_CLONE" --apply'    # then the same, writing
+   ```
+   Fetch world main first (`git -C "$WORLD_CLONE" fetch -q origin main`) so every published settlement is read: the replay groups with **every `settlement: sweep` commit on world main** (the same list the conversations page reads) and refuses to run with none. **Read the dry run's report before `--apply`:**
+   - `rooms.closed` / `rooms.to_write` / `rooms.timeline_only` (talk with no reply links, which stays a timeline) / `rooms.open_or_carried` (not written yet);
+   - `says.unplaced` (a say whose anchor mark is in no row: counted, never placed at the Origin), `says.ungrouped_before_first_settlement` (older than the oldest settlement: unknown, not grouped), `says.dungeon_interior_never_read`, `says.first_say`;
+   - `events.unknown`: an ended event whose window opens before the oldest settlement world main holds, or whose rooms cannot be told: left as it was, **never written as "no rooms"**;
+   - **`suspect_frames`: rooms whose bounds span more than 20 km, written exactly as derived and listed for the lead's judgment, never repaired.** The costume awards' room `t1793353930000-seraphina` (about 95 km by 99 km, joining voices at Pando with voices in town) is expected here (CORE-155 holds its judgment); report what the run lists.
+   - After `--apply`: `written.rooms.drift` must be `[]`. A room the rules would now derive differently from the stored one is **reported and left**: the stored record is the identity. A non-empty `drift` is a finding to bring back, not something to fix by hand.
+4. **Keep it current (proposed, the box half, Jetto's):** one more step in the keeping tick, `node world2/tools/replay-rooms.mjs --world "$WORLD_CLONE" --apply`, after the world fetch that brings the settlements in. It fixes each room as it closes (the hour after a settlement) and each ended event the completion missed, and is idempotent, so a repeat is harmless. Until it runs, a room not yet fixed is answered exactly as before. Its credentials are the office's own; it prints one JSON report and nothing else.
+5. **Prove it, from the store:**
+   ```sh
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*), count(*) FILTER (WHERE has_replies), count(*) FILTER (WHERE frame_flag IS NOT NULL), min(first_at), max(latest_at) FROM durable_rooms"
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM durable_room_says"   # every say in exactly one room: no duplicate act_id is possible
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT e.event_id, e.rooms_count, e.source FROM durable_event_memberships e ORDER BY e.window_from"
+   ```
+   and read an old event's page (`town { read: "calendar", args: { event: "<host>/<slug>" } }`): its `evidence.room_history` is `complete` and its gallery is a gallery, past the 60-settlement window, **where before the replay it answered unknown rooms and a null gallery**.
+
+**Rollback** is the migration's own header: the five tables dropped and their registry rows deleted. The code reads around their absence, so the release can stay; every read then answers as it did before 103. Nothing in the store is edited by this change (a fixed record is insert only; `acts` is untouched).
+
+**What this does not do (named, not hidden):** the conversations page's bare list and `?before=` paging still come from the process's kept rooms (built once per start from `acts`), not from the stored rooms; only a named `?room=` / `?circle=` is looked up in the store. The site's viewers (`calendar.mjs`, `circle-reader-mount.mjs`, `fetch-town-data.mjs`, the event pages) need no change to read this, and the site's own build bounds (25 past-event pages, 400 evidence reads) are the site's (Facet's fit note on CORE-170): durable evidence does not make an omitted page appear. Browsing the durable record (replay, time travel) is CORE-155.
