@@ -80,10 +80,11 @@ test("the wall helper: a point in town is clear, a point past the border is behi
 // in test/mists-forecast.test.mjs; this pin keeps the ORDER.
 test("THE PLACEMENT DOOR forecasts the Mists for the mark's ground after every other judgment and before either pen writes; it vetoes nothing", () => {
   const door = SOURCE.slice(SOURCE.indexOf("export async function leaveMarkViaOffice"), SOURCE.indexOf("export async function withdrawMarkViaOffice") > 0 ? SOURCE.indexOf("export async function withdrawMarkViaOffice") : undefined);
-  const asked = door.indexOf(": await placementForecast({ worldClone,");
+  // POS-1221: the calls are pinned by their own text, not the `await` before them (each now runs inside its timing segment, `actSpan("m_…", () => …)`)
+  const asked = door.indexOf("placementForecast({ worldClone,");
   assert.ok(asked > 0, "the placement door asks for the forecast");
   assert.ok(asked > door.indexOf("RING_CLAIM_SENTENCE") && asked > door.indexOf("const clean = {"), "after every other judgment of the mark");
-  assert.ok(asked < door.indexOf("await journalLeaveMark(clean") && asked < door.indexOf("draftWrite("), "and before either pen writes");
+  assert.ok(door.indexOf("journalLeaveMark(clean") > 0 && asked < door.indexOf("journalLeaveMark(clean") && asked < door.indexOf("draftWrite("), "and before either pen writes");
   assert.ok(!door.includes("await mistsGroundCheck(worldClone,"), "placement no longer vetoes on the wall");
   assert.doesNotMatch(door, /this ground stands behind the wall of the Mists/);
   assert.ok(!door.includes("bounce(503, MISTS_UNREADABLE"), "nor refuses while it cannot read it");
