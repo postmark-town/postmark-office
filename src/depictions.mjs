@@ -122,25 +122,57 @@ const shape = (r, household) => ({
   id: r.id, url: r.url, made_by: r.made_by, made_at: r.made_at instanceof Date ? r.made_at.toISOString() : r.made_at,
   ...(r.source ? { source: r.source } : {}), own: r.made_by === household,
   ...(r.made_by === TOWN ? { note: TOWN_SHEET_NOTE } : {}),
-  // POS-1202 (prepared, not yet live): a sheet's optional name rides its row when the record carries one; an unnamed or old row has none, and none is made up
+  // POS-1202: who the sheet shows, when the record holds a name for it (the latest naming act); an unnamed or older sheet has none, and none is made up
   ...(typeof r.name === "string" && r.name !== "" ? { name: r.name } : {}),
 });
 
-/**
- * THE INPUT ADAPTER for `update_profile { sheet }` (POS-1202, prepared): the existing call is a media URL string; the one additive form is
- * `{ url, name? }`. Pure: it reads the shape and nothing else (no persistence, no length or authority policy for the name, which are not
- * yet ruled). A string answers `{ url, name: null }`, an object with a string `url` and an optional string `name` answers `{ url, name }`
- * (the name trimmed, "" and absent both `null`); any other shape, or an unknown key, is the door's 422 without echoing the value.
- */
-export function sheetInputOf(sheet) {
-  const refuse = () => bounce(422, "a sheet is a media-door URL",
-    "pass the url upload_media handed back as sheet, or { url, name } to say who it shows; a sheet is never cleared, a newer one supersedes it. Nothing was written");
-  if (typeof sheet === "string") return { url: sheet, name: null };
-  if (!sheet || typeof sheet !== "object" || Array.isArray(sheet)) throw refuse();
-  if (Object.keys(sheet).some((k) => k !== "url" && k !== "name") || typeof sheet.url !== "string") throw refuse();
-  if (sheet.name != null && typeof sheet.name !== "string") throw refuse();
-  const name = typeof sheet.name === "string" && sheet.name.trim() !== "" ? sheet.name.trim() : null;
-  return { url: sheet.url, name };
+// ── WHO A SHEET SHOWS (POS-1202; Darko 11-23, Wright 11-24 04:26Z) ───────────
+//
+// One resident can be several characters (little-bird: three men and a dog), and its sheets say nothing of who each shows. The name is a
+// SEPARATE LABEL beside the immutable picture: the household sets it, on a sheet it is keeping now or on one kept before this, and may
+// change it. Each setting is an ACT in the record (`acts`, class `appearance`, action `name-sheet`, object the depiction's id, payload the
+// name), written through the acts pen like a describe; the sheet read shows the LATEST act for each sheet. The picture row, its author
+// and the anchor are never touched, and no rename service exists: a name is set the way every other appearance word is.
+export const SHEET_NAME_CLASS = "appearance";
+export const SHEET_NAME_ACTION = "name-sheet";
+// "a name, not a sentence": the bound edit.mjs § HOME_TITLE_MAX already gives a house's name, kept here as this label's (no new limit invented)
+export const SHEET_NAME_MAX = 80;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** A sheet's name as text: trimmed, one line, 1 to SHEET_NAME_MAX characters. Anything else is the door's 422. Pure; the value is never echoed. */
+export function sheetNameOf(raw) {
+  const t = typeof raw === "string" ? raw.trim() : "";
+  if (!t) throw bounce(422, "a sheet's name is who it shows, in a few words", `send sheet_name as text, at most ${SHEET_NAME_MAX} characters on one line, with the sheet's url as sheet. Nothing was written`);
+  if ([...t].length > SHEET_NAME_MAX || CONTROL_CHARS.test(t))
+    throw bounce(422, `a sheet's name is a name, not a sentence: at most ${SHEET_NAME_MAX} characters, on one line`, "shorten it and send the same call again. Nothing was written");
+  return t;
+}
+
+/** The latest name for each of these sheets (depiction ids), as `Map id → name`; null when the record cannot be asked. */
+export async function sheetNames(ids, { env = process.env, query = actsQuery } = {}) {
+  const want = [...new Set((ids ?? []).map(String))];
+  if (!want.length) return new Map();
+  const rows = await query(
+    `SELECT DISTINCT ON (object) object, payload->>'name' AS name FROM acts
+      WHERE class = $1 AND action = $2 AND object = ANY($3::text[]) ORDER BY object, id DESC`,
+    [SHEET_NAME_CLASS, SHEET_NAME_ACTION, want], env);
+  if (rows === null) return null;
+  return new Map(rows.filter((r) => typeof r.name === "string" && r.name !== "").map((r) => [String(r.object), r.name]));
+}
+
+/** The act: one row in `acts` through the acts pen (world-journal.mjs § appendActFlipped), refused whole when the record cannot be reached. */
+async function nameSheetAct({ actor, id, subject, name, household }) {
+  const { appendActFlipped } = await import("./world-journal.mjs");
+  const { currentCrossing } = await import("./crossings.mjs");
+  try {
+    const out = await appendActFlipped(null, { actor, action: SHEET_NAME_ACTION, object: String(id), payload: { subject, name }, household, cls: SHEET_NAME_CLASS, crossing: currentCrossing() });
+    return out?.actId == null ? null : String(out.actId);
+  } catch (e) {
+    if (e?.name === "PenUnreachableError" || e?.name === "NoRecordError")
+      throw bounce(503, "the office's record cannot be reached — the name was not kept", "the sheet itself stands; send the same call again");
+    throw e;
+  }
 }
 
 /**
@@ -152,8 +184,12 @@ export async function sheetRead({ handle } = {}, { env = process.env, query = ac
   const h = String(handle ?? "").trim();
   if (!h) throw bounce(422, "whose sheet?", "pass handle: a resident's handle");
   const reg = registry ?? (await likenessRegistry(env));
-  const rows = await depictionsOf(h, "sheet", env, query);
-  if (rows === null || !reg) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  const kept = await depictionsOf(h, "sheet", env, query);
+  if (kept === null || !reg) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  // POS-1202: each sheet's name, from the latest naming act; a record that cannot be asked is no read, never "unnamed"
+  const names = await sheetNames(kept.map((r) => r.id), { env, query });
+  if (names === null) throw bounce(503, "the office's record cannot be reached", "nothing was read; try again shortly");
+  const rows = kept.map((r) => (names.has(String(r.id)) ? { ...r, name: names.get(String(r.id)) } : r));
   const household = reg.houseOf(h);
   const likeness = household ? likenessOfHouse(reg.houses[household]) : "not given";
   const given = likeness === "given";
@@ -202,18 +238,27 @@ export async function sheetPointerOf(handle, { env = process.env, query = actsQu
  * for a resident of the same household (Postmark governs between households).
  * A sheet is never cleared: a newer one supersedes it.
  */
-export async function keepSheet({ handle, url } = {}, key = null, { env = process.env, keep = keepDepiction, registry = null, urlOk = null } = {}) {
+export async function keepSheet({ handle, url, name = null } = {}, key = null, { env = process.env, keep = keepDepiction, registry = null, urlOk = null, namesOf = sheetNames, nameAct = nameSheetAct } = {}) {
   const h = String(handle ?? "").trim();
   if (!key?.handles?.has(h)) throw bounce(403, `"${h}" is not one of your residents`, `a resident's sheet is its own household's to give; this key acts for: ${[...(key?.handles ?? [])].join(", ") || "(none)"}`);
   const u = typeof url === "string" ? url.trim() : "";
   const ok = urlOk ?? (await import("./media.mjs")).mediaUrlOk;
   if (!u) throw bounce(422, "a sheet is kept, never cleared", "a newer sheet supersedes the one before it; send its media-door URL");
   if (!ok(u)) throw bounce(422, "a sheet is a media-door URL", "upload the image first (upload_media) and pass the url it hands back as sheet; nothing was written");
+  const label = name == null ? null : sheetNameOf(name);   // judged before anything is kept, so a bad name refuses the whole call
   const reg = registry ?? (await likenessRegistry(env));
   const household = reg?.houseOf(h) ?? null;
   if (!household) throw bounce(409, `no household holds "${h}" on the record`, "a sheet is kept against a resident of a household; move in first (postmark.town/join)");
   const row = await keep({ subject: h, kind: "sheet", url: u, made_by: household, source: "the household's own" }, env);
   if (!row) throw bounce(503, "the office's record cannot be reached", "nothing was kept; send the same call again");
+  // POS-1202: the name is a label beside the picture, which the keep above left exactly as it was. A name the household sends is set now (on
+  // this sheet, new or kept before); the same name again writes nothing; a different one is a correction, one more act. No name sent: the
+  // answer shows the name that stands, and nothing is written.
+  const standing = (await namesOf([row.id], { env }))?.get(String(row.id)) ?? null;
+  if (label !== null && label !== standing) {
+    await nameAct({ actor: h, id: row.id, subject: h, name: label, household: String(key?.household ?? "").trim() || household });
+    row.name = label;
+  } else if (standing) row.name = standing;
   return { ...shape(row, household), canon: "at once: your household's own sheet is the one used first", ...(row.kept === false ? { already: true } : {}) };
 }
 

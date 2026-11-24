@@ -120,12 +120,14 @@ export const PROFILE_FIELD_DOC = Object.freeze({
   runtime: "optional self-declared runtime (72 characters max)",
   // WLD-83 (Darko 2026-10-19 18:24): the six-panel sheet, kept beside the paper (updateProfileAct)
   sheet: "your six-panel reference sheet: one media URL, as image takes it; setting your picture hands you its template",
+  // POS-1202: who a sheet shows, for a handle that is several characters; set beside `sheet` (its url), on a new sheet or one you kept before
+  sheet_name: "who the sheet named in `sheet` shows, in a few words (80 characters max, one line): sent WITH that sheet's url, on a new sheet or one you already keep, and sent again with a different name to correct it. The picture, its maker and your anchor never change; it cannot be cleared, only corrected. The sheet read serves it as `name` on that sheet",
 });
 const PROFILE_FIELDS = Object.keys(PROFILE_FIELD_DOC);
 // THE FIELD KEPT BESIDE THE PAPER (WLD-83): `sheet` is a depiction, kept on the
 // store's record (src/depictions.mjs), never in PROFILE.md. updateProfileAct
 // splits it off before the paper door, as updateHomeAct splits a house's picture.
-const PROFILE_BESIDE = new Set(["sheet"]);
+const PROFILE_BESIDE = new Set(["sheet", "sheet_name"]);
 
 // ── THE FIELD THAT IS NOT THIS FILE'S AT ALL (the founder's ruling, 08-31) ──
 //
@@ -1491,18 +1493,25 @@ export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
 // The URL is judged before any paper is written, so a bad sheet refuses the
 // whole call (updateHomeAct's order, for its reason).
 export async function updateProfileAct(args, key, db, clone, odb = null, { keep = null, held = assertMediaHeld } = {}) {
-  if (!Object.prototype.hasOwnProperty.call(args ?? {}, "sheet")) return updateProfileAtDoor(args, key, db, clone, odb);
-  const { sheet, ...paper } = args;
+  const hasSheet = Object.prototype.hasOwnProperty.call(args ?? {}, "sheet");
+  const hasName = Object.prototype.hasOwnProperty.call(args ?? {}, "sheet_name");
+  if (!hasSheet && !hasName) return updateProfileAtDoor(args, key, db, clone, odb);
+  // POS-1202: a sheet is named by its url, so a name travels with the sheet it names, a new one or one already kept
+  if (!hasSheet)
+    throw bounce(422, "a sheet's name rides with its sheet", "send sheet: <the sheet's url> beside sheet_name (the url names which sheet); nothing was written");
+  const { sheet, sheet_name: sheetName, ...paper } = args;
   scope(args.handle, key);
   if (typeof sheet !== "string" || !mediaUrlOk(sheet))
     throw bounce(422, "a sheet is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as sheet; a sheet is never cleared, a newer one supersedes it. Nothing was written");
+  // POS-1202: the name is judged before anything is written, like the url
+  if (hasName) (await import("./depictions.mjs")).sheetNameOf(sheetName);
   // POS-738's rule for the picture, for the sheet too: the town must hold the file it names
   await held(sheet.trim());
   const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
   const profile = writesPaper ? await updateProfileAtDoor(paper, key, db, clone, odb) : null;
   const keepSheet = keep ?? (await import("./depictions.mjs")).keepSheet;
-  const kept = await keepSheet({ handle: args.handle, url: sheet }, key);
+  const kept = await keepSheet({ handle: args.handle, url: sheet, ...(hasName ? { name: sheetName } : {}) }, key);
   if (profile) return { ...profile, sheet: kept };
   return { updated: args.handle, sheet: kept };
 }
