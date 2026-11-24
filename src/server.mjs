@@ -34,7 +34,7 @@ import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS, householdDispatchToolFor } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { readBody, isBodyTooLarge, refuseTooLarge, BodyIncomplete } from "./body.mjs";
-import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
+import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, berthLapse, berthSunset, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
@@ -67,6 +67,7 @@ import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-s
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { speakerBook } from "./speaker-line.mjs"; // POS-1132
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
@@ -377,7 +378,7 @@ const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 //
 // THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
 // "Probe first"). The two reads used to run side by side and held two of the
-// thread's pen connections at once (the pen is three per pool instance,
+// thread's pen connections at once (the pen is six per pool instance, three until POS-1095,
 // world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
 // the store does. The probe goes first: it
 // carries the as-of and the write path's sign-in and resident checks, and the
@@ -673,7 +674,7 @@ async function fromTownIndex(res, fn, onNull = null, onError = null, then = null
 // when the store cannot be reached. The pending paper rows are read first
 // (paper-fresh.mjs § freshFor): the town log is a paper, and the composed read
 // is synchronous.
-async function residentCard(who, key) {
+async function residentCard(who, key, { registry = null } = {}) {
   const fresh = await freshFor(who, { odb, clone: TOWN_CLONE, asOf: AS_OF });
   const got = await townIndexStore.storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, who, fresh)));
   if (got.refused) return { refused: got.refused };
@@ -702,6 +703,10 @@ async function residentCard(who, key) {
   // here. Garnish like the marks: a record that cannot be read leaves the card.
   const looks = await import("./entity-predicates.mjs").then((m) => m.appearanceFor(who)).catch(() => null);
   if (looks && !looks.unavailable) card.appearance = looks;
+  // POS-1201: the official sheet's pointer beside it (depictions.mjs § sheetPointerOf, the one helper both skins call), composed here, after the
+  // town-index lease above was released; absent when the record cannot be asked, never an invented "none"
+  const sheet = await import("./depictions.mjs").then((m) => m.sheetPointerOf(who, { registry })).catch(() => null);
+  if (sheet) card.official_sheet = sheet;
   // their pronouns beside the name, from their profile (profiles.mjs § pronounsOf);
   // absent when unwritten, never guessed
   const pronouns = pronounsOf(card);
@@ -727,8 +732,10 @@ async function mapLanes(items, fn) {
   return out;
 }
 async function withPublicCards(page) {
+  // POS-1201: the sheet pointer asks the registry once for the page, not once per card
+  const registry = await import("./likeness.mjs").then((m) => m.likenessRegistry()).catch(() => null);
   const cards = await mapLanes(page.residents ?? [], async (row) => {
-    const got = await residentCard(row.handle, null);
+    const got = await residentCard(row.handle, null, { registry });
     if (got.refused) throw new CardRefused(got.refused);
     return got.card;
   });
@@ -1432,7 +1439,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   if (path === "/mcp") {
     if (!key) {
       setWwwAuth(res);
-      return bounce(res, 401, "no key at the door", "this door is LIVE — you are not early, you need to sign in. Connector lane: your human runs the client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate; a browser opens for GitHub). Shell lane: Authorization: Bearer <household-key> — your human mints it at the key desk on the join page. Guide: https://postmark.town/join/");
+      return noKeyAtTheDoor(req, res, "this door is LIVE — you are not early, you need to sign in. Connector lane: your human runs the client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate; a browser opens for GitHub). Shell lane: Authorization: Bearer <household-key> — your human mints it at the key desk on the join page. Guide: https://postmark.town/join/");
     }
     return handleMcp(req, res, {
       key, asOf: AS_OF, canWrite, clone: TOWN_CLONE,
@@ -1470,7 +1477,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // morning round reads it through the roll-call, which reads the file on the box.
   if (path === "/ops/set-down-strands") {
     if (req.method !== "GET") return bounce(res, 405, "GET only", "GET /ops/set-down-strands reads the stranded set-downs");
-    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "the stranded set-downs name things and residents; this read is the principal's"); }
+    if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "the stranded set-downs name things and residents; this read is the principal's"); }
     if (!(await principalNow(rdb, key))) return bounce(res, 403, "the stranded set-downs are the principal's", "this read names things and residents, so it answers only the principal's GitHub sign-in");
     return j(res, 200, (await import("./set-down-strands.mjs")).readStrands());
   }
@@ -1481,7 +1488,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // not a public read. The login island reads this to name the household.
   if (path === "/me") {
     if (req.method !== "GET") return bounce(res, 405, "GET only", "GET /me reads your own identity");
-    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "GET /me tells you who you are at this door — sign in first. Connector lane: your client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate). Shell lane: Authorization: Bearer <household-key>. Guide: https://postmark.town/join/"); }
+    if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "GET /me tells you who you are at this door — sign in first. Connector lane: your client's MCP authenticate step (Claude Code: /mcp -> postmark -> Authenticate). Shell lane: Authorization: Bearer <household-key>. Guide: https://postmark.town/join/"); }
     const me = identityOf(key);
     // the registry view per handle — household is the primary column (2026-08-07)
     // POS-317: the household a payment by this account goes in, and the one
@@ -1504,7 +1511,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // (a GitHub account the household's record binds, and not an agent's own key). An agent reads the same values at household { read: "settings" }.
   const settingsRead = req.method === "GET" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
   if (settingsRead) {
-    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "GET /households/<slug>/settings is the household's own: sign in with GitHub first"); }
+    if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "GET /households/<slug>/settings is the household's own: sign in with GitHub first"); }
     if (agentHeld(key))
       return bounce(res, 403, "settings are read here by the household's human", "this key is an agent's own: read the same values at household { read: \"settings\" }");
     return import("./household-settings.mjs").then(async ({ readSettings }) => {
@@ -1566,7 +1573,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // a door that eventually does.
       if (path === "/world2/my-drafts") {
         if (!world2ServeEnabled()) return bounce(res, 404, "no such door", "the world 2.0 store is not engaged at this office");
-        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your drafts live only in your own reading of the world — sign in as your resident household first"); }
+        if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "your drafts live only in your own reading of the world — sign in as your resident household first"); }
         return world2MyDrafts(key)
           .then((r) => j(res, 200, r))
           .catch((e) => doorTripped(res, "the drafts door tripped", e));
@@ -1583,7 +1590,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // written with the parameter already in hand.
       if (path === "/world2/my-marks") {
         if (!world2ServeEnabled()) return bounce(res, 404, "no such door", "the world 2.0 store is not engaged at this office");
-        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your marks need your resident household identity — sign in first"); }
+        if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "your marks need your resident household identity — sign in first"); }
         const offset2 = Number(url.searchParams.get("offset"));
         return world2MyMarks(key, { offset: Number.isFinite(offset2) && offset2 > 0 ? Math.floor(offset2) : 0 })
           .then((r) => j(res, 200, r))
@@ -1596,7 +1603,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       }
       if (path === "/world") return worldSummary(key).then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       if (path === "/world/my-marks") {
-        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your marks need your resident household identity — sign in first"); }
+        if (!key) { setWwwAuth(res); return noKeyAtTheDoor(req, res, "your marks need your resident household identity — sign in first"); }
         // ⚑ THE OFFSET REACHES THE FUNCTION (2026-09-10). This route called
         // `worldMyMarks(key)` with no second argument while the function has
         // taken `{ offset }` since it was paged and the MCP twin
@@ -1823,8 +1830,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // apart from "I could not tell who you are".
       if (path === "/world/holdings") {
         if (!key)
-          return bounce(res, 401, "these are YOUR hands, and the office must know whose",
-            "send your household key as a Bearer token — your human mints one at https://postmark.town/join, or a rolled resident mints their own at POST /keys/claim");
+          return noKeyAtTheDoor(req, res,
+            "send your household key as a Bearer token — your human mints one at https://postmark.town/join, or a rolled resident mints their own at POST /keys/claim",
+            { defect: "these are YOUR hands, and the office must know whose" });
         (async () => {
           try {
             const handle = url.searchParams.get("handle") ?? undefined;
@@ -1842,7 +1850,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // listens as one of the key's residents; the handler lives beside the say
       // (world.mjs § worldSayStream, say-push.mjs § serveSayStream).
       if (path === "/world/say/stream") {
-        if (!key) return bounce(res, 401, "a stream needs a key", "a stream listens where one of your residents stands — send your household key or signed-in token as a Bearer token (fetch with a ReadableStream carries it; EventSource cannot)");
+        if (!key) return noKeyAtTheDoor(req, res, "a stream listens where one of your residents stands — send your household key or signed-in token as a Bearer token (fetch with a ReadableStream carries it; EventSource cannot)", { defect: "a stream needs a key" });
         const q = Object.fromEntries(url.searchParams);
         serveSayStream(req, res, (send) => worldSayStream(q, key, send),
           { onBounce: (b) => bounce(res, b.code ?? 422, b.defect, b.hint) })
@@ -1857,6 +1865,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
         // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
         try {
+          await speakerBook(); // POS-1132: the book the sync line shapers read, so a human's line says what their profile says now
           // POS-1035: a named circle or room (?circle= / ?room=) is looked for in the record too, where the store is engaged — memory
           // only holds the last voices, and history past the first page must answer complete, folded or unavailable honestly
           if ((url.searchParams.get("before") || url.searchParams.get("circle") || url.searchParams.get("room")) && world2ServeEnabled()) {
@@ -2466,7 +2475,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     }
     if (!key) {
       setWwwAuth(res);
-      return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
+      return noKeyAtTheDoor(req, res, "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
     }
 
     // PATCH /households/{slug}/human — NO BEARER SETS THE HUMAN'S PROFILE (POS-721/c, Darko
@@ -3208,6 +3217,26 @@ const resolveBearer = async (token) =>
   (await staticLookup(odb, token))
   ?? (await oauthLookup(odb, null, TOWN_CLONE, token)) ?? (await keyLookup(odb, null, TOWN_CLONE, token))
   ?? (await claimLookup(odb, null, TOWN_CLONE, token)) ?? (await berthLookup(odb, null, TOWN_CLONE, token)) ?? null;
+// A SUNSET BERTH KEY IS NAMED (POS-1189). A bearer that resolves to nothing is asked once more whether it is a berth key that
+// lapsed un-co-signed (oauth.mjs § berthLapse); the request carries that, and every door that would answer "no key at the door"
+// answers the sunset by name instead (§ noKeyAtTheDoor). A public read still serves anonymously, as for any key that is not one.
+// The same store as the lookup: a read that fails is the lookup's outage (503), never a sunset.
+const resolveRequestBearer = async (req, token) => {
+  const key = await resolveBearer(token);
+  if (key == null) req.berthLapse = await berthLapse(odb, token);
+  return key;
+};
+/**
+ * "no key at the door" (or a keyed door's own words, `defect`), or, for a berth key that has sunset, the sunset by name with its
+ * one-POST way back (POS-1189): every keyed door, REST, MCP and media, the page's stream and the holdings read included.
+ */
+function noKeyAtTheDoor(req, res, hint, { defect = "no key at the door" } = {}) {
+  if (req?.berthLapse) {
+    const s = berthSunset(req.berthLapse);
+    return bounce(res, s.code, s.defect, s.hint);
+  }
+  return bounce(res, 401, defect, hint);
+}
 
 // POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
 const handle = (req, res) => withRoute(routeOfRequest(req), () => handleRequest(req, res));
@@ -3236,7 +3265,7 @@ const handleRequestBody = (req, res) => {
   const auth =/^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };
   if (!auth) return route(req, res, null, t0).catch(tripped);
-  resolveBearer(auth[1]).then((key) => key, (e) => {
+  resolveRequestBearer(req, auth[1]).then((key) => key, (e) => {
     if (e instanceof SignInUnreadable) return e;
     console.error(`[auth] a bearer's lookup could not read the record (answered 503; the sign-in is intact): ${String(e?.message ?? e).slice(0, 200)}`);
     return LOOKUP_THREW;

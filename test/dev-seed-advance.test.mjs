@@ -42,7 +42,7 @@ const LOGGED = 'echo "$NAME $*" >> "$STUB_LOG"\nif [ -n "${STUB_FAIL:-}" ] && [[
 const STUBS = {
   // exec, with the flags off and the law pen's names unset, as the real sudo's env_reset leaves them.
   // The env file's grep is the real one, over the fixture that stands for the box's file.
-  sudo: `unset WORLD2_DB STAMP_LINES PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
+  sudo: `unset WORLD2_DB STAMP_LINES TOWN_PINS_DIR PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
 while :; do case "\${1:-}" in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done
 if [ "$1" = grep ]; then NAME=grep; shift; ${LOGGED}[ "\${!#}" = /etc/postmark-office-dev.env ] || { echo "sudo stub: grep asked of \${!#}" >&2; exit 8; }
   exec grep "\${@:1:$#-1}" "$STUB_OFFICE_ENV"; fi
@@ -64,7 +64,8 @@ esac\n`,
   if [ -n "\${STUB_CHAIN_PRINTS:-}" ]; then cat > /dev/null; echo "$STUB_CHAIN_PRINTS"; else "$STUB_REAL_NODE" "$@" || exit $?; fi
   NAME=node; shift 3; set -- chain-comparison; ${LOGGED}exit 0
 fi
-NAME=node; ${LOGGED}echo "$1 PGUSER=\${PGUSER:-} PGDATABASE=\${PGDATABASE:-} STAMP_LINES=\${STAMP_LINES:-}" >> "$STUB_ENV_LOG"; exit 0\n`,
+NAME=node; ${LOGGED}echo "$1 PGUSER=\${PGUSER:-} PGDATABASE=\${PGDATABASE:-} STAMP_LINES=\${STAMP_LINES:-}" >> "$STUB_ENV_LOG"
+echo "pins $1 TOWN_PINS_DIR=\${TOWN_PINS_DIR:-}" >> "$STUB_ENV_LOG"; exit 0\n`, // POS-1172: the pins each tool would load, as the process under sudo's reset sees them
   psql: `NAME=psql; ${LOGGED}case "$*" in
   *"SELECT sig"*) cat "$STUB_STORE_SIGS" ;;
   *"SELECT sha"*) echo "$STUB_PIN" ;;
@@ -316,6 +317,36 @@ test("the law pen's three writes connect as law_ingester, to the sandbox, with t
   for (const tool of ["world2/tools/town-index-ingest.mjs", "world2/tools/law-ingest.mjs", "src/world-hydrate.mjs"]) {
     assert.ok(r.envs.includes(`${tool} PGUSER=law_ingester PGDATABASE=${SANDBOX} STAMP_LINES=store`), `${tool}: ${r.envs.join("\n")}`);
   }
+});
+
+// ── THE LAW PEN CARRIES DEV'S PINS (POS-1172) ───────────────────────────────
+// sudo resets the environment (the stub unsets what the real env_reset would), so steps 5-7 meet whatever law_pen's own
+// shell exports. As_dev_office and the dev units name TOWN_PINS_DIR (POS-994); law_pen dropped it, and the three ingests
+// read prod's pins and refused dev's re-signed town (TownPinMismatch). Observed at the wrapper boundary: the pins each
+// tool would load, in the process law_pen execs. No box command runs.
+test("the law pen's three tools load dev's own pins, the value as_dev_office names, whatever the caller's environment held", { skip }, () => {
+  const sh = readFileSync(SCRIPT, "utf8");
+  const tree = /^DEV_TREE=(\S+)$/m.exec(sh)?.[1];
+  const named = /-p Environment=TOWN_PINS_DIR="\$D\/town-pins-dev"/.test(/^as_dev_office\(\) \{\n[\s\S]*?\n\}$/m.exec(sh)?.[0] ?? "");
+  assert.ok(tree && named, "as_dev_office names $D/town-pins-dev (POS-994)");
+  const r = advance({ env: { TOWN_PINS_DIR: "/invented/prod-pins" } });   // a caller's own pins must not ride through the reset
+  assert.equal(r.status, 0, r.stderr);
+  const want = `${r.tree}/town-pins-dev`;
+  for (const tool of ["world2/tools/town-index-ingest.mjs", "world2/tools/law-ingest.mjs", "src/world-hydrate.mjs"])
+    assert.ok(r.envs.includes(`pins ${tool} TOWN_PINS_DIR=${want}`), `${tool} must load dev's pins (${want}): ${r.envs.filter((l) => l.startsWith("pins")).join("\n")}`);
+  assert.equal(r.envs.filter((l) => /^pins .* TOWN_PINS_DIR=\/invented\/prod-pins$/.test(l)).length, 0, "nothing ran on the caller's pins");
+});
+
+test("the law pen still asserts the sandbox and still runs the exact commands: the carry changes the binding, nothing else", { skip }, () => {
+  const sh = readFileSync(SCRIPT, "utf8");
+  const fn = /^law_pen\(\) \{\n[\s\S]*?\n\}$/m.exec(sh)?.[0];
+  assert.ok(fn, "the law pen is one function");
+  assert.match(fn, /\[ "\$PGDATABASE" = "\$WORLD2_DB" \] \|\| \{ echo "REFUSED: \$PGDATABASE is not the dev sandbox" >&2; exit 9; \}/, "the database is asserted where it writes");
+  assert.match(fn, /exec runuser -u meepo -- "\$@"/, "the commands run as meepo, with the caller's arguments");
+  const r = advance();
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.calls.includes(`node world2/tools/law-ingest.mjs --law-repo ${r.tree}/world-clone --sha ${WORLD}`), "the exact law-ingest arguments");
+  assert.ok(r.envs.includes(`world2/tools/law-ingest.mjs PGUSER=law_ingester PGDATABASE=${SANDBOX} STAMP_LINES=store`), "still law_ingester, to the sandbox");
 });
 
 test("a real advance: the trim keeps only what the store and the new seed's ledger share, and the sync records the rest", { skip }, () => {

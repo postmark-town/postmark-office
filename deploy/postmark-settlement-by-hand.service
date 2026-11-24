@@ -33,8 +33,8 @@ Type=oneshot
 # mechanism to keep in step, which is the thing this deliberately is not.
 User=meepo
 EnvironmentFile=/etc/postmark-office.env
-# WORLD2_CLEARING_URL — the clearing pen the retire step and the store-source
-# crossing hold. ONE file, shared with postmark-world2-clearing.service (office
+# WORLD2_CLEARING_URL — the clearing pen the printout reads the seal with and
+# records it through (095 § record_printout). ONE file, shared with postmark-world2-clearing.service (office
 # #26, 2026-09-12).
 EnvironmentFile=-/etc/postmark-world2-clearing.env
 # THE ONE DIFFERENCE, and it is set HERE rather than passed on a command line so

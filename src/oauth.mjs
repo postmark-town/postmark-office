@@ -422,7 +422,8 @@ export async function mintBerth(odb, slug, fromTown = null, { t = now() } = {}) 
   // two boardings racing for one name leave one berth and one 409, never a fault.
   try {
     await paper.tx(async (x) => {
-      await x.run("UPDATE berths SET slug = slug || '~' || created WHERE slug = ? AND expires < ?", slug, t);
+      // only a berth nobody co-signed sunsets (POS-1189): a co-signed berth keeps its name, so a mint under it is refused below
+      await x.run("UPDATE berths SET slug = slug || '~' || created WHERE slug = ? AND expires < ? AND cosigned_gh_id IS NULL", slug, t);
       await x.run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
         slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
     });
@@ -495,9 +496,32 @@ export function arrivalsReader({ read = berthArrivals, ttlMs = ARRIVALS_TTL_MS, 
   };
 }
 
-/** A live berth holds its slug against re-mint; an expired one frees it. */
+/** A live berth holds its slug against re-mint; a co-signed one always does (POS-1189: it does not sunset); an expired, un-co-signed one frees it. */
 export async function berthTaken(odb, slug) {
-  return Boolean(await asPaper(odb).get("SELECT slug FROM berths WHERE slug = ? AND expires >= ?", slug, now()));
+  return Boolean(await asPaper(odb).get("SELECT slug FROM berths WHERE slug = ? AND (expires >= ? OR cosigned_gh_id IS NOT NULL)", slug, now()));
+}
+
+/**
+ * A BERTH KEY THAT HAS SUNSET (POS-1189): a `pmb_` key whose berth nobody co-signed and whose date has passed —
+ * `{ slug, expired_at }`, or null for anything else (another kind of key, an unknown key, a live or co-signed berth).
+ * berthLookup answers such a key as no key at all; the doors that would say "no key at the door" say this instead, by
+ * name, with the one-POST way back (§ berthSunset). A read: a store that cannot answer throws, as every lookup does.
+ */
+export async function berthLapse(odb, token) {
+  if (typeof token !== "string" || !token.startsWith("pmb_")) return null;
+  const row = await asPaper(odb).get("SELECT slug, expires, cosigned_gh_id FROM berths WHERE token_hash = ?", sha256(token));
+  if (!row || row.cosigned_gh_id || !(row.expires < now())) return null;
+  // a re-boarded name keeps its old row as `<slug>~<created>`: the sunset key is still that name's
+  return { slug: String(row.slug).split("~")[0], expired_at: new Date(Number(row.expires) * 1000).toISOString() };
+}
+
+/** The refusal a sunset berth key gets on every door (REST, MCP, media), in place of "no key at the door". */
+export function berthSunset(lapse) {
+  return {
+    code: 401,
+    defect: `your berth key has sunset — "${lapse.slug}" lapsed at ${lapse.expired_at}`,
+    hint: `a berth nobody co-signs lasts fourteen crossings (seven days). Re-boarding is one POST: POST /berth {"slug": "${lapse.slug}"} mints a fresh berth key under the same name (the sunset berth stays on the record). A berth whose human co-signs keeps its key; a household key is minted at postmark.town/join`,
+  };
 }
 
 /** When a berth row was minted, in ms (its `created` is seconds): a re-minted slug's body starts fresh from here (POS-739). */
@@ -506,7 +530,12 @@ const mintedAtOf = (row) => (Number.isFinite(Number(row?.created)) && row.create
 export async function berthLookup(odb, db, clone, token) {
   if (!token.startsWith("pmb_")) return null;
   const row = await asPaper(odb).get("SELECT * FROM berths WHERE token_hash = ?", sha256(token));
-  if (!row || row.expires < now()) return null;
+  // A CO-SIGNED BERTH IS NOT TURNED AWAY FOR ITS DATE (POS-1189; Darko 2026-11-22 18:41 EST, "keep working"; Wright: "A row
+  // with `cosigned_gh_id` must not be turned away for its date. The seven-day clock stays for a berth nobody has co-signed").
+  // `expires` is the sunset of a berth NOBODY co-signs (BERTH_TTL_S, fourteen crossings); once a human co-signs, the upgrade
+  // below is the standing, and the date no longer bounds it. A lapsed un-co-signed berth is still no key here; the door names it
+  // (§ berthLapse).
+  if (!row || (!row.cosigned_gh_id && row.expires < now())) return null;
   // UPGRADE IN PLACE (the arrival ruling, 2026-08-15): the moment a co-signed
   // berth's human is known to the registry, this same key answers as the
   // household — the agent never fetches a new credential, its standing simply

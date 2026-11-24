@@ -490,7 +490,7 @@ export function stanceReturnsWhole(inputs, state) {
  * Without it nothing is written and the gate alone decides. `town_returns`
  * says what was returned, what waits and why.
  */
-export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null }) {
+export async function settlementTakesAway(p, header, { worldRepo, townRepo = null, townReturns = null, decide = false }) {
   const inputs = await settlementFoldInputs(p, header, { worldRepo, townRepo });
   // R14: BEFORE THE CUTOVER, EVERYTHING COUNTS AS RATIFIED, AND THE CUTOVER IS
   // A SETTLEMENT NUMBER (Darko, 2026-10-09 10:25 EDT, the conservative
@@ -507,7 +507,11 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
   const words = stancesCount ? await wordsAtSeal(p, header, { worldRepo }) : NO_WORDS;
   const cleared = foldOver(inputs);
   const { state, vetoes } = foldWithWords(inputs, words, cleared);
-  const town = await townReturnsAt(header, gate, state, { townRepo, townReturns });
+  // `decide` (POS-1025/d, "Save first, then pay"): the clearing asks BEFORE its seal, and saves the answer. Every town return the
+  // engine names is then part of the decided removal, with its targets handed back for the settlement crossing to pay; nothing is
+  // written or read of the ledger here. The gate is asked after the payment, and a return it holds blocks the seal (Wright
+  // 2026-11-22 03:26Z), never changes this removal.
+  const town = decide ? null : await townReturnsAt(header, gate, state, { townRepo, townReturns });
   const waiting = new Set((town?.held ?? []).map((h) => h.mark));
   const slugs = new Set();
   const limitParcels = [];
@@ -540,6 +544,7 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
     ...(stancesCount ? {} : { stances_not_counted: `${gate.why}, so no stance takes one out of git` }),
     ...(vetoes?.stance_returns_whole ? { stance_returns_whole: wholeSentence(header, vetoes.stance_returns_whole) } : {}),
     ...(town ? { town_returns: town } : {}),
+    ...(decide ? { town_targets: (await import("./town-return.mjs")).townReturnTargets(state), limit_parcels: [...new Set(limitParcels)].sort() } : {}),
   };
 }
 
@@ -579,16 +584,20 @@ async function townReturnsAt(header, gate, state, { townRepo, townReturns }) {
  * THE SEAL'S DECISION (072; Wright, 2026-10-09: decide once, at the seal). The
  * clearing job asks this just before it seals and hands the answer to the seal,
  * which records it on the header: `{ counted, cutover, settlement_inferred, how }`.
- * The snapshot being sealed has no settlements row yet, so its number is the
- * settlement this crossing makes (§ settlementNumberAt: the store's newest plus
- * one, `how: "inferred"`). The only caller is the seal; every reader reads the
- * record (§ stancesOf). A malformed cutover throws: the seal never guesses it.
+ * Since 095 the seal allocates its own number (world-snapshot-seal.mjs §
+ * NEXT_SETTLEMENT_SQL) and hands it in as `number`: the decision is made at
+ * that number, `how: "sealed"`. Without one (a store before 095), the snapshot
+ * being sealed has no settlements row yet, so its number is the settlement this
+ * crossing makes (§ settlementNumberAt: the store's newest plus one, `how:
+ * "inferred"`). The only caller is the seal; every reader reads the record (§
+ * stancesOf). A malformed cutover throws: the seal never guesses it.
  */
-export async function stancesAtSeal(p, { env = process.env, header = { id: null } } = {}) {
+export async function stancesAtSeal(p, { env = process.env, header = { id: null }, number = null } = {}) {
   const { stancesCountAt } = await import("./town-stance.mjs");
-  const at = await settlementNumberAt(p, header);
+  const at = number != null ? { number: Number(number), sealed: true } : await settlementNumberAt(p, header);
   const gate = stancesCountAt(at.number, env);
-  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number, how: at.inferred ? "inferred" : "row" };
+  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number,
+    how: at.sealed ? "sealed" : at.inferred ? "inferred" : "row" };
 }
 
 /**
@@ -645,6 +654,8 @@ export const NO_WORDS = Object.freeze({ townWords: new Map(), holderOpposed: [],
  */
 export async function settlementNumberAt(p, header) {
   if (header?.settlement != null) return { number: Number(header.settlement), inferred: null };
+  // THE SEAL'S OWN NUMBER (095): a snapshot sealed since the settlement prints itself names it, and nothing infers it.
+  if (header?.sealed_settlement != null) return { number: Number(header.sealed_settlement), inferred: null };
   if (header?.id != null) {
     const { rows: [r] } = await p.query("SELECT number FROM settlements WHERE snapshot_id = $1 ORDER BY number LIMIT 1", [header.id]);
     if (r?.number != null) return { number: Number(r.number), inferred: null };

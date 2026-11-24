@@ -98,11 +98,14 @@ export function townReturnTargets(state) {
  * The returns that wait: each target with a mark it takes still carrying open
  * stamps, `[{ mark, leaving, open: { <mark>: n } }]`. PURE.
  */
-export function heldTownReturns(targets, open) {
+export function heldTownReturns(targets, open, holders = null) {
   const held = [];
   for (const t of targets) {
     const standing = t.leaving.filter((m) => (open.get(m) ?? 0) > 0);
-    if (standing.length) held.push({ ...t, open: Object.fromEntries(standing.map((m) => [m, open.get(m)])) });
+    if (standing.length) held.push({ ...t, open: Object.fromEntries(standing.map((m) => [m, open.get(m)])),
+      // WHO HOLDS THEM (POS-1025; Wright 2026-11-22 03:26Z: the blocked return's receipt names "its removal, its staker and the
+      // reason"), when the read knew: `{ <mark>: [{ handle, n }] }`, from the same ledger positions as `open`
+      ...(holders ? { stakers: Object.fromEntries(standing.map((m) => [m, holders.get(m) ?? []])) } : {}) });
   }
   return held;
 }
@@ -119,12 +122,16 @@ export async function liveLedgerOpen(townClone, { held = withTownLockHeld, waitS
   return held(async ({ signal }) => {
     const { worldStakeState } = await importTownTool(townClone, "world-stake.mjs");
     if (signal?.aborted) throw new Error("the town lock was let go before the ledger was read");
-    const open = new Map();
+    const open = new Map(), holders = new Map();
     for (const [key, n] of worldStakeState(townClone).positions) {
-      const mark = key.slice(0, key.lastIndexOf("|"));
-      if (n > 0) open.set(mark, (open.get(mark) ?? 0) + n);
+      const cut = key.lastIndexOf("|");
+      const mark = key.slice(0, cut);
+      if (n > 0) {
+        open.set(mark, (open.get(mark) ?? 0) + n);
+        holders.set(mark, [...(holders.get(mark) ?? []), { handle: key.slice(cut + 1), n }].sort((a, b) => (a.handle < b.handle ? -1 : 1)));
+      }
     }
-    return { open };
+    return { open, holders };
   }, { shared: true, waitSec });
 }
 
@@ -210,7 +217,7 @@ export async function settleTownReturns({ targets, removal, date, townClone, wri
     receipt = await write({ marks: [...new Set(targets.flatMap((t) => t.leaving))].sort(), removal, date });
   const after = await townReturnOpen({ townClone, read });
   let held, source = after.source;
-  if (after.source === "live") held = heldTownReturns(targets, after.open);
+  if (after.source === "live") held = heldTownReturns(targets, after.open, after.holders ?? null);
   else {
     const closed = closedByReceipt(receipt, targets);
     if (closed) { held = heldTownReturns(targets, closed); source = "receipt"; }

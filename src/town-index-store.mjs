@@ -378,7 +378,7 @@ export class TownIndexUnreachable extends Error {
  * THIS IS THE ONE A DOOR USES. A composed read (the estate, a doorstep) does
  * more than read the index between its reads: the world's siting, the quest
  * tools, a household's store writes. Holding one pooled connection across all
- * of that while other work asks the same small pool (max 3) for another is how
+ * of that while other work asks the same small pool (the pen's max, 6 since POS-1095) for another is how
  * three concurrent readers each hold one connection and wait forever for a
  * second. So each method takes a connection, reads, and gives it back. A store
  * that cannot be reached throws TownIndexUnreachable, never an empty answer.

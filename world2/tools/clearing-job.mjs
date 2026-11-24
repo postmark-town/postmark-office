@@ -66,9 +66,14 @@ import { classLayerVia, isGround } from "./standing.mjs";
 import { candidateRowOf, prospectiveTiers } from "./prospective-standing.mjs"; // 5.5's walk input, shared with the stake door (POS-674/701)
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
-import { sealSnapshot } from "./world-snapshot-seal.mjs";
+// Since POS-1025/d the clearing SAVES the header it decided (095 § 4) and the settlement crossing seals it; see step 8.
+import { sealPrepare, provisionalHeader, saveDecision, NEXT_SETTLEMENT_SQL } from "./world-snapshot-seal.mjs";
+// THE SETTLEMENT'S LAST DECISIONS (POS-1025): the withdrawal, the commons unpublish, and what its words and limits take away,
+// before the seal. See step 7.5.
+import { settlementDecides, takeawaysBeforeSeal, WITHDRAW_CAUSE, UNPUBLISH_CAUSE } from "./settlement-decides.mjs";
 // WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
-import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
+import { stancesAtSeal, lawCarriesRulingB, settlementTakesAway } from "../../src/world-settlement.mjs";
+import { townDate } from "../../src/town-return.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
 import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
 // THE CARRY (POS-441): a move carries the mover's household's marks inside it,
@@ -747,6 +752,44 @@ try {
   const { standing, moved, notes, containment: containmentSeen } = await recomputeStanding(q);
   for (const n of notes) console.log(`  ⚑ standing: ${n}`);
 
+  // 7.5 · THE SETTLEMENT'S LAST TWO DECISIONS, BEFORE ITS SEAL (POS-1025; Darko
+  //     2026-11-13, POS-1025/c: "What publishes is decided inside the settlement
+  //     and stays fixed"). The withdrawal its owner asked for, and the commons
+  //     mark with no stamps behind it, both used to leave canon AFTER the seal (the
+  //     sweep, then retire-unpublished feeding the store back). They leave here,
+  //     with the same causes and the same return to drafts, the registry kept as
+  //     the sweep kept its file, and the standing walked again when ground left.
+  //     The world's unpublish rule is read at the pinned law, never copied; an
+  //     input the store cannot answer keeps the mark and is named on the receipt.
+  //     settlement-decides.mjs is the step.
+  //
+  //     AND WHAT ITS WORDS AND LIMITS TAKE AWAY (port 5; Rivet 2026-11-22 01:11Z: "carry existing town/R11 removal
+  //     outcomes before seal; no new eligibility"). The settlement's own fold (world-settlement.mjs §
+  //     settlementTakesAway), asked over the World about to be saved, at the number this decision takes: each mark it
+  //     takes away is held by the seal (never printed, never registered, its store row kept, as w48 withheld it), and
+  //     its town returns are saved with the decision for the settlement crossing to pay (POS-1025/d, "Save first,
+  //     then pay"). A fold that cannot run here holds w48's fallback, the over-limit forecasts, and says so.
+  let prepared = null, settlementNumber = null, stances = null;
+  const takeAway = async () => {
+    prepared = await sealPrepare(q);
+    const provisional = await provisionalHeader(q);
+    ({ rows: [{ next: settlementNumber }] } = await q(NEXT_SETTLEMENT_SQL));
+    stances = await stancesAtSeal({ query: q }, { env: process.env, number: Number(settlementNumber) });
+    const header = { ...provisional, id: null, settlement: Number(settlementNumber), stances,
+      digest: `decision:${windowId}:${provisional.marks_digest}:${provisional.register_digest}:${provisional.stance_through ?? "-"}` };
+    try {
+      if (!worldRepo) throw new Error("no --world-repo: the settlement's fold has no engine here");
+      return await takeawaysBeforeSeal(q, await settlementTakesAway({ query: q }, header, { worldRepo, townRepo, decide: true }));
+    } catch (e) {
+      return takeawaysBeforeSeal(q, null, { unread: `the settlement could not be folded before its seal: ${String(e?.message ?? e).slice(0, 240)}` });
+    }
+  };
+  const decided = await settlementDecides(q, { windowId, townSha, lawSha, worldRepo, takeAway });
+  for (const s of decided.withdrawn) console.log(`  ⚑ settlement: ${s} withdrawn by its owner — retired (${WITHDRAW_CAUSE})${(decided.over_hold_printout ?? []).includes(s) ? ", over this window's hold printout (WLD-179: withdrawal wins)" : ""}`);
+  for (const s of decided.unpublished) console.log(`  ⚑ settlement: ${s} a commons mark with no stamps behind it — retired (${UNPUBLISH_CAUSE}), back to its household's drafts`);
+  for (const u of decided.unchecked ?? []) console.log(`  ⚑ settlement: ${u.slug} UNCHECKED for the commons rule (kept) — ${u.why}`);
+  if (decided.restanding) console.log(`  ⚑ settlement: the standing walked again after ${decided.withdrawn.length + decided.unpublished.length} retirement(s): ${decided.restanding.moved} moved`);
+
   // 8 · THE SEAL — the World this window leaves, copied into the store's
   //     snapshot tables in THIS transaction (054_world_snapshots.sql).
   //
@@ -770,14 +813,42 @@ try {
   //     this job holds (TOWN_STANCE_CUTOVER, from its own unit's env) against
   //     the settlement this crossing makes, recorded on the header and covered
   //     by its digest. Every reader reads the record; nothing recomputes it.
-  const stances = await stancesAtSeal({ query: q }, { env: process.env });
-  const sealed = await sealSnapshot(q, { windowId, stances });
-  console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
+  //
+  //     AND ITS NUMBER (095, POS-1025; Darko 2026-11-13, "Every settlement"): the
+  //     seal allocates the settlement this window IS, quiet or not, under the
+  //     candle lock this transaction already holds, and the decision above is made
+  //     at that number. A rolled-back window takes none; the settlement unit prints
+  //     and tags exactly this number, and a retry of its printout reuses it.
+  //
+  //     SAVED, NOT SEALED (POS-1025/d; Darko 2026-11-21, "Save first, then pay"; Wright 2026-11-22 03:26Z: "the
+  //     office seals the saved decisions in number order"). This transaction writes the header it decided, whole and
+  //     with its digest, into settlement_decisions (095 § 4), beside the removal's day and its town returns, and
+  //     commits it with the window's close. The settlement crossing pays the returns and then seals exactly this
+  //     header (world2/tools/settlement-seal.mjs): before any stamp moves the decision stands, and a retry repeats it.
+  //     The candle never waits for that seal.
+  //
+  //     THE SEAL'S HELD LIST (095 `held`; POS-1025, Wright 2026-11-22 00:13Z): what this settlement decided not to
+  //     publish, covered by its digest: what its words and limits take away (port 5), then WLD-230's filing holds.
+  //     The printout writes none of it.
+  const takenHeld = decided.taken_away ?? [];
+  const takenSlugs = new Set(takenHeld.map((h) => h.slug));
+  const filingHeld = (decided.filing_held ?? []).filter((h) => !takenSlugs.has(h.slug)).map((h) => ({ slug: h.slug, held: "filing-collision", path: h.path,
+    held_by_filing_of: h.held_by_filing_of, ...(h.held_under ? { held_under: h.held_under } : {}) }));
+  const sealHeld = [...takenHeld, ...filingHeld];
+  const decidedAt = new Date();
+  const sealed = await saveDecision(q, { windowId, stances, settlement: Number(settlementNumber), held: sealHeld,
+    day: townDate(decidedAt), townReturns: decided.town_returns ?? null, at: decidedAt, prepared });
+  const header = sealed.header;
+  for (const h of takenHeld) console.log(`  ⚑ held: ${h.slug} — taken away by the settlement (${h.held}${h.mark && h.mark !== h.slug ? `, with ${h.mark}` : ""}); not published, its store row kept`);
+  for (const h of filingHeld) console.log(`  ⚑ held: ${h.slug} — its filing ${h.path} is ${h.held_by_filing_of}'s on main (WLD-230); sealed not published, its store row kept`);
+  for (const r of decided.town_returns ?? []) console.log(`  ⚑ town return: ${r.mark} (${r.leaving.length} mark(s)) is S${sealed.settlement}'s removal, saved for the settlement crossing to pay on ${sealed.day}`);
+  if (decided.takeaway?.unread) console.log(`  ⚑ takeaway: ${decided.takeaway.unread}; held the clearings' over-limit forecasts instead (${(decided.takeaway.withheld_by_forecast ?? []).length})`);
+  console.log(`  ⚑ decision: ${header.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${String(header.digest).slice(0, 12)}; settlement S${sealed.settlement}, saved for the settlement crossing to seal`);
   // And whether the law it was sealed on carries ruling B (world#171): a cutover
   // sealed on an older law returns every stance-opposed mark with its children,
   // for good (DEPLOY.md § 072, step 0).
-  const b = lawCarriesRulingB(worldRepo, sealed.law_sha);
-  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}; law ${String(sealed.law_sha ?? "-").slice(0, 12)} ${b === true ? "carries ruling B" : b === false ? "does NOT carry ruling B (world#171)" : "unread for ruling B (no --world-repo, or the sha is not in it)"}`);
+  const b = lawCarriesRulingB(worldRepo, header.law_sha);
+  console.log(`  ⚑ stances: ${stances.counted ? "COUNTED" : "not counted"} at S${stances.settlement_inferred ?? "?"} (${stances.how}), cutover ${stances.cutover ?? "unset"}; law ${String(header.law_sha ?? "-").slice(0, 12)} ${b === true ? "carries ruling B" : b === false ? "does NOT carry ruling B (world#171)" : "unread for ruling B (no --world-repo, or the sha is not in it)"}`);
 
   // Close, pin, open the successor.
   //
@@ -817,8 +888,13 @@ try {
       ...(held.printed.length ? { hold_printed: held.printed } : {}),
       ...(held.returned?.length ? { hold_returned: held.returned } : {}),
       ...(held.notes.length ? { hold_not_printed: held.notes } : {}),
-      // The seal's own account: which snapshot this window wrote.
-      snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
+      // THE SETTLEMENT'S OWN ACCOUNT (POS-1025, step 7.5): what left canon by which door, what went back to
+      // drafts, what the commons rule could not check, and the registry it kept.
+      settlement: decided,
+      // The decision this window saved (095 § 4), which the settlement crossing seals in number order.
+      decision: { settlement: sealed.settlement, day: sealed.day, digest: header.digest, marks_digest: header.marks_digest, marks: header.marks,
+        new_versions: sealed.new_versions, register_digest: header.register_digest, register_rows: sealed.register_rows,
+        held: (header.held ?? []).length, town_returns: (sealed.town_returns ?? []).length, sealed_by: "the settlement crossing (settlement-seal.mjs)" },
       standing: {
         recomputed: standing.length, moved: moved.length,
         // Capped, because the receipt is evidence and not an export: the first

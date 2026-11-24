@@ -57,7 +57,9 @@ import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
-import { sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
+import { speakerBook, adoptSpeakerBook, bookToPlain, lineSpeaker, pickSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
+import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, replyTargetIn, closedRoomRefusal, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
+import { roomsOf, roomFor, roomsHeardFrom, roomIdOf, roomAtOf, roomKeyOf, isRoomId } from "./rooms.mjs"; // POS-1185: which room a say is in, decided once
 
 // The class the dials hang on. Named once, beside the reader, for the same
 // reason STRIDE_CLASS_NAME is: the slow-walk bug was a lookup asking for a
@@ -236,6 +238,10 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 // is not the say record: the sound class's own `thread_close_min`
 // (dynamic-emissions.mjs). `boundaries: []` is a record with no settlement known:
 // ONE epoch, and the caller discloses it.
+//
+// NOT THE SAY RECORD'S ROOMS ANY MORE (POS-1185, Darko 2026-11-22). This function still FUSES two groups when one voice hears
+// both, which is what the sound class's lull threads want. The say record's rooms are `roomsOf` (rooms.mjs): a say's room is
+// decided once, when it is spoken, and a later say within earshot of two rooms joins one and leaves the other as it was.
 export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
@@ -264,9 +270,21 @@ export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, bo
   return [...closed, ...open].sort((a, b) => a.latest - b.latest);
 }
 
+// POS-1152: the mark a room's ROOT started at, as recorded: the founding say's own (the say whose id names the room), else the copy a later
+// say of that room carried when the founder left memory. A later say's own mark, a reply, or a missing record lends nothing: unknown stays absent.
+function rootPlaceOf(cluster) {
+  const voices = cluster.voices;
+  const root = cluster.root ?? `t${voices[0].at}-${voices[0].handle}`;
+  // POS-1185: the founder is the say whose own id is the room's, to the second (the record reads an instant to the second; a recorded name keeps milliseconds)
+  const key = roomKeyOf(root);
+  const founder = voices.find((v) => roomKeyOf(roomIdOf(v)) === key && v.reply_to == null && markIdOf(v.place_mark));
+  return founder?.place_mark ?? voices.find((v) => v.root === root && markIdOf(v.root_place_mark))?.root_place_mark ?? null;
+}
+
 function threadOf(cluster, { live, voiceCap }) {
   const voices = cluster.voices;
   const first = voices[0];
+  const placeMark = rootPlaceOf(cluster);
   const last = voices[voices.length - 1];
   const participants = [];
   for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
@@ -284,7 +302,8 @@ function threadOf(cluster, { live, voiceCap }) {
     if (v.y > y1) y1 = v.y;
   }
   return {
-    id: `t${first.at}-${first.handle}`,
+    id: cluster.root ?? `t${first.at}-${first.handle}`, // POS-1185: the room's own name (rooms.mjs § roomsOf); a bare list of voices is named by its first
+    ...(placeMark ? { place_mark: placeMark } : {}), // POS-1152: where the conversation STARTED (its root), never where it is now (`place`, `at` stay the latest voice's)
     live,
     // place words lead; the coordinates are the detail line. Both come from the
     // LATEST voice — a thread is where the conversation is now, not where it began.
@@ -371,6 +390,9 @@ export const EARSHOT_MEMO_MS = 1000;
 export function createVoices({
   standpoint,
   place = async () => null,
+  // `placeMark({ x, y })` (POS-1152): the canonical mark id a ROOT say starts at, or null. Asked only for a say that answers no one, never for a say
+  // inside a dungeon room; null is "unknown" and is never replaced by a guess. The office derives it at the write; no caller supplies it.
+  placeMark = async () => null,
   onSpoke = null,
   // `beforeSpoke(voice, { standAs, household })` — the PEN that must commit
   // BEFORE the log line lands (World 2.0's flipped say lane, W2_PEN=say). It
@@ -459,51 +481,19 @@ export function createVoices({
   // names the cut rather than passing a short page off as the whole window.
   let cutAt = null;
   // A ROOM KEEPS ITS NAME, AND ITS MEMBERS, WHEN ITS FRONT LEAVES MEMORY (CORE-97). A room's id is its first say's (`t<at>-<handle>`), and a room that renews at every
-  // settlement outlives the memory's first say. So every voice names its room's ROOT at the moment it is spoken, on its own log line (`root`, and `merged` when
-  // the say joined two rooms that had different roots): the log is the road, hydrate reads the names back with no clustering, and an old line without one still reads.
-  // `parent` is a union-find over root ids (earlier root wins), only for the merges the log recorded; a bridge that has left memory leaves its two sides still one room.
-  const parent = new Map();
-  const rootAtOf = (id) => Number(/^t(\d+)-/.exec(id)?.[1]);
-  const ownId = (v) => `t${v.at}-${v.handle}`;
-  function findRoot(id) {
-    let r = id;
-    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r);
-    for (let c = id; c !== r;) { const n = parent.get(c); parent.set(c, r); c = n; }
-    return r;
-  }
-  function unionRoots(a, b) {
-    const ra = findRoot(a), rb = findRoot(b);
-    if (ra === rb) return ra;
-    const [lo, hi] = rootAtOf(ra) <= rootAtOf(rb) ? [ra, rb] : [rb, ra];
-    parent.set(hi, lo);
-    return lo;
-  }
-  const rootOfVoice = (v) => findRoot(v.root ?? ownId(v)); // an old line stands for itself, resolved through any join the log recorded for it
-  // a cluster's root: the earliest root among its voices (an old line without one stands for itself)
-  function clusterRoot(c) {
-    let best = null;
-    for (const v of c.voices) { const r = rootOfVoice(v); if (best == null || rootAtOf(r) < rootAtOf(best)) best = r; }
-    return best;
-  }
-  // The map only needs the joins a HELD voice still names: past twice the memory, resolve every held voice's root to its final root and keep just those.
-  function pruneRoots(held) {
-    if (parent.size <= 2 * memoryMax) return;
-    const keep = new Map();
-    for (const v of held) {
-      const id = v.root ?? ownId(v); // an old line's join is recorded against its own id
-      const r = findRoot(id);
-      if (r !== id) keep.set(id, r);
-    }
-    parent.clear();
-    for (const [k, r] of keep) parent.set(k, r);
-  }
+  // settlement outlives the memory's first say. So every voice names its room at the moment it is spoken, on its own log line (`root`) and, since POS-1185, on its
+  // act (`payload.conversation`): the log is the road, hydrate reads the names back, and an old line without one still reads (rooms.mjs names it as it was when spoken).
+  // A ROOM IS THE SAYS THAT NAME IT (POS-1185, Darko 2026-11-22: "we simply dont merge separate conversations just because there is a geometric linker later on").
+  // Until then a say that joined two rooms recorded `merged`, and memory kept the two as one room from then on. A `merged` an old line carries is no longer read:
+  // the says a room held before its bridge are that room's own again, under its own id, and the bridge and the says after it stay in the room they named.
+  // THE SAYS BETWEEN A ROOM DECIDED AND ITS LINE WRITTEN: a say's room is named before its act is penned (`speak`), and the pen is awaited. A second say arriving in
+  // that moment must still hear the first, or two residents opening a party in the same breath would each found a room. `pending` holds them until they land.
+  const pending = new Set();
   function trimmed(list) {
-    if (list.length <= memoryMax) { pruneRoots(list); return list; }
+    if (list.length <= memoryMax) return list;
     const cut = list.length - memoryMax;
     cutAt = list[cut - 1].at;
-    const kept = list.slice(cut);
-    pruneRoots(kept);
-    return kept;
+    return list.slice(cut);
   }
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
@@ -549,9 +539,11 @@ export function createVoices({
         if (!v.handle || !Number.isFinite(at) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
         const id = sayIdOf(v.id), replyTo = sayIdOf(v.reply_to); // POS-1035: the act number and the stored parent, when the line carries them
         voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}),
-          ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}),
-          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}) });
-        if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
+          ...(isRoomId(v.root) ? { root: v.root } : {}), // the room this say named when it was spoken (a `merged` beside it is history: POS-1185)
+          ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
+          // POS-1152: the recorded start-place marks, as the log line held them (a root say's own; a joiner's copy of its room's). Old lines have neither.
+          ...(replyTo == null && markIdOf(v.place_mark) ? { place_mark: v.place_mark } : {}), ...(markIdOf(v.root_place_mark) ? { root_place_mark: v.root_place_mark } : {}),
+          ...(typeof v.stood_with === "string" && v.stood_with ? { stood_with: v.stood_with } : {}) }); // POS-1132: the shoulder this say was spoken on, when the line kept it
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
     voices.sort((a, b) => a.at - b.at);
@@ -561,19 +553,12 @@ export function createVoices({
 
   function append(voice, spoken = null) {
     hydrate();
+    // POS-1185: the say arrives already named (`speak` § nameRoom decided its room before its act was penned); a voice handed in
+    // without a name founds its own room, so no line is ever written without one.
+    if (!isRoomId(voice.root)) voice.root = roomIdOf(voice);
+    pending.delete(voice);
     voices.push(voice);
     voices = trimmed(voices);
-    // the room this say joins names it: the clusters are the ones the reply's snapshot is about to read (memoised, so no second walk)
-    const mine = (clusterByRoom(voices, boundariesAt(now())).get(voice.room ?? null) ?? []).find((c) => c.voices.includes(voice));
-    let merged = [];
-    if (mine) {
-      // the roots of the rooms this say joins are the OTHER voices' (its own fresh id is no join): none, and it founds a room under its own id
-      const roots = [...new Set(mine.voices.filter((v) => v !== voice).map(rootOfVoice))];
-      const lead = roots.length ? roots.reduce((a, b) => (rootAtOf(b) < rootAtOf(a) ? b : a), roots[0]) : ownId(voice);
-      for (const r of roots) if (r !== lead) unionRoots(lead, r);
-      merged = roots.filter((r) => r !== lead);
-      voice.root = lead;
-    }
     const file = pathOf();
     const line = `${JSON.stringify({
       at: new Date(voice.at).toISOString(),
@@ -585,10 +570,12 @@ export function createVoices({
       aboard: voice.aboard,
       ...(voice.room ? { room: voice.room } : {}),
       ...(voice.root ? { root: voice.root } : {}),
-      ...(merged.length ? { merged } : {}),
+      ...(voice.place_mark ? { place_mark: voice.place_mark } : {}),            // POS-1152: this root say's own start-place mark
+      ...(voice.root_place_mark ? { root_place_mark: voice.root_place_mark } : {}), // POS-1152: the room's recorded start-place, carried by a joiner
       // POS-1035, additive: the say's act number (when the pen returned one) and the say it answers. Old lines have neither and stay a timeline.
       ...(voice.id != null ? { id: voice.id } : {}),
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
+      ...(voice.stood_with ? { stood_with: voice.stood_with } : {}), // POS-1132: whom a human stood with when they spoke (an old line has none)
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -725,7 +712,7 @@ export function createVoices({
     const marks = boundariesAt(t);
     for (const list of clusters.values()) {
       for (const c of list) {
-        const began = rootAtOf(c.root) ?? c.voices[0].at;
+        const began = Number.isFinite(roomAtOf(c.root)) ? roomAtOf(c.root) : c.voices[0].at;
         if (began >= since || !roomOpen(c.latest, t, marks)) continue;
         const lost = began < c.voices[0].at; // the room began earlier than its first voice still held
         for (const v of c.voices) { out.add(v); if (lost) out.cut.add(v.handle + "|" + v.at); }
@@ -741,19 +728,6 @@ export function createVoices({
     roomMemo = { key, list, clusters };
     return clusters;
   }
-  // Two memory clusters that name the same root are one room whose bridge has left memory: they stay one (membership, not only the id).
-  function mergedByRoot(cs) {
-    const by = new Map();
-    const out = [];
-    for (const c of cs) {
-      c.root = clusterRoot(c);
-      // only a root a voice RECORDED joins clusters: an old line's own id is no one else's name (two says can share an instant)
-      const host = c.voices.some((v) => v.root) ? by.get(c.root) : null;
-      if (host) { host.voices.push(...c.voices); host.voices.sort((a, b) => a.at - b.at); host.latest = Math.max(host.latest, c.latest); }
-      else { if (c.voices.some((v) => v.root)) by.set(c.root, c); out.push(c); }
-    }
-    return out.sort((a, b) => a.latest - b.latest);
-  }
   function groupByRoom(list) {
     const byRoom = new Map();
     for (const v of list) {
@@ -767,8 +741,45 @@ export function createVoices({
     stats.clustered += 1; // walks of the held list: one per distinct list (the append's, which the reply's snapshot reads again)
     const byRoom = groupByRoom(list);
     const clusters = new Map();
-    for (const [key, spoken] of byRoom) clusters.set(key, mergedByRoot(clusterVoices(spoken, { earshotM, boundaries })));
+    // POS-1185: a room is the says that name it (rooms.mjs § roomsOf); a say with no recorded name is named as it was when spoken
+    for (const [key, spoken] of byRoom) clusters.set(key, roomsOf(spoken, { earshotM, boundaries }));
     return clusters;
+  }
+
+  // POS-1185: THE ROOM, DECIDED ONCE, BEFORE THE ACT IS WRITTEN. A reply joins the room of the say it answers (`link`, resolved
+  // against the open rooms the speaker can hear); any other say joins the room of the nearest voice in earshot among the open rooms
+  // (ties to the most recent), or founds its own. The name rides the voice from here: to the act (`payload.conversation`), the log
+  // line (`root`) and memory. Dungeon rooms keep their walls: only the says spoken in the speaker's own room (the open, for none) are heard.
+  function nameRoom(voice, t, link) {
+    const boundaries = boundariesAt(t);
+    const rooms = (pending.size ? clusterByRoomUncached([...hydrate(), ...pending], boundaries) : clusterByRoom(hydrate(), boundaries)).get(voice.room ?? null) ?? [];
+    const joined = link
+      ? rooms.find((c) => c.voices.some((v) => v.id === link.id))
+      : roomFor(voice, rooms, { earshotM, boundaries, at: t });
+    voice.root = joined?.root ?? roomIdOf(voice);
+    // POS-1152: a say that joins a room carries its room's recorded start-place beside the room's name, so the room keeps its place when its
+    // founding say leaves memory. Read only from the founder (the say that named the room) or an earlier joiner's copy; never from this say.
+    const startedAt = joined ? rootPlaceOf(joined) : null;
+    if (startedAt) voice.root_place_mark = startedAt;
+  }
+
+  /** The closed-conversation refusal when the say a `reply_to` names is held in a room that is over at `t`; else null (not held, or its room is still open). */
+  function closedConversationOf(replyTo, here, t) {
+    const key = here.room ?? null;
+    const target = replyTargetIn(hydrate().filter((v) => (v.room ?? null) === key), replyTo);
+    if (!target) return null;
+    const boundaries = boundariesAt(t);
+    const room = (clusterByRoom(hydrate(), boundaries).get(key) ?? []).find((c) => c.voices.includes(target));
+    return room && !roomOpen(room.latest, t, boundaries) ? closedRoomRefusal(target.id) : null;
+  }
+
+  /** The says of every open room `here` can hear, oldest first: what a reply may answer (POS-1185; call 21's earshot rule). */
+  function heardRoomVoices(here, t, clusters0, boundaries = boundariesAt(t)) {
+    const key = here.room ?? null;
+    const ear = { x: here.at.x, y: here.at.y, aboard: Boolean(here.aboard) };
+    return roomsHeardFrom(ear, clusters0?.get(key) ?? [], { earshotM, boundaries, at: t })
+      .flatMap((c) => c.voices.filter((v) => (v.room ?? null) === key))
+      .sort((a, b) => a.at - b.at);
   }
 
   function heardBy(here, snap) {
@@ -793,6 +804,7 @@ export function createVoices({
   // for a read answered off the main thread, where the voices window is not:
   // the main thread takes it at the call's admission and hands it over.
   async function heardAt(at, { aboard = false, since = null, cap = hearMax, exclude = null, snapshot: carried = null, room: earRoom = null } = {}) {
+    if (carried) adoptSpeakerBook(carried.speakers ?? null); else await speakerBook(); // POS-1132: a worker takes the main thread's book; the main thread reads its own
     const t = carried?.t ?? now();
     const snap = carried ?? await snapshot(t);
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since) && v.handle !== exclude;
@@ -801,6 +813,7 @@ export function createVoices({
       handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
       ...(v.id != null ? { id: v.id } : {}), // POS-1035: the say's id, optional and additive (call 24)
+      ...lineSpeaker(v), // POS-1132: the human's chosen presentation and recorded shoulder (nothing on a resident's line)
     }));
   }
 
@@ -815,7 +828,7 @@ export function createVoices({
   function earshotSnapshot() {
     const t = now();
     if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
-    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}) }, x, y, structural })) }));
+    const p = snapshot(t, { clusters: false }).then(async (snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}), ...(v.stood_with ? { stood_with: v.stood_with } : {}) }, x, y, structural })), speakers: bookToPlain(await speakerBook()) }));
     const mine = { t, p };
     memo = mine;
     p.catch(() => { if (memo === mine) memo = null; });
@@ -869,9 +882,9 @@ export function createVoices({
     // POS-886: `clusters0` is the snapshot's record clustered room by room (`clusterByRoom`), so the reader takes their own room's
     // clusters, which were grouped from that room's voices alone. The filter after it cannot change them; it stays as the WLD-74 guard.
     const clusters = (clusters0?.get(here.room ?? null) ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
-    const mine = clusters.find((c) =>
-      roomOpen(c.latest, t, boundaries) &&
-      c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
+    // POS-1185: where several open rooms are within earshot, "the room here" is the one a say from here would join (rooms.mjs §
+    // roomFor: the nearest voice's room, ties to the most recent). The others stay their own rooms; what they say is still HEARD.
+    const mine = roomFor({ x: here.at.x, y: here.at.y, aboard: Boolean(here.aboard) }, clusters, { earshotM, boundaries, at: t });
     if (!mine) return null;
     const voices = mine.voices;
     const participants = [];
@@ -879,6 +892,7 @@ export function createVoices({
     return {
       ...(boundaries.length ? {} : { settlement_disclosed: "settlements not yet read: until this office has read the last settlement from the world repo, every conversation here reads as open" }),
       started: agoWords(t - voices[0].at).replace(/^just now$/, "moments ago") + " (" + new Date(voices[0].at).toISOString() + ")",
+      ...(rootPlaceOf(mine) ? { place_mark: rootPlaceOf(mine) } : {}), // POS-1152: where this room's conversation started, as recorded
       participants,
       voice_count: voices.length,
       latest_ms: voices.at(-1).at,
@@ -933,6 +947,7 @@ export function createVoices({
   // the final text; `trailing` are fields this module adds after the reply (a nonce receipt's), placed last as they always were.
   async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true, circleAsk = null, spokenSay = null, doorExtra = null, trailing = {} } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
+    await speakerBook(); // POS-1132: the book the sync line shapers below read
     snap ??= await snapshot(t);
     const everHeard = heardBy(here, snap);
     const heard = everHeard.filter(fresh);
@@ -985,6 +1000,7 @@ export function createVoices({
         // the instant it was spoken, on the record's own clock (#3350, Kogane):
         // the same `at_ms` a `conversation.record` line carries
         at_ms: v.at,
+        ...lineSpeaker(v), // POS-1132
       })),
     };
     // ALWAYS present, both ways. `spoke` used to appear only when true, so a
@@ -1032,10 +1048,10 @@ export function createVoices({
         const fresh = sinceRead(roomVoices, since, { decorate });
         // The since-reply's `record` keeps ITS line, field for field (`handle, standing, said, ago, at_ms`, then `heard`), and gains
         // only the additive `id`, `reply_to`, `circle` and — on an earlier parent carried along — `context: true` (call 24).
-        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard }) => ({
+        const recordLine = ({ handle: h, standing: s, said, at_ms: atMs, id, reply_to: replyTo, circle, context, heard, place_mark: placeMark, ...line }) => ({
           handle: h, standing: s, said, ago: agoWords(t - atMs), at_ms: atMs,
           ...(heard ? { heard } : {}), ...(id != null ? { id } : {}), ...(replyTo != null ? { reply_to: replyTo } : {}),
-          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}) });
+          ...(circle != null ? { circle } : {}), ...(context ? { context } : {}), ...(placeMark ? { place_mark: placeMark } : {}), ...pickSpeaker(line) });
         out.conversation = { ...shape, record: fresh.lines.map(recordLine), ...(fresh.context_says ? { context_says: fresh.context_says } : {}), ...(fresh.broken ? { broken: fresh.broken } : {}),
           note: fresh.lines.length ? "`record` is every say since your last call, plus — marked context: true — the earlier say each new reply answers" : "nothing new since your last call — the room's shape rides above; say something, or check back in a minute" };
       } else {
@@ -1302,7 +1318,8 @@ export function createVoices({
     }
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
-    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}) };
+    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}),
+      ...(standAs && standAs !== handle ? { stood_with: standAs } : {}) }; // POS-1132: the same fact voiceEntry records as payload.stood_with
     // THE PARENT, RESOLVED BEFORE THE PEN WRITES (POS-1035, calls 3, 21, 25). An explicit `reply_to` (an id, or a handle plus a
     // time) or — with none — a name in the words resolves against the ROOM the speaker is speaking into, and nowhere else: a
     // say outside it is refused, never linked (call 21's earshot rule; the room is POS-779's, carried over a settlement by
@@ -1313,19 +1330,39 @@ export function createVoices({
       return refused("this office is not keeping say ids, so a reply has nothing to point at",
         "say ids are the act numbers of the town's say record, written only where the say lane writes acts; speak without reply_to");
     if ((replyTo != null && replyTo !== "") || mightName(body, handle, t)) {
-      const room = openConversationAt(here, t, clusterByRoom(hydrate(), boundariesAt(t)));
-      link = resolveReplyTo(room?.room_voices ?? [], { replyTo, speaker: handle, text: body });
-      if (link?.refused) return refused(link.refused.defect, link.refused.hint);
+      // POS-1185: a reply may answer a say in ANY open room the speaker can hear (rooms no longer fuse, so two can be in earshot),
+      // and it joins that say's room (`nameRoom` below)
+      link = resolveReplyTo(heardRoomVoices(here, t, clusterByRoom(hydrate(), boundariesAt(t))), { replyTo, speaker: handle, text: body });
+      if (link?.refused) {
+        // WHY it is refused decides what the caller can do: a say whose conversation has CLOSED cannot be reached by walking back
+        // (WLD-242: such a reply is refused, and nothing reopens the room), so it gets its own words; one that is open but out of
+        // reach keeps the walk-back hint. Asked only after the refusal, over the says this office still holds for the speaker's room.
+        const closed = closedConversationOf(replyTo, here, t);
+        const why = closed ?? link.refused;
+        return refused(why.defect, why.hint);
+      }
       if (link) voice.reply_to = link.id;
     }
+    // POS-1152: a say that answers no one starts a circle, and the mark it starts at is recorded on it, once. A reply never carries one (it
+    // would be a later place borrowing the root's name), and a say inside a dungeon room records none (its place stays with its room).
+    if (voice.reply_to == null && !voice.room) {
+      let mark = null;
+      try { mark = await placeMark({ x: here.at.x, y: here.at.y }); } catch { mark = null; }
+      if (markIdOf(mark)) voice.place_mark = mark;
+    }
+    // POS-1185: the room is named here, once, after every await that could move the room under it and before the pen writes the act
+    nameRoom(voice, t, link);
     if (beforeSpoke) {
       // The pen first, refusable: a refusal here is the answer, and the log
       // never learns the voice existed (R2: nothing written anywhere else).
       // `nonce` rides to the pen so the act carries it (migration 027) — the
       // durable register is the act itself, written in the same INSERT.
       // POS-1035: a pen that writes answers `{ id }`, the act number — the say's id from here on.
-      const penned = await beforeSpoke(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
-      if (penned?.error) return penned;
+      pending.add(voice); // POS-1185: a say arriving while this one is penned still hears it (never two founders for one opening)
+      let penned;
+      try { penned = await beforeSpoke(voice, { standAs, household, ...(nonce ? { nonce } : {}) }); }
+      catch (e) { pending.delete(voice); throw e; }
+      if (penned?.error) { pending.delete(voice); return penned; }
       const id = sayIdOf(penned?.id);
       if (id != null) voice.id = id;
     }
@@ -1374,7 +1411,8 @@ export function createVoices({
     const boundaries = boundariesAt(t);
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
-    const clusters = mergedByRoot(clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries }));
+    // POS-1185: the rooms are the says that name them (rooms.mjs § roomsOf): a later say within earshot of two rooms fuses nothing
+    const clusters = roomsOf(hydrate().filter((v) => !v.room), { earshotM, boundaries });
     // POS-1035: a named room or circle, found among every thread memory holds — never only the page it would fall on. The same
     // rooms, ids and liveness as the page below (CORE-97: a room keeps its root's id, and is live while roomOpen holds).
     if (find) {
@@ -1382,7 +1420,7 @@ export function createVoices({
         now: new Date(t).toISOString(),
         earshot_m: earshotM,
         settlement_since: boundaries.length ? new Date(since).toISOString() : null,
-        find: findConversation(clusters, find, { thread: (c) => ({ ...threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), ...(c.root ? { id: c.root } : {}) }), budget: circleBudget, source: "memory" }),
+        find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), budget: circleBudget, source: "memory" }),
       };
     }
     const live = [];
@@ -1405,8 +1443,8 @@ export function createVoices({
       // POS-951 (little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew): the two things a listener on this feed needs that nothing here said
       place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.",
       voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
-      closed: page.map((c) => ({ ...pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax })),
+      closed: page.map((c) => pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
@@ -1460,5 +1498,5 @@ export function createVoices({
     now,
   };
 
-  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _aliases: () => parent.size, _presence: presence };
+  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _presence: presence };
 }

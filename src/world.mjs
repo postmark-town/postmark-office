@@ -66,6 +66,7 @@ import { createVoices, EARSHOT_M, HEAR_MAX, HEARING_WINDOW, RECORD_KEPT_AT } fro
 import { findOf } from "./circles.mjs"; // POS-1035: ?circle= / ?room= on the conversations read
 import { createHearingWindow } from "./hearing-window.mjs"; // earshot: speech at a position (the party line)
 import { createSayPush, waitMsOf, serveSayStream } from "./say-push.mjs"; // POS-265: the waiters — a listen that waits, and the page's stream
+import { placementRelations } from "./placement-relations.mjs"; // POS-1156: what a placement overlaps and contains, beside its parent
 import { householdLookup, humanHandFor, pinnedLoginOf } from "./households.mjs"; // the human speaker's label wears the town's name, never the login
 import { householdLockPath, poolEnabled, pushDraftBranch, withDraftLease } from "./world-pool.mjs";
 import { NOTE_KEPT, noteOf, writeNote } from "./note-store.mjs"; // POS-392: the note's one home is the store
@@ -1992,10 +1993,18 @@ function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
       place: voice.place ?? null,
       ...(voice.aboard ? { aboard: true } : {}),
       ...(voice.room ? { room: voice.room } : {}), // WLD-74: spoken inside a dungeon room: its record is shown only to readers in that room
+      // POS-1152: the mark this conversation's ROOT started at, recorded once on that root say (no reply_to), derived by the office at the
+      // write (voices.mjs § speak), never supplied by a caller. Public game-place metadata like `place`; absent when unknown.
+      ...(voice.place_mark && voice.reply_to == null && !voice.room ? { place_mark: voice.place_mark } : {}),
       ...(standAs ? { stood_with: standAs } : {}),
       // POS-1035 (call 3): the say this one answers, by act number — the ONE stored edge circles are derived from. Public
       // like the words: it leaves the box in the notary's archive with the rest of the payload.
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
+      // POS-1185 (Darko 2026-11-22): the conversation this say joined, decided once when it was spoken (voices.mjs § nameRoom) and
+      // recorded here so no later say can change it: the id of the room, `t<its first say's instant, ms>-<that speaker>` — its own
+      // id when it founds one. A room is the says that carry its id. Public like the words and `place`. An act written before this
+      // has none, and is read as it was named when spoken (rooms.mjs). Not a place: POS-1152's `place_mark` is where a root say stood.
+      ...(typeof voice.root === "string" && voice.root ? { conversation: voice.root } : {}),
     },
     effect: "the words were spoken where the actor stood and heard by whoever was within earshot; hearing fades, the record does not",
     writtenAt: new Date(voice.at).toISOString(),
@@ -2133,6 +2142,8 @@ hearing.refresh().catch(() => {});
 export const hearingWindowAt = (at) => hearing.read(at);
 /** Every published settlement this office keeps in memory (ms, ascending): where a conversation splits (POS-779). */
 export const settlementsKnown = () => hearing.settlements();
+/** Every published settlement world main holds (ms, ascending), for the conversations RECORD's reads (POS-1185): no room is too old to open. */
+export const settlementsRecorded = () => hearing.recorded();
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
@@ -2158,6 +2169,7 @@ const voices = createVoices({
     return { handle, placed: true, x: ORIGIN.x, y: ORIGIN.y, aboard: false, moving: false };
   },
   place: (at) => placeWords(at),
+  placeMark: (at) => placeMarkAt(at), // POS-1152: the conversation's start-place mark, one derivation with the witnessed line
   // Stage 2's dual-write. The voices log is written first and is untouched —
   // it stays the ruled durable operator record it has been since the earshot
   // ruling. This adds a SECOND consumer of the same fact: an emission instance
@@ -2378,6 +2390,11 @@ async function sayAct(args = {}, key = null) {
 // answer (POS-265 lifted it out of worldSayHuman so the page's stream stands
 // the human exactly where their say would). Returns `{ speaker, standAs }`,
 // or a bounce.
+// POS-1132: the human's stand asks where a housemate stands through ONE function, so a test can say who is placed instead of
+// depending on whether this environment has a World clone. Unset (always, outside a test) it is residentStandpoint, unchanged.
+let _humanStandpointSeam = null;
+const humanStandpointOf = (handle) => (_humanStandpointSeam ?? residentStandpoint)(handle);
+export const __setHumanStandpointForTest = (fn) => { _humanStandpointSeam = fn ?? null; };
 async function humanStand(args = {}, key = null) {
   if (args.handle)
     return { error: "bounce", defect: "one voice at a time",
@@ -2420,16 +2437,24 @@ async function humanStand(args = {}, key = null) {
     if (!handles.includes(w))
       return { error: "bounce", defect: `"${w}" is not one of your residents`,
         hint: `with: names the housemate you stand beside — one of ${handles.join(", ")}` };
-    const here = await residentStandpoint(w).catch(() => null);
-    if (!here?.placed)
-      return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
-        hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    const here = await humanStandpointOf(w).catch(() => null);
+    if (!here?.placed) {
+      // POS-1132 (Wright, CORE-122 03:06Z): "The office accepts an explicit `with` for the unplaced resident it would pick itself
+      // (speaking from the Origin)." Omitting `with` when NOBODY is placed picks the first handle, whom the voice's standpoint stands at
+      // the Origin; the always-with box sends that disclosed resident back, so it is accepted, and ONLY it: any other unplaced
+      // housemate, or this one while another is placed (the office would pick the placed one), is still refused.
+      const first = handles[0];
+      const nobodyPlaced = w === first && (await Promise.all(handles.map((h) => humanStandpointOf(h).catch(() => null)))).every((p) => !p?.placed);
+      if (!nobodyPlaced)
+        return { error: "bounce", defect: `the world doesn't know where ${w} stands yet`,
+          hint: "pick a housemate the world can place, or omit with: and the office chooses one" };
+    }
     standAs = w;
   } else {
     let firstPlaced = null;
     const placed = [];
     for (const h of handles) {
-      const here = await residentStandpoint(h).catch(() => null);
+      const here = await humanStandpointOf(h).catch(() => null);
       if (!here?.placed) continue;
       placed.push(h);
       if (here.aboard) { standAs = h; break; }
@@ -2442,6 +2467,8 @@ async function humanStand(args = {}, key = null) {
   }
   return { speaker, standAs };
 }
+/** The one answer, as a test asks it (POS-1132): who the human is and whose body they borrow, with no voice read after it. */
+export const __humanStandForTest = humanStand;
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function worldSayHuman(args = {}, key = null) { return perceived(() => sayHumanAct(args, key)); }
@@ -4342,22 +4369,43 @@ export async function witnessStamp(handle) {
  * the-witnessed-line's serialization, so a `say` row and a `leave-mark` row
  * cannot come to mean different things by the same field.
  */
+// The ground a point stands on, in one world: the containment chain and the innermost-ground chain over it.
+// NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has no place for the act to compose
+// against, so the anchor is the innermost ground that is not a thing (the-town/the-not-ground: a thing is not
+// ground). Shared by the witnessed line and by the conversation's start-place mark (POS-1152): one derivation.
+async function groundFrameOf(w) {
+  const { verbs } = await mods();
+  const marks = w.marks ?? [];
+  const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
+  const chainAt = (p) => verbs.containmentChain(p, marks);
+  const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
+  const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+  const byId = new Map(marks.map((m) => [m.id, m]));
+  const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
+  return { byId, centreOf, chainAt, groundAt };
+}
+
+/**
+ * THE MARK A CONVERSATION STARTED AT (POS-1152; Wright 2026-11-19 21:51Z: "the place where each conversation started, and only
+ * when that place is a recorded mark id"). The innermost non-thing ground at the write point, when it is a real mark of this
+ * world. The world frame is no mark to picture, and a point on no ground, an unplaced speaker or a world this office could not
+ * read answer null: unknown stays absent, and nothing is guessed from a name, a coordinate or a later place.
+ */
+export async function placeMarkAt(here, known = null) {
+  try {
+    const w = known ?? await world();
+    const { byId, centreOf, groundAt } = await groundFrameOf(w);
+    const at = anchorAt(here, { chain: groundAt(here), centreOf });
+    if (at.unplaced || !at.anchor || at.anchor === WORLD_FRAME || !byId.has(at.anchor)) return null;
+    return at.anchor;
+  } catch { return null; }
+}
+
 export async function witnessStampAt(handle, here, known = null) {
   const unread = (reason) => ({ at: { anchor: null, dx: null, dy: null, unplaced: true }, witnesses: { source: "unread", reason, list: [] } });
   try {
     const w = known ?? await world();
-    const { verbs } = await mods();
-    const marks = w.marks ?? [];
-    const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
-    const chainAt = (p) => verbs.containmentChain(p, marks);
-
-    // NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has
-    // no place for the act to compose against, so the anchor is the innermost
-    // ground that is not a thing (the-town/the-not-ground: a thing is not ground).
-    const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
-    const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
-    const byId = new Map(marks.map((m) => [m.id, m]));
-    const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
+    const { centreOf, chainAt, groundAt } = await groundFrameOf(w);
     const at = anchorAt(here, { chain: groundAt(here), centreOf });
 
     // `presentNear` is null when the presence layer is switched off at this
@@ -4562,7 +4610,7 @@ async function escrowBehindMark(mark) {
  * nothing behind it — the same reason `stamps: 0` is a deliberate putting-
  * forward there and not a no-op.
  */
-export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0 } = {}) {
+export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0, refiling = false } = {}) {
   const min = Number(groundMin);
   const behind = Number(escrowBehind) || 0;
   const byStake = staking === true && Number(stamps) >= min;
@@ -4572,13 +4620,17 @@ export function putForwardVerdict({ staking = false, stamps = 0, amending = fals
   // the mark's own escrow, which it is not: escrow_behind and escrow_after stay the mark's.
   const backing = Number(groundBacking) || 0;
   const byGround = amending === true && typeof backedBy === "string" && backing >= min;
+  // POS-990/a: a claim already put forward, re-filed where its thing was set down, stays put forward whatever the
+  // escrow behind it, because the claim moves with its thing and the settlement judges it there (journalLeaveMark)
+  const byRefiling = amending === true && refiling === true;
   return {
-    put_forward: byStake || byStanding || byGround,
+    put_forward: byStake || byStanding || byGround || byRefiling,
     // WHICH FACT CARRIED IT, for the sentence and for a reader of the log. Not
     // a tiebreak: a staked amendment on a backed mark is both, and the stake is
     // named because it is the thing the author just did.
-    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : null,
+    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : byRefiling ? "set-down" : null,
     ...(byGround && !byStake && !byStanding ? { backed_by: backedBy, ground_backing: backing } : {}),
+    ...(byRefiling ? { refiled: true, ground_min: min } : {}),
     escrow_behind: amending === true ? behind : 0,
     // WHAT THE CALL LEAVES (postmark#3593, kogane; Darko 2026-10-09). `stamps:`
     // ADDS to the stake, so the escrow behind the mark after this act is what
@@ -4601,6 +4653,12 @@ export function amendmentPublishNote(verdict) {
   if (verdict?.put_forward !== true) return null;
   const behind = Number(verdict.escrow_behind) || 0;
   const staked = Number(verdict.staked) || 0;
+  // POS-990/a: a claim re-filed where its thing was set down is judged at the next settlement, which can refuse it
+  if (verdict.refiled === true) {
+    const with_ = behind > 0 ? `with the ✦${behind} in escrow behind it` : "with no stamps in escrow behind it";
+    const commons = behind < (Number(verdict.ground_min) || 0) ? ": off your household's own ground, a mark stands only with a stamp behind it" : "";
+    return `it is re-filed here, in place of the claim put forward where it stood, ${with_}, and the next settlement judges it on this ground, which can refuse it${commons}.`;
+  }
   if (staked > 0) {
     const after = Number(verdict.escrow_after) || behind + staked;
     return behind > 0
@@ -4912,8 +4970,14 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // own escrow does not carry is judged by the escrow behind that ground, read by the same door and as safely.
     const backedBy = amending && ground?.backing && escrowBehind < (ground?.min ?? 1) ? ground.backing : null;
     const groundBacking = backedBy ? await escrowBehindMark(backedBy) : 0;
+    // A CLAIM PUT FORWARD MOVES WITH ITS THING (POS-990/a, Darko 2026-11-13: "Moves with it"): the hold door's
+    // set-down (`_set_down`, which only the hold door passes) of a claim already pending and not yet in canon is
+    // re-filed put forward, and the clearing judges it on the new ground. Ruled here, it would be the author's
+    // draft whenever the escrow behind it did not clear that ground, and the claim at the old place would stand
+    // and be judged there; the new ground's refusal is the settlement's to make, with the stamps the claim has.
+    const refiling = amending && clean._set_down != null && priorLive?.claim_status === "pending" && !priorCanon;
     const verdict = putForwardVerdict({
-      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking });
+      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking, refiling });
     const putForward = verdict.put_forward;
 
     // The refusal is a refusal to PUBLISH, never a refusal to save: the
@@ -4931,6 +4995,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // carries, so wildcat's previewed parcel answered "the Gloaming" and the same
     // geometry written answered null, with an overhang note riding on the null.
     const parent = await nestingParent({ ...declaration, id }, [...canon.marks, ...live]);
+    const relations = await placementRelationsOf({ ...declaration, id }, [...canon.marks, ...live]); // POS-1156: overlaps + contains, the same snapshot
     // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): SAY IT, WRITE NOTHING.
     // Every guard above has run and the verdict is computed; what a real leave
     // would do from here is stamp the witness line, append the row and hand the
@@ -4942,7 +5007,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     if (clean.preview === true) {
       const landing = pathFor({ ...declaration, id }, { publishedPathOf: filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))) });
       return {
-        preview: true, id, kind: clean.kind, parent, would: amending ? "amend" : "leave",
+        preview: true, id, kind: clean.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
         at: clean.at ?? null, extent: clean.extent ?? null,
         dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
         branch: draftBranch(household), put_forward: putForward,
@@ -5028,7 +5093,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
       },
     });
     return {
-      id, kind: clean.kind, parent,
+      id, kind: clean.kind, parent, ...(relations ?? {}),
       at: clean.at ?? null, extent: clean.extent ?? null,
       dir: String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, ""),
       branch: draftBranch(household),
@@ -5217,6 +5282,8 @@ function overCapHint(by, slug) {
 export const ON_BEHALF_PLACERS = Object.freeze(["illuminator", "worldkeeper", "wright"]);
 const PLACED_BY_KEY = "_placed_by";
 const CONSENT_KEY = "_consent";
+/** An operator's repair names its reason on the act (POS-1025/b), underscored like the placer's. */
+export const REPAIR_REASON_KEY = "_repair_reason";
 
 /** Null when this is not a placement on another's behalf (the caller answers the unchanged 403); otherwise who placed, on whose asking, under which household. */
 async function placingOnBehalf(by, payload, key, bounce) {
@@ -5359,13 +5426,15 @@ async function namedMadeRecord(payload, by, key, bounce) {
   if (taken) throw bounce(409, `you already have a mark "${slug}"`,
     "a slug is unique per author, and that one names a mark of yours, published or a draft. Pick another slug for the thing you are making. Nothing was made.");
   if ((await madeMarksOrRefuse([id], bounce)).has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }
-  return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
+  return madeRecordOf({ by, slug, kind, body, holderFields, image, extent: payload.extent, household, date: new Date().toISOString() });
 }
 
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 // `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
 // draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
-async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AND ONLY ITS AMEND PASSES IT (POS-1025/b; mark-repair.mjs § repairMarkAtOffice): the
+// mark's own author and household, judged by every guard below as their own amend; no payload can set it.
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
@@ -5422,8 +5491,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const by = byOther ? payload.by : named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
-  const onBehalf = key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
-  if (!key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+  // AN OPERATOR'S REPAIR (POS-1025/b) amends as the mark's own author: its hand is judged at the repair door and
+  // rides the act's provenance scope (act-provenance.mjs § withOperator), never this key's residents
+  const onBehalf = operator || key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
+  if (!operator && !key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
   if (!onBehalf && (payload.consent !== undefined || payload.placed_by !== undefined))
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
       `"${by}" is your own resident — leave the mark without them`);
@@ -5615,7 +5686,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // THE ADMIN ROLE (WLD-21, Darko 2026-10-18): an admin household may make the
     // three passage classes exactly (the world's admin-makers.mjs), asked only
     // after makers said no; the refusal's words for everyone else are unchanged (G6).
-    if (!droppedUnit && !makers.may && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
+    // An operator repairing a town mark AS THE TOWN (POS-1025/b) is the town's pen, the one road a town-only class arrives by.
+    if (!droppedUnit && !makers.may && !operator?.asTown && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
@@ -5756,7 +5828,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
   // RESIDENT'S household, never the placer's (POS-233): it is their act, their
   // live layer, their sketchbook and their cap, and their own amend must find it.
-  const household = onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
@@ -5815,6 +5887,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     ...(payload.preview === true ? { preview: true } : {}),
     ...(setDown ? { _set_down: setDown } : {}),
     ...(onBehalf ? { [PLACED_BY_KEY]: onBehalf.placer, [CONSENT_KEY]: onBehalf.consent } : {}),
+    // the operator's reason, underscored as `_placed_by` is: the act's payload carries it, a mark file never does
+    ...(operator ? { [REPAIR_REASON_KEY]: operator.reason } : {}),
     // `stamps` now RIDES the declaration instead of being stripped here. It was
     // stripped because 1.0 routes escrow through the stake verb and the record
     // had no use for it — but under the stake-is-the-boundary ruling the amount
@@ -5890,6 +5964,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       throw bounce(500, "the mark pass tripped", faultLogged("the mark pass tripped", e)); // its stderr goes to the log (POS-578)
     }
     if (result.error) throw bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
+    await projectRelationRows(result); // POS-1156: the same public name/household as the journal path
   }
   if (outline) result.outline = outline; // POS-322: one line, only when the door moved or derived the box
   if (mistsWarning) result.mists = mistsWarning; // WLD-38: the forecast, computed before the write
@@ -5967,7 +6042,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
 // exec cannot: WHOSE hand (the mark's by must be on your key — only the hand
 // that left a mark may withdraw it) and the LEDGER (escrow anchors a mark; the
 // stake ledger lives town-side, so the check runs here before anything spawns).
-export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AS FOR leaveMarkAct (POS-1025/b): the mark's own author and household, withdrawn
+// under every guard below, the escrow first. A set-down unit or holder goes back to its dropper only by the dropper's
+// own withdrawal, so a repair refuses it by name rather than end it with nothing returned.
+export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const mark = String(args.mark ?? "").trim();
@@ -5997,9 +6075,9 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
   if (!mark || !mark.includes("/")) throw bounce(422, "which mark?", "pass mark: '<by>/<slug>' — ids as the telling shows them");
   const by = mark.slice(0, mark.indexOf("/"));
   const slug = mark.slice(mark.indexOf("/") + 1);
-  if (!key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
+  if (!operator && !key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
     `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "(none)"}`);
-  const household = String(key?.household ?? "").trim();
+  const household = operator ? operator.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household");
 
   // Escrow anchors — the law world_stake_read already states. Your own stake
@@ -6033,6 +6111,16 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
     // ledger read fail and hand in the class law; the office passes neither.
     const guard = withdrawEscrowGuard({ mark, escrow: escrowOf ?? ((m) => ledgerEscrowOf(m)) });
     try {
+      if (operator) {
+        const [{ droppedUnitOnGitLane }, { setDownHolderOnGitLane }] = await Promise.all([import("./world-units.mjs"), import("./set-down-return.mjs")]);
+        for (const asked of [droppedUnitOnGitLane, setDownHolderOnGitLane]) {
+          const r = await asked({ mark, by, household }, units ?? null);
+          if (r?.code === 503) throw bounce(r.code, r.defect, r.hint);
+          if (r) throw bounce(409, `"${mark}" was set down from a resident's hands, and only its dropper's own withdrawal sends it back`,
+            "a repair moves nothing between hands: withdrawn by an operator it would end with nothing returned. Ask its dropper to withdraw it, or amend it instead. Nothing was written.");
+        }
+        return await journalWithdraw({ by, slug, household, guard, cause: { repair: operator.reason } });
+      }
       // A SET-DOWN THAT DID NOT LAND (setDownMade's own undo, `undoSetDown`, never a resident's call): the
       // thing and all it holds are still in hand, so its draft goes without the empty-holder guard, under the
       // guard that proves it (WLD-138; set-down-return.mjs § stillInHandGuard)
@@ -6379,6 +6467,51 @@ async function nestingParent(candidate, marks) {
   if (typeof engine.placementParent === "function")
     return candidate._parentMarkId ?? engine.placementParent(candidate, all) ?? engine.worldRootOf?.(all)?.id ?? null;
   return null;
+}
+
+// WHAT THE PLACEMENT OVERLAPS AND CONTAINS (POS-1156): the two lists beside `parent`,
+// computed ONCE over the same marks nestingParent judged (canon plus this household's
+// drafts), for the preview and the write alike, with the engine's own predicates
+// (src/placement-relations.mjs). Null — and the answer carries neither list — when the
+// engine cannot be read: not read is never printed as empty, and no failure here can
+// refuse or fail a placement.
+async function placementRelationsOf(candidate, marks) {
+  try {
+    if (!isSited(candidate, classExtendsOf())) return null;
+    const [engine, geom, proj] = await Promise.all([foldConstants(), geomMod(), relationProjection()]);
+    return placementRelations(candidate, marks, {
+      marksOverlapArea: geom?.marksOverlapArea, containmentParentOf: engine.containmentParentOf, worldRootOf: engine.worldRootOf,
+      name: proj.name, household: proj.household,
+    });
+  } catch { return null; }
+}
+
+// THE ROW'S TWO PUBLIC FIELDS, one projection for both writers (POS-1156): `name` is the door's own
+// mark name (markName: the fold's determined name, else the slug in words) and `household` the public
+// house slug of the mark's author (a parcel's declared household first). Registry-less or unknown: null.
+async function relationProjection() {
+  const [w, houses] = await Promise.all([world(), householdLookup().catch(() => null)]);
+  const allMarks = w?.marks ?? [];
+  const determined = determinedOf(w);
+  const canonById = new Map(allMarks.map((m) => [m.id, m]));
+  return {
+    name: (m) => markName(m, allMarks, determined),
+    household: (m) => (m.declared_household ?? canonById.get(m.id)?.declared_household)
+      ?? houses?.(String(m.by ?? String(m.id).split("/")[0]))?.slug ?? null,
+  };
+}
+
+// The flag-off (git) writer computes the lists in its own process, which has no registry and no
+// determined names, so its rows arrive as `{ id }` with null fields. The door fills them with the
+// journal path's projection, so both writers ship the same rows.
+async function projectRelationRows(result) {
+  try {
+    if (!Array.isArray(result?.overlaps) && !Array.isArray(result?.contains)) return;
+    const proj = await relationProjection();
+    const fill = (rows) => rows.map((r) => ({ id: r.id, name: proj.name({ id: r.id }), household: proj.household({ id: r.id }) }));
+    if (Array.isArray(result.overlaps)) result.overlaps = fill(result.overlaps);
+    if (Array.isArray(result.contains)) result.contains = fill(result.contains);
+  } catch { /* the rows keep their ids; the lists were read */ }
 }
 
 async function discloseOverhang(result, by, key = null) {
@@ -7601,15 +7734,15 @@ export const WORLD_TOOLS = [
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
   { name: "world_leave_mark",
-    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
+    description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. A sited mark's answer, preview or written, also names what it lands among, beside `parent` (the smallest strictly-larger mark that holds it): `overlaps` lists every other placed mark that shares ground with it, by the engine's own overlap test, so your own marks and the mark that holds it appear too (touching an edge is not overlapping), and `contains` lists the marks that would become its children (the same containment rule that names the parent). Each row is `{ id, name, household }`. When the town cannot read the ground, the lists are absent, never empty. It is one call: nothing to confirm. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
       // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
-      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at, extent, points are refused). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at and points are refused), but it may declare extent { w, h }: how big it is, in metres; it's used when it's set down (left off, it is set down 1×1). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
       count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
-      extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
+      extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door). With to: and a slug and body (a thing made into hands or a holder) it is how big the thing is, in metres; it's used when it's set down", properties: { w: { type: "number" }, h: { type: "number" } } },
       points: { type: "array", description: "optional polygon ring [[x,y],…] for an irregular shape, in grid meters. On a sited mark the town derives at (the ring's bounding-box centre) and extent (its w×h) from it, so you may leave both off; a sent at/extent that disagrees is replaced and the answer's `outline` says so. On a parcel the ring must fill the town's 25×25 box exactly" },
       body: { type: "string", description: "one present-tense observation; maximum 150 characters — the mark's face in every view" },
       // `tier` is DELIBERATELY ABSENT: standing is derived from the ground a
@@ -7639,7 +7772,7 @@ export const WORLD_TOOLS = [
       status: { type: "string", enum: ["open", "done"], description: "bounty only: open (default) or done — a done notice stays on the board, struck" },
       image: { type: "string", description: "optional: one image URL on the town's media host (https://media.postmark.town/…) — upload the file first with upload_media (or POST /media) and pass the url it returns; other hosts bounce" },
       stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a DRAFT — not the town's canon: it lives only in your own reading of the world, on no docket, and is not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays a draft. Whole stamps; they stay yours — world_unstake returns them." },
-      preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
+      preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule) and, for a sited mark, what it overlaps and contains (`overlaps`, `contains`: rows of `{ id, name, household }`), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
       amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
       // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
       holder: { type: "boolean", description: "a thing only: whether it holds other things (sovereign on thing, default false) — a bag, a bowl, a crate" },
@@ -7725,7 +7858,7 @@ export const WORLD_TOOLS = [
       // visitors, and this field on a say says they were read.
       rules_read: { type: "boolean", description: "visitors (berths) only: true says you have read the town's rules for visitors (GET /berth shows them, and so does the answer to your first say). Recorded once; residents never need it." },
       // CIRCLES (POS-1035; CORE-70 calls 3, 11, 21, 25). The reply edge rides a say with text; the three selectors are reads.
-      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in the room you are speaking into (the same conversation, even across a settlement while the room carries on). Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
+      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in an open conversation within earshot of where you stand (even one carried across a settlement), and your reply joins that say's conversation. Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
       circle: { type: "number", description: "no text: read one circle whole — the say with this id and every reply under it, with the says above it as context. Paged: pass the `next` it returns." },
       after: { type: "number", description: "with circle: the `after` from that circle's previous page's `next`." },
       with: { type: "string", description: "no text: where this resident is talking in your room — their says, each with the say it answers as context, and the circles they are in." },

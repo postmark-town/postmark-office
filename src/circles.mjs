@@ -21,6 +21,7 @@
 // proposal on CORE-82 (8,192 bytes of serialized JSON, Facet's confirmation pending); it is a target, never a truncation ceiling.
 
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { lineSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
 
 /** The default read's size target, in UTF-8 bytes of serialized JSON (POS-1035 → CORE-82 proposal; not a silent ceiling). */
 export const CIRCLE_BUDGET_BYTES = 8192;
@@ -59,6 +60,14 @@ export function sayIdOf(raw) {
 }
 
 /**
+ * A canonical mark id (`<by>/<slug>`, as ids appear in the telling) from a stored or carried value, or null (POS-1152). The recorded
+ * start-place of a conversation is this and nothing else: never an image URL, a name, a coordinate or a room identity.
+ */
+export function markIdOf(raw) {
+  return typeof raw === "string" && /^[^\s/]+(\/[^\s/]+)+$/.test(raw) ? raw : null;
+}
+
+/**
  * THE FLAT SAY LINE, extended additively (call 24). The first seven fields are the line `threadOf` has always served, by name,
  * meaning and order. `id` rides when the say's act number is known, `reply_to` when it answers one, `circle` when its top circle
  * resolves from the edges this read holds (a reply whose parent is not held carries no `circle`, and the tree reads say why).
@@ -77,6 +86,9 @@ export function sayLine(v, circle = null) {
     ...(id != null ? { id } : {}),
     ...(replyTo != null ? { reply_to: replyTo } : {}),
     ...(id != null && isId(circle) ? { circle } : {}),
+    // POS-1152: only a circle's ROOT say carries the mark the conversation started at (a reply never does, so no later say can lend one)
+    ...(replyTo == null && markIdOf(v.place_mark) ? { place_mark: v.place_mark } : {}),
+    ...lineSpeaker(v), // POS-1132: the human's chosen presentation and the shoulder they spoke on; nothing on a resident's line or an old one
   };
 }
 
@@ -194,7 +206,10 @@ export function circleStub(index, id) {
     people: peopleOf(all),
     started: iso(top.at),
     latest: iso(Math.max(...all.map((v) => v.at))),
+    // POS-1152: the mark this circle started at, only when its top is a root say that recorded one (a folded reply's stub has none)
+    ...(sayIdOf(top.reply_to) == null && markIdOf(top.place_mark) ? { place_mark: top.place_mark } : {}),
     read: { circle: id },
+    ...lineSpeaker(top), // POS-1132: the opener's presentation, so a circle names who opened it as the lines do
   };
 }
 
@@ -339,6 +354,8 @@ export function circleRead(voices, id, { after = null, budget = CIRCLE_BUDGET_BY
   const page = { circle: want, path, says: tree.length, people: peopleOf(tree.map((s) => s.v)),
     ...(from === 0 ? { context } : {}), lines: [] };
   if (path == null) page.broken = brokenNote(index.byId.get(want));
+  // POS-1152: the circle's start-place, from the root its ancestry reaches; a broken chain has no root and borrows nothing
+  else { const rootSay = index.byId.get(path[0]); if (sayIdOf(rootSay?.reply_to) == null && markIdOf(rootSay?.place_mark)) page.place_mark = rootSay.place_mark; }
   let i = from;
   for (; i < tree.length; i++) {
     page.lines.push(lineOf(tree[i].v, { depth: tree[i].depth }));
@@ -404,9 +421,11 @@ export function withRead(voices, handle, { budget = CIRCLE_BUDGET_BYTES, decorat
 const nameRe = (handle) => new RegExp(`(^|[^a-z0-9_.-])${handle.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_-])`);
 
 /**
- * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` is the room the speaker is speaking into — the same room
- * is the earshot rule (call 21: "yes to room, no to settlement"), so a say outside it is refused, never linked. `replyTo` is:
- *   · an act number (or its digits) — that say, if it is in this room;
+ * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` are the says the speaker can answer: every say of the
+ * open conversations within earshot of where they stand (call 21: "yes to room, no to settlement"; POS-1185: rooms no longer fuse,
+ * so that can be more than one room, and the reply joins the room of the say it answers). A say outside them is refused, never
+ * linked. `replyTo` is:
+ *   · an act number (or its digits) — that say, if it is among them;
  *   · `{ handle, at }` — that resident's say at EXACTLY that instant (ISO or ms, normalized to ms): none, or more than one, is
  *     refused by name — a nearby say is never chosen;
  *   · absent — NAME-LINKING: if the words name someone who has spoken in this room (their handle, as a word), the say links to
@@ -439,22 +458,47 @@ export function resolveReplyTo(roomVoices, { replyTo = null, speaker = null, tex
       return refuse("reply_to by handle needs both `handle` and `at`", "reply_to: { handle: \"<who>\", at: \"<the instant they spoke, ISO or at_ms>\" } — or pass the say's id");
     const theirs = threaded.filter((v) => v.handle === handle);
     if (!theirs.length)
-      return refuse(`${handle} has not spoken in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21); listen with say {} to see who is talking here");
+      return refuse(`${handle} has not spoken in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21); listen with say {} to see who is talking here");
     // THE EXACT INSTANT, never a nearby one (CORE-82 read, Rivet 18:18Z): the rulings say handle plus time, and the say read gives
     // every line its `at` and `at_ms` — the same instant, normalized to ms here. No say at it, or two, is refused; none is guessed.
     const exact = theirs.filter((v) => v.at === t);
     if (exact.length === 1) return found(exact[0], "handle_time");
     if (exact.length > 1)
       return refuse(`${handle} has ${exact.length} says at exactly ${iso(t)} (${exact.map((v) => sayIdOf(v.id)).join(", ")})`, "pass the id of the one you mean");
-    return refuse(`${handle} said nothing in this room at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
+    return refuse(`${handle} said nothing within your hearing at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
   }
   const id = sayIdOf(asked);
   if (id == null) return refuse("reply_to is a say's id (a whole number) or { handle, at }", "the ids ride on every line of the say read as `id`");
   const hit = threaded.find((v) => sayIdOf(v.id) === id);
   if (!hit)
-    return refuse(`say ${id} is not in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21): walk back within earshot of that conversation, or read it with say { circle: " + id + " }");
+    return refuse(`say ${id} is not in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21): walk back within earshot of it, or read it with say { circle: " + id + " }");
   return found(hit, "id");
 }
+
+/**
+ * THE SAY A `reply_to` NAMES among `voices` — an id, or `{ handle, at }` at exactly that instant, and only when it names ONE say — or
+ * null. It decides nothing about whether that say may be answered (`resolveReplyTo` does, over the says in reach): the say door asks
+ * this only AFTER a refusal, to tell a say whose conversation has closed from one that is merely out of reach (POS-1185), so each
+ * refusal can say what the caller can do about it.
+ */
+export function replyTargetIn(voices, replyTo) {
+  const threaded = voices.filter((v) => sayIdOf(v.id) != null);
+  if (replyTo != null && typeof replyTo === "object" && !Array.isArray(replyTo)) {
+    const handle = String(replyTo.handle ?? "").trim();
+    const t = typeof replyTo.at === "number" ? replyTo.at : /^\d{10,15}$/.test(String(replyTo.at ?? "")) ? Number(replyTo.at) : Date.parse(String(replyTo.at ?? ""));
+    if (!handle || !Number.isFinite(t)) return null;
+    const exact = threaded.filter((v) => v.handle === handle && v.at === t);
+    return exact.length === 1 ? exact[0] : null;
+  }
+  const id = sayIdOf(replyTo);
+  return id == null ? null : threaded.find((v) => sayIdOf(v.id) === id) ?? null;
+}
+
+/** The refusal for a reply to a say whose conversation has closed (WLD-242: "A reply to a say whose room has closed is refused"). */
+export const closedRoomRefusal = (id) => ({
+  defect: `say ${id} is in a conversation that has closed`,
+  hint: `that conversation has closed, and a reply cannot reopen it. Say it fresh, with no reply_to, and it starts or joins a conversation where you are. The closed one is still there to read: say { circle: ${id} }`,
+});
 
 /** `?circle=<say id>[&after=<id>]` or `?room=<thread id>` on a conversations read — a named conversation; null for a page read. */
 export function findOf(searchParams) {
@@ -477,7 +521,13 @@ export function findConversation(clusters, { circle = null, room = null, after =
   // a room's id is the page's: its recorded root (CORE-97, memory: the room keeps its name when its front leaves memory or it
   // carries across a settlement), else its first say (the record, which holds the room whole)
   const roomOf = (c) => c.root ?? `t${c.voices[0].at}-${c.voices[0].handle}`;
-  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id)) : clusters.find((c) => roomOf(c) === String(room));
+  // POS-1183: the record rounds a say's `at` to the second, while the page's live room id carries milliseconds
+  // (t1795343232206-wren-porter vs the record's t1795343232000-wren-porter). An exact id wins; failing that, the same handle
+  // starting in the same second is the same room. No id the office hands out changes, and ?circle= is not loosened.
+  const roomKey = (rid) => { const m = /^t(\d+)-(.+)$/.exec(String(rid)); return m ? `${Math.floor(Number(m[1]) / 1000)}-${m[2]}` : null; };
+  const askedKey = id == null ? roomKey(room) : null;
+  const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id))
+    : clusters.find((c) => roomOf(c) === String(room)) ?? (askedKey == null ? undefined : clusters.find((c) => roomKey(roomOf(c)) === askedKey));
   const asked = id != null ? { circle: id } : { room: String(room) };
   if (!hit)
     return { ...asked, history: "unavailable", source,

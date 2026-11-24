@@ -48,7 +48,7 @@ import {
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
   RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
-import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { githubAuthorOf, judgeEarnedCreditVia, ownWordsReceipt } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
+import { eventEvidenceInputs, composeEventEvidence, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -72,8 +72,10 @@ import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window,
  * this module never boots the world to read a calendar; a read that cannot get them groups the window as one settlement and says so.
  */
 async function publishedSettlements() {
-  const { settlementsKnown } = await import("./world.mjs");
-  return settlementsKnown();
+  // POS-1203: the HISTORICAL source, every published settlement (hearing.recorded()), not the ear's newest sixty: an event read is the record's, and an
+  // ongoing season older than the ear must not lose its rooms (and so its gallery) while it is still on
+  const { settlementsRecorded } = await import("./world.mjs");
+  return settlementsRecorded();
 }
 
 /** How many ended events one page of the lasting list carries (POS-1035, calls 13 and 25). */
@@ -884,20 +886,21 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
-    await judgeEarnedCreditVia(client, r, gh);
+    const own = await judgeEarnedCreditVia(client, r, gh);
+    const ownWords = own ? ownWordsReceipt(own) : "";
     const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
       ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
     if (skipped) {
       return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
         ...(grade !== undefined ? { grade } : {}),
-        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}${ownWords}. The skip and its reason stay on the bug's history, with this credit beside them. `
           + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
           + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
         read: bugReadHint(id) };
     }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
-      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}${ownWords}`
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
         + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + ". "
@@ -934,7 +937,8 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
     const j = judgeAdvance(fields, prev, roll);
-    if (j.earned) await judgeEarnedCreditVia(client, j, gh);
+    // the bug's own post (POS-1105) answers whose words it holds and when they were written
+    const own = j.earned ? await judgeEarnedCreditVia(client, j, gh) : null;
     if (j.of && !(await bugRow(client, j.of)))
       throw refuse(404, `no bug "${j.of}" to be a duplicate of`, 'of: a standing bug post — town { read: "posts", args: { class: "bug" } } lists them', { field: "of" });
     // The critter's namer is the fix's credit, kept beside the name so the post says who named it.
@@ -955,6 +959,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        + (own ? ownWordsReceipt(own) : "")
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
         + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
@@ -1189,33 +1194,42 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
   const id = String(fields?.event ?? fields?.post ?? "").trim();
   const past = fields?.past === true || fields?.past === "true";
   if (past && id) throw refuse(422, "past lists events; event opens one", 'town { read: "calendar", args: { past: true } } — or { event: "<host>/<slug>" } for one');
-  return read(async (client) => {
-    if (id) {
+  if (id) {
+    // POS-1203: the composition of an event's rooms is CPU over history and must not hold the pen (its idle-in-transaction bound is 30 s). So the one-event read is
+    // three steps: the lease that reads the row and the evidence's INPUTS, the composition with no lease, and a second short lease for the sparks and the gallery.
+    let edges = [];
+    const first = await read(async (client) => {
       const row = await eventRow(client, id);
       if (!row) throw refuse(404, `no event "${id}"`, 'ids are <host>/<slug> — town { read: "calendar" } lists them');
       const view = eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id]));
       // POS-1035 (CORE-82): once its doors have opened, an event answers its window, every room its talk formed and the households
       // with a public act there — resolved by the office from the record, never by the site from RSVPs or today's positions
+      let inputs = null;
       if (row.state !== STATE_CANCELLED) {
-        let edges = [];
         try { edges = (await settlements()) ?? []; } catch { edges = []; }
-        const evidence = await eventEvidence(client, row, { now, edges });
-        if (evidence) {
-          // its own sparks, the public collection its completion recorded (one per room, in order): each accepted (standing) or
-          // waiting on acceptance; [] before it ends, and for a free event, whose sparks are its host's private drafts
-          try { evidence.sparks = await eventSparksOf(client, row); }
-          catch { evidence.sparks = null; evidence.spark_note = "the store could not answer the event's sparks just now — unknown, not none"; }
-          // why the collection says what it says — so an empty one is never read as a failed read, nor a capped one as every room's
-          const note = evidence.sparks ? sparkNoteOf(row, evidence, { now }) : undefined;
-          if (note) evidence.spark_note = note;
-          // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
-          try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(row) })); }
-          catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
-          view.evidence = evidence;
-        }
+        inputs = await eventEvidenceInputs(client, row, { now, edges });
       }
-      return { as_of: new Date(now).toISOString(), event: view };
+      return { row, view, inputs };
+    }, env);
+    const evidence = first.inputs ? composeEventEvidence(first.inputs) : null;
+    if (evidence) {
+      await read(async (client) => {
+        // its own sparks, the public collection its completion recorded (one per room, in order): each accepted (standing) or
+        // waiting on acceptance; [] before it ends, and for a free event, whose sparks are its host's private drafts
+        try { evidence.sparks = await eventSparksOf(client, first.row); }
+        catch { evidence.sparks = null; evidence.spark_note = "the store could not answer the event's sparks just now — unknown, not none"; }
+        // why the collection says what it says — so an empty one is never read as a failed read, nor a capped one as every room's
+        const note = evidence.sparks ? sparkNoteOf(first.row, evidence, { now }) : undefined;
+        if (note) evidence.spark_note = note;
+        // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
+        try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(first.row) })); }
+        catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
+      }, env);
+      first.view.evidence = evidence;
     }
+    return { as_of: new Date(now).toISOString(), event: first.view };
+  }
+  return read(async (client) => {
     if (past) return pastEvents(client, fields, now);
     const since = new Date(now - ENDED_LIST_DAYS * 86_400_000).toISOString();
     const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends > $2 ORDER BY starts, id`, [EVENT_CLASS, since]);
