@@ -116,8 +116,9 @@ export const WORLD_ANCHOR = "the-town/let-there-be-light";
 // `frame` is a reparenting (§8's ruling (b)). Both ride one table, and the drain
 // sorts them by this column: marks to the sketchbook, frames to STATE/log.
 import { TOWN_CLASSES } from "./town-journal.mjs";
-import { isSited } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
+import { isSited, kindFieldOf } from "./world-grants.mjs"; // the kind rung: sited in both forms (LOGOS v2, O1)
 import { classExtendsOf } from "./world-classes.mjs";
+const SPARK_KIND = "spark"; // the spark class's own kind, written `kind: spark` with no `class:` line (event-sparks.mjs § SPARK_CLASS, WLD-173)
 
 export const CLASS_MARK = "mark";
 export const CLASS_FRAME = "frame";
@@ -926,7 +927,12 @@ export function pathFor(record, { parentPathOf = null, publishedPathOf = null } 
   const { by, slug } = idPartsOf(record);
   if (!slug) return null;
 
-  if (isSited(record, classExtendsOf())) {
+  // POS-1209 (WLD-173): A SPARK FILES AT ITS ID, SITED OR NOT. A spark is a record with a place, not ground: it stands "spark", never "sited", and it
+  // writes no `parent:` (mark-lint: "a spark is never anchored: it writes no parent: and files at its id"). Gate B was sited-only, so an unsited, parentless
+  // spark fell to the root fallback and was filed in a folder named for its slug under let-there-be-light, where the lint refused the crossing (window 330).
+  // It is not made sited and given no parent; only where it files changes, and every other kind files as it did.
+  const isSpark = kindFieldOf(record) === SPARK_KIND;
+  if (isSpark || isSited(record, classExtendsOf())) {
     // GATE A: an existing filing never moves.
     const filed = record?.id && typeof publishedPathOf === "function" ? publishedPathOf(record.id) : null;
     if (filed) return filed;
