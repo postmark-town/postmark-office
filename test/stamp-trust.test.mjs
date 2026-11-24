@@ -134,8 +134,8 @@ test("the loader: asked for and unusable fails closed, by name, every way (the w
     "a third field": /exactly pubkeyPem and afterSeal, and holds afterSeal, privateKeyPem, pubkeyPem/,
     "no afterSeal": /exactly pubkeyPem and afterSeal, and holds pubkeyPem\. /,
     "a short seal": /afterSeal is not a seal/, "an uppercase seal": /afterSeal is not a seal/,
-    "a private key": /not a public key PEM \(a private key is never trust\)/, "not a key": /not an ed25519 public key/,
-    "not ed25519": /not an ed25519 public key \(a ec key/, "the base key": /its key is the base key/,
+    "a private key": /not a public key PEM \(a private key is never trust\)/, "not a key": /pubkeyPem is not a readable public key/,
+    "not ed25519": /pubkeyPem is a ec key, not ed25519/, "the base key": /its key is the base key/,
     "inside the town clone": /inside the town clone/, "group-writable": /writable by its group or by anyone/,
   };
   const verdicts = {}, expected = {};

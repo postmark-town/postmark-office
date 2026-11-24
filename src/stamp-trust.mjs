@@ -78,7 +78,7 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
   try {
     real = realpathSync(where);
     st = statSync(real);
-  } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? e?.message ?? e})`); }
+  } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? "no error code"})`); }
   if (!st.isFile()) throw new StampTrustUnusable(where, "it is not a regular file");
   if (st.size > MAX_BYTES) throw new StampTrustUnusable(where, `it holds ${st.size} bytes, more than a trust file's ${MAX_BYTES}`);
   // read-only to everyone but its owner: a group- or world-writable trust is anyone's (POSIX only; Windows has no such bits)
@@ -89,8 +89,9 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
     const rel = relative(town, real);
     if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) throw new StampTrustUnusable(where, "it is inside the town clone, and trust never comes from the town it checks");
   }
-  let doc;
-  try { doc = JSON.parse(readFileSync(real, "utf8")); } catch (e) { throw new StampTrustUnusable(where, `it is not JSON (${e?.code ?? e?.message ?? e})`); }
+  let text, doc;
+  try { text = readFileSync(real, "utf8"); } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? "no error code"})`); }
+  try { doc = JSON.parse(text); } catch { throw new StampTrustUnusable(where, "it is not JSON"); }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) throw new StampTrustUnusable(where, "it is not a JSON object");
   const keys = Object.keys(doc).sort();
   if (keys.join(",") !== "afterSeal,pubkeyPem") throw new StampTrustUnusable(where, `it must hold exactly pubkeyPem and afterSeal, and holds ${keys.join(", ") || "nothing"}`);
@@ -98,16 +99,14 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
   if (typeof afterSeal !== "string" || !SEAL.test(afterSeal)) throw new StampTrustUnusable(where, "afterSeal is not a seal (64 lowercase hex)");
   if (typeof pubkeyPem !== "string" || /PRIVATE KEY/.test(pubkeyPem) || !/^-----BEGIN PUBLIC KEY-----\r?\n/.test(pubkeyPem.trimStart()))
     throw new StampTrustUnusable(where, "pubkeyPem is not a public key PEM (a private key is never trust)");
-  let uat;
-  try {
-    const k = createPublicKey(pubkeyPem);
-    if (k.asymmetricKeyType !== "ed25519") throw new Error(`a ${k.asymmetricKeyType} key, not ed25519`);
-    uat = spki(pubkeyPem);
-  } catch (e) { throw new StampTrustUnusable(where, `pubkeyPem is not an ed25519 public key (${e?.message ?? e})`); }
+  let key;
+  try { key = createPublicKey(pubkeyPem); } catch { throw new StampTrustUnusable(where, "pubkeyPem is not a readable public key"); }
+  if (key.asymmetricKeyType !== "ed25519") throw new StampTrustUnusable(where, `pubkeyPem is a ${key.asymmetricKeyType} key, not ed25519`);
+  const uat = key.export({ type: "spki", format: "der" });
   const basePem = typeof base === "function" ? base() : base;
   if (basePem != null) {
     let same;
-    try { same = spki(basePem).equals(uat); } catch (e) { throw new StampTrustUnusable(where, `the base key it hands off from can't be read (${e?.message ?? e})`); }
+    try { same = spki(basePem).equals(uat); } catch { throw new StampTrustUnusable(where, "the base key it hands off from isn't a readable public key"); }
     if (same) throw new StampTrustUnusable(where, "its key is the base key: a handoff to the same key is no boundary");
   }
   return Object.freeze({ pubkeyPem, afterSeal });
