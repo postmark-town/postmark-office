@@ -40,7 +40,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS-994: the town modules are the office pinned copies, checked against the clone
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf } from "../../src/mint-inputs.mjs";
-import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia } from "../../src/stamp-lines.mjs";
+import { engineOf, stampLinesVia, syncStampLinesVia, stampRowsPast, stampHeadVia, lockStampLinesVia, insertStampRowsVia, stampKeyPlanFor } from "../../src/stamp-lines.mjs";
 import { LOST_RACE, penCommit } from "../../src/write.mjs";
 import { uatHandoff, withHandoff } from "../../src/stamp-trust.mjs"; // POS-1214: UAT's trust, one policy for every verifier
 
@@ -159,11 +159,13 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
   };
   // POS-994: the pinned verifier, answering to the PINNED public key (the trust root)
   const verifyLedger = verify ?? await pinnedVerifier(clone, { env });
+  // POS-1214: the town's handoff rule for the store's own signature checks, UAT only (null in production)
+  const keyPlan = await stampKeyPlanFor(clone, env);
   arrive();
   let raced = 0;
   try {
     for (let attempt = 1; attempt <= HEAD_TRIES; attempt++) {
-      await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng, env }), { env });
+      await officeWrite((client) => syncStampLinesVia(client, clone, { engine: eng, env, keyPlan }), { env });
       const { inputs, entries } = await officeRead(async (client) =>
         ({ inputs: await mintInputsVia(client), entries: await stampLinesVia(client) }), { env });
       if (!inputs.rooms.size) throw new Error("town_rooms is empty: the store has no key base yet (apply 067 and run the town-index ingest)");
@@ -178,7 +180,7 @@ export async function mintFromStore(clone, { keyPem, message = "mint: crossing p
       const v = await verifyLedger(clone);
       if (!v.ok) throw new Error(`stamp-verify is red over the appended ledger; nothing committed\n${v.problems[0]}`);
       const head = entries.at(-1);
-      const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng, env });
+      const fresh = stampRowsPast(clone, { ...head, seq: entries.length }, { engine: eng, env, keyPlan });
       if (fresh.length !== d.lines.length) throw new Error(`signed ${d.lines.length} line(s) and the export holds ${fresh.length} past the store; nothing committed`);
       let out;
       try {

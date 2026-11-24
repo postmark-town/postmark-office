@@ -118,19 +118,7 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
  */
 export const withHandoff = (opts, handoff) => (handoff ? { ...opts, handoff } : opts);
 
-/**
- * THE BOUNDARY, for the office's own signature checks (src/stamp-lines.mjs),
- * the town's rule: the line whose running seal is `afterSeal` is the last the
- * base key signs, and every line after it is UAT's. `seals` are the chain's
- * running seals from genesis. Answers the anchor's index, or throws
- * StampTrustUnusable when the trusted seal is not in the chain.
- */
-export function anchorIndex(seals, handoff, what = "the stamp ledger") {
-  const at = seals.indexOf(handoff.afterSeal);
-  if (at === -1) throw unknownAnchor(handoff, what);
-  return at;
-}
-
-/** The refusal for a trusted seal that no line of `what` carries (the town's "unknown anchor"). */
-export const unknownAnchor = (handoff, what) =>
-  new StampTrustUnusable(null, `its afterSeal ${handoff.afterSeal.slice(0, 12)}… is not a seal in ${what}, so no line is known to be the prefix's last`);
+// Which key verifies which line is NOT decided here: it is the town's one rule,
+// the pinned stamp-verify.mjs § stampKeyPlan (POS-1213), which the town verifier
+// runs on the handoff this file hands it, and which src/stamp-lines.mjs asks for
+// its own signature checks.

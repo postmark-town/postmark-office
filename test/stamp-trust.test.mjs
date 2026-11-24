@@ -11,17 +11,19 @@
 //
 // What this file holds, path by path, each with the production control beside its UAT arm:
 //   · the loader (src/stamp-trust.mjs): unset is null and reads nothing; every way a trust can't be used refuses;
-//   · src/stamp-lines.mjs: the office's own signature walk keeps the town's boundary (the writer and the verifier);
+//   · src/stamp-lines.mjs: the office's own signature walk asks the town's rule (stampKeyPlan) which key verifies
+//     each line (the writer and the verifier), and loads it only when the trust is asked for;
 //   · src/stamp-verify-pinned.mjs: the runner hands the town verifier `handoff`, and in prod exactly what it did;
 //   · world2/tools/stamp-mint-run.mjs § pinnedVerifier: the mint pass's verifier, the same;
 //   · src/house-key.mjs § replayHolds: the admission replay's child, the same.
-// The town's own handoff (POS-1213) isn't in the pins yet: the arms that need the town's verifier to honour it run
-// only with OFFICE_HANDOFF_TOWN naming a town checkout that has it, and say so in their titles.
+// The town's handoff (POS-1213) is pinned in src/town-pins from its head f5201394, so the arms that need the town's
+// verifier and rule run against the pins the office ships; OFFICE_HANDOFF_TOWN points them at another town
+// checkout (a later POS-1213 head) before a re-pin.
 //
 // THE CAN-FAIL FLIPS (each run on a copy of the lane's head, each redding the named test):
-//   · stamp-lines § stampRowsPast: verify every line under `key` (drop the `i > anchor` choice), or every new line
-//     under UAT's key → "the writer keeps the town's boundary";
-//   · stamp-lines § verifyStampLinesVia: never set pastAnchor → "the verifier keeps the same boundary";
+//   · stamp-lines § stampRowsPast: verify every line under `key` (ignore the plan's keyAt), or every new line under
+//     the plan's last key → "the writer keeps the town's boundary";
+//   · stamp-lines § verifyStampLinesVia: ignore the plan's keyAt → "the verifier keeps the same boundary";
 //   · stamp-verify-pinned: always add `handoff` (even undefined) → "PROD CONTROL: the runner"; never add it → "the
 //     runner hands the town verifier UAT's handoff";
 //   · stamp-trust § uatHandoff: take any PEM createPublicKey accepts (a private PEM derives a public key), drop the
@@ -37,17 +39,24 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { UAT_TRUST_ENV, uatHandoff, withHandoff, anchorIndex } from "../src/stamp-trust.mjs";
-import { stampRowsPast, verifyStampLinesVia } from "../src/stamp-lines.mjs";
+import { UAT_TRUST_ENV, uatHandoff, withHandoff } from "../src/stamp-trust.mjs";
+import { stampKeyPlanFor, stampRowsPast, verifyStampLinesVia } from "../src/stamp-lines.mjs";
+import { PIN_ROOT } from "../src/town-tool.mjs";
 import { replayHolds } from "../src/house-key.mjs";
 import { pinnedVerifier } from "../world2/tools/stamp-mint-run.mjs";
-import { copyTownModule, pinnedTown, pinRootNow, pinTown } from "./helpers/pinned-town.mjs";
+import { copyTownModule, pinRootNow, pinTown } from "./helpers/pinned-town.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RUNNER = join(OFFICE, "src", "stamp-verify-pinned.mjs");
 const scratch = tempDir("stamp-trust-");
 const ENGINE = await import(pathToFileURL(join(pinRootNow(), "tools", "stamp-mint.mjs")).href);
+// The town's handoff rule as the office SHIPS it: src/town-pins, pinned from POS-1213's head (the suite's own
+// TOWN_PINS_DIR follows test/clone-pins.json's older town, which has no handoff yet).
+const SHIPPED = await import(pathToFileURL(join(PIN_ROOT, "tools", "stamp-verify.mjs")).href);
+const KEYPLAN = SHIPPED.stampKeyPlan;
+const shippedHasHandoff = typeof KEYPLAN === "function" ? false
+  : "the office's own pins (src/town-pins) carry no stampKeyPlan: they predate POS-1213's handoff";
 
 const keyPair = () => {
   const k = generateKeyPairSync("ed25519");
@@ -152,10 +161,13 @@ test("the loader: asked for and unusable fails closed, by name, every way (the w
   assert.deepEqual(verdicts, expected);
 });
 
-test("the anchor: the line carrying the trusted seal is the prefix's last; a seal no line carries is refused", () => {
-  const { seals, afterSeal } = mixedTown(6, 3);
-  assert.equal(anchorIndex(seals, { afterSeal }), 2);
-  assert.throws(() => anchorIndex(seals, { afterSeal: "c".repeat(64) }), (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && /is not a seal in the stamp ledger/.test(e.message));
+test("the town's rule is loaded only when UAT's trust is asked for: production imports nothing more", async () => {
+  // a clone the loader could never check: a load would throw, so null proves nothing was loaded
+  assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), {}), null);
+  assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), DECOYS("/x")), null);
+  const given = () => ({});
+  assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), { [UAT_TRUST_ENV]: "/x" }, given), given, "a caller's plan is used as handed");
+  await assert.rejects(stampKeyPlanFor(join(scratch, "no-such-town"), { [UAT_TRUST_ENV]: "/x" }), "asked for, it loads through the pin check, which refuses a town it can't check");
 });
 
 // ── src/stamp-lines.mjs: the writer (stampRowsPast) and the verifier (verifyStampLinesVia) ────────────────────────
@@ -172,34 +184,38 @@ test("PROD CONTROL: the writer, with no STAMP_UAT_TRUST, records what it recorde
     { message: "the stamp ledger's line 4: its signature does not verify over its seal. Nothing was written." });
 });
 
-test("the writer keeps the town's boundary: the base key through the trusted seal, UAT's key only after it", () => {
+test("the writer keeps the town's boundary (its own stampKeyPlan): the base key through the trusted seal, UAT's key only after it", { skip: shippedHasHandoff }, () => {
   const m = mixedTown(7, 3);
   const env = uatEnv(m.afterSeal);
+  const opts = { engine: ENGINE, env, keyPlan: KEYPLAN };
   const all = m.canonicals.map((c, i) => [i + 1, c, m.sigs[i], m.seals[i]]);
-  assert.deepEqual(stampRowsPast(m.town, null, { engine: ENGINE, env }), all, "valid mixed history records whole");
+  assert.deepEqual(stampRowsPast(m.town, null, opts), all, "valid mixed history records whole");
   for (const h of [1, 3, 5]) {
     const head = { seq: h, canonical: m.canonicals[h - 1], sig: m.sigs[h - 1], seal: m.seals[h - 1] };
-    assert.deepEqual(stampRowsPast(m.town, head, { engine: ENGINE, env }), all.slice(h), `past a head at line ${h}`);
+    assert.deepEqual(stampRowsPast(m.town, head, opts), all.slice(h), `past a head at line ${h}`);
   }
   // never either key on any line
   const baseSuffix = mixedTown(7, 3, { signer: (i) => (i < 4 ? BASE : UAT) });
-  assert.throws(() => stampRowsPast(baseSuffix.town, null, { engine: ENGINE, env: uatEnv(baseSuffix.afterSeal) }),
+  assert.throws(() => stampRowsPast(baseSuffix.town, null, { ...opts, env: uatEnv(baseSuffix.afterSeal) }),
     { message: "the stamp ledger's line 4: its signature does not verify over its seal under UAT's key (it is past the trusted seal). Nothing was written." });
   const uatPrefix = mixedTown(7, 3, { signer: (i) => (i < 2 ? BASE : UAT) });
-  assert.throws(() => stampRowsPast(uatPrefix.town, null, { engine: ENGINE, env: uatEnv(uatPrefix.afterSeal) }),
+  assert.throws(() => stampRowsPast(uatPrefix.town, null, { ...opts, env: uatEnv(uatPrefix.afterSeal) }),
     { message: "the stamp ledger's line 3: its signature does not verify over its seal under the base key (it is not past the trusted seal). Nothing was written." });
   const forged = mixedTown(7, 3, { signer: (i) => (i === 5 ? FORGER : i < 3 ? BASE : UAT) });
-  assert.throws(() => stampRowsPast(forged.town, null, { engine: ENGINE, env: uatEnv(forged.afterSeal) }), /line 6: its signature does not verify/);
+  assert.throws(() => stampRowsPast(forged.town, null, { ...opts, env: uatEnv(forged.afterSeal) }), /line 6: its signature does not verify/);
 });
 
-test("the writer fails closed on a trust it can't use: an unknown anchor, a past that isn't the store's, an unusable file", () => {
+test("the writer fails closed: an unknown anchor (the town's rule refuses), a past that isn't the store's, an unusable file, pins with no rule", { skip: shippedHasHandoff }, () => {
   const m = mixedTown(6, 3);
-  assert.throws(() => stampRowsPast(m.town, null, { engine: ENGINE, env: uatEnv("d".repeat(64)) }),
-    (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && /is not a seal in the stamp ledger's export/.test(e.message));
+  assert.throws(() => stampRowsPast(m.town, null, { engine: ENGINE, env: uatEnv("d".repeat(64)), keyPlan: KEYPLAN }),
+    (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && /the town's handoff rule refuses it: the handoff's afterSeal d{64} is not a seal of this ledger/.test(e.message));
   const wrongSeal = { seq: 2, canonical: m.canonicals[1], sig: m.sigs[1], seal: "e".repeat(64) };
-  assert.throws(() => stampRowsPast(m.town, wrongSeal, { engine: ENGINE, env: uatEnv(m.afterSeal) }), /line 2 does not seal to the store's row 2/);
-  assert.throws(() => stampRowsPast(m.town, null, { engine: ENGINE, env: { [UAT_TRUST_ENV]: join(scratch, "gone.json") } }),
+  assert.throws(() => stampRowsPast(m.town, wrongSeal, { engine: ENGINE, env: uatEnv(m.afterSeal), keyPlan: KEYPLAN }), /line 2 does not seal to the store's row 2/);
+  assert.throws(() => stampRowsPast(m.town, null, { engine: ENGINE, env: { [UAT_TRUST_ENV]: join(scratch, "gone.json") }, keyPlan: KEYPLAN }),
     (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE");
+  // pinned town code older than POS-1213: no rule, so no boundary, and never the base key alone
+  assert.throws(() => stampRowsPast(m.town, null, { engine: ENGINE, env: uatEnv(m.afterSeal), keyPlan: null }),
+    (e) => e.code === "STAMP_UAT_TRUST_UNUSABLE" && /has no stampKeyPlan/.test(e.message));
 });
 
 /** A read-only store holding `rows` (stamp_lines' columns), for verifyStampLinesVia. */
@@ -215,20 +231,23 @@ test("PROD CONTROL: the verifier, with no STAMP_UAT_TRUST, answers what it answe
     { ok: false, problems: ["store: line 3's signature does not verify"], held: 5, exported: 5 });
 });
 
-test("the verifier keeps the same boundary, and fails visibly on a trust it can't use", async () => {
+test("the verifier keeps the same boundary (the town's stampKeyPlan), and fails visibly on a trust it can't use", { skip: shippedHasHandoff }, async () => {
   const m = mixedTown(6, 2);
-  assert.deepEqual(await verifyStampLinesVia(storeOf(m), m.town, { engine: ENGINE, env: uatEnv(m.afterSeal) }), { ok: true, problems: [], held: 6, exported: 6 });
+  const opts = { engine: ENGINE, keyPlan: KEYPLAN };
+  assert.deepEqual(await verifyStampLinesVia(storeOf(m), m.town, { ...opts, env: uatEnv(m.afterSeal) }), { ok: true, problems: [], held: 6, exported: 6 });
   const baseSuffix = mixedTown(6, 2, { signer: (i) => (i < 3 ? BASE : UAT) });
-  assert.deepEqual((await verifyStampLinesVia(storeOf(baseSuffix), baseSuffix.town, { engine: ENGINE, env: uatEnv(baseSuffix.afterSeal) })).problems,
+  assert.deepEqual((await verifyStampLinesVia(storeOf(baseSuffix), baseSuffix.town, { ...opts, env: uatEnv(baseSuffix.afterSeal) })).problems,
     ["store: line 3's signature does not verify under UAT's key (it is past the trusted seal)"]);
-  const unknown = await verifyStampLinesVia(storeOf(m), m.town, { engine: ENGINE, env: uatEnv("f".repeat(64)) });
+  const unknown = await verifyStampLinesVia(storeOf(m), m.town, { ...opts, env: uatEnv("f".repeat(64)) });
   assert.equal(unknown.ok, false);
-  assert.equal(unknown.problems.length, 2, JSON.stringify(unknown.problems));
-  assert.match(unknown.problems[0], /^store: the trust STAMP_UAT_TRUST names can't be used: its afterSeal ffffffffffff… is not a seal in the store's chain/, "the unknown anchor is named first");
-  assert.match(unknown.problems[1], /^store: line 3's signature does not verify under the base key/, "and with no anchor every line is the prefix's");
-  const short = await verifyStampLinesVia(storeOf(m, 1), m.town, { engine: ENGINE, env: uatEnv(m.afterSeal) });
-  assert.ok(short.problems.some((p) => /is not a seal in the store's chain/.test(p)), JSON.stringify(short.problems));
-  const unusable = await verifyStampLinesVia(storeOf(m), m.town, { engine: ENGINE, env: { [UAT_TRUST_ENV]: "" } });
+  assert.equal(unknown.problems.length, 1, JSON.stringify(unknown.problems));
+  assert.match(unknown.problems[0], /^store: the trust STAMP_UAT_TRUST names can't be used: the town's handoff rule refuses it: the handoff's afterSeal f{64} is not a seal of this ledger/,
+    "the unknown anchor is named, and no line is judged under the base key alone");
+  const short = await verifyStampLinesVia(storeOf(m, 1), m.town, { ...opts, env: uatEnv(m.afterSeal) });
+  assert.ok(short.problems.some((p) => /is not a seal of this ledger/.test(p)), JSON.stringify(short.problems));
+  const noRule = await verifyStampLinesVia(storeOf(m), m.town, { engine: ENGINE, keyPlan: () => ({ problems: [], keyAt: null, anchor: 0 }), env: uatEnv(m.afterSeal) });
+  assert.match(noRule.problems[0], /the town's handoff rule refuses it: no key plan/);
+  const unusable = await verifyStampLinesVia(storeOf(m), m.town, { ...opts, env: { [UAT_TRUST_ENV]: "" } });
   assert.equal(unusable.ok, false);
   assert.match(unusable.problems[0], /^store: STAMP_UAT_TRUST names "", and it can't be used/);
 });
@@ -282,20 +301,21 @@ function realVerifierTown(m, fromTown) {
   copyTownModule(fromTown, m.town, "stamp-verify.mjs");
   return join(pinTown(m.town), "tools");
 }
-const HANDOFF_TOWN = process.env.OFFICE_HANDOFF_TOWN || null;
-const needsHandoff = HANDOFF_TOWN ? false
-  : "needs POS-1213's town head (verifyStampLedger's handoff), which the office hasn't pinned yet; set OFFICE_HANDOFF_TOWN=<a town checkout with it>";
+// The town code the office ships (src/town-pins, pinned from POS-1213's head f5201394), or OFFICE_HANDOFF_TOWN
+// naming another town checkout (a later POS-1213 head, before the re-pin).
+const HANDOFF_TOWN = process.env.OFFICE_HANDOFF_TOWN || PIN_ROOT;
+const needsHandoff = process.env.OFFICE_HANDOFF_TOWN ? false : shippedHasHandoff;
 
-test("PROD CONTROL with the town's real verifier: no trust, and a UAT suffix fails at its first line, visibly", () => {
+test("PROD CONTROL with the town's real verifier, as pinned: no trust, and a UAT suffix fails at its first line, visibly", () => {
   const m = mixedTown(6, 3);
-  const pinned = realVerifierTown(m, HANDOFF_TOWN ?? pinnedTown());
+  const pinned = realVerifierTown(m, HANDOFF_TOWN);
   const r = runRunner(pinned, m.town, childEnv());
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stderr, /line 4: SIGNATURE FAILS/);
-  assert.doesNotMatch(r.stderr, /line [1-3]: SIGNATURE FAILS/, "the base-signed prefix verifies");
+  assert.match(r.stderr, /line 4: SIGNATURE FAILS — first divergence/, "production's own words (no handoff side named)");
+  assert.doesNotMatch(r.stderr, /line [1-3]: SIGNATURE FAILS|handoff/, "the base-signed prefix verifies, and no handoff is in play");
 });
 
-test("WITH THE TOWN'S HANDOFF (POS-1213): valid mixed history verifies; a suffix line signed by the base key fails", { skip: needsHandoff }, () => {
+test("WITH THE TOWN'S HANDOFF (POS-1213, as pinned): valid mixed history verifies; the base key past the seal, or an unknown seal, fails", { skip: needsHandoff }, () => {
   const m = mixedTown(6, 3);
   const ok = runRunner(realVerifierTown(m, HANDOFF_TOWN), m.town, childEnv(uatEnv(m.afterSeal)));
   assert.match(ok.stdout + ok.stderr, /stamp-ledger/, "the town's verifier ran");
@@ -303,7 +323,23 @@ test("WITH THE TOWN'S HANDOFF (POS-1213): valid mixed history verifies; a suffix
   const bad = mixedTown(6, 3, { signer: (i) => (i < 4 ? BASE : UAT) });
   const r = runRunner(realVerifierTown(bad, HANDOFF_TOWN), bad.town, childEnv(uatEnv(bad.afterSeal)));
   assert.equal(r.status, 1, r.stdout + r.stderr);
-  assert.match(r.stderr, /line 4: SIGNATURE FAILS/);
+  assert.match(r.stderr, /line 4: SIGNATURE FAILS under the handoff key, after line 3/);
+  const lost = mixedTown(6, 3);
+  const u = runRunner(realVerifierTown(lost, HANDOFF_TOWN), lost.town, childEnv(uatEnv("8".repeat(64))));
+  assert.equal(u.status, 1, u.stdout + u.stderr);
+  assert.match(u.stderr, /handoff: the handoff's afterSeal 8{64} is not a seal of this ledger/);
+});
+
+test("WITH THE TOWN'S HANDOFF (as pinned): the mint pass's verifier, the real one, takes UAT's suffix only with the trust", { skip: needsHandoff }, async () => {
+  const m = mixedTown(6, 3);
+  copyTownModule(HANDOFF_TOWN, m.town, "stamp-verify.mjs");
+  const sigProblems = (r) => (r.problems ?? []).filter((p) => /SIGNATURE|UNSIGNED|handoff:/.test(p));
+  await withPins({ pins: pinTown(m.town), probe: join(scratch, "unused.jsonl") }, async () => {
+    const uat = await pinnedVerifier(m.town, { env: uatEnv(m.afterSeal) });
+    assert.deepEqual(sigProblems(uat(m.town)), [], "the prefix under the base key, the suffix under UAT's");
+    const prod = await pinnedVerifier(m.town, { env: {} });
+    assert.deepEqual(sigProblems(prod(m.town)).map((p) => p.slice(0, 31)), ["line 4: SIGNATURE FAILS — first"], "without the trust, production's verdict");
+  });
 });
 
 // ── the mint pass (stamp-mint-run § pinnedVerifier) and the admission replay (house-key § replayHolds) ───────────
