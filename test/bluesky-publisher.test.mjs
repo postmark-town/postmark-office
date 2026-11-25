@@ -13,10 +13,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, watch, writeFileSync 
 import { join } from "node:path";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import {
-  BSKY_ENV, MAX_SENDS, XRPC_ERROR_NAMES, crossingEvent, knownName, lockEvent, plainLine, postRecord, publishEvent, readState, recordedEvents, rkeyFor,
+  BSKY_ENV, MAX_SENDS, XRPC_ERROR_NAMES, crossingEvent, knownName, lockEvent, plainLine, postRecord, publishEvent, readState, recordedEvents, eventKeyFor, tidFor, instantMs,
   settlementChanges, settlementEvent,
 } from "../src/bluesky-publisher.mjs";
-import { crossingsFromTown, main, settlementsFromWorld } from "../tools/bluesky-publish.mjs";
+import { crossingsFromTown, instantOf, main, settlementsFromWorld } from "../tools/bluesky-publish.mjs";
 
 // synthetic, and distinctive so a leak is findable in any byte written
 const IDENT = "postmark.town";
@@ -24,6 +24,12 @@ const PASSWORD = "synthetic-app-pw-7f3a";
 const TOKEN = "synthetic-access-jwt-91c2";
 const DID = "did:plc:faketown";
 const ENV = { BSKY_IDENTIFIER: IDENT, BSKY_APP_PASSWORD: PASSWORD };
+// THE REAL PDS'S KEY RULE, written here independently of the code under test: app.bsky.feed.post's key type is `tid`
+// (atproto packages/pds/src/repo/prepare.ts validateRecord runs the lexicon's key schema BEFORE anything is written).
+// The first real send, S187 at 2026-11-22 20:06Z, was refused twice for a key that was legal in general and not a TID,
+// and no fake that took any key could have said so.
+const REAL_TID = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
+const HEAD_CID = "bafyreib2rxk3rybk3aobmv5cjuql3bm2twh4jo5uxgf5kpqcsgz7soitae";   // the fake repo's commit, as a swapCommit would name it
 const stripped = (s) => s.replace(/[^A-Za-z0-9]/g, "");
 
 /**
@@ -32,6 +38,7 @@ const stripped = (s) => s.replace(/[^A-Za-z0-9]/g, "");
  */
 async function fakePds({ password = PASSWORD } = {}) {
   const records = new Map();
+  const rejected = [];                  // keys the lexicon's key schema refused
   const calls = [];
   const faults = { createSession: [], createRecord: [], getRecord: [] };
   let creates = 0;
@@ -64,6 +71,9 @@ async function fakePds({ password = PASSWORD } = {}) {
         if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { error: "AuthenticationRequired" });
         if (fault === "400") return send(400, { error: "InvalidRequest", message: "the fake refuses" });
         const b = JSON.parse(body);
+        // validation first, exactly as the PDS orders it: a key the lexicon refuses never reaches the swap check or a write
+        if (b.rkey !== undefined && !REAL_TID.test(b.rkey)) { rejected.push(b.rkey); return send(400, { error: "InvalidRequest", message: "Invalid record key for app.bsky.feed.post" }); }
+        if (b.swapCommit !== undefined && b.swapCommit !== HEAD_CID) return send(400, { error: "InvalidSwap", message: `Commit was at ${HEAD_CID}` });
         b.rkey ??= `tid${Date.now()}${creates}`;          // as a PDS does: no key asked for, one is made up
         if (records.has(b.rkey)) return send(400, { error: "InvalidRequest", message: "Record already exists" });
         creates += 1;
@@ -71,6 +81,7 @@ async function fakePds({ password = PASSWORD } = {}) {
         if (fault === "drop-after") return req.socket.destroy();
         return send(200, { uri: `at://${DID}/${b.collection}/${b.rkey}`, cid: `cid-${b.rkey}` });
       }
+      if (method === "com.atproto.sync.getLatestCommit") return send(200, { cid: HEAD_CID, rev: "3kfakerev0000" });
       if (method === "com.atproto.repo.getRecord") {
         if (fault === "notfound-500") return send(502, { error: "UpstreamFailure" });
         const rkey = url.searchParams.get("rkey");
@@ -81,10 +92,12 @@ async function fakePds({ password = PASSWORD } = {}) {
     });
   });
   await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
-  return { service: `http://127.0.0.1:${server.address().port}`, records, calls, faults, creates: () => creates, close: () => new Promise((ok) => server.close(ok)) };
+  return { service: `http://127.0.0.1:${server.address().port}`, records, rejected, calls, faults, creates: () => creates, close: () => new Promise((ok) => server.close(ok)) };
 }
 
-const EVENT = { kind: "crossing", n: 320, text: "Crossing 320 · Ferry's Daily: A porch hello", link: "https://postmark.town/daily/" };
+const AT320 = "2026-11-19T00:00:00.000Z";                              // crossing 320 sails at 00:00Z on the 19th (crossings.mjs § crossingSailsAt)
+const EVENT = { kind: "crossing", n: 320, text: "Crossing 320 · Ferry's Daily: A porch hello", link: "https://postmark.town/daily/", at: AT320 };
+const K320 = tidFor("crossing", 320, AT320);
 const run = (pds, dir, over = {}) => publishEvent(over.event ?? EVENT, { stateDir: dir, env: ENV, service: pds.service, timeoutMs: 2000, ...over });
 const methods = (pds) => pds.calls.map((c) => c.method.split(".").pop());
 const filesIn = (dir) => (existsSync(dir) ? readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("\n") : "");
@@ -94,12 +107,44 @@ const assertNoSecret = (text, where, secrets = [PASSWORD, TOKEN]) => {
 
 // ── the post ─────────────────────────────────────────────────────────────────
 
-test("the rkey is the event: crossing-<n> and settlement-<n>, and nothing else", () => {
-  assert.equal(rkeyFor("crossing", 320), "crossing-320");
-  assert.equal(rkeyFor("settlement", 175), "settlement-175");
-  assert.throws(() => rkeyFor("letter", 1));
-  assert.throws(() => rkeyFor("crossing", 3.5));
+test("the event's NAME names its state file and lock, and nothing else: crossing-<n> and settlement-<n>", () => {
+  assert.equal(eventKeyFor("crossing", 320), "crossing-320");
+  assert.equal(eventKeyFor("settlement", 175), "settlement-175");
+  assert.throws(() => eventKeyFor("letter", 1));
+  assert.throws(() => eventKeyFor("crossing", 3.5));
   assert.deepEqual(BSKY_ENV, ["BSKY_IDENTIFIER", "BSKY_APP_PASSWORD"]);
+});
+
+/** An independent decoder for a TID: the microseconds and the clock id it carries (the code under test never sees this). */
+function decodeTid(tid) {
+  const A = "234567abcdefghijklmnopqrstuvwxyz";
+  let v = 0n;
+  for (const c of tid) v = (v << 5n) | BigInt(A.indexOf(c));
+  return { micros: v >> 10n, clock: Number(v & 1023n), topBit: Number(v >> 63n) };
+}
+
+test("THE KEY IS A LEGAL TID FROM THE EVENT'S OWN INSTANT: the lexicon's shape, the instant in the microseconds, a fixed clock id per kind, and one key however it is run", () => {
+  const t = tidFor("settlement", 187, "2026-11-22T18:20:11Z");
+  assert.match(t, REAL_TID, "the shape the PDS's key schema accepts");
+  assert.equal(t.length, 13);
+  assert.deepEqual(decodeTid(t), { micros: BigInt(Date.parse("2026-11-22T18:20:11Z")) * 1000n + 187n, clock: 2, topBit: 0 },
+    "the instant to the millisecond, then the event's number in the microseconds, then settlement's clock id");
+  assert.equal(decodeTid(tidFor("crossing", 327, "2026-11-22T12:00:00Z")).clock, 1, "crossing's clock id");
+  // one event, one key: the same words whatever time (or order) it is asked
+  assert.equal(tidFor("settlement", 187, "2026-11-22T18:20:11Z"), t);
+  assert.equal(tidFor("settlement", 187, Date.parse("2026-11-22T18:20:11Z")), t, "an ISO string and epoch milliseconds are one instant");
+  assert.equal(tidFor("settlement", 187, "2026-11-22T13:20:11-05:00"), t, "and so is the same instant in another zone's spelling");
+  // no aliasing
+  assert.notEqual(tidFor("crossing", 5, "2026-11-22T12:00:00Z"), tidFor("settlement", 5, "2026-11-22T12:00:00Z"), "two kinds at one instant");
+  assert.notEqual(tidFor("settlement", 187, "2026-11-22T18:20:11Z"), tidFor("settlement", 188, "2026-11-22T18:20:11Z"), "two events of a kind sharing a second");
+  assert.ok(tidFor("settlement", 187, "2026-11-22T18:20:11Z") < tidFor("settlement", 188, "2026-11-22T18:20:11Z"), "in their own order (a TID sorts by time)");
+  assert.notEqual(tidFor("crossing", 327, "2026-11-22T12:00:00Z"), tidFor("crossing", 328, "2026-11-23T00:00:00Z"));
+  // no instant, no key: never a guess
+  for (const bad of [undefined, null, "", "not a time", NaN, -1]) assert.throws(() => tidFor("crossing", 1, bad), /real time/, String(bad));
+  assert.throws(() => tidFor("letter", 1, "2026-11-22T00:00:00Z"));
+  // the keys the town's own crossings get are legal for every crossing the town will count to
+  for (let n = 0; n < 3000; n += 7) assert.match(tidFor("crossing", n, Date.UTC(2026, 5, 12) + n * 12 * 3600e3), REAL_TID);
+  assert.equal(instantMs("2026-11-22T18:20:11Z"), Date.parse("2026-11-22T18:20:11Z"));
 });
 
 test("the post is an app.bsky.feed.post whose link facet sits on the link's exact UTF-8 bytes, and it fits 300 graphemes", () => {
@@ -143,15 +188,16 @@ test("a blessed settlement's counts are the literal records added between its ta
 
 // ── the publisher ────────────────────────────────────────────────────────────
 
-test("NORMAL: one session, one createRecord at crossing-320, posted; the next run answers from state with no network", async () => {
+test("NORMAL: one session, one createRecord at the crossing's TID, posted; the next run answers from state with no network", async () => {
   const pds = await fakePds(); const dir = tempDir("bsky-ok-");
   try {
     const r = await run(pds, dir);
-    assert.deepEqual([r.outcome, r.rkey, r.sends], ["posted", "crossing-320", 1]);
-    assert.equal(r.uri, `at://${DID}/app.bsky.feed.post/crossing-320`);
+    assert.deepEqual([r.outcome, r.rkey, r.sends], ["posted", K320, 1]);
+    assert.equal(r.uri, `at://${DID}/app.bsky.feed.post/${K320}`);
+    assert.deepEqual(pds.rejected, [], "the PDS's own key schema refused nothing");
     assert.deepEqual(methods(pds), ["createSession", "createRecord"]);
     assert.equal(pds.calls[1].auth, `Bearer ${TOKEN}`, "the token goes in the header, to the PDS only");
-    assert.equal(pds.records.get("crossing-320").text, "Crossing 320 · Ferry's Daily: A porch hello\nhttps://postmark.town/daily/");
+    assert.equal(pds.records.get(K320).text, "Crossing 320 · Ferry's Daily: A porch hello\nhttps://postmark.town/daily/");
     const again = await run(pds, dir);
     assert.equal(again.outcome, "already");
     assert.equal(pds.calls.length, 2, "no network for an event already posted");
@@ -204,9 +250,9 @@ test("RESTART MID-SEND: a state left 'sending' is reconciled first; a record the
   const pds = await fakePds(); const dir = tempDir("bsky-restart-");
   try {
     // the earlier process sent, the PDS took it, and the process died before writing the answer
-    pds.records.set("crossing-320", { text: "x" });
+    pds.records.set(K320, { text: "x" });
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "crossing-320.json"), JSON.stringify({ v: 1, event: { kind: "crossing", n: 320 }, rkey: "crossing-320", status: "sending", sends: 1, attempts: [], payload: { text: EVENT.text, link: EVENT.link, created_at: "2026-11-19T00:50:00.000Z" } }));
+    writeFileSync(join(dir, "crossing-320.json"), JSON.stringify({ v: 1, event: { kind: "crossing", n: 320, at: AT320 }, rkey: K320, status: "sending", sends: 1, attempts: [], payload: { text: EVENT.text, link: EVENT.link, created_at: "2026-11-19T00:50:00.000Z" } }));
     const r = await run(pds, dir);
     assert.deepEqual([r.outcome, r.sends], ["reconciled", 1]);
     assert.ok(!methods(pds).includes("createRecord"), "nothing created over an event already delivered");
@@ -218,10 +264,10 @@ test("RESTART MID-SEND, the key empty: the one remaining send is made, with the 
   const pds = await fakePds(); const dir = tempDir("bsky-restart2-");
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "crossing-320.json"), JSON.stringify({ v: 1, event: { kind: "crossing", n: 320 }, rkey: "crossing-320", status: "sending", sends: 1, attempts: [], payload: { text: "Crossing 320 · Ferry's Daily: the first headline", link: EVENT.link, created_at: "2026-11-19T00:50:00.000Z" } }));
+    writeFileSync(join(dir, "crossing-320.json"), JSON.stringify({ v: 1, event: { kind: "crossing", n: 320, at: AT320 }, rkey: K320, status: "sending", sends: 1, attempts: [], payload: { text: "Crossing 320 · Ferry's Daily: the first headline", link: EVENT.link, created_at: "2026-11-19T00:50:00.000Z" } }));
     const r = await run(pds, dir, { event: { ...EVENT, text: "Crossing 320 · Ferry's Daily: a re-tended headline" } });
     assert.deepEqual([r.outcome, r.sends], ["posted", 2]);
-    assert.match(pds.records.get("crossing-320").text, /the first headline/, "a retry sends the payload bound on first sight");
+    assert.match(pds.records.get(K320).text, /the first headline/, "a retry sends the payload bound on first sight");
   } finally { await pds.close(); }
 });
 
@@ -347,7 +393,7 @@ const hold = (point) => {
   writeFileSync(sync + "/" + name + "." + point, "");
   while (!existsSync(sync + "/" + name + "." + point + ".go")) Atomics.wait(nap, 0, 0, 5);
 };
-const r = await publishEvent({ kind: "crossing", n: 320, text: "Crossing 320 · Ferry's Daily: A porch hello", link: "https://postmark.town/daily/" },
+const r = await publishEvent({ kind: "crossing", n: 320, text: "Crossing 320 · Ferry's Daily: A porch hello", link: "https://postmark.town/daily/", at: "2026-11-19T00:00:00.000Z" },
   { stateDir: dir, env: process.env, service, timeoutMs: 5000, pause: hold });
 process.stdout.write(JSON.stringify(r));
 `;
@@ -608,7 +654,7 @@ test("THE OPERATOR STARTS IT, THEN AFTER EACH WITH NO AGE: nothing is chosen unt
     assert.deepEqual([r.code, said(r)], [0, ["settlement 173 posted"]], "a named event below the floor is that one alone");
     r = await go(["settlement", "--world", repo, "--state", state]);
     assert.deepEqual(said(r), ["settlement skipped"], "and it moved no floor: no backfill of S172");
-    assert.deepEqual([...pds.records.keys()], ["settlement-174", "settlement-175", "settlement-176", "settlement-177", "settlement-173"]);
+    assert.deepEqual([...pds.records.keys()], [174, 175, 176, 177, 173].map((n) => tidFor("settlement", n, instantOf("settlement", n, repo))), "each blessing's key is the TID of its tag's commit time");
     assert.equal(pds.creates(), 5);
   } finally { await pds.close(); }
 });
@@ -637,7 +683,7 @@ test("OWED EVENTS ARE CARRIED WITH THEIR OWN WORDS: a crossing left waiting is r
     r = await go(["crossing", "--town", repo, "--state", state], { now: () => NOW + 3 * DAY });
     assert.deepEqual([r.code, said(r)], [0, ["crossing 320 reconciled", "crossing 321 posted", "crossing 322 posted"]],
       "the owed crossing first, from its own state, though HEAD names 322 and three days passed");
-    assert.match(pds.records.get("crossing-320").text, /A porch hello\n/, "its words are the ones first composed");
+    assert.match(pds.records.get(K320).text, /A porch hello\n/, "its words are the ones first composed");
     assert.equal(pds.creates(), 4, "one record per crossing");
   } finally { await pds.close(); }
 });
@@ -684,7 +730,8 @@ test("THE CLI END TO END: one JSON receipt line, the exit codes, --state require
     assert.equal((await main(["settlement", "--world", repo, "--state", state, "--settlement", "x"])), 2, "a settlement number");
     let r = await go(["settlement", "--world", repo, "--state", state, "--settlement", "S175"]);
     assert.equal(r.code, 0);
-    assert.deepEqual(r.out, [{ event: "settlement 175", rkey: "settlement-175", outcome: "posted", sends: 1, uri: `at://${DID}/app.bsky.feed.post/settlement-175` }]);
+    const k175 = tidFor("settlement", 175, "2026-11-19T06:20:00Z");
+    assert.deepEqual(r.out, [{ event: "settlement 175", rkey: k175, outcome: "posted", sends: 1, uri: `at://${DID}/app.bsky.feed.post/${k175}` }]);
     r = await go(["settlement", "--world", repo, "--state", state, "--settlement", "175"]);
     assert.deepEqual([r.code, r.out[0].outcome], [0, "already"]);
     r = await go(["settlement", "--world", repo, "--state", state], { env: {} });
@@ -697,6 +744,194 @@ test("THE CLI END TO END: one JSON receipt line, the exit codes, --state require
     r = await go(["settlement", "--world", repo, "--state", tempDir("bsky-cli-fail-"), "--settlement", "174"]);
     assert.deepEqual([r.code, said(r)], [1, ["settlement 174 failed"]]);
     assert.equal(pds.creates(), 1);
+    assertNoSecret(lines.join("\n"), "stdout");
+  } finally { await pds.close(); }
+});
+
+// ── the TID correction (POS-904): the key the PDS accepts, and the operator's re-send of a failed event ─────────
+
+test("THE OLD KEY FAILS THE ACCEPTANCE TEST: the PDS refuses an event-named key before anything is written, and the publisher never offers one", async () => {
+  const pds = await fakePds();
+  try {
+    // what the first real run sent (S187, 2026-11-22 20:06Z), against a server that runs the lexicon's key schema
+    const session = await (await fetch(`${pds.service}/xrpc/com.atproto.server.createSession`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identifier: IDENT, password: PASSWORD }) })).json();
+    for (const legacy of ["settlement-187", "crossing-327"]) {
+      const res = await fetch(`${pds.service}/xrpc/com.atproto.repo.createRecord`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${session.accessJwt}` },
+        body: JSON.stringify({ repo: DID, collection: "app.bsky.feed.post", rkey: legacy, record: { $type: "app.bsky.feed.post", text: "x", createdAt: "2026-11-22T00:00:00Z" } }) });
+      assert.deepEqual([res.status, (await res.json()).error], [400, "InvalidRequest"], `${legacy} is a legal key in general and not a TID`);
+    }
+    assert.deepEqual(pds.rejected, ["settlement-187", "crossing-327"]);
+    assert.equal(pds.records.size, 0);
+    // the publisher, over both kinds and several events: every createRecord it ever sends carries a TID, and the server refuses none
+    const dir = tempDir("bsky-tid-");
+    for (const e of [{ kind: "crossing", n: 327, at: "2026-11-22T12:00:00Z" }, { kind: "settlement", n: 187, at: "2026-11-22T18:20:11Z" }, { kind: "settlement", n: 188, at: "2026-11-22T18:20:11Z" }])
+      assert.equal((await run(pds, dir, { event: { ...e, text: `${e.kind} ${e.n}`, link: "https://postmark.town/daily/" } })).outcome, "posted");
+    const sent = pds.calls.filter((c) => c.method.endsWith("createRecord")).map((c) => JSON.parse(c.body).rkey).slice(2);
+    assert.equal(sent.length, 3);
+    for (const k of sent) assert.match(k, REAL_TID);
+    assert.equal(new Set(sent).size, 3, "three events, three keys, two of them in one second");
+    assert.deepEqual(pds.rejected, ["settlement-187", "crossing-327"], "the server refused none of the publisher's");
+  } finally { await pds.close(); }
+});
+
+test("ONE KEY PER EVENT UNDER DIFFERENT RUN CLOCKS: two runs for one event, hours apart, in separate state, send the same rkey", async () => {
+  const keys = [];
+  for (const now of ["2026-11-22T20:06:04Z", "2026-11-25T03:11:59Z"]) {
+    const pds = await fakePds();
+    try {
+      const r = await run(pds, tempDir("bsky-clock-"), { now: () => new Date(now) });
+      assert.equal(r.outcome, "posted");
+      keys.push(r.rkey, JSON.parse(pds.calls.find((c) => c.method.endsWith("createRecord")).body).rkey);
+      assert.equal(pds.records.get(K320).createdAt, new Date(now).toISOString(), "the post is dated by its run; its key is not");
+    } finally { await pds.close(); }
+  }
+  assert.deepEqual([...new Set(keys)], [K320]);
+});
+
+/** A state as the first real run left it: S187 failed under the event-named key, two sends, no record, no instant recorded. */
+function legacyFailed(dir, n = 187, status = "failed", sends = 2) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `settlement-${n}.json`), JSON.stringify({
+    v: 1, event: { kind: "settlement", n }, rkey: `settlement-${n}`, status, sends,
+    attempts: [{ at: "2026-11-22T20:06:04.000Z", step: "createRecord", outcome: "refused", detail: "com.atproto.repo.createRecord: HTTP 400 InvalidRequest" }],
+    payload: { text: `Settlement S${n} is blessed. New marks published: 5 · household records added: 1.`, link: `https://postmark.town/replay/#S${n}`, created_at: "2026-11-22T20:06:04.000Z" },
+  }, null, 1));
+}
+const S187 = { kind: "settlement", n: 187, at: "2026-11-22T18:20:11.000Z" };
+const K187 = tidFor("settlement", 187, S187.at);
+
+test("A FAILED EVENT IS NEVER RE-SENT BY AN ORDINARY RUN, and the operator's re-arm is explicit, receipted, keeps its history, and sends once", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-rearm-");
+  try {
+    legacyFailed(dir);
+    const before = readFileSync(join(dir, "settlement-187.json"), "utf8");
+    const plain = await run(pds, dir, { event: S187 });
+    assert.equal(plain.outcome, "failed");
+    assert.equal(pds.calls.length, 0, "a scheduled run re-arms nothing and makes no call");
+    assert.equal(readFileSync(join(dir, "settlement-187.json"), "utf8"), before, "and does not touch the file");
+
+    const reason = "S187 failed on the key schema (POS-904); the key is now a TID";
+    const r = await run(pds, dir, { event: S187, rearm: { reason }, now: () => new Date("2026-11-23T01:00:00Z") });
+    assert.deepEqual([r.outcome, r.sends, r.rkey], ["posted", 1, K187]);
+    assert.deepEqual(r.rearmed, { at: "2026-11-23T01:00:00.000Z", reason, prior_sends: 2, prior_key: "settlement-187", key: K187 }, "the receipt");
+    assert.deepEqual(methods(pds), ["createSession", "getRecord", "createRecord"], "the key is asked first (absent), then one send");
+    assert.equal(pds.creates(), 1);
+    assert.deepEqual(pds.rejected, []);
+    const st = readState(dir, "settlement-187");
+    assert.deepEqual([st.status, st.rkey, st.legacy_rkey, st.sends], ["posted", K187, "settlement-187", 1]);
+    assert.deepEqual(st.rearms, [r.rearmed], "the receipt is kept in the state");
+    assert.ok(st.attempts.some((a) => a.step === "createRecord" && a.outcome === "refused"), "the failed history is kept, not replaced");
+    assert.equal(st.payload.text, "Settlement S187 is blessed. New marks published: 5 · household records added: 1.", "the words first composed");
+    assert.equal(st.event.at, S187.at);
+    assert.equal((await run(pds, dir, { event: S187 })).outcome, "already", "and it is answered from state afterwards");
+    assertNoSecret(filesIn(dir) + JSON.stringify(r), "state and receipt");
+  } finally { await pds.close(); }
+});
+
+test("RE-ARMING IS FOR ONE FAILED EVENT ONLY: a posted, pending or unknown event is not re-armed, and nothing is sent", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-rearm-no-");
+  try {
+    legacyFailed(dir, 190, "pending", 0);
+    const unknown = await run(pds, dir, { event: { ...S187, n: 189 }, rearm: { reason: "x" } });
+    assert.equal(unknown.outcome, "not-rearmed");
+    const pending = await run(pds, dir, { event: { ...S187, n: 190 }, rearm: { reason: "x" } });
+    assert.equal(pending.outcome, "not-rearmed");
+    assert.match(pending.detail, /is pending, not failed/);
+    const other = tempDir("bsky-rearm-no2-");
+    assert.equal((await run(pds, other)).outcome, "posted");
+    const callsBefore = pds.calls.length;
+    const posted = await run(pds, other, { rearm: { reason: "x" } });
+    assert.equal(posted.outcome, "already", "a posted event is answered from state, never re-armed");
+    assert.equal(pds.calls.length, callsBefore, "no call for any of them");
+    assert.equal(readState(dir, "settlement-190").status, "pending", "and the state is as it was");
+  } finally { await pds.close(); }
+});
+
+test("A RE-ARMED EVENT WHOSE RECORD IS ALREADY THERE IS RECONCILED, never posted twice; the failed file is kept, not deleted", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-rearm-found-");
+  try {
+    legacyFailed(dir);
+    pds.records.set(K187, { text: "Settlement S187 is blessed. New marks published: 5 · household records added: 1.\nhttps://postmark.town/replay/#S187" });
+    const r = await run(pds, dir, { event: S187, rearm: { reason: "belt and braces" } });
+    assert.deepEqual([r.outcome, r.sends], ["reconciled", 0]);
+    assert.equal(pds.creates(), 0);
+    assert.ok(!methods(pds).includes("createRecord"));
+    assert.ok(existsSync(join(dir, "settlement-187.json")));
+    assert.equal(readState(dir, "settlement-187").status, "posted");
+  } finally { await pds.close(); }
+});
+
+test("A RE-ARMED EVENT THAT FAILS AGAIN gets its own fresh budget of two sends and is failed again, with both lives in the history", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-rearm-again-");
+  try {
+    legacyFailed(dir);
+    pds.faults.createRecord.push("400", "400");
+    const r = await run(pds, dir, { event: S187, rearm: { reason: "try" } });
+    assert.deepEqual([r.outcome, r.sends], ["failed", MAX_SENDS]);
+    assert.equal(pds.calls.filter((c) => c.method.endsWith("createRecord")).length, MAX_SENDS);
+    assert.equal((await run(pds, dir, { event: S187 })).outcome, "failed", "and an ordinary run still leaves it");
+    assert.equal(readState(dir, "settlement-187").attempts.filter((a) => a.outcome === "refused").length, 3, "the first life's refusal and the two new ones");
+  } finally { await pds.close(); }
+});
+
+test("A STATE WRITTEN BEFORE THE TID (not failed) takes the TID on its next run, asks the key first, and records the change", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-legacy-");
+  try {
+    legacyFailed(dir, 187, "sending", 1);
+    const r = await run(pds, dir, { event: S187 });
+    assert.deepEqual([r.outcome, r.sends, r.rkey], ["posted", 2, K187]);
+    assert.deepEqual(methods(pds), ["createSession", "getRecord", "createRecord"]);
+    const st = readState(dir, "settlement-187");
+    assert.equal(st.legacy_rkey, "settlement-187");
+    assert.ok(st.attempts.some((a) => a.step === "rekey"));
+  } finally { await pds.close(); }
+});
+
+test("NO INSTANT, NO KEY: an event that cannot name its instant is held with nothing sent, and two events of a kind cannot take one key", async () => {
+  const pds = await fakePds(); const dir = tempDir("bsky-noat-");
+  try {
+    const none = await run(pds, dir, { event: { ...S187, at: undefined } });
+    assert.equal(none.outcome, "held");
+    assert.match(none.detail, /no key can be derived/);
+    assert.equal(pds.calls.length, 0);
+    assert.equal(existsSync(join(dir, "settlement-187.json")), false, "and no state is made for it");
+    // n and n+1000 at one millisecond would share a key: the second is held, never sent
+    assert.equal((await run(pds, dir, { event: { ...S187, n: 5, text: "a", link: "https://postmark.town/daily/" } })).outcome, "posted");
+    const twin = await run(pds, dir, { event: { ...S187, n: 1005, text: "b", link: "https://postmark.town/daily/" } });
+    assert.equal(twin.outcome, "held");
+    assert.match(twin.detail, /settlement 5 already holds this key/);
+    assert.equal(pds.creates(), 1);
+  } finally { await pds.close(); }
+});
+
+test("THE CLI'S RE-SEND: --rearm-failed names its event and its reason, re-arms only that failed event, and a plain run never does", async () => {
+  const pds = await fakePds();
+  try {
+    const repo = world({ tags: TAGS });
+    const state = tempDir("bsky-cli-rearm-");
+    legacyFailed(state, 174);
+    const { go, lines } = cli(pds);
+    let r = await go(["settlement", "--world", repo, "--state", state]);
+    // a scheduled-style run: the failed floor event is left alone (never re-armed, never re-sent), and the next blessing posts as ever
+    const k175 = tidFor("settlement", 175, "2026-11-19T06:20:00Z");
+    assert.deepEqual([r.code, said(r)], [0, ["settlement 175 posted"]]);
+    assert.deepEqual([...pds.records.keys()], [k175], "S174 was not re-sent");
+    assert.equal(readState(state, "settlement-174").status, "failed", "and is still failed");
+    assert.equal(await main(["settlement", "--world", repo, "--state", state, "--rearm-failed", "why"], { env: ENV, out: () => {} }), 2, "no event named");
+    assert.equal(await main(["settlement", "--world", repo, "--state", state, "--settlement", "174", "--rearm-failed", " "], { env: ENV, out: () => {} }), 2, "no reason");
+    assert.equal(pds.creates(), 1);
+    r = await go(["settlement", "--world", repo, "--state", state, "--settlement", "174", "--rearm-failed", "POS-904 key correction"]);
+    assert.deepEqual([r.code, said(r)], [0, ["settlement 174 posted"]], "only the named event, and nothing else is carried or discovered");
+    const k174 = tidFor("settlement", 174, "2026-11-18T18:20:00Z");
+    assert.equal(r.out[0].rkey, k174);
+    assert.equal(r.out[0].rearmed.reason, "POS-904 key correction");
+    assert.deepEqual([...pds.records.keys()], [k175, k174], "the one new record, at the tag's TID");
+    assert.equal(pds.creates(), 2);
+    r = await go(["settlement", "--world", repo, "--state", state, "--settlement", "174", "--rearm-failed", "again"]);
+    assert.deepEqual([r.code, said(r)], [0, ["settlement 174 already"]], "a posted event has nothing to re-arm");
+    assert.equal(pds.creates(), 2);
+    r = await go(["settlement", "--world", repo, "--state", tempDir("bsky-cli-rearm-none-"), "--settlement", "174", "--rearm-failed", "x"]);
+    assert.deepEqual([r.code, said(r)], [1, ["settlement 174 not-rearmed"]], "and an event with no state has none");
     assertNoSecret(lines.join("\n"), "stdout");
   } finally { await pds.close(); }
 });
