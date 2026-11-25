@@ -153,7 +153,7 @@ test("OPT-IN through the public adapter: the canonical room's public lines: an U
   assert.deepEqual([byId[ID.b].reply_to, byId[ID.c].reply_to, byId[ID.d].reply_to, byId[ID.e].reply_to, byId[ID.f].reply_to, byId[ID.g].reply_to],
     [ID.a, ID.b, ID.a, ID.a, ID.a, undefined], "the recorded edges, as recorded (three levels: a <- b <- c)");
   assert.deepEqual([byId[ID.a].circle, byId[ID.b].circle, byId[ID.c].circle, byId[ID.d].circle, byId[ID.g].circle], [ID.a, ID.a, ID.a, ID.a, ID.g],
-    "the producer's own circle classification, resolved over the whole room");
+    `the producer's own circle classification, resolved over the whole room: ${JSON.stringify(f.voices.map((v) => [v.id, v.reply_to, v.circle, v.at]))} ${JSON.stringify(f.circles).slice(0, 600)}`);
   for (const v of f.voices) for (const k of ["handle", "standing", "said", "at", "at_ms", "x", "y"]) assert.ok(k in v, `${k} is on every line`);
   assert.deepEqual({ ...f.voices_page, source: undefined }, { source: undefined, order: "oldest first", total: 7, served: 7, cap: 100, complete: true });
   assert.equal(f.room.voice_count, 7, "the header's own total agrees");
