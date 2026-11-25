@@ -1,0 +1,7 @@
+[Unit]
+Description=postmark-loop-lag-keep every 5 minutes (POS-1098)
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+[Install]
+WantedBy=timers.target

@@ -605,6 +605,34 @@ test("the flag gate — the drain refuses with WORLD_SINGLE_LOG off", async () =
   } finally { process.env.WORLD_SINGLE_LOG = "1"; }
 });
 
+test("POS-1212 — a mark the plan HELD BY NAME (a declared parent that cannot be found) refuses the whole drain before any write: rows, cursor, refs and files are all untouched", async () => {
+  const w = makeWorld("held-by-name");
+  withDb(w.dbPath, (db) => {
+    leave(db, { id: "alpha/a-sound-mark", body: "a sound declaration" });
+    leave(db, { id: "alpha/call-it-nowhere", kind: "naming", parent_id: "alpha/never-heard-of", body: "names a parent that does not exist" });
+  });
+  const before = snapshotWorld(w);
+  assert.deepEqual(before.store.rows, [1, 2]);
+  const r = await drain({ repo: w.repo, dbPath: w.dbPath, at: Date.parse(DRAIN_ISO), stateDir: join(w.root, "state") });
+  assert.equal(r.refused, "filing-held");
+  assert.equal(r.count, 1);
+  assert.deepEqual(r.held.map((h) => [h.id, h.why, h.declared_parent]), [["alpha/call-it-nowhere", "parent-unresolved", "alpha/never-heard-of"]]);
+  assert.match(r.detail, /alpha\/call-it-nowhere \(parent-unresolved: it declares parent alpha\/never-heard-of, which cannot be found\)/, "it names the mark, the cause and the declared parent");
+  assert.match(r.detail, /nothing was drained/);
+  const after = snapshotWorld(w);
+  assert.deepEqual(after.store.rows, [1, 2], "BOTH journal rows stay (the sound one is not drained past the held one)");
+  assert.equal(after.store.cursor, before.store.cursor, "the cursor did not move");
+  assert.deepEqual(after.refs, before.refs, "no sketchbook ref was written or advanced");
+  assert.deepEqual(after.state, before.state, "no STATE journal window or ledger was written");
+  assert.equal(existsSync(join(w.root, "state")), false, "not even the state directory");
+  // the CONTROL: with the held mark repaired (a parent that exists), the same sound row drains normally
+  withDb(w.dbPath, (db) => leave(db, { id: "alpha/call-it-nowhere", action: ACTION_AMEND, kind: "naming", parent_id: "alpha/a-sound-mark", body: "now names a real parent" }));
+  const ok = await drain({ repo: w.repo, dbPath: w.dbPath, at: Date.parse(DRAIN_ISO) });
+  assert.equal(ok.refused, undefined, JSON.stringify(ok).slice(0, 300));
+  assert.ok(ok.drained >= 2, JSON.stringify(ok).slice(0, 200));
+  assert.deepEqual(snapshotWorld(w).store.rows, [], "drained and truncated, as ever");
+});
+
 test("THE STALE JOURNAL — a non-empty journal refuses the drain by count, before anything is written (POS-269)", async () => {
   const w = makeWorld("stale");
   seedJournal(w.dbPath);
@@ -701,7 +729,8 @@ test("convert ONCE — the file frame is applied at write-down and nowhere else"
   }];
   // `publishedPathOf` answers where the mark WITH THAT ID sits. The parent here
   // is `the-town/town-square`, a pre-freeze fossil one level under the root.
-  const nestedPath = (id) => `WORLD/marks/let-there-be-light/${String(id).split("/")[1]}/mark.md`;
+  // (POS-1212: gate A now answers for every kind, so the stub answers only for the parent, never for the new child)
+  const nestedPath = (id) => (String(id) === "the-town/town-square" ? `WORLD/marks/let-there-be-light/${String(id).split("/")[1]}/mark.md` : null);
 
   const converted = planDrain(rows, {
     publishedPathOf: nestedPath,

@@ -9,7 +9,13 @@ Description=stripe-watch every 15 minutes — card payments resolve on a clock, 
 # town.lock on the same second. Cadence is not the grace window: a session is
 # held one full crossing regardless, so this only decides how fresh the operator
 # journal is.
-OnCalendar=*:7/15
+# Off the office keep's minutes too (POS-1227): postmark-office-keep.timer fires at
+# *:07,22,37,52 and holds town.lock exclusively for part of its ~2-minute run,
+# while fund-exec waits only `flock -w 30`. On the keep's minutes the watcher
+# refused a payment on every try for nine hours (11-24). :02/17/32/47 sit between
+# keep runs and clear of the other town.lock writers' minutes. Spelled in the
+# step form, which the site sentinel's cadence check reads (*:2/15 = :02,17,32,47).
+OnCalendar=*:2/15
 RandomizedDelaySec=45
 # a box that was down catches up on the next boot rather than skipping the gap;
 # the ledger's ref uniqueness is what makes a catch-up run safe to repeat

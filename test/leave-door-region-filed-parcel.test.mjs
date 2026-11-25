@@ -434,6 +434,16 @@ test("POS-493: a mark 0.5 m outside the parcel's edge warns, names the parcel's 
   }
 });
 
+test("POS-1212: the preview and the act answer the SAME dir for a mark nested on a region-filed parcel (the preview asks with the act's resolver)", async () => {
+  const body = { slug: "the-flat-colour", kind: "predicated", by: "reader", parent_id: "reader/the-keepers-flat", slot: "name", value: "the keeper's flat", body: "the flat is green" };
+  const previewed = await leave({ ...body, preview: true }, HOUSE);
+  assert.equal(previewed.ok, true, JSON.stringify(previewed));
+  const wrote = await leave(body, HOUSE);
+  assert.equal(wrote.ok, true, JSON.stringify(wrote));
+  assert.equal(previewed.dir, "let-there-be-light/the-doubled-coast/the-keepers-flat/the-flat-colour", "under its parent's real (region) filing, not the root");
+  assert.equal(wrote.dir, previewed.dir, "what the preview says is what the act files");
+});
+
 test("POS-493: a mark inside the parcel does not warn, and still names your ground", async () => {
   const out = await leave(bench({ slug: "the-inner-bench", at: { x: 300, y: 311 } }), HOUSE);
   assert.equal(out.ok, true, JSON.stringify(out));
