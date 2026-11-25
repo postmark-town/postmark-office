@@ -253,7 +253,8 @@ export const SOURCE_WORDS = Object.freeze({
   "store:depictions": "a resident's six-panel sheet",
   "office:likeness-gallery.json": "the town's likeness gallery",
 });
-const sourceWords = (name) => SOURCE_WORDS[name] ?? (String(name).startsWith("extra:") ? "work the town holds that is not yet published" : String(name));
+// A source the vocabulary does not know is never named raw: its name (an extra clone's path included) is the operator's, in the log.
+const sourceWords = (name) => SOURCE_WORDS[name] ?? (String(name).startsWith("extra:") ? "work the town holds that is not yet published" : "a place the town keeps");
 
 // ONE AT A TIME, the simple bound on what a call costs: every delete reads the
 // sweep's whole reference set (git over the world and town clones, and the
@@ -293,8 +294,10 @@ export async function deleteMediaAtOffice(fields, key, { odb, env = process.env,
   const r = await oneAtATime(() => deleteOwnUpload({ odb, household, by, url, ...from,
     ...(del ? { del } : {}), ...(now != null ? { now } : {}) }));
   if (r.refused) {
-    const { code, defect, hint, in_use, ...extra } = r.refused;
-    return bounce(code, defect, hint, { ...extra, ...(in_use ? { in_use: in_use.map(sourceWords) } : {}) });
+    const { code, defect, hint, in_use, unread, ...extra } = r.refused;
+    return bounce(code, defect, hint, { ...extra,
+      ...(in_use ? { in_use: in_use.map(sourceWords) } : {}),
+      ...(unread ? { unread: [...new Set(unread.map(sourceWords))] } : {}) });
   }
   const quota = await mediaQuota(odb, household);
   const note = r.already

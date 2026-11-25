@@ -120,9 +120,12 @@ test("planSweep: hung clears, first sight stamps, the grace decides due from wai
 
 test("the world source reads the blessing and main but not STATE/log, which is its own source (POS-737/b); drafts are their own source; the town reads its whole tree", async () => {
   const w = world(), t = town();
-  assert.deepEqual([...gitKeys(w, ["refs/heads/main"], { exclude: sweep.WORLD_HISTORY })], [rowKey({ household: "alta", sha: sha("a"), ext: "png" })]);
-  assert.equal(gitKeys(w, ["refs/heads/main"]).has(`dane/${sha("d")}.png`), true, "precondition: the history does name OLD");
-  assert.deepEqual([...sweep.historyKeys(w, ["refs/heads/main"])], [`dane/${sha("d")}.png`], "the history source reads only STATE/log");
+  assert.deepEqual([...await gitKeys(w, ["refs/heads/main"], { exclude: sweep.WORLD_HISTORY })], [rowKey({ household: "alta", sha: sha("a"), ext: "png" })]);
+  assert.equal((await gitKeys(w, ["refs/heads/main"])).has(`dane/${sha("d")}.png`), true, "precondition: the history does name OLD");
+  assert.deepEqual([...await sweep.historyKeys(w, ["refs/heads/main"])], [`dane/${sha("d")}.png`], "the history source reads only STATE/log");
+  // git's "no match" (exit 1) is an empty answer; a read error (a ref that is not there) is a refusal: the async reader keeps both
+  assert.deepEqual([...await gitKeys(w, ["refs/heads/main"], { only: ["WORLD/marks/nowhere"] })], [], "no match is no keys");
+  await assert.rejects(gitKeys(w, ["refs/heads/no-such-ref"]), /git grep in .* failed/, "a read error is never read as no match");
   const r = await referenceSet({ ...sources({ worldClone: w, townClone: t }), pool: null, officeFiles: [] });
   assert.equal(r.ok, true, JSON.stringify(r.sources));
   // LAW (Darko, 2026-11-25 08:34 EST, POS-737/b): "history counts as in use ... the World's logs (STATE/log/*) and the public replays"
@@ -192,7 +195,8 @@ test("POS-737/b: the household's own delete refuses a file named ONLY in a World
     const r = await deleteOwnUpload({ odb: db, household: h, by: h, url: file, ...sources(), now: NOW, log: () => {}, del });
     assert.deepEqual([r.refused?.code, r.refused?.defect], [409, "that file is still in use"], `${h}: ${JSON.stringify(r)}`);
     assert.deepEqual(r.refused.in_use, [where], `${h}: it names the history source that holds it`);
-    assert.match(r.refused.hint, /record of a past crossing .* a picture it shows stays/, `${h}: and says that history is not taken down`);
+    assert.match(r.refused.hint, /record of a past crossing .* a picture it shows stays and cannot be deleted/, `${h}: and says that history stays`);
+    assert.doesNotMatch(r.refused.hint, /take it down/, `${h}: and never advises taking a past record down`);
     assert.deepEqual(keys, [], `${h}: storage untouched`);
     const x = db.prepare("SELECT deleted_at, purged_at, unreferenced_since FROM media WHERE household = ?").get(h);
     assert.deepEqual([x.deleted_at, x.purged_at, x.unreferenced_since], [null, null, null], `${h}: not claimed, and no clock left running`);
@@ -583,4 +587,18 @@ test("WLD-83: the office's own likeness gallery is a source, so a picture it han
   assert.equal(row(db, "eve", sha("e")).unreferenced_since, null, "so its clock never starts");
   const shipped = await referenceSet({ ...sources(), pool: null });
   assert.ok(shipped.sources.some((s) => s.name === "office:likeness-gallery.json"), "the shipped gallery is read by default");
+});
+
+test("POS-737 FIX: the collector's core keeps the raw source name and path for the operator's log, and a hold by history alone is told apart from one with a live holder", async () => {
+  const db = LEDGER(), lines = [], gone = join(tmpdir(), "no-such-extra-xyz");
+  const r = await own(db, "eve", LOOSE, { extraClones: [gone], log: (l) => lines.push(l) });
+  assert.deepEqual([r.refused?.code, r.refused?.unread], [503, [`extra:${gone}`]], "the answer's core carries the raw name (household-media.mjs maps it to public words)");
+  assert.ok(lines.some((l) => l.includes(`extra:${gone}`)), "the operator's log names the raw source and path");
+  // history only, then a live holder beside it
+  const hist = await own(db, "dane", OLD);
+  assert.doesNotMatch(hist.refused.hint, /take it down/);
+  const mixedWorld = repo({ "WORLD/marks/dane/m/mark.md": `image: ${OLD}`, "STATE/log/1.jsonl": JSON.stringify({ say: OLD }) });
+  const mixed = await own(db, "dane", OLD, { worldClone: mixedWorld });
+  assert.ok(mixed.refused.in_use.includes("world") && mixed.refused.in_use.includes("world-history"));
+  assert.match(mixed.refused.hint, /whatever is taken down elsewhere/);
 });

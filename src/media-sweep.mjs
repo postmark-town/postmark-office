@@ -6,15 +6,14 @@
 // pictures, posts, events) after a 30-day grace, with its -96/-256 copies. The
 // ledger row moves to a deleted state and its bytes leave the household's wall.
 // It runs report-only first. An operator takedown verb (immediate, with a
-// receipt) ships with it. Until 2026-11-25 this said "The replay gap is
-// accepted: old records keep the pointer, never the bytes", and the sweep did
-// not read the world's history.
+// receipt) ships with it.
 //
 // RULED (Darko, 2026-11-25 08:34 EST, POS-737/b, "1 as rec"): history counts as
 // in use. "Before freeing anything, the sweep must also read the World's logs
-// (STATE/log/*) and the public replays (/world-engine/replay/*.json)." That
-// reverses the replay gap above, for the sweep and for the household's own
-// delete alike, since both read this one reference set.
+// (STATE/log/*) and the public replays (/world-engine/replay/*.json)." So there
+// is no replay gap: a file the world's record or a public replay still shows is
+// in use, for the sweep and for the household's own delete alike, since both
+// read this one reference set.
 //
 // WHY A SWEEP AND NOT A HOOK. The bytes are content-addressed per household, so
 // one file can hang on a mark, a face, a house picture and a bug post at once,
@@ -118,8 +117,8 @@
 // on a source it could not read. Its cause is 'household' (102), and its
 // `deleted_by` is the resident who asked.
 
-import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 
 import { asPaper } from "./paperwork.mjs";
@@ -152,42 +151,54 @@ export function keysIn(text, into = new Set()) {
 
 // ── the git sources ─────────────────────────────────────────────────────────
 
-const gitOut = (repo, args) => execFileSync("git", ["-C", repo, ...args],
-  { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
+// ASYNC ON PURPOSE (POS-737 FIX, Rivet's review). The household's delete runs this
+// inside the office's own process, on `POST /household`, and `git grep` over the
+// world's 37,000 log files takes seconds: a synchronous child freezes every other
+// request for that long. So every costly read here (git, the replay files, the
+// gallery) is a promise and the event loop keeps turning while it runs. The only
+// synchronous git left is world-branches.mjs's `blessed` and `freshestMainRef`,
+// the office's own memoized ref reads (a few cheap spawns, answered from memory
+// while the refresher runs), kept so the world's refs are chosen exactly as every
+// other reader chooses them.
+const gitOut = (repo, args) => new Promise((resolve, reject) => {
+  execFile("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true }, (e, stdout) => {
+    if (e) reject(e); else resolve(stdout); // a failed child's error already carries its stderr and its exit status in `code`
+  });
+});
 
 /**
  * Every media key on the trees of `refs` in `repo`, minus `exclude` paths. One
  * `git grep` over the commits: exit 1 is "no match", anything else is a refusal.
  */
-export function gitKeys(repo, refs, { exclude = [], only = null } = {}) {
+export async function gitKeys(repo, refs, { exclude = [], only = null } = {}) {
   const keys = new Set();
   if (!refs.length) return keys;
   let out;
   try {
-    out = gitOut(repo, ["grep", "-h", "-o", "-I", "-E", MEDIA_URL_ERE, ...refs, "--", ...(only ?? ["."]), ...exclude.map((p) => `:(exclude)${p}`)]);
+    out = await gitOut(repo, ["grep", "-h", "-o", "-I", "-E", MEDIA_URL_ERE, ...refs, "--", ...(only ?? ["."]), ...exclude.map((p) => `:(exclude)${p}`)]);
   } catch (e) {
-    if (e.status === 1) return keys; // no line matched
-    throw new Error(`git grep in ${repo} failed: ${String(e.stderr ?? e.message).trim().slice(0, 200)}`);
+    if (e.code === 1) return keys; // no line matched (the child's exit status; a spawn failure's code is a string)
+    throw new Error(`git grep in ${repo} failed: ${String(e.stderr || e.message).trim().slice(0, 200)}`);
   }
   return keysIn(out, keys);
 }
 
-const refsLike = (repo, pattern) =>
-  gitOut(repo, ["for-each-ref", "--format=%(refname)", pattern]).split("\n").filter(Boolean);
+const refsLike = async (repo, pattern) =>
+  (await gitOut(repo, ["for-each-ref", "--format=%(refname)", pattern])).split("\n").filter(Boolean);
 
 /** The world's current refs: the blessing and main, deduplicated. */
-export function worldRefs(repo) {
+export async function worldRefs(repo) {
   const b = blessed(repo);
   return [...new Set([b.ref, freshestMainRef(repo)])];
 }
 
 /** Every draft ref the world clone holds, local and fetched. */
-export const draftRefs = (repo) => [...new Set([...refsLike(repo, "refs/heads/draft/"), ...refsLike(repo, "refs/remotes/origin/draft/")])];
+export const draftRefs = async (repo) => [...new Set([...await refsLike(repo, "refs/heads/draft/"), ...await refsLike(repo, "refs/remotes/origin/draft/")])];
 
 /** The town's current refs: the checkout and, when fetched, origin/main. */
-export function townRefs(repo) {
+export async function townRefs(repo) {
   const refs = ["HEAD"];
-  if (refsLike(repo, "refs/remotes/origin/main").length) refs.push("refs/remotes/origin/main");
+  if ((await refsLike(repo, "refs/remotes/origin/main")).length) refs.push("refs/remotes/origin/main");
   return refs;
 }
 
@@ -199,9 +210,9 @@ export const WORLD_HISTORY = Object.freeze(["STATE/log"]);
  * as a history with no picture, so each ref's history directory is asked for
  * first: a ref that does not hold it is a refusal, never an empty history.
  */
-export function historyKeys(repo, refs, paths = WORLD_HISTORY) {
+export async function historyKeys(repo, refs, paths = WORLD_HISTORY) {
   for (const ref of refs) for (const p of paths) {
-    try { gitOut(repo, ["cat-file", "-e", `${ref}:${p}`]); }
+    try { await gitOut(repo, ["cat-file", "-e", `${ref}:${p}`]); }
     catch { throw new Error(`${repo} holds no ${p}/ at ${ref}, so the world's history cannot be read`); }
   }
   return gitKeys(repo, refs, { only: paths });
@@ -212,12 +223,12 @@ export function historyKeys(repo, refs, paths = WORLD_HISTORY) {
  * resolved directory. No replay file at all is a refusal, never an empty
  * history, and so is any file that cannot be read.
  */
-export function replayKeys(root) {
-  const files = readdirSync(root).filter((f) => f.endsWith(".json")).sort();
+export async function replayKeys(root) {
+  const files = (await readdir(root)).filter((f) => f.endsWith(".json")).sort();
   if (!files.length) throw new Error(`${root} holds no replay file (*.json), so the public replays cannot be read`);
   const keys = new Set();
   // an escaped slash in a JSON value reads as one, as the store's rows do
-  for (const f of files) keysIn(readFileSync(join(root, f), "utf8").replace(/\\+\//g, "/"), keys);
+  for (const f of files) keysIn((await readFile(join(root, f), "utf8")).replace(/\\+\//g, "/"), keys);
   return { keys, files: files.length };
 }
 
@@ -228,7 +239,7 @@ export const OFFICE_GALLERY = new URL("./likeness-gallery.json", import.meta.url
 
 /** The store's current-state tables a media URL can hang in, read whole as text. */
 export const STORE_SOURCES = Object.freeze([
-  { table: "marks", where: "status = 'standing'", why: "standing marks (a retired mark's picture is the accepted replay gap)" },
+  { table: "marks", where: "status = 'standing'", why: "standing marks (a retired mark's picture is still held by the world's log and the public replays, the history sources above)" },
   { table: "posts", why: "posts: bug reveals, events, notices" },
   { table: "responses", why: "answers to posts" },
   { table: "households", why: "home pictures (home_images)" },
@@ -296,7 +307,7 @@ export async function referenceSet({ worldClone, townClone, replayDir = null, po
   // The replays' directory is resolved ONCE, here, before any source is read: the
   // site's webroot is a symlink the refresh swaps, and a run reads one release of it.
   let replayRoot = null, replayWhy = null;
-  try { replayRoot = replayDir ? realpathSync(replayDir) : null; } catch (e) { replayWhy = e; }
+  try { replayRoot = replayDir ? await realpath(replayDir) : null; } catch (e) { replayWhy = e; }
   const keys = new Set();
   const sources = [];
   const take = async (name, expectSome, fn) => {
@@ -310,40 +321,40 @@ export async function referenceSet({ worldClone, townClone, replayDir = null, po
       sources.push({ name, error: String(e?.message ?? e).slice(0, 300) });
     }
   };
-  await take("world", true, worldClone && (() => {
-    const refs = worldRefs(worldClone);
-    return { found: gitKeys(worldClone, refs, { exclude: WORLD_HISTORY }), refs };
+  await take("world", true, worldClone && (async () => {
+    const refs = await worldRefs(worldClone);
+    return { found: await gitKeys(worldClone, refs, { exclude: WORLD_HISTORY }), refs };
   }));
   // POS-737/b: the world's own record counts as in use
-  await take("world-history", false, worldClone && (() => {
-    const refs = worldRefs(worldClone);
-    return { found: historyKeys(worldClone, refs), refs };
+  await take("world-history", false, worldClone && (async () => {
+    const refs = await worldRefs(worldClone);
+    return { found: await historyKeys(worldClone, refs), refs };
   }));
-  await take("drafts", false, worldClone && (() => {
-    const refs = draftRefs(worldClone);
-    return { found: gitKeys(worldClone, refs, { exclude: WORLD_HISTORY }), refs: refs.length };
+  await take("drafts", false, worldClone && (async () => {
+    const refs = await draftRefs(worldClone);
+    return { found: await gitKeys(worldClone, refs, { exclude: WORLD_HISTORY }), refs: refs.length };
   }));
-  await take("town", true, townClone && (() => {
-    const refs = townRefs(townClone);
-    return { found: gitKeys(townClone, refs), refs };
+  await take("town", true, townClone && (async () => {
+    const refs = await townRefs(townClone);
+    return { found: await gitKeys(townClone, refs), refs };
   }));
   // WLD-83: the office's own likeness gallery (src/likeness-gallery.json) hangs
   // pictures no town or store source names; they are kept like any hung picture.
   for (const file of officeFiles)
-    await take(`office:${String(file).split(/[\\/]/).pop()}`, false, () => ({ found: keysIn(readFileSync(file, "utf8")) }));
+    await take(`office:${String(file).split(/[\\/]/).pop()}`, false, async () => ({ found: keysIn(await readFile(file, "utf8")) }));
   for (const clone of extraClones)
-    await take(`extra:${clone}`, false, () => {
-      const refs = [...new Set([...refsLike(clone, "refs/heads/"), ...refsLike(clone, "refs/remotes/")])].filter((r) => !r.endsWith("/HEAD"));
-      return { found: gitKeys(clone, refs), refs: refs.length };
+    await take(`extra:${clone}`, false, async () => {
+      const refs = [...new Set([...await refsLike(clone, "refs/heads/"), ...await refsLike(clone, "refs/remotes/")])].filter((r) => !r.endsWith("/HEAD"));
+      return { found: await gitKeys(clone, refs), refs: refs.length };
     });
   for (const src of storeSources)
     await take(`store:${src.table}`, false, pool && (async () => ({ found: await storeKeys(pool, src) })));
   // POS-737/b: the public replays, read from the directory resolved at the top. Last, so the slow
   // sources have all run and the one read that a webroot swap could split is the one the top pinned.
-  await take("replays", false, () => {
+  await take("replays", false, async () => {
     if (replayWhy) throw replayWhy;
     if (!replayRoot) throw new Error("not configured: the public replays' directory is MEDIA_SWEEP_REPLAY_DIR, and nothing is freed without it");
-    const { keys: found, files } = replayKeys(replayRoot);
+    const { keys: found, files } = await replayKeys(replayRoot);
     return { found, files };
   });
   return { keys, sources, ok: sources.every((s) => !s.error) };
@@ -553,10 +564,15 @@ export async function deleteOwnUpload({
   const token = row.unreferenced_since;
   // POS-737/b: the town's past record counts as in use, and a record is not edited, so that part never goes
   const REMEMBERED = new Set(["world-history", "replays"]);
-  const inUse = (holders) => refusal(409, "that file is still in use",
-    "it hangs somewhere in the town, so it cannot be deleted: take it down from there first, then ask again. A mark's picture is in use until the change is published at a settlement"
-    + (holders.some((h) => REMEMBERED.has(h)) ? ". The town's record of a past crossing (a log or a public replay) shows it too, and that record is kept as it was: a picture it shows stays" : ""),
-    { in_use: holders });
+  // The words never advise taking a past record down: the record is kept as it was, so what it shows stays.
+  const inUse = (holders) => {
+    const past = holders.some((h) => REMEMBERED.has(h)), live = holders.some((h) => !REMEMBERED.has(h));
+    return refusal(409, "that file is still in use",
+      !past ? "it hangs somewhere in the town, so it cannot be deleted: take it down from there first, then ask again. A mark's picture is in use until the change is published at a settlement"
+      : !live ? "the town's record of a past crossing (a log or a public replay) shows it, and that record is kept as it was, so a picture it shows stays and cannot be deleted"
+      : "it hangs somewhere in the town, and the town's record of a past crossing (a log or a public replay) shows it too. That record is kept as it was, so a picture it shows stays and cannot be deleted, whatever is taken down elsewhere",
+      { in_use: holders });
+  };
   const hungMeanwhile = () => refusal(409, "that file is still in use",
     "a door hung it while the town was checking, so nothing was deleted: take it down from there first, then ask again");
   if (token == null) return hungMeanwhile(); // a hanging door cleared the clock between the stamp and this read

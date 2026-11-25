@@ -700,7 +700,8 @@ test("delete-media (POS-737/b): a file named only in a World log, or only in a p
     const r = await deleteMediaAtOffice({ url: hung.url }, key(), { odb: db, sources: sourcesWithHistory(over(hung.url)), del: async (k) => { deleted.push(k); } });
     assert.deepEqual([r.error, r.code, r.defect], ["bounce", 409, "that file is still in use"], `${where}: ${JSON.stringify(r)}`);
     assert.deepEqual(r.in_use, [words], `${where}: it says where`);
-    assert.match(r.hint, /The town's record of a past crossing .* a picture it shows stays/, `${where}: and that a record is not taken down`);
+    assert.match(r.hint, /record of a past crossing .* a picture it shows stays and cannot be deleted/, `${where}: and that a record is kept`);
+    assert.doesNotMatch(r.hint, /take it down/, `${where}: never advising a past record be taken down`);
     assert.deepEqual(deleted, [], `${where}: storage untouched`);
     assert.deepEqual((await mediaLedgerRows(db, "testers")).map((u) => u.url), [hung.url], `${where}: the upload stands`);
     assert.equal((await mediaQuota(db, "testers")).used, hung.bytes, `${where}: no quota released`);
@@ -716,11 +717,11 @@ test("delete-media (POS-737/b): the door reads the replay directory from the off
   const ask = (e) => deleteMediaAtOffice({ url: up.url }, key(), { odb: db, env: e, del: async (k) => { deleted.push(k); } });
   const without = await ask(env());
   assert.deepEqual([without.code, without.defect], [503, "the town could not check every place this file could hang, so nothing was deleted"], JSON.stringify(without));
-  assert.ok(without.unread.includes("replays"), "the unbound replay directory is named");
+  assert.ok(without.unread.includes(SOURCE_WORDS.replays), "the unbound replay directory is named, in the public words");
   // bound: the replay source reads (the store's tables are still unreadable here: this odb has no pool)
   const bound = await ask(env({ MEDIA_SWEEP_REPLAY_DIR: s.replayDir }));
-  assert.equal(bound.unread.includes("replays"), false, "bound, the door's own env reaches the reference set");
-  assert.equal(bound.unread.includes("world-history"), false);
+  assert.equal(bound.unread.includes(SOURCE_WORDS.replays), false, "bound, the door's own env reaches the reference set");
+  assert.equal(bound.unread.includes(SOURCE_WORDS["world-history"]), false);
   assert.deepEqual(deleted, [], "and nothing was deleted either way");
 });
 
@@ -740,4 +741,61 @@ test("delete-media through the household verb: on the menu, its card readable by
   assert.equal((await mediaLedgerRows(db, "others")).length, 1, "their file stands");
   const media = await mediaRead(key(), { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
   assert.equal(media.delete, DELETE_TEACH);
+});
+
+// ── POS-737 FIX (Rivet's review of 428ed65d): the delete does not freeze the office ──
+//
+// LAW (Darko, 2026-11-25 08:34 EST, POS-737/b): history counts as in use, so the delete reads the world's
+// whole log. That read runs inside the office's own process, on POST /household, and a synchronous child
+// stalls every other request for its length. ORACLE: another timer, due 1 ms in, runs BEFORE the delete
+// finishes, on every outcome. A synchronous collector settles the whole delete inside one turn of the
+// event loop, so the timer can only run after it: the old implementation fails this order.
+async function inFlight(run) {
+  const order = [];
+  const other = new Promise((r) => setTimeout(() => { order.push("another timer ran"); r(); }, 1));
+  const done = run().then((v) => { order.push("the delete finished"); return v; });
+  await Promise.all([other, done]);
+  return { order, result: await done };
+}
+const PROGRESSED = ["another timer ran", "the delete finished"];
+
+test("delete-media (POS-737 FIX): another timer runs while the sources are read, on a refused, an unread and a freed outcome; the answers are as before", async () => {
+  // refused: a file the world's log shows (History counts as in use)
+  const db = odb();
+  const logged = await upload(svg("liveness-log"), key(), db);
+  const deleted = [];
+  const refused = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, sources: sourcesWithHistory({ log: logged.url }), del: async (k) => { deleted.push(k); } }));
+  assert.deepEqual(refused.order, PROGRESSED, "refused: the office kept turning while the collector read");
+  assert.deepEqual([refused.result.code, refused.result.defect], [409, "that file is still in use"]);
+  // unread: the replay directory is not bound
+  const s = sourcesWithHistory();
+  const unread = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, env: { WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone }, del: async (k) => { deleted.push(k); } }));
+  assert.deepEqual(unread.order, PROGRESSED, "unread: the same");
+  assert.equal(unread.result.code, 503);
+  assert.ok(unread.result.unread.includes(SOURCE_WORDS.replays));
+  assert.deepEqual(deleted, [], "and nothing was deleted on either");
+  assert.equal((await mediaQuota(db, "testers")).used, logged.bytes, "no quota released");
+  // freed: the control that the deletion path itself is the one being timed
+  const free = await upload(svg("liveness-free"), key(), db);
+  const freed = await inFlight(() => deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources: sourcesWithHistory(), del: async (k) => { deleted.push(k); } }));
+  assert.deepEqual(freed.order, PROGRESSED, "freed: the same");
+  assert.deepEqual([freed.result.deleted, freed.result.purged], [true, true]);
+  assert.deepEqual(deleted, freed.result.receipt.objects, "exactly the freed file's objects (an SVG has no small copies)");
+});
+
+test("delete-media (POS-737 FIX): `unread` is in the public words, an extra clone's path never reaches the resident; history and live holders together still say the record stays", async () => {
+  const db = odb();
+  const up = await upload(svg("unread-words"), key(), db);
+  const gone = join(tempDir("pm-media-del-nowhere-"), "no-such-clone");
+  const r = await deleteMediaAtOffice({ url: up.url }, key(), { odb: db, sources: { ...sourcesWithHistory(), extraClones: [gone] } });
+  assert.equal(r.code, 503);
+  assert.ok(r.unread.includes("work the town holds that is not yet published"), JSON.stringify(r.unread));
+  assert.equal(JSON.stringify(r).includes("no-such-clone"), false, "the resident never reads the operator's path");
+  assert.ok(r.unread.every((w) => Object.values(SOURCE_WORDS).includes(w) || w === "work the town holds that is not yet published"), "only public vocabulary");
+  // a file a live mark AND the past record show: the words name both and never advise taking the record down
+  const both = await upload(svg("both-holders"), key(), db);
+  const mixed = await deleteMediaAtOffice({ url: both.url }, key(), { odb: db, sources: sourcesWithHistory({ hanging: [both.url], log: both.url }) });
+  assert.equal(mixed.code, 409);
+  assert.deepEqual(mixed.in_use, [SOURCE_WORDS.world, SOURCE_WORDS["world-history"]]);
+  assert.match(mixed.hint, /That record is kept as it was, so a picture it shows stays and cannot be deleted, whatever is taken down elsewhere/);
 });

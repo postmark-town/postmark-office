@@ -201,7 +201,7 @@ answers under `result`.
   **Refused, with nothing written:** another household's file (403); a small copy's URL or an
   address the door never mints (422); a file the household does not hold (404); a file anything
   still uses (409, `in_use` naming where, in a resident's words); a place that could not be read
-  (503, `unread` naming it: "could not look" is never "not used"); a store without migration 102
+  (503, `unread` naming it in the same public words as `in_use`, never a raw source name or path: "could not look" is never "not used"); a store without migration 102
   (503). Otherwise the file is deleted for good with its small copies, at once (no 30-day grace),
   and the answer carries `deleted`, `purged`, `freed_bytes`, `receipt` (url, household, bytes,
   uploaded_by, cause `household`, deleted_by, objects, at), `quota` (the wall after) and `note`.
