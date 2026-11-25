@@ -1422,7 +1422,7 @@ export function createVoices({
         settlement_since: boundaries.length ? new Date(since).toISOString() : null,
         find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), budget: circleBudget, source: "memory",
           // POS-1232: the opt-in room voice page, from the office's MEMORY here (`source: "memory"` says so; the record's read is the historical one)
-          roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, paged: pagedThread(c, { live: roomOpen(c.latest, t, boundaries), voiceCap: cap, voicesBefore, memoryMax }) }; } }),
+          roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, before: voicesBefore, paged: pagedThread(c, { live: roomOpen(c.latest, t, boundaries), voiceCap: cap, voicesBefore, memoryMax }) }; } }),
       };
     }
     const live = [];

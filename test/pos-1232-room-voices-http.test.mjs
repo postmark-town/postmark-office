@@ -16,7 +16,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
@@ -182,6 +182,46 @@ test("PAGING tells the truth and continues without loss or repetition, widening 
   // a requested page larger than the bound is capped, and the page says the cap it served
   const big = (await getJson("durable", `/world/conversations?room=${encodeURIComponent(id)}&room_voices=1&voices=100000`)).body.find;
   assert.equal(big.voices_page.cap, 400);
+});
+
+test("EVERY PAGE'S CLASSIFICATION IS THE WHOLE ROOM'S: a circle spanning pages keeps its circle on every page, and a pre-circles root answered on another page is still the root of its circle", async (t) => {
+  if (skip) return t.skip(skip);
+  const id = await room();
+  const get = async (extra) => (await getJson("durable", `/world/conversations?room=${encodeURIComponent(id)}&room_voices=1${extra}`)).body.find;
+  const whole = await get("&voices=100");
+  const truth = Object.fromEntries(whole.voices.map((v) => [v.id, { circle: v.circle, reply_to: v.reply_to }]));
+  assert.deepEqual(Object.values(truth).map((x) => x.circle), [ID.a, ID.a, ID.a, ID.a, ID.a, ID.a, undefined], "the whole room's answer: one circle across a..f; g is no circle (pre-circles, unanswered)");
+  // (1) a circle that spans pages: walk the room two lines a page, newest first; EVERY line on EVERY page equals the whole room's answer
+  let seen = 0, page = await get("&voices=2");
+  for (let hops = 0; hops < 10; hops++) {
+    for (const v of page.voices) { seen += 1; assert.deepEqual({ circle: v.circle, reply_to: v.reply_to }, truth[v.id], `line ${v.id} on a partial page reads as the whole room reads it`); }
+    if (!page.voices_page.earlier) break;
+    page = await get(`&voices=2&voices_before=${page.voices_page.earlier.before_ms}`);
+  }
+  assert.ok(seen >= 7, `${seen} lines compared across the pages`);
+  // (2) a pre-circles root ANSWERED across a page boundary: a (spoken before circles) alone on its page, its replies on a later page, is still the root of circle a (not an unanswered pre-circles line)
+  const alone = await get(`&voices=1&voices_before=${ROOM_AT + 1 * MIN}`);
+  assert.deepEqual(ids(alone.voices), [ID.a]);
+  assert.equal(alone.voices[0].circle, ID.a, "the opener is the root of its circle even though every reply is on a page not served here");
+  assert.equal(alone.voices[0].said, OPENER);
+  assert.equal(alone.voices_page.later_not_served, 6, "and the page says the replies were left to later pages");
+  // a reply whose parent is on another page is not 'broken': it still names its circle
+  const tail = await get(`&voices=1&voices_before=${ROOM_AT + 3 * MIN}`);
+  assert.deepEqual(ids(tail.voices), [ID.c]);
+  assert.deepEqual([tail.voices[0].reply_to, tail.voices[0].circle], [ID.b, ID.a], "c answers b (page before) and belongs to circle a");
+});
+
+test("COVERAGE WORDS: find.history describes the circles view, voices_page.complete describes these lines; the two are independent, and body-level unplaced_says still counts what neither could place", async (t) => {
+  if (skip) return t.skip(skip);
+  const id = await room();
+  const r = (await getJson("durable", `/world/conversations?room=${encodeURIComponent(id)}&room_voices=1&voices=2`)).body;
+  assert.ok(["complete", "folded"].includes(r.find.history));
+  assert.equal(r.find.voices_page.complete, false, "a partial page of lines is not complete however whole the circles view is");
+  const full = (await getJson("durable", `/world/conversations?room=${encodeURIComponent(id)}&room_voices=1&voices=100`)).body;
+  assert.equal(full.find.voices_page.complete, true);
+  assert.ok("evaluated_at" in full, "the body's own disclosures (evaluated_at, and unplaced_says where any say could not be placed) ride beside `find`, unchanged");
+  const src = readFileSync(join(ROOT, "src", "circles.mjs"), "utf8");
+  assert.match(src, /voices_page\.complete` is about THESE LINES[\s\S]*not `find\.history`[\s\S]*`unplaced_says` still counts/);
 });
 
 test("UNAVAILABLE stays honest: a room the record does not hold answers unavailable with no lines, opt-in or not", async (t) => {

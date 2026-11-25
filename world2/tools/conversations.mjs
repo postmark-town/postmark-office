@@ -565,7 +565,7 @@ export function conversationFound(clusters, find, { now, earshotM, boundaries = 
     settlement_since: marks.length ? new Date(since).toISOString() : null,
     find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, now, marks), voiceCap }), source: "record",
       // POS-1232: the opt-in room voice page: the LIST's own paged thread (tie-safe), its cap bounded
-      roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, paged: pagedThread(c, { live: roomOpen(c.latest, now, marks), voiceCap: cap, voicesBefore }) }; } }),
+      roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, before: voicesBefore, paged: pagedThread(c, { live: roomOpen(c.latest, now, marks), voiceCap: cap, voicesBefore }) }; } }),
   };
 }
 

@@ -554,15 +554,23 @@ export const ROOM_VOICES_MAX = 400;
  * POS-1232: THE ROOM'S PUBLIC VOICES, as one page. `paged` is the same `pagedThread` the conversations LIST serves (its `voices` are the public say lines: full
  * `said`, `id` and `reply_to` where recorded, the producer's `circle` resolved over the WHOLE room, and nothing invented for an old line without ids), and its tie-safe
  * `voices_earlier`. This states what the page IS: the room's total, how many lines this page serves, whether earlier lines wait behind it (and the cursor that opens
- * them), and whether later lines were left out by the caller's own cursor. A partial page never reads as the whole room. PURE.
+ * them), and whether later lines were left out by the caller's own cursor. A partial page never reads as the whole room. `voices_page.complete` is about THESE LINES
+ * (is this page the whole room's lines?); it is not `find.history`, which is about the room's circles view (complete / folded / unavailable), and neither says whether
+ * any say was left out of the room because it could not be placed: the body-level `unplaced_says` still counts those. PURE.
  */
-export function roomVoicesPage(paged, { cap, source }) {
+export function roomVoicesPage(paged, { cap, source, cluster, before = null }) {
   const total = Number(paged.voice_count ?? 0);
-  const served = paged.voices.length;
+  // THE LINES' CLASSIFICATION IS THE WHOLE ROOM'S, NOT THE SLICE'S. `pagedThread` builds its lines from the served slice alone, so a reply whose parent sits on an earlier
+  // page would read as broken, and a pre-circles root answered on a later page would read as unanswered (and so as no circle). The page is therefore the same
+  // tie-safe slice (the last `served` voices before the cursor, exactly as `pagedThread` cut it), turned into public lines with the circle index of the WHOLE room.
+  const pool = Number.isFinite(before) ? cluster.voices.filter((v) => v.at < before) : cluster.voices;
+  const slice = pool.slice(pool.length - paged.voices.length);
+  const lines = sayLines(slice, circleIndex(cluster.voices));
+  const served = lines.length;
   const earlier = paged.voices_earlier?.remaining ?? 0;
   const later = Math.max(0, total - earlier - served);
   return {
-    voices: paged.voices,
+    voices: lines,
     voices_page: {
       source, order: "oldest first", total, served, cap,
       complete: earlier === 0 && later === 0,
@@ -608,7 +616,7 @@ export function findConversation(clusters, { circle = null, room = null, after =
     const circles = circleView(hit.voices, { caller: null, budget, measure: (v) => measure({ ...asked, source, room: header, circles: v }) });
     const folded = Boolean(circles.more_circles?.length || circles.timeline_folded);
     // POS-1232: the OPT-IN public voice page of this one room, beside (never instead of) the circles; omitted, the answer is byte-for-byte what it was
-    const lines = room_voices && typeof roomLines === "function" ? (({ paged, cap }) => roomVoicesPage(paged, { cap, source }))(roomLines(hit)) : null;
+    const lines = room_voices && typeof roomLines === "function" ? (({ paged, cap, before }) => roomVoicesPage(paged, { cap, source, cluster: hit, before }))(roomLines(hit)) : null;
     return { ...asked, history: circles.broken ? "unavailable" : folded ? "folded" : "complete", source, room: header, circles, ...(lines ?? {}),
       ...(circles.broken ? { note: "some replies here answer says this read does not hold (named in circles.broken); everything else is served" } : {}),
       ...(folded && !circles.broken ? { note: "more circles than fit: each id in circles.more_circles opens with ?circle=<id>" } : {}) };
