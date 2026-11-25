@@ -31,6 +31,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
 import { markRecord, recordKindOf } from "./mark-record.mjs";
+import { keptEntry } from "./door-destination.mjs"; // POS-1238
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
 import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
@@ -351,7 +352,9 @@ async function main() {
     return framing?.at ?? null;
   };
   // a new description writes `kind: predicate` (W2's rename, WLD-73 G10); the parent check above reads either form
-  const fileRec = { ...p, kind: recordKindOf(p.kind) };
+  // a door stays a door across an amend (POS-1238, door-destination.mjs § keptEntry): the entry it does not send is the prior one's
+  const kept = amending ? keptEntry(p.entry, priorRec) : undefined;
+  const fileRec = { ...p, ...(kept !== undefined ? { entry: kept } : {}), kind: recordKindOf(p.kind) };
   if (relativeTree) {
     const origin = frameOrigin();
     if (origin) {

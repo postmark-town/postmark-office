@@ -53,6 +53,7 @@ import { harborWritesOpen, HARBOR_BOUNCE } from "./harbor-gate.mjs"; // POS-739:
 import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, classOwnProperties, departurePace, freeCellIn } from "./world-classes.mjs";
 import { carriedProperties } from "./event-sparks.mjs"; // POS-1035: WLD-173's office half — properties carried by name
+import { keptEntry } from "./door-destination.mjs"; // POS-1238: an amend keeps the door's entry it does not send
 // The classes whose fields this door picks by hand (the bounty's ask, a chest's contents, a candy's label, a thing's holding word):
 // they keep their own named fields; every other class carries its law-declared properties through `properties`.
 const HAND_PICKED_CLASSES = Object.freeze(["bounty", "chest", "candy", "thing"]);
@@ -4772,6 +4773,9 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     const priorCanon = canon.byId.get(id) ?? null;
     const exists = Boolean(priorLive || priorCanon);
     const amending = exists && clean.amend === true;
+    // A DOOR STAYS A DOOR ACROSS AN AMEND (POS-1238): an amend that sends no entry keeps the one standing, unchanged. Before
+    // this, new words on a door filed a record with no entry at all, and the next save deleted where it leads.
+    if (amending) { const kept = keptEntry(clean.entry, priorLive ?? priorCanon); if (kept !== undefined) clean.entry = kept; }
 
     // ── slug collision, as a lookup ──────────────────────────────────────────
     if (exists && !amending)
@@ -5467,6 +5471,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     const actor = named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
     if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
     if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+    // a door's destination on this road too (POS-1238): a thing made in hand is new, so there is no entry standing
+    { const r = await (await import("./door-destination.mjs")).doorWriteRefusal({ payload, actor }); if (r) throw bounce(r.code, r.defect, r.hint); }
     // ── ONE NAMED THING, MADE INTO HANDS OR A HOLDER (POS-766, Darko 2026-10-22 21:55) ──
     // With anything of its own (a slug, a body, its holder fields, a picture) and
     // no count, `to:` makes ONE mark, held, free and live; with kind and count it
@@ -5518,6 +5524,25 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   let klass = payload.class;
   let { at, extent, points } = payload;
   if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw bounce(422, "slug must be kebab-case", `lowercase letters, digits, single hyphens — got "${slug}"`);
+  // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
+  // RESIDENT'S household, never the placer's (POS-233): it is their act, their
+  // live layer, their sketchbook and their cap, and their own amend must find it.
+  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  // ── A DOOR'S DESTINATION IS THE TOWN'S TO SET (POS-1238, WLD-253) ─────────
+  // Asked first, on every road a door's `into` or `lands_at` can arrive by (door-destination.mjs), so its refusal is the
+  // door's own and nothing else is read or written. The town is the operator acting as the town, and no one else. An
+  // amend's entry as it stands is the live layer's, else canon's: the same order the journal pass reads it in.
+  {
+    const beforeOf = async () => {
+      if (payload.amend !== true) return null;
+      const id = `${by}/${slug}`;
+      let live = null;
+      if (singleLogEnabled()) { try { live = (await guardedLiveMarks(null, { household, actor: by })).find((m) => m.id === id) ?? null; } catch { live = null; } }
+      return (live ?? canonForGuards()?.byId?.get(id) ?? null)?.entry ?? null;
+    };
+    const r = await (await import("./door-destination.mjs")).doorWriteRefusal({ payload, beforeOf, actor: by, town: operator?.asTown === true });
+    if (r) throw bounce(r.code, r.defect, r.hint);
+  }
   // ── A THING MADE IN HAND IS NOT LEFT, AMENDED OR DESCRIBED HERE (POS-766: G2, G6, G7) ──
   // Its name stays taken for good, its words are set when it is made, and a
   // detail laid on it would name a parent the settlement's lint cannot see.
@@ -5838,10 +5863,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     throw bounce(422, "stamps must be a whole number, 0 or more",
       "stamps: 1 stakes your new mark in the same act — escrow is what publishes a commons mark; 0 or omitted keeps it a personal draft");
 
-  // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
-  // RESIDENT'S household, never the placer's (POS-233): it is their act, their
-  // live layer, their sketchbook and their cap, and their own amend must find it.
-  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  // THE ACT'S HOUSEHOLD, read above (before the door's question, POS-1238).
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
