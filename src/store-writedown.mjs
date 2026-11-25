@@ -594,6 +594,15 @@ export function filingHolds(marks, { publishedPathOf = null, canonBytesAt = null
   const rootHolds = new Map();
   for (const m of marks) {
     const p = planPath(m, new Set());
+    // POS-1212: NO FILING IS A HOLD BY NAME, at write planning (Wright, 2026-11-24 13:21Z). A mark that declares a `parent_id` we cannot find has told us where it
+    // belongs, and filing it at its maker's id would be a guess; it is held (not written, reported, its row untouched) rather than placed under the root, the
+    // fallback that is gone. A mark with no maker is held the same way. A supplier's own `plannedPath` never gets here (it is a path).
+    if (!p && !m.plannedPath && (m.fileRec?.kind ?? m.kind ?? null)) {
+      const declared = m.fileRec?.parent_id ?? null;
+      rootHolds.set(m.id, { id: m.id, by: m.by ?? null, slug: m.slug ?? null, household: m.household ?? null, locked_window: m.locked_window ?? null,
+        path: null, held_by_filing_of: null, declared_parent: declared, crossing_output: declared ? "parent-unresolved" : "no-maker" });
+      continue;
+    }
     const c = p ? pathCollision(m, p, { publishedPathOf, canonBytesAt }) : null;
     if (c) rootHolds.set(m.id, c);
   }
@@ -668,13 +677,9 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     // checking a file existed.
     const kind = m.fileRec?.kind ?? m.kind ?? null;
     if (!m.plannedPath && !kind) {
-      // A MISSING `kind` IS A MISFILING, NOT A MISSING FIELD. `pathFor` takes
-      // Gate A/B only for `sited` and `parcel`; with no kind it falls through to
-      // the root-prefix branch and files the mark at
-      // `WORLD/marks/let-there-be-light/<slug>/mark.md` — a real path, which
-      // parses, which the sweep will publish, and which is not where the mark
-      // lives. Nothing downstream can tell that apart from a deliberate filing.
-      // So it refuses here rather than landing somewhere plausible.
+      // A MISSING `kind` IS A MISSING FIELD THE FILING CANNOT BE TRUSTED WITHOUT. `pathFor` asks the kind whether a record is sited (which never nests) or
+      // a continuation (which files under its declared parent); with no kind it cannot tell which, and a plausible path that is silently wrong is what the
+      // sweep would publish. So it refuses here rather than landing somewhere plausible.
       throw new FoldInputRefusal(
         "mark-without-kind",
         `${m.id} carries no \`kind\`, and \`pathFor\` needs one to take the freeze's Gate A/B `
@@ -683,17 +688,17 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       );
     }
     const path = planPath(m);
+    // WLD-230 (and POS-1212): a mark whose filing is another id's, or that has NO filing (a declared parent we cannot find; no maker), is held, reported,
+    // not written, not framed, never thrown (see § A FILING IS ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a
+    // file it will not write.
+    const collision = holds.get(m.id) ?? null;
+    if (collision) { held.push(collision); continue; }
     if (!path) {
       throw new FoldInputRefusal(
         "mark-without-path",
         `${m.id} resolves to no path — neither canon's filing nor its id can place it`,
       );
     }
-
-    // WLD-230: the filing at this path is another id's. Held, reported, not written, not framed, never thrown (see § A FILING IS
-    // ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a file it will not write.
-    const collision = holds.get(m.id) ?? null;
-    if (collision) { held.push(collision); continue; }
 
     // ── THE ONE FRAMER, at the one place a row becomes a file (2026-09-18) ────
     //

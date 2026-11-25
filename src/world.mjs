@@ -111,6 +111,7 @@ export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
+import { footprintCaps, footprintRefusal } from "./mark-footprint.mjs"; // POS-1126: the ruled footprint caps, read from the law's mark properties
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
@@ -4737,6 +4738,22 @@ export async function markStandsOnOwnGround(clean, canon = null) {
 // insert and every guard in it, never a door. journalWithdraw is exported the same way.
 // `plan` (POS-1035): every read, judgement and guard of a real leave, then the entry it would write handed back instead of written
 // — for an act that must land with others in ONE transaction (the event's completion: world-journal § prepareActFlipped).
+/**
+ * THE OUTLINE CAP, AT EVERY DOOR THAT WRITES A MARK (POS-1126, WLD-193; mark-footprint.mjs is the rule).
+ * Darko, 2026-11-17: "yeah 256 is good": a mark's 2D `points:` outline holds at most 256 points. The number is the mark class's
+ * `outline-point-cap` property, read here through classDials and nowhere held; a dial the law has not published is no boundary.
+ * Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it answers the same refusal as the write. The cap
+ * judges any ring a write carries (a parcel's, a constitution mark's); it never judges a footprint's size: Darko, 2026-11-18 14:42 EST,
+ * "I'm actually just going to err on not having a cap for now", Wright: "There's no size refusal." An amendment is judged on what it carries.
+ */
+export function footprintGate(clean) {
+  if (clean?.points === undefined) return;
+  const caps = footprintCaps(classDials("mark"));
+  if (caps.points == null) return;
+  const r = footprintRefusal(clean, { caps });
+  if (r) throw Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, hint: r.hint });
+}
+
 export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null, plan = false } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
@@ -4749,7 +4766,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // sentence made true at the door: "A pen flip without a read flip produces
     // an office that writes to Postgres and validates against sqlite — a split
     // brain with a switch on it." Unflipped, `liveMarks` byte for byte.
-    const live = await guardedLiveMarks(null, { household: clean.household, actor: clean.by });
+    const live = await actSpan("m_live", () => guardedLiveMarks(null, { household: clean.household, actor: clean.by })); // POS-1221: the live marks this mark is judged among
     const liveById = new Map(live.map((m) => [m.id, m]));
     const priorLive = liveById.get(id) ?? null;
     const priorCanon = canon.byId.get(id) ?? null;
@@ -4762,6 +4779,10 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         "a slug is unique per author — pass amend: true to supersede it (a newer declaration on your own node, edit-law's revision family), or pick another slug");
     if (clean.amend === true && !exists)
       throw bounce(404, `no mark "${id}" to amend`, "ids are <by>/<slug> — leave it first, or drop amend: true");
+
+    // ── THE OUTLINE CAP (POS-1126): before the preview answers and before any write, for every caller of this pass —
+    // the public door, the event's spark, the town's own amend tools. An amendment is judged against what it supersedes.
+    footprintGate(clean);
 
     // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
@@ -4813,7 +4834,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
       // The SAME `prior` the forecast was handed on the line above — one
       // reading of what is standing, so the two cannot disagree about whether
       // this amend moved anything.
-      const parentRefusal = await declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon);
+      const parentRefusal = await actSpan("m_parent", () => declaredParentGuard(id, clean, canon, WORLD_CLONE, priorLive ?? priorCanon)); // POS-1221
       if (parentRefusal) throw bounce(parentRefusal.code, parentRefusal.defect, parentRefusal.hint);
     }
 
@@ -4935,20 +4956,20 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // land".
     const staking = clean.stamps !== undefined && clean.stamps !== null;
     const stakeN = staking ? Number(clean.stamps) : 0;
-    const ground = staking || amending ? await groundMinimumStake(clean, canon) : null;
+    const ground = staking || amending ? await actSpan("m_ground", () => groundMinimumStake(clean, canon)) : null; // POS-1221
     // THE PUBLISH NOTE READS THIS SAME GROUND (POS-406). It used to ask a second
     // rule of its own, "is the parent your household's parcel", and so told
     // kinofire that a detail on her home (a sited mark on a housemate's parcel)
     // was commons and wanted 1✦, over an act this line had just put forward at
     // ✦0. Asked for an unstaked leave too, because the note rides those as well.
-    const groundRead = ground ?? await groundMinimumStake(clean, canon);
+    const groundRead = ground ?? await actSpan("m_ground", () => groundMinimumStake(clean, canon)); // POS-1221
     const groundMin = groundRead.min;
     const groundOwn = groundRead.own ?? [];
-    const escrowBehind = amending ? await escrowBehindMark(id) : 0;
+    const escrowBehind = amending ? await actSpan("m_escrow", () => escrowBehindMark(id)) : 0; // POS-1221
     // POS-952: on the town's own constitutional ground (groundMinimumStake's `backing`), an amendment the mark's
     // own escrow does not carry is judged by the escrow behind that ground, read by the same door and as safely.
     const backedBy = amending && ground?.backing && escrowBehind < (ground?.min ?? 1) ? ground.backing : null;
-    const groundBacking = backedBy ? await escrowBehindMark(backedBy) : 0;
+    const groundBacking = backedBy ? await actSpan("m_escrow", () => escrowBehindMark(backedBy)) : 0; // POS-1221
     // A CLAIM PUT FORWARD MOVES WITH ITS THING (POS-990/a, Darko 2026-11-13: "Moves with it"): the hold door's
     // set-down (`_set_down`, which only the hold door passes) of a claim already pending and not yet in canon is
     // re-filed put forward, and the clearing judges it on the new ground. Ruled here, it would be the author's
@@ -4973,8 +4994,8 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // The write used to echo `parent_id`, which a sited or parcel mark never
     // carries, so wildcat's previewed parcel answered "the Gloaming" and the same
     // geometry written answered null, with an overhang note riding on the null.
-    const parent = await nestingParent({ ...declaration, id }, [...canon.marks, ...live]);
-    const relations = await placementRelationsOf({ ...declaration, id }, [...canon.marks, ...live]); // POS-1156: overlaps + contains, the same snapshot
+    const parent = await actSpan("m_nest", () => nestingParent({ ...declaration, id }, [...canon.marks, ...live])); // POS-1221: the placement, against every mark
+    const relations = await actSpan("m_relations", () => placementRelationsOf({ ...declaration, id }, [...canon.marks, ...live])); // POS-1221: overlaps and contains, against every mark // POS-1156: overlaps + contains, the same snapshot
     // ── PREVIEW (founder-ruled 2026-09-14, postmark#2692): SAY IT, WRITE NOTHING.
     // Every guard above has run and the verdict is computed; what a real leave
     // would do from here is stamp the witness line, append the row and hand the
@@ -4984,11 +5005,23 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // household's live drafts). The door's disclosures downstream (overhang, the
     // publish note) run on this answer exactly as they run on a written one.
     if (clean.preview === true) {
-      const landing = pathFor({ ...declaration, id }, { publishedPathOf: filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))) });
+      // POS-1212: the preview asks the SAME question the write asks, with the same resolver (canon's filing, else the live drafts and canon's marks), so the
+      // `dir` it says is the `dir` the act answers; an omitted resolver is never read as a bad parent
+      const filedPathOfPreview = filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE)));
+      const landing = pathFor({ ...declaration, id }, {
+        publishedPathOf: filedPathOfPreview,
+        parentPathOf: (pid) => {
+          const filed = filedPathOfPreview(pid);
+          if (filed) return filed.replace(/\/mark\.md$/, "");
+          const p = liveById.get(pid) ?? canon.byId.get(pid);
+          const pp = p ? pathFor({ ...p, id: pid }) : null;
+          return pp ? pp.replace(/\/mark\.md$/, "") : null;
+        },
+      });
       return {
         preview: true, id, kind: clean.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
         at: clean.at ?? null, extent: clean.extent ?? null,
-        dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
+        dir: landing ? String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, "") : null,
         branch: draftBranch(household), put_forward: putForward,
         ...(amending ? { amended: true, moved: false, _verdict: verdict } : {}),
         ...(carries ? { carries } : {}),
@@ -4998,7 +5031,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
       };
     }
 
-    const { at, witnesses } = await witnessStamp(clean.by);
+    const { at, witnesses } = await actSpan("m_witness", () => witnessStamp(clean.by)); // POS-1221
     const entry = {
       crossing, actor: clean.by, household,
       action: amending ? ACTION_AMEND : ACTION_LEAVE,
@@ -5036,9 +5069,9 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // record.
     let row;
     try {
-      row = laneFlipped("mark")
-        ? await appendActFlipped(null, entry, guard ? { guard } : {})
-        : await appendJournal(null, entry, guard ? { guard } : {});
+      row = await actSpan("m_write", () => (laneFlipped("mark") // POS-1221: the write itself
+        ? appendActFlipped(null, entry, guard ? { guard } : {})
+        : appendJournal(null, entry, guard ? { guard } : {})));
     } catch (err) {
       if (err?.name === "PenUnreachableError")
         throw bounce(503, err.message,
@@ -5068,13 +5101,14 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         const filed = filedPathOf(pid);
         if (filed) return filed.replace(/\/mark\.md$/, "");
         const p = liveById.get(pid) ?? canon.byId.get(pid);
-        return p ? pathFor({ ...p, id: pid }).replace(/\/mark\.md$/, "") : null;
+        const pp = p ? pathFor({ ...p, id: pid }) : null;
+        return pp ? pp.replace(/\/mark\.md$/, "") : null;
       },
     });
     return {
       id, kind: clean.kind, parent, ...(relations ?? {}),
       at: clean.at ?? null, extent: clean.extent ?? null,
-      dir: String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, ""),
+      dir: willLandAt ? String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, "") : null,
       branch: draftBranch(household),
       // Which store is the RECORD for this act, as every flipped lane's answer
       // says it. `record` comes from the write itself rather than from
@@ -5886,6 +5920,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       const problems = w.sp.sparkProblems({ ...clean, id: `${by}/${slug}` }, { radiusM, isDate });
       if (problems.length) throw bounce(422, problems[0], problems.length > 1 ? `and: ${problems.slice(1).join("; ")}` : "the World's spark class says what a spark carries (tools/spark.mjs)");
     }
+    // A SPARK MAY NAME ITS EVENT (POS-1204; Darko CORE-163/d 2026-11-23 19:25 EST; Wright 2026-11-24 01:20Z). The World owns the property (its `event`, text);
+    // this door owns whether the event exists: a name that is no event is refused with the reason BEFORE anything is written. A KNOWN event is enough: an ended
+    // one too ("a picture that arrives later still joins the album"), with no live-now, attendance or room requirement, and a lookup that FAILS is never read
+    // as "no such event". The event's gallery then takes the spark once it stands (event-sparks.mjs § eventGalleryOf).
+    if (typeof clean.event === "string" && clean.event !== "") await requireKnownEvent(clean.event);
   }
 
   // ── THE MISTS ON THE PLACEMENT RECEIPT (WLD-38; was POS-468 B's veto) ─────
@@ -5904,7 +5943,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // An amend is forecast for its WHOLE new ground: a warning, unlike the old
     // veto, has no reason to spare ground the mark already held.
     let w = null, worldUnread = null;
-    try { w = await world(); } catch (e) { w = null; worldUnread = e; }
+    try { w = await actSpan("m_world", () => world()); } catch (e) { w = null; worldUnread = e; } // POS-1221
     // THE MISTS WARN; THEY DO NOT VETO (WLD-38, Wright 2026-10-13T05:16:12Z).
     // This door used to refuse ground behind the wall (422) and refuse to place
     // anything while it could not read the wall (503). Both are gone from
@@ -5917,10 +5956,13 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // portal and landing checks keep `mistsGroundCheck` exactly as it was.
     mistsWarning = dialUnread
       ? { unavailable: `mists-forecast-unavailable: the parcel dial could not be read, so this parcel's ground is unknown (${plainReason(dialUnread, "files", "the parcel dial, for a placement's Mists forecast")})` }
-      : await placementForecast({ worldClone, w, worldUnread, id: `${by}/${slug}`, ring: ground, mistsCrossing });
+      : await actSpan("m_forecast", () => placementForecast({ worldClone, w, worldUnread, id: `${by}/${slug}`, ring: ground, mistsCrossing })); // POS-1221
   }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
+  // THE OUTLINE CAP on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
+  // the canon's declaration, before the exec or a preview of it. The journal pass below asks it itself, against the live layer.
+  if (!singleLogEnabled()) footprintGate(clean);
   if (singleLogEnabled()) {
     // POS-5 slice 1. The journal door throws its bounces directly (they are the
     // same grammar the exec answers with, one process earlier), so only the
@@ -5930,11 +5972,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // the unit is in hands or on the ground, never both.
     const dropGuard = dropUnit != null && payload.dropped === `act:${dropUnit.actId}`
       ? (await import("./drop-recovery.mjs")).dropLiveGuard({ actId: dropUnit.actId }) : null;
-    try { result = await journalLeaveMark(clean, dropGuard ? { guard: dropGuard } : {}); }
+    try { result = await actSpan("m_journal", () => journalLeaveMark(clean, dropGuard ? { guard: dropGuard } : {})); } // POS-1221: the whole journal path (m_live … m_write nest in it)
     catch (e) { if (e?.code) throw e; throw bounce(500, "the mark pass tripped", faultLogged("the mark pass tripped", e)); } // its error goes to the log (POS-578)
   } else {
     try {
-      result = await draftWrite(worldClone, exec, JSON.stringify(clean), household, `${by}/${slug}`);
+      result = await actSpan("m_draft", () => draftWrite(worldClone, exec, JSON.stringify(clean), household, `${by}/${slug}`)); // POS-1221
     } catch (e) {
       if (lockTimedOut(e)) throw bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
       throw bounce(500, "the mark pass tripped", faultLogged("the mark pass tripped", e)); // its stderr goes to the log (POS-578)
@@ -5944,11 +5986,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   if (outline) result.outline = outline; // POS-322: one line, only when the door moved or derived the box
   if (mistsWarning) result.mists = mistsWarning; // WLD-38: the forecast, computed before the write
-  await discloseOverhang(result, by, key);
-  await discloseYourGround(result, clean);             // before the publish note, which strips _ground_min
+  await actSpan("m_disclose", () => discloseOverhang(result, by, key)); // POS-1221: the four disclosures, summed as one segment
+  await actSpan("m_disclose", () => discloseYourGround(result, clean));             // before the publish note, which strips _ground_min
   const verdictSeen = result?._verdict ?? null;        // postmark#3593: the note is redone below if the stake bounces
-  await disclosePublishing(result, by);
-  await discloseParcelRoom(result, by, clean);                // POS-762: a claim past its household's parcel room, said at once
+  await actSpan("m_disclose", () => disclosePublishing(result, by));
+  await actSpan("m_disclose", () => discloseParcelRoom(result, by, clean));                // POS-762: a claim past its household's parcel room, said at once
 
   // THE INLINE STAKE (founder-ruled 2026-08-19, same sitting as the publish
   // note): stamps: N stakes the new mark in the same act — mark and escrow
@@ -5966,7 +6008,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // in the docket pen, and there is no escrow row for zero stamps.
   if (stakeBounce) result.stake_bounce = { defect: stakeBounce.defect, hint: stakeBounce.hint };
   if (stakeLands >= 1 && result?.put_forward === true && result?.preview !== true) {
-    const staked = await callWorldStakeTool("world_stake", { mark: result.id, stamps: stakeN, handle: by }, key);
+    const staked = await actSpan("m_stake", () => callWorldStakeTool("world_stake", { mark: result.id, stamps: stakeN, handle: by }, key)); // POS-1221
     if (staked?.error) {
       result.stake_bounce = { defect: staked.defect, hint: staked.hint };
       // The amendment's note counted the escrow this act would leave, stake
@@ -6443,6 +6485,19 @@ async function nestingParent(candidate, marks) {
   if (typeof engine.placementParent === "function")
     return candidate._parentMarkId ?? engine.placementParent(candidate, all) ?? engine.worldRootOf?.(all)?.id ?? null;
   return null;
+}
+
+// POS-1204: a spark's `event` must name an event the office's record holds (any phase, an ended or cancelled one included). Three outcomes, never conflated:
+// the row (known: nothing to say), no row (422, by name), or a read that could not be answered (503: the event could not be checked; it is NOT "no such event").
+async function requireKnownEvent(id) {
+  const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
+  let row;
+  try { row = await (await import("./events-store.mjs")).eventRowAtOffice(id); }
+  catch (e) {
+    throw bounce(503, "the event could not be checked just now", `the calendar lives in the office's record, which could not be read (${plainReason(e, "record", "the calendar, for a spark's event")}); nothing was written — ask again shortly`);
+  }
+  if (!row)
+    throw bounce(422, `properties.event ${JSON.stringify(String(id).slice(0, 60).replace(/[^ -~]/g, "?"))} names no event`, "an event's id is <host>/<slug>, as town { read: \"calendar\" } lists it (an event that has ended is fine); nothing was written");
 }
 
 // WHAT THE PLACEMENT OVERLAPS AND CONTAINS (POS-1156): the two lists beside `parent`,
