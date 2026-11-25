@@ -54,7 +54,8 @@ test("a neighbour's draft work in the shared clone does not trip the oracle; the
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "the oracle looks at the door's own household only");
   assert.ok(draftArtifactsOf(shared, "alex-rowan").length > 0, "and does see a neighbour's, so the control is not blind");
   const { code, out } = await runDoor(shared);
-  assert.equal(code, 0, `the door test passes beside a neighbour's writes:\n${out.slice(-1500)}`);
+  assert.equal(code, 0, `the door test passes beside a neighbour's writes:\n${out.slice(-3000)}`);
+  assert.match(out, /^ok 3 - POS-1234: the door's draft work is in its PRIVATE clone/m, `the child really ran the oracle (not an empty pass):\n${out.slice(-3000)}`);
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "and left nothing of its own in the shared clone");
 });
 
@@ -62,7 +63,7 @@ test("FALSIFIER: the real executor pointed at the shared clone leaves its househ
   const shared = standIn();
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "clean before");
   const { code, out } = await runDoor(shared, { POS1234_DOOR_LEAK: "1" });
-  assert.notEqual(code, 0, "the leaking door fails the suite");
+  assert.notEqual(code, 0, `the leaking door fails the suite; its own output:\n${out.slice(-3000)}`);
   assert.match(out, /not ok \d+ - POS-1234: the door's draft work is in its PRIVATE clone/, "and it is the leak oracle that fails");
   assert.match(out, /leaked into the shared world clone/, "naming the leak");
   assert.ok(draftArtifactsOf(shared, "pos1234-door").length > 0, "the real executor's own writes are what it caught: the household's draft is in the stand-in");
