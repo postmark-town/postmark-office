@@ -181,9 +181,11 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
     // WLD-252: a mark with NO row is the same rule's too, asked as the engine
     // spells it, from where it is filed now; an engine that has no such
     // spelling is one whose sweep never takes it, so it is not at risk there.
+    // A rule that could not be read at all judges NOTHING, a no-row mark
+    // included: an unread engine may be one that would take it (review R1).
     const atRisk = escrow === null ? null
-      : !entry && typeof unregisteredEntry !== "function" ? false
       : typeof rule !== "function" ? null
+      : !entry && typeof unregisteredEntry !== "function" ? false
       : !entry ? rule(unregisteredEntry(null), { escrow, standing: m.tier ?? null, held: heldBy(m) != null, currentPath: () => currentPathOf(m.id) }).unpublish
       : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null, held: heldBy(m) != null }).unpublish;
     rows.push({
