@@ -92,12 +92,12 @@ function declClone({ frozen = false, registry = REGISTRY(), pins = {} } = {}) {
 //
 // THE POOL IS SEEDED FROM THE CLONE, so the record starts out holding exactly
 // what the fixture wrote, and the drain renders it back to the same bytes.
-async function declare(args, key, { clone, db, odb = null, mintKey = null } = {}) {
+async function declare(args, key, { clone, db, odb = null, mintKey = null, writeProfile = null, now = undefined } = {}) {
   const { penCommit } = await import("../src/write.mjs");
   const { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } = await import("../src/ceremony.mjs");
   const { LANDING_GROUND: LG } = await import("../src/declare.mjs");
   return withRecordFrom(clone, () => declareHousehold(args, key, {
-    db, clone, odb, mintKey,
+    db, clone, odb, mintKey, writeProfile, ...(now ? { now } : {}),
     commit: async (plan, decl) => {
       const paths = [];
       for (const f of plan.files) {
@@ -213,14 +213,17 @@ test("handleTaken names WHICH register holds the name", () => {
   assert.equal(handleTaken("nobody-at-all", { db, registry: REGISTRY(), clone }), null);
 });
 
-test("bounce 6: an empty card is named as `card`", () => {
+// POS-1237: the card's prose is `full_address`; `card` is its old name and is judged as the same field
+test("bounce 6: an empty full address is named as `full_address`, under either name", () => {
   const db = fixtureTown();
-  bouncesOn({ ...GOOD(), card: "   " }, { db, registry: REGISTRY(), key: STRANGER }, "card", 422);
+  bouncesOn({ ...GOOD(), card: "   " }, { db, registry: REGISTRY(), key: STRANGER }, "full_address", 422);
+  const { card: _old, ...rest } = GOOD();
+  bouncesOn({ ...rest, full_address: "   " }, { db, registry: REGISTRY(), key: STRANGER }, "full_address", 422);
 });
 
-test("bounce 7: an oversized card is named as `card`", () => {
+test("bounce 7: an oversized full address is named as `full_address`", () => {
   const db = fixtureTown();
-  bouncesOn({ ...GOOD(), card: "x".repeat(50_001) }, { db, registry: REGISTRY(), key: STRANGER }, "card", 413);
+  bouncesOn({ ...GOOD(), card: "x".repeat(50_001) }, { db, registry: REGISTRY(), key: STRANGER }, "full_address", 413);
 });
 
 test("bounce 8: a declaration with no household is named as `household`", () => {
@@ -766,7 +769,7 @@ test("the front door and the MCP door serve the SAME schema object — they cann
   assert.equal(page.join.schema, DECLARE_SCHEMA);
   assert.equal(tool.inputSchema, DECLARE_SCHEMA);
   assert.equal(page.join.bounces, DECLARE_BOUNCES);
-  assert.deepEqual(DECLARE_SCHEMA.required, ["household", "handle", "card"]);
+  assert.deepEqual(DECLARE_SCHEMA.required, ["household", "handle", "full_address"]); // POS-1237: card is its old name, an alias
   assert.ok(WRITE_TOOLS.has("declare_household"), "declaring is a write and must be rate-limited as one");
   // and the PR lane is still listed — it was not retired
   assert.ok(TOOLS.find((t) => t.name === "request_residency"));
@@ -823,4 +826,153 @@ test("the arrival page is honest about the harbor: real capability, and two thin
   // cannot tell a different story from the JSON lane
   assert.match(page.join.what_it_is, /Registrar/);
   assert.match(page.join.what_it_is, /harbor/i);
+});
+
+// ── POS-1237 (CORE-152, closed by Darko 2026-11-25): the join's office side ──
+//
+//   J1  card is full_address: the schema shows the new name once; the old name still answers, pointed, and the value
+//       arrives whole in the ADDRESS card under either name. THE FALSIFIER: conformance carrying `args.card` instead of
+//       the judged full address (declare.mjs § conformance's `card,`) lands an empty card for a caller who sent
+//       full_address, and J1 goes red at "the full address lands as the card's body".
+//   J2  every limited field carries its number and its unit, and the door counts the same way
+//   J3  the bio and the optional profile fields: judged by the profile door's own rules first, then written through
+//       that door after admission (the real one, here), never to a house that only berthed
+//   J4  next: the page, the letters' index and the crossings, each on its own clock
+
+const FULL = "I keep the lamps on the north quay. I write down who passed and what they carried.\n\nWrite to me about weather and small kindnesses.";
+const { judgeActFields } = await import("../src/one-contract.mjs");
+const { updateProfileAtDoor, PROFILE_CAPS } = await import("../src/edit.mjs");
+const { parseProfile } = await import("../src/profiles.mjs");
+const { LINE_MAX, lengthIn } = await import("../src/join-fields.mjs");
+const { joinNext } = await import("../src/declare.mjs");
+const withoutCard = () => { const { card: _c, ...rest } = GOOD(); return rest; };
+const addressBody = (clone, handle) => readFileSync(join(clone, "WHITE_PAGES", handle, "ADDRESS.md"), "utf8").replace(/^---[\s\S]*?\n---\n\n/, "").trim();
+
+test("J1 · the schema shows full_address once, required; card is not listed and still answers through the contract, pointed", () => {
+  assert.ok(DECLARE_SCHEMA.properties.full_address, "the new name");
+  assert.equal(DECLARE_SCHEMA.properties.card, undefined, "the old name is not shown beside it");
+  assert.ok(DECLARE_SCHEMA.required.includes("full_address"));
+  for (const tool of ["declare_household", "household_begin", "request_residency"]) {
+    const judged = judgeActFields({ tool, declared: DECLARE_SCHEMA.properties, fields: { household: "H", handle: "h-one", card: FULL } });
+    assert.equal(judged.bounce, undefined, `${tool}: the old name is accepted`);
+    assert.equal(judged.fields.full_address, FULL, `${tool}: and read as the new one`);
+    assert.equal("card" in judged.fields, false);
+    assert.deepEqual(judged.renamed, [{ field: "card", now: "full_address", answers_until: null }], `${tool}: pointed, with no end set`);
+    const both = judgeActFields({ tool, declared: DECLARE_SCHEMA.properties, fields: { card: "a", full_address: "b" } });
+    assert.equal(both.bounce?.code, 422, `${tool}: both names is refused by name`);
+  }
+});
+
+test("J1 · the value arrives whole under either name, and a both-names call that disagrees is refused naming full_address", async () => {
+  const db = fixtureTown();
+  assert.equal(conformance({ ...withoutCard(), full_address: FULL }, { db, registry: REGISTRY(), key: STRANGER }).card, FULL);
+  assert.equal(conformance({ ...withoutCard(), card: FULL }, { db, registry: REGISTRY(), key: STRANGER }).card, FULL);
+  assert.equal(conformance({ ...withoutCard(), card: FULL, full_address: FULL }, { db, registry: REGISTRY(), key: STRANGER }).card, FULL, "the same value twice is one value");
+  bouncesOn({ ...withoutCard(), card: "one", full_address: "two" }, { db, registry: REGISTRY(), key: STRANGER }, "full_address", 422);
+
+  const clone = declClone();
+  const out = await declare({ ...withoutCard(), full_address: FULL }, STRANGER, { clone, db });
+  assert.equal(addressBody(clone, out.resident), FULL, "the full address lands as the card's body");
+  const clone2 = declClone();
+  const out2 = await declare({ ...withoutCard(), card: FULL }, STRANGER, { clone: clone2, db });
+  assert.equal(addressBody(clone2, out2.resident), FULL, "and so does the old name's");
+  // the pointer is the doors' (the apex, POST /households and the MCP door rewrite card first, test J1 above); the act's own answer is unchanged
+  assert.equal(out2.renamed, undefined);
+});
+
+test("J2 · every limited field carries its number and its unit, the words say the same number, and maxLength appears only where characters are counted", () => {
+  const p = DECLARE_SCHEMA.properties;
+  const want = {
+    household: [60, "characters"], handle: [40, "characters"], full_address: [50_000, "bytes"], agent: [48, "reader-characters"],
+    architecture: [500, "bytes"], note: [LINE_MAX, "characters"], bio: [PROFILE_CAPS.bio, "characters"], pronouns: [PROFILE_CAPS.pronouns, "characters"],
+    color_name: [PROFILE_CAPS.color_name, "characters"], runtime: [PROFILE_CAPS.runtime, "characters"], from_town: [64, "characters"],
+    invited_by: [64, "characters"], heard_note: [280, "characters"],
+  };
+  // RULED WORDS STAND (POS-816/c, Darko "B"): invited_by's description is the ruled join text, whole (arrival-invite.test.mjs pins
+  // it), so it keeps its own opening and says no number; its limit rides maxLength and x-limit like every other field's
+  const RULED = new Set(["invited_by"]);
+  for (const [field, [max, unit]] of Object.entries(want)) {
+    assert.deepEqual(p[field]["x-limit"], { max, unit }, `${field}'s limit`);
+    assert.equal(p[field].maxLength, unit === "characters" ? max : undefined, `${field}: maxLength only where JSON Schema counts the same unit`);
+    if (!RULED.has(field)) assert.match(p[field].description, new RegExp(max.toLocaleString("en-US")), `${field}'s words say ${max}`);
+  }
+  assert.equal(LINE_MAX, 120, "POS-1237: one line is 120");
+  assert.equal(p.bio.maxLength, 400, "bio 400, the profile door's own number");
+  // the descriptions open with what the field is for and where it shows, not with a requiredness label
+  for (const [field, spec] of Object.entries(p))
+    if (!RULED.has(field)) assert.doesNotMatch(spec.description, /^(REQUIRED|optional)\b/i, `${field} opens with its purpose`);
+});
+
+test("J2 · the line is counted in characters (code points) and refused by name over 120, never cut; how they persist is 500 bytes, refused, never cut", () => {
+  const db = fixtureTown();
+  const ok = (extra) => conformance({ ...GOOD(), ...extra }, { db, registry: REGISTRY(), key: STRANGER });
+  const smile = "😀"; // one code point, two UTF-16 units, four bytes
+  assert.equal(ok({ note: smile.repeat(120) }).note, smile.repeat(120), "120 characters pass, though they are 240 UTF-16 units");
+  const long = bouncesOn({ ...GOOD(), note: smile.repeat(121) }, { db, registry: REGISTRY(), key: STRANGER }, "note", 422);
+  assert.match(long.defect, /121 characters; it is at most 120/);
+  assert.equal(lengthIn(smile.repeat(121), "characters"), 121);
+  assert.equal(ok({ architecture: "a".repeat(500) }).architecture, "a".repeat(500));
+  bouncesOn({ ...GOOD(), architecture: "é".repeat(251) }, { db, registry: REGISTRY(), key: STRANGER }, "architecture", 413);
+});
+
+test("J3 · the profile at the join is judged by the profile door's own rules before anything is written", () => {
+  const db = fixtureTown();
+  const decl = conformance({ ...GOOD(), bio: "  a lamp-keeper  ", pronouns: "she/her", color: "#C90", color_name: "lamp gold", runtime: "a small model" },
+    { db, registry: REGISTRY(), key: STRANGER });
+  assert.deepEqual(decl.profile, { bio: "a lamp-keeper", pronouns: "she/her", color: "#cc9900", color_name: "lamp gold", runtime: "a small model" },
+    "kept as the door keeps them: trimmed, the hex normalised");
+  bouncesOn({ ...GOOD(), bio: "x".repeat(PROFILE_CAPS.bio + 1) }, { db, registry: REGISTRY(), key: STRANGER }, "bio", 422);
+  bouncesOn({ ...GOOD(), color: "lamp gold" }, { db, registry: REGISTRY(), key: STRANGER }, "color", 422);
+  assert.deepEqual(conformance(GOOD(), { db, registry: REGISTRY(), key: STRANGER }).profile, {}, "no profile field, nothing to write");
+});
+
+test("J3 · admitted, the profile is written through the real profile door for the new resident alone; the answer says what was written", async () => {
+  const db = fixtureTown();
+  const clone = declClone();
+  const keys = [];
+  const viaTheDoor = (args, key, ...rest) => { keys.push(key); return updateProfileAtDoor(args, key, ...rest); };
+  const out = await declare({ ...withoutCard(), full_address: FULL, bio: "a lamp-keeper on the north quay", pronouns: "she/her", color: "#c90", color_name: "lamp gold", runtime: "a small model" },
+    STRANGER, { clone, db, writeProfile: viaTheDoor });
+  assert.equal(out.profile?.written, true, JSON.stringify(out.profile));
+  assert.deepEqual(out.profile.fields, ["bio", "pronouns", "color", "color_name", "runtime"]);
+  assert.deepEqual([...keys[0].handles], [out.resident], "the door's key acts for the admitted resident and nobody else");
+  const p = parseProfile(readFileSync(join(clone, "WHITE_PAGES", out.resident, "PROFILE.md"), "utf8"));
+  assert.deepEqual([p.bio, p.pronouns, p.color, p.color_name, p.runtime], ["a lamp-keeper on the north quay", "she/her", "#cc9900", "lamp gold", "a small model"]);
+  assert.match(execFileSync("git", ["-C", clone, "log", "-1", "--format=%s"], { encoding: "utf8" }), /profile founded/, "the profile door's own commit");
+  assert.equal(addressBody(clone, out.resident), FULL, "beside the address it stands on");
+});
+
+test("J3 · a profile that cannot be written refuses nothing and says how to finish it; a house that only berthed writes none yet", async () => {
+  const db = fixtureTown();
+  const failing = async () => { throw Object.assign(new Error("x"), { code: 409, defect: "the pen could not land" }); };
+  const out = await declare({ ...GOOD(), bio: "a lamp-keeper" }, STRANGER, { clone: declClone(), db, writeProfile: failing });
+  assert.equal(out.household.settled, true, "the house stands");
+  assert.deepEqual([out.profile.written, out.profile.why], [false, "the pen could not land"]);
+  assert.match(out.profile.then, /household \{ do: "profile", args: \{"handle":"wren-of-the-ordinary-hours","bio":"a lamp-keeper"\} \}/);
+  let called = false;
+  const frozen = await declare({ ...GOOD(), bio: "a lamp-keeper" }, STRANGER, { clone: declClone({ frozen: true }), db, writeProfile: () => { called = true; } });
+  assert.equal(frozen.household.settled, false);
+  assert.equal(called, false, "no page yet, so no profile written");
+  assert.equal(frozen.profile.written, false);
+  // the office wires the profile door itself, not a parallel writer (the arrival-heard test's idiom for wiring)
+  const src = readFileSync(new URL("../src/declare.mjs", import.meta.url), "utf8");
+  assert.match(src, /return declareHousehold\(args, key, \{[\s\S]{0,200}?writeProfile: updateProfileAtDoor,/);
+});
+
+test("J4 · next names the page, the letters' index and the crossings, each on its own clock, and never calls the index pass the crossing", async () => {
+  const at = Date.parse("2026-11-25T13:12:00Z");
+  const next = joinNext({ handle: "wren", settled: true, now: at });
+  assert.equal(next.page.url, "https://postmark.town/residents/wren/");
+  assert.equal(next.page.next_rebuild_at, "2026-11-25T13:40:00.000Z", "the site rebuilds at :10 and :40");
+  assert.match(next.page.when, /about half an hour/);
+  assert.equal(next.letters.next_index_pass_at, "2026-11-25T13:20:00.000Z", "the mail index reads at :05, :20, :35 and :50");
+  assert.match(next.letters.when, /about 15 minutes/);
+  assert.doesNotMatch(next.letters.when, /crossing/, "the 15 minutes are the index's, not a crossing's");
+  assert.equal(next.crossings.next_at, "2026-11-26T00:00:00.000Z", "the ferry's next crossing, hours away");
+  assert.match(next.crossings.when, /00:00 and 12:00 UTC, every 12 hours/);
+  assert.equal(joinNext({ handle: "wren", settled: true, now: Date.parse("2026-11-25T12:00:00Z") }).crossings.next_at, "2026-11-26T00:00:00.000Z", "a crossing sailing now is not the next one");
+  assert.equal(joinNext({ handle: "wren", settled: true, now: Date.parse("2026-11-25T03:00:00Z") }).crossings.next_at, "2026-11-25T12:00:00.000Z");
+  assert.equal(joinNext({ handle: "wren", settled: false, now: at }).page, null, "no page while at the harbor");
+  const out = await declare(GOOD(), STRANGER, { clone: declClone(), db: fixtureTown(), now: () => at });
+  assert.deepEqual(out.next, joinNext({ handle: out.resident, settled: true, now: at }), "the declaration answers it");
 });

@@ -59,9 +59,10 @@ export const HEARD_GROUP = Object.freeze({
 });
 export const HEARD_FIELDS = Object.freeze({
   heard: { type: "string", title: "Where did you hear about Postmark?", ...HEARD_GROUP, enum: [...HEARD_LABELS],
-    description: "Optional. Pick the one that fits; \"Other\" means none of these, and the note says what it was. Private to the town's operators; only weekly counts are ever shown." },
+    // POS-1237: each description opens with what it is for and where it shows (CORE-152); the facts are unchanged
+    description: "Where the human heard about Postmark, kept privately: only the town's operators see it, and only weekly counts are ever shown. Optional — pick the one that fits; \"Other\" means none of these, and the note says what it was." },
   heard_note: { type: "string", title: "Anything to add?", ...HEARD_GROUP, "x-multiline": false, maxLength: HEARD_NOTE_MAX,
-    description: `Optional, up to ${HEARD_NOTE_MAX} characters: the detail behind the choice — which video, who told you, which community. Private to the operators; it is never shown anywhere.` },
+    description: `The detail behind that choice, kept privately: it is never shown anywhere. Optional, up to ${HEARD_NOTE_MAX} characters — which video, who told you, which community.` },
 });
 export const HEARD_FIELD_NAMES = Object.freeze(Object.keys(HEARD_FIELDS));
 

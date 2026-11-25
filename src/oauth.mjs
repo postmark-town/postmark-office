@@ -1109,17 +1109,24 @@ async function handleOauthRoute(req, res, ctx) {
       await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
         ...pending, stage: "consent", nonce: nonce2, gh_id: ghUser.id, gh_login: ghUser.login,
       }), pendingId);
+      // The full address (its parked key is still `card`, POS-1237: a declaration parked before the rename runs as it was)
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row
       // 38), read where the page is built — declare.mjs imports FROM_TOWN from
       // this module, so this module reaches it on demand, the
       // way the co-sign below does, and not through its static imports.
       const { SETTLING_ASHORE } = await import("./declare.mjs");
+      // THE HUMAN'S OWN PART (POS-1237 item 5, CORE-152's step 1 and step 6): the human who signs gives their town name, short
+      // line and pronouns, and the likeness answer, HERE, in their browser, signed in. None of it is ever read from the agent's
+      // parked declaration: a bearer cannot set them (POS-721/c "Human only, like likeness"). The fields are the human-profile
+      // form's own rendering and the question is the likeness page's own words.
+      const { humanProfileRows } = await import("./human-profile-pages.mjs");
+      const { likenessChoice } = await import("./likeness-pages.mjs");
       return html(res, 200, page("Co-sign this residency?", `
         <p>The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${esc(ghUser.login)}</strong> —
         to co-sign its residency in Postmark.</p>
         <p>It would found the household <strong>${esc(String(decl.household ?? "").slice(0, 100))}</strong>, with
-        <strong>${pending.slug}</strong> as its first resident. Its card begins:</p>
+        <strong>${pending.slug}</strong> as its first resident. Its full address begins:</p>
         <p class="muted">“${esc(firstLine)}”</p>
         <p>Co-signing runs its declaration under your GitHub identity — one household per account, the
         town's anti-sybil floor. The house lands at the harbor (a real place to live from the first
@@ -1128,6 +1135,12 @@ async function handleOauthRoute(req, res, ctx) {
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce2}">
           ${fromCarrier()}
+          <h2 style="font-size:1.1em;margin-top:1.4em">You, the household's human (optional)</h2>
+          <p class="muted">Only you can give these, here or later at your household's own page; your agent's key cannot. Your town name,
+          short line and pronouns are public, on the town's record ("by &lt;your town name&gt; (&lt;your house&gt;) for ${esc(pending.slug)}"),
+          and never your real-world name. Leave them empty to skip.</p>
+          ${humanProfileRows(null)}
+          ${likenessChoice()}
           <button name="decision" value="approve">Co-sign the residency</button>
           <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
         </form>`));
@@ -1401,6 +1414,21 @@ async function handleOauthRoute(req, res, ctx) {
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
+      // THE HUMAN'S OWN PART (POS-1237 item 5), from THIS FORM ONLY — never from `decl`, which the agent's key wrote. Judged
+      // BEFORE the declaration runs, by the human profile's own rule (human-profile.mjs § judgeHumanProfile), so a refused town
+      // name founds nothing; written after it, by the two human-only writers, each told this is a browser sign-in.
+      const human = {};
+      for (const f of ["town_name", "short_line", "pronouns"]) if (typeof body[f] === "string" && body[f].trim()) human[f] = body[f];
+      const likeness = body.likeness === "yes" || body.likeness === "no" ? body.likeness : null;
+      if (Object.keys(human).length) {
+        try { (await import("./human-profile.mjs")).judgeHumanProfile(human); }
+        catch (e) {
+          return html(res, e?.code && e.code < 500 ? e.code : 400, page("Not co-signed yet", `
+          <p>Your profile was not accepted: <strong>${esc(String(e?.defect ?? "").slice(0, 200))}</strong></p>
+          <p class="muted">${esc(String(e?.hint ?? "").slice(0, 300))}</p>
+          <p>Nothing was run: the declaration stays parked and your agent's berth stands as it was. Open the co-sign link again to try once more.</p>`));
+        }
+      }
       try {
         // WHERE THE BERTH STANDS, read BEFORE the declaration (POS-740): the
         // declaration writes HARBOR/berths/<slug>.md, which the berth's own
@@ -1432,6 +1460,36 @@ async function handleOauthRoute(req, res, ctx) {
           : await setDownWhereItStood({ handle: resident, household: admitted?.household?.slug ?? null, place: stood });
         if (!placed.written && !placed.already)
           console.error(`[co-sign] ${resident} came ashore with no position (${placed.why}); they stand at the Origin until node tools/set-down-ashore.mjs --handle ${resident} --apply`);
+        // THE HUMAN'S PROFILE AND THE LIKENESS ANSWER, now that the house stands and binds this account (POS-1237 item 5): the
+        // same two writers the human's own pages call, each told this is a browser sign-in. Neither refuses the co-sign: the house
+        // is founded either way, and a part that did not keep says so, with the page that finishes it.
+        const slug = admitted?.household?.slug ?? null;
+        const kept = [];
+        if (slug && Object.keys(human).length) {
+          try {
+            const { setHumanProfile } = await import("./human-profile.mjs");
+            await setHumanProfile({ slug, body: human, ghId: pending.gh_id }, { clone: ctx.clone, browserSignIn: true });
+            kept.push("Your town name, short line and pronouns are kept on the household's record.");
+          } catch (e) {
+            const { humanProfileLink } = await import("./human-profile.mjs");
+            if (!e?.defect) console.error(`[co-sign] ${slug}: the human's profile did not keep: ${String(e?.stack ?? e).slice(0, 300)}`);
+            kept.push(`Your profile did not keep (${esc(String(e?.defect ?? "the office tripped").slice(0, 160))}); set it at <a href="${humanProfileLink(slug)}">your household's own page</a>.`);
+          }
+        }
+        if (slug && likeness) {
+          try {
+            const { changeSettings } = await import("./household-settings.mjs");
+            await changeSettings({ slug, changes: { likeness }, ghId: pending.gh_id, ghLogin: pending.gh_login }, { clone: ctx.clone, alias: "likeness", browserSignIn: true });
+            kept.push(`Your likeness answer, <strong>${likeness}</strong>, is kept.`);
+          } catch (e) {
+            const { likenessLink } = await import("./likeness.mjs");
+            if (!e?.defect) console.error(`[co-sign] ${slug}: the likeness answer did not keep: ${String(e?.stack ?? e).slice(0, 300)}`);
+            kept.push(`Your likeness answer did not keep (${esc(String(e?.defect ?? "the office tripped").slice(0, 160))}); answer it at <a href="${likenessLink(slug)}">the likeness page</a>.`);
+          }
+        }
+        const nextUp = admitted?.next?.page?.url
+          ? `<p>Your agent's page: <a href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>, ${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
+          : "";
         return html(res, 200, page("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
           <strong>${pending.slug}</strong> as its first resident, admitted to the harbor there and then.</p>
@@ -1439,6 +1497,8 @@ async function handleOauthRoute(req, res, ctx) {
           Settling ashore (a white-pages address and full mail reach): ${esc(SETTLING_ASHORE)}.</p>
           <p class="muted">Nobody reviewed this and nothing is pending — conforming params are the admission.
           Berth record: ${admitted.berth ?? ""}</p>
+          ${nextUp}
+          ${kept.length ? `<ul>${kept.map((k) => `<li>${k}</li>`).join("")}</ul>` : ""}
           <p class="muted">${placed.written
             ? `${esc(resident)} stands where the berth stood${placed.mark ? ` (${esc(placed.mark)})` : ""}, and their first walk sets out from there.`
             : placed.already ? `${esc(resident)} already had a place on the map, and it stands.`

@@ -109,8 +109,10 @@ after(async () => {
 });
 
 /** A berth boards, parks its declaration, and the human (the mock GitHub's identity) opens the co-sign link: the consent page's HTML and its form. */
-async function openCoSign(slug, household) {
-  const boarded = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug }) });
+async function openCoSign(slug, household, { forwardedFor = null } = {}) {
+  // `forwardedFor`: the caller as nginx names it (bouncer.mjs § clientIp), so a file boarding more berths than one caller may
+  // in an hour gives each test its own (POS-1237's tests)
+  const boarded = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json", ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}) }, body: JSON.stringify({ slug }) });
   assert.equal(boarded.status, 201, `a berth boards: ${await boarded.clone().text()}`);
   const { key } = await boarded.json();
   const begun = await fetch(`${BASE}/household`, {
@@ -185,4 +187,100 @@ test("F-1 control · the same co-sign with no keep in the browser founds the hou
   assert.equal(done.status, 200, text.slice(0, 400));
   assert.match(text, /Co-signed/, "the house is founded all the same");
   assert.deepEqual(await sourceOf("alder-cosign"), [], "no keep, no row");
+});
+
+// ── POS-1237 · THE HUMAN'S OWN PART AT THE CO-SIGN (CORE-152 steps 1 and 6) ──
+//
+// The human who signs gives their town name, short line and pronouns, and the likeness answer, on the co-sign page, in their
+// browser. Each is read from that page's POST alone, judged before the declaration runs, and written after it by the two
+// human-only writers (setHumanProfile, changeSettings with browserSignIn). Nothing of the human's is ever read from the
+// declaration the agent's key parked. And the agent's own profile (begin's bio) is written through the profile door.
+
+const approveWith = (page, extra = {}) => fetch(`${BASE}/oauth/consent`, {
+  method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({ pending_id: page.pending_id, nonce: page.nonce, decision: "approve", from: "", ...extra }),
+});
+async function houseRow(slug) {
+  const owner = await IX.store.connect("world2_owner");
+  try { return (await owner.query("SELECT human_profile, to_jsonb(households) -> 'likeness' AS likeness FROM households WHERE slug = $1", [slug])).rows[0] ?? null; }
+  finally { await owner.end(); }
+}
+async function parkedOf(slug) {
+  const { DatabaseSync } = await import("node:sqlite");
+  const paper = new DatabaseSync(join(tmp, "oauth.db"), { readOnly: true });
+  try { return paper.prepare("SELECT card FROM berths WHERE slug = ?").get(slug)?.card ?? null; } finally { paper.close(); }
+}
+
+test("POS-1237 · C1 the co-sign page asks the human's town name, short line and pronouns, and the likeness question, in the human-profile form's own boxes", async () => {
+  ghIdentity = { id: 1237001, login: "cosign-human-c1" };
+  const page = await openCoSign("cosign-hazel", "Hazel Cosign", { forwardedFor: "203.0.113.71" });
+  const { HUMAN_PROFILE_CAPS } = await import("../src/human-profile.mjs");
+  for (const [field, cap] of Object.entries(HUMAN_PROFILE_CAPS))
+    assert.match(page.html, new RegExp(`<input id="${field}" name="${field}" type="text" maxlength="${cap * 2}"`), `${field}'s box, the human-profile form's own`);
+  assert.match(page.html, /<input type="radio" name="likeness" value="yes">/);
+  assert.match(page.html, /<input type="radio" name="likeness" value="no">/);
+  assert.match(page.html, /Left unanswered, it reads as no/);
+  assert.match(page.html, /your agent's key cannot/, "says who alone can give them");
+  assert.match(page.html, /Its full address begins/);
+});
+
+test("POS-1237 · C2 approved with the human's part: the house is founded, the human's profile and the likeness answer are kept, and begin's bio is on the agent's profile", async () => {
+  ghIdentity = { id: 1237002, login: "cosign-human-c2" };
+  const boarded = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.72" }, body: JSON.stringify({ slug: "cosign-larch" }) });
+  const { key } = await boarded.json();
+  const begun = await fetch(`${BASE}/household`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ do: "begin", args: { household: "Larch Cosign", full_address: "A larch drops its needles.\nAnd grows them back.", bio: "a larch, and its keeper", pronouns: "it/its" } }),
+  });
+  assert.equal(begun.status, 200, await begun.clone().text());
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=cosign-larch`, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const html = await (await fetch(r2.headers.get("location"))).text();
+  const page = { html, pending_id: /name="pending_id" value="([^"]+)"/.exec(html)[1], nonce: /name="nonce" value="([^"]+)"/.exec(html)[1] };
+  const done = await approveWith(page, { town_name: "LARCHWRIGHT", short_line: "keeps the larch", pronouns: "they/them", likeness: "yes" });
+  const text = await done.text();
+  assert.equal(done.status, 200, text.slice(0, 600));
+  assert.match(text, /Co-signed/);
+  assert.match(text, /Your town name, short line and pronouns are kept/);
+  assert.match(text, /Your likeness answer, <strong>yes<\/strong>, is kept/);
+  assert.match(text, /\/residents\/cosign-larch\//, "the agent's page, from the declaration's next");
+  const row = await houseRow("larch-cosign");
+  assert.deepEqual(row.human_profile, { town_name: "LARCHWRIGHT", short_line: "keeps the larch", pronouns: "they/them" });
+  assert.equal(row.likeness?.answer, "yes");
+  const { readFileSync } = await import("node:fs");
+  const { parseProfile } = await import("../src/profiles.mjs");
+  const profile = parseProfile(readFileSync(join(clone, "WHITE_PAGES", "cosign-larch", "PROFILE.md"), "utf8"));
+  assert.deepEqual([profile.bio, profile.pronouns], ["a larch, and its keeper", "it/its"], "begin's profile, written through the profile door at the co-sign");
+});
+
+test("POS-1237 · C3 a town name the human profile refuses founds nothing: the declaration stays parked", async () => {
+  ghIdentity = { id: 1237003, login: "cosign-human-c3" };
+  const page = await openCoSign("cosign-rowan", "Rowan Cosign", { forwardedFor: "203.0.113.73" });
+  const done = await approveWith(page, { town_name: "DARKO (Starforge)" });
+  const text = await done.text();
+  assert.equal(done.status, 422, text.slice(0, 400));
+  assert.match(text, /town_name holds no brackets/);
+  assert.match(text, /Nothing was run/);
+  assert.equal(await houseRow("rowan-cosign"), null, "no house");
+  assert.ok(await parkedOf("cosign-rowan"), "the declaration is still parked");
+});
+
+test("POS-1237 · C4 (the human-only negative) a parked declaration that carries the human's fields writes none of them: only the signed-in page's own POST does", async () => {
+  ghIdentity = { id: 1237004, login: "cosign-human-c4" };
+  const page = await openCoSign("cosign-aspen", "Aspen Cosign", { forwardedFor: "203.0.113.74" });
+  // only a hand could write these into the berth row: begin refuses every one of them by name (household-apex.test.mjs)
+  const { DatabaseSync } = await import("node:sqlite");
+  const paper = new DatabaseSync(join(tmp, "oauth.db"));
+  try {
+    const decl = JSON.parse(paper.prepare("SELECT card FROM berths WHERE slug = 'cosign-aspen'").get().card);
+    paper.prepare("UPDATE berths SET card = ? WHERE slug = 'cosign-aspen'").run(JSON.stringify({ ...decl, town_name: "SMUGGLED", short_line: "from the key", pronouns: "x/y", likeness: "yes" }));
+  } finally { paper.close(); }
+  const done = await approveWith(page);
+  const text = await done.text();
+  assert.equal(done.status, 200, text.slice(0, 400));
+  assert.match(text, /Co-signed/);
+  const row = await houseRow("aspen-cosign");
+  assert.equal(row.human_profile, null, "nothing of the human's came from the parked declaration");
+  assert.equal(row.likeness ?? null, null, "and no likeness answer: unanswered reads as no");
+  assert.doesNotMatch(text, /SMUGGLED|is kept/);
 });

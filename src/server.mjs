@@ -2660,7 +2660,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           return j(res, 202, withRenamed(result, judged.renamed)); // 202: the ask is accepted; a human merge admits you
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","card", optional: agent, household, architecture, since, note}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","full_address", optional: agent, household, architecture, since, note}');
           return bounceFault(res, "the office tripped", e);
         }
       }, (e) => bodyUnread(res, e));
@@ -2688,10 +2688,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const result = await declareViaOffice(TOWN_CLONE, judged.fields, key, { odb });
           // 201: a thing was created. The PR lane answers 202 because its ask is
           // still pending a merge; this one is not pending anything.
-          return j(res, 201, result);
+          return j(res, 201, withRenamed(result, judged.renamed)); // POS-1237: card, full_address's old name, answers with its pointer
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, e.field, e);
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","card","household", optional: agent, architecture, since, note}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"handle","full_address","household", optional: agent, architecture, since, note, bio, pronouns, color, color_name, runtime}');
           return bounceFault(res, "the office tripped", e);
         }
       }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send JSON"));
@@ -2720,7 +2720,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const r = await householdApex(payload, key, { clone: TOWN_CLONE, odb, pen: PEN, rdb, canWrite, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
-          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "card": "…" }}');
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"do": "begin", "args": { "household": "…", "full_address": "…" }}');
           return bounceFault(res, "the household door tripped", e);
         }
       }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));

@@ -57,6 +57,7 @@ import { paperDoor } from "./town-updates.mjs";
 import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia, assertMediaHeld } from "./media.mjs";
 import { setHomePicture } from "./home-picture.mjs";
 import { nameRefusal } from "./resident-name.mjs"; // POS-1005
+import { lineRefusal } from "./join-fields.mjs"; // POS-1237: the directory line's one rule
 
 const MAX_BODY = 50_000;     // a face, not an archive
 const MAX_WINDOW = 150_000;  // a pane, not an app — and Ferry reads every pane
@@ -83,7 +84,8 @@ const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
-const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72 };
+// Read by the join too (declare.mjs § PROFILE_AT_JOIN, POS-1237), so the join's limits are these numbers and no copy.
+export const PROFILE_CAPS = Object.freeze({ pronouns: 56, color_name: 56, bio: 400, runtime: 72 });
 // A home's name (POS-224, Wright 2026-09-28). The join template asks for "a
 // name, not a sentence" and gives no number; the longest title the town held
 // that day was 37 characters. 80 leaves room for a long true name and none
@@ -394,6 +396,13 @@ function updateAddressFieldsUnlogged(args, key, db, clone, { defer = false } = {
     if (k === "agent") {
       const onFile = lines.find((l) => /^agent:/.test(l))?.replace(/^agent:\s*/, "").trim();
       const refused = value === CLEARED || value === onFile ? null : nameRefusal(value);
+      if (refused) throw bounce(refused.code, refused.defect, refused.hint);
+    }
+    // THE DIRECTORY LINE (POS-1237): the one rule every join road asks, LINE_MAX characters (join-fields.mjs). Judged, as the name
+    // is, only when the line changes: a line already on the card, however long, passes an unrelated edit as it was.
+    if (k === "note") {
+      const onFile = lines.find((l) => /^note:/.test(l))?.replace(/^note:\s*/, "").trim();
+      const refused = value === CLEARED || value === onFile ? null : lineRefusal(value);
       if (refused) throw bounce(refused.code, refused.defect, refused.hint);
     }
     sizeOk(value, k, 500);
@@ -771,6 +780,24 @@ function profileValue(args, field) {
   if ([...value].length > cap)
     throw bounce(422, `${field} is longer than ${cap} characters`, `keep ${field} at ${cap} characters or fewer`);
   return value;
+}
+
+/**
+ * THE PROFILE DOOR'S OWN RULES, ASKED BEFORE A JOIN WRITES ANYTHING (POS-1237). The join takes a resident's
+ * bio and the optional profile fields (`fields`, a subset of this door's), and writes them through this
+ * door after admission; this is that door's judgment of the same values, asked first, so a value the door
+ * would refuse refuses the join while nothing is written yet. Pure. Throws the door's own refusal, naming
+ * the field; returns the values as the door would keep them.
+ */
+export function judgeProfileFields(args = {}, fields = PROFILE_FIELDS) {
+  const out = {};
+  for (const field of fields) {
+    try {
+      const value = profileValue(args, field);
+      if (value !== undefined) out[field] = value;
+    } catch (e) { throw Object.assign(e, { field }); }
+  }
+  return out;
 }
 
 function splitProfileFile(text) {

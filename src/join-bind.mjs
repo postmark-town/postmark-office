@@ -38,6 +38,7 @@ import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./ho
 import { recordAshore } from "./ashore.mjs";
 import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { fullAddressOf } from "./join-fields.mjs"; // POS-1237: the full address, under its old name too
 
 export const BIND_REFUSALS = Object.freeze({
   NO_RECORD: Object.freeze({
@@ -109,7 +110,8 @@ export async function bindUnderLock({ args, key, clone, db, env = process.env, d
   // The card and its mailboxes go down first, as declare-exec's berth does, so
   // the one commit below holds the address and both printed registers.
   const files = buildJoinFiles({
-    handle, card: args.card, agent: args.agent, household: plan.houseLine,
+    // the full address under either name (POS-1237: card is full_address's old name)
+    handle, card: fullAddressOf(args).value, agent: args.agent, household: plan.houseLine,
     architecture: args.architecture, since: args.since, note: args.note, ghLogin: key.ghLogin,
   });
   const card = files[0].content;

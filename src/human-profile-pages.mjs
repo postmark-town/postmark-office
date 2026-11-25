@@ -18,14 +18,22 @@ const FIELDS = [
 ];
 
 /**
+ * The three fields' boxes, filled with `profile`'s values (or empty): the one rendering of the human's profile fields,
+ * read by this form and by the berth co-sign (POS-1237, oauth.mjs § the berth co-sign), so the two cannot drift.
+ */
+export function humanProfileRows(profile = null) {
+  return FIELDS.map(([name, label, hint]) => `
+    <p><label for="${name}"><strong>${esc(label)}</strong></label><br>
+    <input id="${name}" name="${name}" type="text" maxlength="${HUMAN_PROFILE_CAPS[name] * 2}" value="${esc(profile?.[name] ?? "")}" style="${INPUT}"><br>
+    <span class="muted">${esc(hint)}; up to ${HUMAN_PROFILE_CAPS[name]} characters.</span></p>`).join("");
+}
+
+/**
  * The form, to the account the household's record binds and no one else. `profile` is the stored
  * `human_profile` (or null); each field is filled with what is set now, and an emptied field clears it.
  */
 export function formPage({ login, houseName, profile = null, action, pendingId, nonce }) {
-  const rows = FIELDS.map(([name, label, hint]) => `
-    <p><label for="${name}"><strong>${esc(label)}</strong></label><br>
-    <input id="${name}" name="${name}" type="text" maxlength="${HUMAN_PROFILE_CAPS[name] * 2}" value="${esc(profile?.[name] ?? "")}" style="${INPUT}"><br>
-    <span class="muted">${esc(hint)}; up to ${HUMAN_PROFILE_CAPS[name]} characters.</span></p>`).join("");
+  const rows = humanProfileRows(profile);
   return plainPage("Your name in town", `
   <p class="who">Signed in as <strong>@${esc(login)}</strong>, the human of the household <strong>${esc(houseName)}</strong>.</p>
   <p>The town's reads name you as your household's human. Give yourself a town name and they say it, with your house beside it:

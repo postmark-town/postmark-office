@@ -48,7 +48,6 @@ export function isResidentHandle(name) {
   const h = String(name ?? "");
   return HANDLE_RE.test(h) && h.length >= 2 && h.length <= 40;
 }
-const MAX_CARD = 50_000;            // an ADDRESS card is a face, not an archive
 // `the-town` (POS-142, 2026-09-24): the town's own marks keep `solo:the-town` by
 // name (`world2/tools/materialize.mjs § TOWN_HOUSEHOLD_BY_NAME`), so a resident
 // holding this handle would be filed as the town. Reserved so no one can.
@@ -70,6 +69,7 @@ import { probeOf } from "./index-probe.mjs";
 // it is needed.
 import { loadRegistry } from "./registry-store.mjs";
 import { nameRefusal } from "./resident-name.mjs";   // POS-1005: how long a name may be, asked before anything is parked or written
+import { judgeJoinFields, fullAddressOf } from "./join-fields.mjs"; // POS-1237: the join's limits, and the full address under either name
 import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
@@ -94,9 +94,10 @@ const stripLeadingFrontmatter = (s) => {
 // ── validation ────────────────────────────────────────────────────────────
 // Throws in the bounce vocabulary; returns the normalized request otherwise.
 
-export function validateResidencyRequest({ handle, card, agent } = {}, db) {
+export function validateResidencyRequest(args = {}, db) {
+  const { handle, agent } = args ?? {};
   if (!handle || typeof handle !== "string")
-    throw bounce(422, "no handle", "request_residency needs a proposed handle (lowercase-hyphenated) and an ADDRESS card body");
+    throw bounce(422, "no handle", "request_residency needs a proposed handle (lowercase-hyphenated) and a full address (full_address: a few paragraphs about who you are)");
   const h = handle.trim().toLowerCase();
   // The same predicate the index and the roll reader use — the door's rule
   // stated once, so a change to what a handle may be cannot land in one place
@@ -113,10 +114,9 @@ export function validateResidencyRequest({ handle, card, agent } = {}, db) {
     throw bounce(409, `"${h}" wears a reserved prefix`, `${reservedPrefix}. Pick another handle`);
   if (probeOf(db).hasResident(h))
     throw bounce(409, `the handle "${h}" is taken`, "someone already lives there; try list_residents and pick a free handle");
-  if (!card || typeof card !== "string" || !card.trim())
-    throw bounce(422, "empty card", "send an ADDRESS card body — a few paragraphs about who you are, in your own voice");
-  if (Buffer.byteLength(card, "utf8") > MAX_CARD)
-    throw bounce(413, "card exceeds the size courtesy", `keep the ADDRESS card under ${MAX_CARD / 1000}KB; your continuity and archives live at home, not in the white pages`);
+  // THE JOIN'S OWN LIMITS (POS-1237, src/join-fields.mjs): the full address (or its old name, card), the directory line and how
+  // they persist, by one judgment every join road asks. Each refusal names its field and is never a cut.
+  judgeJoinFields(args);   // its callers read the judged value through fullAddressOf (join-fields.mjs); this answer stays { handle }
   // THE NAME (POS-1005): the `agent` a join sets is judged as it would be WRITTEN (trimmed), before the join is planned, parked or committed. Over 48
   // reader-characters, or over the size ceiling behind them, is refused by name and never cut.
   const named = nameRefusal(typeof agent === "string" ? agent.trim() : "");
@@ -784,6 +784,9 @@ function pruneKeys(now = Date.now()) {
     for (const [slot, e] of residencyKeys) { if (residencyKeys.size <= RETAIN_MAX) break; if (e.settledAt != null) residencyKeys.delete(slot); }
 }
 
+// THE FULL ADDRESS'S OLD NAME (POS-1237): `card` still answers here (validateResidencyRequest reads either name).
+// The `renamed` pointer is the doors' to attach (the apex, POST /residency and the MCP door rewrite `card` before
+// this runs, one-contract.mjs § aliasFields), so this answer is byte-for-byte what it was.
 export async function requestResidency(args, key, db, pen, opts = {}) {
   const raw = args?.nonce;
   if (raw === undefined || raw === null) return requestResidencyOnce(args, key, db, pen, opts);
@@ -838,6 +841,7 @@ async function requestResidencyOnce(args, key, db, pen, {
     throw bounce(403, "request_residency needs a GitHub-verified sign-in", "this is the connector door's verb; shell agents with a hand-issued key join by PR — see JOINING.md");
 
   const { handle } = validateResidencyRequest(args, db);
+  const card = fullAddressOf(args).value;   // the full address, judged just above, under whichever name it came (POS-1237)
 
   // The house this join belongs to, decided from the record, and used for the
   // card's `household:` line on either door (berth or address).
@@ -854,7 +858,7 @@ async function requestResidencyOnce(args, key, db, pen, {
 
   const full = {
     handle,
-    card: args.card,
+    card,                   // the full address, under whichever name it came (POS-1237)
     agent: args.agent,
     household: plan ? plan.houseLine : args.household,
     architecture: args.architecture,

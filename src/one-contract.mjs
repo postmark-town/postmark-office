@@ -53,10 +53,21 @@ export const ANSWERS_UNTIL = "train/2026-w41";
 // the answer carries `renamed`, naming the field it was read as and the day the
 // old spelling stops answering. A caller who reads their receipt learns the
 // real name; one who does not is still served until the cycle turns.
+// THE JOIN'S FULL ADDRESS (POS-1237, CORE-152): the card's prose is `full_address`, and `card`, its old name,
+// still answers at every join road (declare, begin, add-resident), pointed with the same `renamed` row. Its
+// end is NOT set (FIELD_ALIAS_UNTIL below: null, read-grammar.mjs § CURSOR_RENAMES_UNTIL's convention): a
+// deprecation is its own issue, with notice. src/join-fields.mjs § fullAddressOf reads it on the flat doors.
+const CARD = Object.freeze({ card: "full_address" });
 export const FIELD_ALIASES = Object.freeze({
   send_letter: Object.freeze({ subject: "title" }),
   update_window: Object.freeze({ pane: "html" }),
+  declare_household: CARD,
+  household_begin: CARD,
+  request_residency: CARD,
 });
+/** An alias's own end, where it is not ANSWERS_UNTIL: `null` says no end is set. */
+const NO_END = Object.freeze({ card: null });
+export const FIELD_ALIAS_UNTIL = Object.freeze({ declare_household: NO_END, household_begin: NO_END, request_residency: NO_END });
 
 // ── the door's own fields ───────────────────────────────────────────────────
 //
@@ -130,7 +141,13 @@ export const renamedRow = (kind, from, now, until = ANSWERS_UNTIL) => ({ [kind]:
  * `{ bounce }`, whose shape is the apexes' own refusal:
  * `{ code: 422, defect, hint, unknown_fields, allowed }`.
  */
-export function judgeActFields({ tool, declared, fields, exempt = [] }) {
+/**
+ * THE ALIAS HALF OF THE JUDGEMENT, on its own: each old spelling `tool` answers to, rewritten to its field
+ * with a `renamed` row, or a bounce when both spellings were sent. Returns `{ fields, renamed }` (a NEW
+ * object) or `{ bounce }`. judgeActFields runs it first; the MCP door runs it for the join's own alias
+ * (mcp.mjs § tools/call, POS-1237), whose flat tools judge their fields with validate-args.mjs.
+ */
+export function aliasFields(tool, fields, declared = null) {
   const src = fields && typeof fields === "object" && !Array.isArray(fields) ? fields : {};
   const out = { ...src };
   const renamed = [];
@@ -143,8 +160,16 @@ export function judgeActFields({ tool, declared, fields, exempt = [] }) {
     }
     out[now] = out[old];
     delete out[old];
-    renamed.push(renamedRow("field", old, now));
+    const until = FIELD_ALIAS_UNTIL[tool] ?? {};
+    renamed.push(renamedRow("field", old, now, Object.prototype.hasOwnProperty.call(until, old) ? until[old] : ANSWERS_UNTIL));
   }
+  return { fields: out, renamed };
+}
+
+export function judgeActFields({ tool, declared, fields, exempt = [] }) {
+  const aliased = aliasFields(tool, fields, declared);
+  if (aliased.bounce) return aliased;
+  const { fields: out, renamed } = aliased;
   if (declared) {
     const skip = new Set([...exempt, ...(DOOR_FIELDS[tool] ?? [])]);
     const unknown = Object.keys(out).filter((k) => !(k in declared) && !skip.has(k));

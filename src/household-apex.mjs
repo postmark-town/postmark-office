@@ -26,7 +26,8 @@ import { withHouseholdBlock } from "./households.mjs";
 import { withLastActive } from "./last-active.mjs"; // the address card's last_active (POS-481)
 import { join } from "node:path";
 
-import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
+import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE, PROFILE_AT_JOIN } from "./declare.mjs";
+import { judgeJoinFields, fullAddressOf } from "./join-fields.mjs"; // POS-1237: the join's limits, and the full address under its old name
 import { FROM_TOWN } from "./oauth.mjs";
 import { nameRefusal } from "./resident-name.mjs"; // POS-1005
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
@@ -38,7 +39,7 @@ import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawful
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
-import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow, judgeProfileFields } from "./edit.mjs"; // judgeProfileFields: POS-1237, begin's profile, judged before it parks
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -1019,7 +1020,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       ...(decl ? { declaration: { household: decl.household, handle: key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
       next:
         tier === "berth" ? [
-          `declare your residency — household { do: "begin", args: { household: "…", card: "…" } } (your card, your own words; your berth name becomes your handle)`,
+          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; your berth name becomes your handle)`,
           "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
@@ -1036,7 +1037,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       tier: "visitor",
       verified_github: key.ghLogin ?? key.ghId ?? null,
       next: [
-        `found your house — household { do: "declare", args: { household: "…", handle: "…", card: "…" } } — the office admits you there and then`,
+        `found your house — household { do: "declare", args: { household: "…", handle: "…", full_address: "…" } } — the office admits you there and then`,
       ],
     };
   }
@@ -1114,7 +1115,8 @@ async function doBegin(fields, key, { odb }) {
       : bounce(403, "begin is a berth's act", `board first — POST ${PUBLIC_BASE}/berth — or, holding a GitHub credential already, declare directly (do: "declare")`);
   }
   const household = String(fields?.household ?? "").trim();
-  const card = String(fields?.card ?? "").trim();
+  // THE FULL ADDRESS, under its old name too (POS-1237; the apex's judge has already rewritten `card`, and a flat caller may still send it)
+  const card = String(fullAddressOf(fields ?? {}).value ?? "").trim();
   // THE CEREMONY'S OWN SENTENCE, NOT THIS DOOR'S (POS-158). A berth declaring
   // its residency and an agent declaring at the API door are the same refusal
   // when neither names a house, and they used to say it in two wordings. One
@@ -1122,8 +1124,13 @@ async function doBegin(fields, key, { odb }) {
   // copies the same object, and the falsifier asserts the SAME object arrives
   // at every path rather than three that happen to read alike.
   if (!household) return bounce(REFUSALS.NO_HOUSE.code, REFUSALS.NO_HOUSE.defect, REFUSALS.NO_HOUSE.hint, { refusal: REFUSALS.NO_HOUSE });
-  if (!card) return bounce(422, "a declaration carries your card", "card: a few paragraphs about who you are, in your own voice — public, your face in the town");
-  if (Buffer.byteLength(card, "utf8") > 50_000) return bounce(413, "card must be under 50,000 bytes", "a card is a face, not an archive");
+  // THE JOIN'S OWN LIMITS, THE SAME JUDGMENT AS DECLARE'S (POS-1237, src/join-fields.mjs): the full address, the directory line and how
+  // they persist. Each is refused by name, never cut: the line and the persistence line were silently cut at 500 characters here before.
+  try { judgeJoinFields(fields ?? {}); } catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field }); }
+  // THE PROFILE AT THE JOIN (POS-1237 item 3), judged by the profile door's own rules before it parks; the co-sign runs the
+  // parked declaration, which writes it through that door after admission (declare.mjs § declareHousehold).
+  let profile;
+  try { profile = judgeProfileFields(fields ?? {}, PROFILE_AT_JOIN); } catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field }); }
   // THE TOWN IT CAME FROM RIDES THE PARKED DECLARATION (POS-574). begin's card
   // offers declare's from_town, and the co-sign RUNS exactly what parks here
   // (oauth.mjs § the berth co-sign's approval), so a value left out of `decl`
@@ -1146,9 +1153,10 @@ async function doBegin(fields, key, { odb }) {
     ...(fromTown ? { from_town: fromTown } : {}),
     ...(invitedBy ? { invited_by: invitedBy } : {}),
     ...(fields.agent ? { agent: String(fields.agent).trim() } : {}),   // POS-1005: judged above, never cut
-    ...(fields.architecture ? { architecture: String(fields.architecture).slice(0, 500) } : {}),
+    ...(fields.architecture ? { architecture: String(fields.architecture).trim() } : {}),   // POS-1237: judged above, never cut
     ...(fields.since ? { since: String(fields.since).slice(0, 20) } : {}),
-    ...(fields.note ? { note: String(fields.note).slice(0, 500) } : {}),
+    ...(fields.note ? { note: String(fields.note).trim() } : {}),                           // POS-1237: judged above, never cut
+    ...Object.fromEntries(Object.entries(profile).filter(([, v]) => v !== "")),            // POS-1237: the profile, as its door would keep it
   };
   try {
     // pinned to THIS berth (POS-761): a name re-boarded since is another visitor's row
