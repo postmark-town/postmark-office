@@ -765,8 +765,11 @@ async function inFlight(run) {
 const PROGRESSED = ["another timer ran", "the delete finished"];
 // MEASURED (this box, 2026-11-25): the async collector beat 39 to 81 times per delete (1 to 2.5 s); the synchronous
 // one it replaced beat 3 to 5 times in 2 to 6 s, because its git children froze the loop between two async file reads.
-// The floor sits between the two, well clear of both; the order check above is the exact form of the same claim.
+// The synchronous count does not grow with the work (no turn of the loop between its children), the async count does,
+// so the delete reads a crowd of extra clones (8 reads of one clone: 24 more git children; measured with 25 reads here: 600 to 1000 beats) and CI's fast box, which
+// first measured 19 beats in 80 ms without the crowd, clears the floor by a wide margin too.
 const MIN_BEATS = 20;
+const CROWD = Array(8).fill(cloneWith({ "README.md": "an extra clone naming no picture" }));
 const alive = (x, label) => {
   assert.deepEqual(x.order, PROGRESSED, `${label}: another timer ran before the delete finished`);
   assert.ok(x.beats >= MIN_BEATS, `${label}: the office kept turning while the collector read (${x.beats} heartbeats in ${x.ms} ms, wanted ${MIN_BEATS})`);
@@ -777,12 +780,12 @@ test("delete-media (POS-737 FIX): another timer runs while the sources are read,
   const db = odb();
   const logged = await upload(svg("liveness-log"), key(), db);
   const deleted = [];
-  const refused = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, sources: sourcesWithHistory({ log: logged.url }), del: async (k) => { deleted.push(k); } }));
+  const refused = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, sources: { ...sourcesWithHistory({ log: logged.url }), extraClones: CROWD }, del: async (k) => { deleted.push(k); } }));
   alive(refused, "refused");
   assert.deepEqual([refused.result.code, refused.result.defect], [409, "that file is still in use"]);
   // unread: the replay directory is not bound
   const s = sourcesWithHistory();
-  const unread = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, env: { WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone }, del: async (k) => { deleted.push(k); } }));
+  const unread = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, env: { WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone, MEDIA_SWEEP_EXTRA_CLONES: CROWD.join(",") }, del: async (k) => { deleted.push(k); } }));
   alive(unread, "unread");
   assert.equal(unread.result.code, 503);
   assert.ok(unread.result.unread.includes(SOURCE_WORDS.replays));
@@ -790,7 +793,7 @@ test("delete-media (POS-737 FIX): another timer runs while the sources are read,
   assert.equal((await mediaQuota(db, "testers")).used, logged.bytes, "no quota released");
   // freed: the control that the deletion path itself is the one being timed
   const free = await upload(svg("liveness-free"), key(), db);
-  const freed = await inFlight(() => deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources: sourcesWithHistory(), del: async (k) => { deleted.push(k); } }));
+  const freed = await inFlight(() => deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources: { ...sourcesWithHistory(), extraClones: CROWD }, del: async (k) => { deleted.push(k); } }));
   alive(freed, "freed");
   assert.deepEqual([freed.result.deleted, freed.result.purged], [true, true]);
   assert.deepEqual(deleted, freed.result.receipt.objects, "exactly the freed file's objects (an SVG has no small copies)");
