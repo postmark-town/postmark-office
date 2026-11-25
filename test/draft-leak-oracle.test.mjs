@@ -34,7 +34,10 @@ function standIn() {
   return clone;
 }
 
-/** The door test, run as its own process with `clone` as the clone the suite shares; resolves { code, out }. */
+/**
+ * The door test, run as its own process with `clone` as the clone the suite shares; resolves { code, out }. READ `out`, NOT `code`: in CI
+ * (run 45661772790) the child printed `not ok 3` and still exited 0 with no summary, so its exit status says nothing about its tests.
+ */
 const runDoor = (clone, env = {}) => new Promise((resolve) => {
   const args = [...process.execArgv.filter((a) => !a.startsWith("--test")), DOOR_TEST];
   // NODE_TEST_CONTEXT would make the child report to THIS run in node:test's internal serializer; it is its own run, read as plain TAP
@@ -53,18 +56,20 @@ test("a neighbour's draft work in the shared clone does not trip the oracle; the
   git(shared, "update-ref", "refs/remotes/origin/some-branch", "main");
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "the oracle looks at the door's own household only");
   assert.ok(draftArtifactsOf(shared, "alex-rowan").length > 0, "and does see a neighbour's, so the control is not blind");
-  const { code, out } = await runDoor(shared);
-  assert.equal(code, 0, `the door test passes beside a neighbour's writes:\n${out.slice(-3000)}`);
-  assert.match(out, /^ok 3 - POS-1234: the door's draft work is in its PRIVATE clone/m, `the child really ran the oracle (not an empty pass):\n${out.slice(-3000)}`);
+  const { out } = await runDoor(shared);
+  // the verdict is the child's own TAP, never its exit code (see runDoor), and all three of its tests must have run: not an empty pass
+  assert.doesNotMatch(out, /^\s*not ok /m, `the door test passes beside a neighbour's writes:\n${out.slice(-3000)}`);
+  for (const n of [1, 2, 3]) assert.match(out, new RegExp(`^ok ${n} - `, "m"), `the child really ran its test ${n}:\n${out.slice(-3000)}`);
+  assert.match(out, /^ok 3 - POS-1234: the door's draft work is in its PRIVATE clone/m, "including the leak oracle");
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "and left nothing of its own in the shared clone");
 });
 
 test("FALSIFIER: the real executor pointed at the shared clone leaves its household's draft there, and the door test goes red on exactly that", { skip, timeout: 170_000 }, async () => {
   const shared = standIn();
   assert.deepEqual(draftArtifactsOf(shared, "pos1234-door"), [], "clean before");
-  const { code, out } = await runDoor(shared, { POS1234_DOOR_LEAK: "1" });
-  assert.notEqual(code, 0, `the leaking door fails the suite; its own output:\n${out.slice(-3000)}`);
-  assert.match(out, /not ok \d+ - POS-1234: the door's draft work is in its PRIVATE clone/, "and it is the leak oracle that fails");
+  const { out } = await runDoor(shared, { POS1234_DOOR_LEAK: "1" });
+  assert.match(out, /^\s*not ok 3 - POS-1234: the door's draft work is in its PRIVATE clone/m, `the leak oracle is what goes red; the child's output:\n${out.slice(-3000)}`);
   assert.match(out, /leaked into the shared world clone/, "naming the leak");
+  for (const n of [1, 2]) assert.match(out, new RegExp(`^ok ${n} - `, "m"), `and ONLY the oracle: the door's own tests ${n} still pass`);
   assert.ok(draftArtifactsOf(shared, "pos1234-door").length > 0, "the real executor's own writes are what it caught: the household's draft is in the stand-in");
 });
