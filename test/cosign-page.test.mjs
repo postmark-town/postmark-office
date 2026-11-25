@@ -100,7 +100,8 @@ test("S4 · the co-sign page wears the join's look: the Registrar's portrait and
   assert.match(QUILL_SVG, /shape-rendering="crispEdges"/);
   assert.match(html, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f 0%,#0d1426 48%,#070b15 100%\)/, "the join's night sky");
   assert.match(html, /--pm-gold:#e8c48b;--pm-paper:#f7efdc/, "and its paper and gold");
-  assert.match(html, /\.sf input::placeholder\{color:rgba\(239,230,210,\.3\)/, "ghost text, as the join greys it");
+  assert.match(html, /\.sf input::placeholder\{color:rgba\(239,230,210,\.6\)/, "ghost text, the join's cream dimmed only as far as it still reads (4.5:1 and more on the night sky)");
+  assert.match(html, /\.reg-name\{[^}]*color:#87501f/, "the Registrar's label, her accent deepened to read on her paper");
   assert.match(html, /<h1 class="jf-q">Co-signed<\/h1>/);
   assert.match(html, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
 });

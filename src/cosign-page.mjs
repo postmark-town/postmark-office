@@ -22,7 +22,9 @@ export function countedLength(value) { return Array.from(String(value ?? "").tri
 /** The words under a box: "n / max", and how many too many past it. */
 export function countWords(n, max) { return `${n} / ${max}${n > max ? ` — ${n - max} too many` : ""}`; }
 
-// the approved join's tokens and rules (join-flow-full.html § .site), set on the page itself
+// the approved join's tokens and rules (join-flow-full.html § .site), set on the page itself. Two treatments are deeper than
+// the mockup's, so they read (the lead's FIX at 07fdf3d1, measured on the served render): the ghost text's cream at .6, not .3
+// (2.37:1 before), and the Registrar's label in a darker shade of her accent, #87501f, not #a4632a (4.17:1 on her paper)
 const STYLE = `
 :root{--pm-gold:#e8c48b;--pm-paper:#f7efdc;--pm-ink:#2e2417;--pm-ink-soft:#6d5c44;--pm-accent:#a4632a;
   --pm-serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,Charter,serif;--pm-mono:ui-monospace,"SF Mono",Consolas,monospace;
@@ -40,7 +42,7 @@ a{color:var(--pm-gold)}
 .reg-face{flex:none;width:64px;height:64px;border-radius:50%;border:2px solid var(--pm-gold);box-shadow:0 6px 18px rgba(0,0,0,.4);object-fit:cover;background:var(--pm-paper)}
 .reg-bubble{position:relative;background:var(--pm-paper);color:var(--pm-ink);border-radius:12px;padding:10px 14px;font-size:1rem;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .reg-bubble::before{content:"";position:absolute;left:-8px;top:20px;border:8px solid transparent;border-left:0;border-right-color:var(--pm-paper)}
-.reg-name{display:block;font-family:var(--pm-mono);font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:var(--pm-accent);margin-bottom:2px}
+.reg-name{display:block;font-family:var(--pm-mono);font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:#87501f;margin-bottom:2px}
 .jf-kicker{margin:0 0 .9em;font-family:var(--pm-mono);font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;color:rgba(232,196,139,.75)}
 .jf-q{margin:0 0 .5em;font-size:clamp(1.7rem,4.2vw,2.6rem);line-height:1.12;font-weight:700;color:var(--jf-gold);text-shadow:0 0 34px rgba(232,196,139,.28)}
 .jf-sub{margin:0 0 1.2em;max-width:56ch;font-size:clamp(1rem,1.9vw,1.12rem);line-height:1.55;color:var(--jf-soft)}
@@ -57,7 +59,7 @@ a{color:var(--pm-gold)}
 .sf input[type=text]{width:100%;font-family:inherit;font-size:clamp(1.15rem,2.6vw,1.5rem);line-height:1.4;color:var(--jf-cream);background:transparent;
   border:0;border-bottom:2px solid rgba(232,196,139,.45);border-radius:0;padding:.3em .05em}
 .sf input[type=text]:focus{outline:none;border-color:var(--jf-gold)}
-.sf input::placeholder{color:rgba(239,230,210,.3);opacity:1}
+.sf input::placeholder{color:rgba(239,230,210,.6);opacity:1}
 .sf-count{margin:.45em 0 0;text-align:right;font-family:var(--pm-mono);font-size:.72rem;letter-spacing:.06em;color:rgba(185,173,149,.8)}
 .sf-count[data-over="1"]{color:var(--jf-gold);font-weight:700}
 .lk-pick{display:flex;gap:.8em;flex-wrap:wrap;margin:.2em 0 .9em}
