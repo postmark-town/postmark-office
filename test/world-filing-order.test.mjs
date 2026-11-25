@@ -60,10 +60,10 @@ test("a filing is the freeze's, else the tree's, else the write-down's rule", ()
   assert.equal(dirs.get("b/filed-later"), "WORLD/marks/let-there-be-light/the-high-ground/filed-later", "Gate A: an existing filing never moves");
   assert.equal(dirs.get("c/new-house"), "WORLD/marks/c/new-house", "Gate B: a new sited mark files at its id");
   assert.equal(dirs.get("c/its-name"), "WORLD/marks/c/new-house/its-name", "a naming mark files under its parent");
-  assert.equal(dirs.get("d/a-note"), "WORLD/marks/let-there-be-light/a-note", "a terrain parent is no directory: the root prefix");
+  assert.equal(dirs.get("d/a-note"), "WORLD/marks/d/a-note", "a terrain parent is no directory: no parent, so its maker's id (POS-1212; the root prefix is gone)");
   assert.deepEqual(inFilingOrder(records, filing).map((r) => r.id),
     ["c/new-house", "c/its-name", "d/a-note", "a/frozen-one", "b/filed-later"],
-    "WORLD/marks/c before WORLD/marks/let-there-be-light; there, the file a-note, then old-quarter, then the-high-ground");
+    "WORLD/marks/c, then WORLD/marks/d, before WORLD/marks/let-there-be-light; there old-quarter, then the-high-ground");
 });
 
 // ── ON A REAL TAG ────────────────────────────────────────────────────────────

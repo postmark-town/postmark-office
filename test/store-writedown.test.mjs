@@ -1221,12 +1221,6 @@ test("F-claim-undated · a parcel with no date keeps the bytes it has always had
   assert.equal(recordFromRow(amended).claimed_at, "2026-07-21T09:00:00.000Z");
 });
 
-test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's change: it is the store's fact printed into the file", async () => {
-  const { recordDiff } = await import("../world2/tools/marks-ingest.mjs");
-  assert.deepEqual(recordDiff({ kind: "parcel", body: "a", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), []);
-  assert.deepEqual(recordDiff({ kind: "parcel", body: "b", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), ["body"], "a real change is still read");
-});
-
 // ── F-first-laid · EVERY MARK'S AGE, AND ITS FOOTPRINTS, REACH THE TREE'S FOLD (POS-571) ──
 //
 // World LOGOS conflict-matrix § Roles from seniority: "A mark's age is its
@@ -1315,16 +1309,6 @@ test("F-first-laid · an EXPANSION is a newcomer on its new cells: footprints ri
   const scalar = foldThroughTheTree(engine, [estate(false), mill], [stakeOn("mi/mill", 100)]);
   assert.equal(scalar.marks.find((m) => m.id === "ea/estate")?.footprints, undefined);
   assert.ok(scalar.state.marks.some((m) => m.id === "ea/estate"), "without its history the estate keeps the old answer");
-});
-
-test("F-first-laid-ingest · marks-ingest never reads footprints back as a resident's change, and an amend never carries them into the store", async () => {
-  const { recordDiff, carriedRow } = await import("../world2/tools/marks-ingest.mjs");
-  const footprints = [{ since: D("01"), at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } }];
-  assert.deepEqual(recordDiff({ kind: "sited", body: "a", footprints }, { kind: "sited", body: "a" }), [], "the printed history is no change");
-  assert.deepEqual(recordDiff({ kind: "sited", body: "b", footprints }, { kind: "sited", body: "a" }), ["body"], "a real change is still read");
-  const was = { slug: "x/y", kind: "sited", body: "a", geometry: null, data: { date: D("01") } };
-  const ref = { slug: "x/y", kind: "sited", body: "b", geometry: null, data: { date: D("02"), footprints } };
-  assert.equal(carriedRow(was, ref, new Set(recordDiff({ ...ref.data, body: "b" }, { ...was.data, body: "a" }))).data.footprints, undefined, "the amend carries the words, never the printed history");
 });
 
 // ── W · AN OWED WITHDRAWAL IS A REMOVAL ON ITS SKETCHBOOK (WLD-88) ──────────

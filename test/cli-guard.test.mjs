@@ -236,7 +236,9 @@ const ROSTER = {
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
   // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
   "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
-  "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
+  "deploy/durable-rooms-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/durable-rooms-pass.mjs" },
+  // STAR-237: the keep tick's Hearth joins and queued entry pay — no arguments, so it answers its usage and touches nothing
+  "deploy/hearth-joins.mjs": { args: [], code: 2, needle: "usage: node deploy/hearth-joins.mjs" },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
@@ -295,15 +297,12 @@ const ROSTER = {
   "world2/tools/graph-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: graph-ingest.mjs" },
   "tools/arena-archive.mjs": { args: [], env: {}, code: 2, needle: "usage: arena-archive.mjs" },
   "world2/tools/ledger-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: WORLD2_PG_URL=" },
-  // No --world-repo: stops on usage before any git or Postgres (POS-142).
-  "world2/tools/marks-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: marks-ingest.mjs" },
   "world2/tools/pointer-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: pointer-ingest.mjs --world-repo" },
   // No connection named: stops before any Postgres (POS-302).
   "world2/tools/position-snapshot.mjs": { args: [], env: NO_PG, code: 2, needle: "no --pg-url, no PG* environment, and no WORLD2_PG_URL" },
   "world2/tools/replay-ingest.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage: replay-ingest.mjs" },
   // No --tree: stops on usage before any git read or Postgres connect (POS-242).
   "world2/tools/rehearse.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: rehearse.mjs" },
-  "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
   "world2/tools/return-past-takes.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: return-past-takes.mjs" },
   // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
   // opens any connection — it has no write mode at all.
@@ -333,6 +332,7 @@ const ROSTER = {
   // POS-341 part 4: the quest snapshot on the store's key base. Stops on a clone that is not a town, before any store is read.
   "world2/tools/quest-snapshot-run.mjs": { args: ["--clone", NOWHERE], env: NO_PG, code: 1, needle: "no town clone with tools/quest-progress.mjs" },
   "world2/tools/town-index-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: town-index-ingest.mjs" },
+  "world2/tools/replay-rooms.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: replay-rooms.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
   // POS-155 gave this tool a second door (`--window <N>`, a candle window) beside
   // the exact-crossing `--windows`, so its no-args sentence names both. The
@@ -349,6 +349,12 @@ const ROSTER = {
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
   "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
+  // POS-1025: the printout refuses a missing mode before it reads a seal or opens a store.
+  "world2/tools/settlement-printout.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-printout.mjs print" },
+  // POS-1025/d: the seal step refuses with no --through before it pays anything, reads a decision or opens a store.
+  "world2/tools/settlement-seal.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-seal.mjs --through <window>" },
+  // POS-1025: the cutover's one copy of the registry refuses with no --world-repo before it reads a file or a store.
+  "world2/tools/publications-seed.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: publications-seed.mjs --world-repo" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────

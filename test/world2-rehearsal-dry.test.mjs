@@ -31,14 +31,14 @@ const URL_ = "postgres://rehearsal_runner:s3cret@127.0.0.1:5432/world2_rehearsal
 test("the crossing's environment: built from nothing, the office's pen on the copy, prod's modes, its own clone and receipt", () => {
   const env = dryLegEnv({ tree: "/r/tree", url: URL_, townRepo: "/r/town", worldRepo: "/r/world", dryDir: "/r/dry", path: "/usr/bin", home: "/home/meepo" });
   assert.deepEqual(Object.keys(env).sort(), [
-    "HOME", "OFFICE_ROOT", "PATH", "SETTLEMENT_CLONE", "SETTLEMENT_DRY", "SETTLEMENT_REPORT", "SETTLEMENT_SOURCE",
-    "STATE_LOG_SOURCE", "TOWN_CLONE", "WORLD2_PG", "WORLD2_PG_URL", "WORLD_CLONE",
-  ], "nothing inherited: no TOWN_PUSH, no token, no other WORLD2_*");
+    "HOME", "OFFICE_ROOT", "PATH", "SETTLEMENT_CLONE", "SETTLEMENT_DRY", "SETTLEMENT_REPORT",
+    "STATE_LOG_SOURCE", "TOWN_CLONE", "WORLD2_CLEARING_URL", "WORLD2_PG", "WORLD2_PG_URL", "WORLD_CLONE",
+  ], "nothing inherited: no TOWN_PUSH, no token, no other WORLD2_*; no SETTLEMENT_SOURCE, retired at the printout cutover");
   assert.equal(env.SETTLEMENT_DRY, "1");
-  assert.equal(env.SETTLEMENT_SOURCE, "store");
   assert.equal(env.STATE_LOG_SOURCE, "store", "the box's own mode (read 2026-10-01)");
   const u = new URL(env.WORLD2_PG_URL);
   assert.equal(u.searchParams.get("options"), "-c role=office_api", "the crossing reads as the office's pen");
+  assert.equal(new URL(env.WORLD2_CLEARING_URL).searchParams.get("options"), "-c role=clearing_job", "the printout reads the seal as the clearing's pen (POS-1025)");
   assert.equal(u.pathname, "/world2_rehearsal");
   assert.equal(u.password, "s3cret");
   assert.equal(env.OFFICE_ROOT, "/r/tree", "the tree's crossing, not the runner's");
@@ -61,25 +61,29 @@ test("runDryLeg crosses the tree's REAL settlement-auto.sh dry: a published rece
   assert.equal(d.ran, true);
   assert.equal(d.ok, true, JSON.stringify(d.tail));
   assert.equal(d.status, "published");
-  assert.match(d.detail, /^DRY RUN, nothing written — 1 published/);
+  assert.match(d.detail, /^DRY RUN, nothing written — S214 printed: 1 written, 1 removed, 0 re-framed/);
   assert.ok(d.withheld.some((l) => l.startsWith("world main's push: ")), JSON.stringify(d.withheld));
+  assert.ok(d.withheld.some((l) => l.startsWith("the tag settlement/S214 at ")), "the tag is withheld and named");
   assert.ok(d.withheld.includes("escalation: suite-warning"));
-  assert.deepEqual(d.retired, { ran: false, dry_run: true, would_retire: ["alpha/old"], would_retire_withdrawn: [], reason: "dry run — the store was not written" });
+  assert.equal(d.settlement, 214);
+  assert.equal(d.printout.status, "dry");
+  assert.deepEqual(d.printout.removed, [{ id: "alpha/old", path: "WORLD/marks/alpha/old/mark.md" }]);
   assert.equal(originRefs(b.origin), before, "every ref on origin, tags included, is as it was");
   assert.ok(existsSync(d.receipt_path));
   assert.equal(existsSync(join(b.root, "store.log")), false);
   assert.equal(existsSync(join(b.root, "esc.log")), false);
 });
 
-test("a harm refusal comes back as a rehearsal that did not cross: ok false, status refused", { skip }, () => {
+test("harm over the printout is a rehearsal that did NOT pass, though the crossing would publish (POS-1025/c)", { skip }, () => {
   const b = bottle({ harm: true });
   const { env } = inBottle(b);
   const d = runDryLeg({ tree: b.office, env });
   assert.equal(d.ran, true);
-  assert.equal(d.ok, false);
-  assert.equal(d.status, "refused");
-  assert.match(d.detail, /HARM NAMED/);
-  assert.ok(d.withheld.includes("escalation: harm"));
+  assert.equal(d.status, "published", "after the seal harm holds nothing");
+  assert.equal(d.ok, false, "and a rehearsal that finds harm has not passed");
+  assert.match(d.reason, /harm gate named harm over the printout/);
+  assert.equal(d.harm.ok, false);
+  assert.ok(d.withheld.includes("escalation: harm-warning"));
 });
 
 function fakeTree(script) {

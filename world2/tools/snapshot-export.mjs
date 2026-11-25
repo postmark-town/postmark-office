@@ -460,7 +460,14 @@ const CERT_FILE = "CERTIFICATION.json";
  * miss an act rewritten, and "the office cannot rewrite history without the repo
  * catching it" is the sentence this file exists to make true.
  */
-export function certification({ cursors, windowCursor, pins, marksDigest, archives, exportedAt }) {
+//
+// THE SETTLEMENT'S PAIR (POS-1025): where the newest certified window was sealed
+// with a settlement number (095), the certification carries that number and the
+// snapshot's digest, the same pair the settlement/S<n> tag names on the world, so
+// the private repo can hold the public tag to what the store sealed. Both are
+// written at the seal and never move. A window sealed before 095 carries neither
+// key, so every certification already signed re-derives byte for byte.
+export function certification({ cursors, windowCursor, pins, marksDigest, archives, exportedAt, seal = null }) {
   return {
     certified_by: `${TOOL} (snapshot_exporter — pen 4, repo-side notary)`,
     acts_cursor: cursors.acts_cursor,
@@ -471,6 +478,7 @@ export function certification({ cursors, windowCursor, pins, marksDigest, archiv
     archives_sha: contentDigest(archives.map((a) => ({ key: String(a.window), bytes: a.bytes }))),
     law_sha: pins.law_sha,
     town_sha: pins.town_sha,
+    ...(seal?.sealed_settlement != null ? { settlement: Number(seal.sealed_settlement), snapshot_digest: seal.digest } : {}),
     exported_at: exportedAt,
   };
 }
@@ -597,8 +605,24 @@ export async function derive(client, { now = Date.now() } = {}) {
   // in it. `held` names the second reason window by window.
   const heldBack = cursors.acts_total - archives.reduce((n, a) => n + a.lines, 0);
 
+  // the newest window's seal: its settlement number and digest (095), or nothing before 095
+  const { rows: [seal = null] } = await client.query(
+    "SELECT sealed_settlement, digest FROM world_snapshots WHERE window_id = $1", [latest.id]);
+  // A WINDOW DECIDED AND NOT SEALED YET (095 § 4; POS-1025/d): the clearing saved its decision and the settlement crossing seals it
+  // after paying its town returns, in number order. Certified now, it would carry no settlement pair and read as a window sealed
+  // before 095, frozen under a tag the next run must then refuse. So the certification WAITS FOR ITS SEAL (Rivet 2026-11-22
+  // 03:47Z), by name, as it waits for a ferry; nothing is certified and every earlier certification and tag stands as it was.
+  if (!seal) {
+    const { rows: [has] } = await client.query("SELECT to_regclass('public.settlement_decisions') IS NOT NULL AS ok");
+    const { rows: [decided = null] } = has?.ok
+      ? await client.query("SELECT settlement FROM settlement_decisions WHERE window_id = $1", [latest.id])
+      : { rows: [] };
+    if (decided)
+      throw new Cannot(`window ${latest.id} is decided as S${decided.settlement} and not sealed yet (the settlement crossing seals it after its town returns, in number order): its certification waits for its seal, and nothing was certified`);
+  }
+
   return {
-    windows, held, latest, cursors, archives, rendered, marksDigest, heldBack,
+    windows, held, latest, cursors, archives, rendered, marksDigest, heldBack, seal,
     windowCursor: latest.id,
     pins: { law_sha: latest.law_sha, town_sha: latest.town_sha },
   };

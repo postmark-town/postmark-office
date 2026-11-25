@@ -214,3 +214,35 @@ test("THE EVENT'S GALLERY (Facet via Rivet 20:03Z): every accepted spark across 
   assert.equal(unknown.gallery, null, "rooms that cannot be told: the gallery is unknown, never an empty list");
   assert.match(unknown.gallery_note, /unknown, not none/);
 });
+
+test("POS-1204: the one-event gallery is the UNION of standing Sparks naming the event and its room-derived ones — once each, accepted order, with no rooms at all", async () => {
+  const { rows: [w] } = await owner.query("SELECT id FROM windows ORDER BY id DESC LIMIT 1");
+  const mark = async (slug, data, status = "standing", locked = w.id) => owner.query(
+    `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+     VALUES (gen_random_uuid(), $1, 'spark', $2, $3, $4, $5, box(point(0,0), point(1,1)), $6, $7, $8)`,
+    [slug, slug.split("/")[0], `${slug.split("/")[0]}-house`, `the ${slug}`, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), status, locked, JSON.stringify(data)]);
+  const base = { kind: "spark", recounting: "r", experienced_at: "2026-11-14T20:00:00.000Z" };
+  const EV = "host/ended-album";
+  await mark("pic/direct-only", { ...base, event: EV });                                           // named, no room
+  await mark("pic/dual", { ...base, event: EV, rooms: ["u1-album"], circle: 1, circle_path: [1] });   // named AND in a room
+  await mark("pic/room-only", { ...base, rooms: ["u1-album"], circle: 1, circle_path: [1] });
+  await mark("pic/other-event", { ...base, event: "host/another" });
+  await mark("pic/retired-named", { ...base, event: EV }, "retired");
+  await mark("host/ended-album-root", { ...base, event: EV });                                      // a completion root
+  await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
+    VALUES ($1, 'spark', 'otto', 'otto-house', 'pending', 'waiting', $2, 1, $3, 'otto/pending-named')`,
+    [w.id, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), JSON.stringify({ ...base, event: EV })]);
+  const ids = (g) => g.gallery.sparks.map((s) => s.id);
+
+  const none = await S.eventGalleryOf(owner, { room_history: "complete", rooms: [] }, { roots: ["host/ended-album-root"], event: EV });
+  assert.deepEqual(none.gallery.rooms, [], "zero rooms stay zero");
+  assert.deepEqual(ids(none).sort(), ["pic/dual", "pic/direct-only"].sort(), "THE FALSIFIER: no rooms, yet the directly named standing Sparks are the gallery (never another event's, a retired one, a pending claim or the root)");
+  const both = await S.eventGalleryOf(owner, { room_history: "complete", rooms: [{ id: "u1-album" }] }, { roots: ["host/ended-album-root"], event: EV });
+  assert.deepEqual(ids(both).sort(), ["pic/direct-only", "pic/dual", "pic/room-only"], "room-derived and named, the dual match once");
+  assert.equal(ids(both).filter((i) => i === "pic/dual").length, 1);
+  assert.deepEqual(ids(both), ["pic/direct-only", "pic/dual", "pic/room-only"], "accepted order: the locked window, then the slug — named and room-derived interleaved as one list");
+  const roomOnly = await S.eventGalleryOf(owner, { room_history: "complete", rooms: [{ id: "u1-album" }] }, { roots: [] });
+  assert.deepEqual(ids(roomOnly).sort(), ["pic/dual", "pic/room-only"], "no event named: the room-derived set, exactly as before");
+  const unknown = await S.eventGalleryOf(owner, { room_history: "unavailable", rooms: [] }, { event: EV });
+  assert.equal(unknown.gallery, null, "unknown rooms stay unknown, never an empty list, even with a named event");
+});

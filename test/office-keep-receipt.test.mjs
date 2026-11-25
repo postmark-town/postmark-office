@@ -155,6 +155,9 @@ const town = process.argv[process.argv.indexOf("--town") + 1];
 const dirty = execFileSync(${JSON.stringify(which("git") ?? "git")}, ["-C", town, "status", "--porcelain", "--", ${JSON.stringify(LEDGER)}], { encoding: "utf8" }).trim();
 if (dirty) { console.error("[event-sparks] the stamp ledger holds lines nobody committed — stub"); process.exit(3); }
 if (process.env.STUB_SPARKS_RC) process.exit(Number(process.env.STUB_SPARKS_RC)); // the pass's own exit, as the shell maps it`),
+  // The Hearth joins (STAR-237), right after the sparks and before the snapshot: its own exit, as the shell maps it (0 ok, 4 ok and owed, else refused)
+  "deploy/hearth-joins.mjs": plain("hearth_joins", `
+if (process.env.STUB_HEARTH_RC) process.exit(Number(process.env.STUB_HEARTH_RC));`),
   // STAMP_LINES=store: the store's mint pass appends and commits its own lines
   "world2/tools/stamp-mint-run.mjs": plain("mint-run", `
 import { execFileSync } from "node:child_process";
@@ -192,6 +195,8 @@ console.log(process.env.STUB_DROPS_FAIL ? "drops: NOT reconciled (non-fatal) —
 console.log(process.env.STUB_ENDINGS_FAIL ? "endings: NOT ended (non-fatal) — stub" : "endings: ended 0 at S1, cutoff 2026-10-26T18:00:00.000Z");
 `,
   "world2/tools/position-snapshot.mjs": plain("positions", `console.log("positions: none owed");`),
+  // The durable rooms pass (POS-1203), its own step in the tick that already runs: STUB_ROOMS_RC is the pass's own exit, as the shell maps it
+  "deploy/durable-rooms-pass.mjs": plain("rooms", `if (process.env.STUB_ROOMS_RC) process.exit(Number(process.env.STUB_ROOMS_RC));`),
   // The world step (POS-268 5b; review-593 a and c), in shell builtins only, since the run's PATH
   // has no env or sed: it records which store passwords it was handed, and STUB_FAIL=world makes it
   // exit 4 (the credential unreadable).
@@ -347,7 +352,7 @@ const steps = (r) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => 
 const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", invite: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
-  sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
+  sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", hearth_joins: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok", rooms: "ok",
   hhkeys: "ok", hhkeys_log: "ok", world: "ok", bluesky: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
@@ -401,6 +406,10 @@ const SOFT = [
   ["sparks", { STUB_FAIL: "sparks" }, { sparks: "refused:exit:7" }],
   ["sparks (a ledger with lines nobody committed: skipped, asked again next tick)", { STUB_SPARKS_RC: "3" }, { sparks: "skip:prereq:clean_ledger" }],
   ["sparks (an event due on a red ledger: refused as the mint refuses it)", { STUB_SPARKS_RC: "4" }, { sparks: "refused:ledger-red" }],
+  // STAR-237: the Hearth joins refused (a join or a plan it could not finish), or finding the entry pay owed: ok, with the word that says so
+  ["hearth_joins", { STUB_FAIL: "hearth_joins" }, { hearth_joins: "refused:exit:7" }],
+  ["hearth_joins (a refusal's own exit, here 1)", { STUB_HEARTH_RC: "1" }, { hearth_joins: "refused:exit:1" }],
+  ["hearth_joins (the pay is owed, a hand's to make: ok, and the receipt says so)", { STUB_HEARTH_RC: "4" }, { hearth_joins: "ok:owed:hearth_entry" }],
   // a failed run prints no soft-step lines, so carried and amends never ran
   ["settlements", { STUB_FAIL: "settlements" }, { settlements: "refused:exit:7", carried: "notrun", chests: "notrun", amends: "notrun", drops: "notrun", endings: "notrun" }],
   // POS-612: each soft step's failure leaves the run's exit 0 and settlements ok,
@@ -413,6 +422,10 @@ const SOFT = [
   // WLD-25: a named creature's ending, the same
   ["endings (non-fatal: settlements stays ok)", { STUB_ENDINGS_FAIL: "1" }, { endings: "refused:write-failed" }],
   ["positions", { STUB_FAIL: "positions" }, { positions: "refused:exit:7" }],
+  // POS-1203: the durable rooms pass refused (a write it could not make; asked again next tick), or has nothing it can tell yet (exit 3), and the tick goes on
+  ["rooms", { STUB_FAIL: "rooms" }, { rooms: "refused:exit:7" }],
+  ["rooms (a write that failed: exit 1, refused, the next tick asks again)", { STUB_ROOMS_RC: "1" }, { rooms: "refused:exit:1" }],
+  ["rooms (migration 103 not landed, or no settlement yet: skipped)", { STUB_ROOMS_RC: "3" }, { rooms: "skip:prereq:no_migration" }],
   ["hhkeys (the predicate left no JSON: the append succeeds, the step is refused)", { STUB_FAIL: "hhkeys" }, { hhkeys: "refused:unchecked" }],
   // POS-904: the Bluesky publisher refused (a crash's exit, here 7) is its own refused step, and the tick goes on
   ["bluesky", { STUB_FAIL: "bluesky" }, { bluesky: "refused:exit:7" }],
@@ -448,7 +461,7 @@ test("mint · a ledger that arrives red: mint refused ledger-red (exit 0 is not 
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
   });
   // POS-1035: the sparks pass runs (nothing is due here, so it judges no ledger; with an event due it refuses a red one, exit 4)
-  assert.deepEqual(calls(fx).slice(0, 7), ["registry", "settle", "standing", "gangway", "verify", "sparks", "settlements"]);
+  assert.deepEqual(calls(fx).slice(0, 8), ["registry", "settle", "standing", "gangway", "verify", "sparks", "hearth_joins", "settlements"]);
   assert.ok(published(fx));
 });
 

@@ -40,6 +40,18 @@ POS-1064 added `household` (`read:` doorstep, stamps, quests, stances, outcomes,
 call) and the `doorstep` apex. Left on the main thread: every `do:`, `read: "letter"` (opening a letter clears it for the key's residents: a write), `explain:`, and the
 household reads not audited for this lane (mail, window, address, home, media, earpiece, fund, blocks, settings, house, day, hearth). A batch goes only if every call in it does.
 
+## CALLS: one read asked of a worker inside a request the main thread keeps (POS-1219)
+
+`callOnWorker(name, payload)` (main thread) asks a worker for one named read; `onCall(name, fn)` (in a worker) answers it. The call rides the same port as the
+announcements, so a worker answers it after every write announced before it. The answer comes back as a structured clone. It is null whenever no worker gave
+one: no pool (`OFFICE_READ_WORKERS=0`), none ready, a payload or an answer that cannot be cloned, a worker that stopped while it held the call, a handler that
+threw, or a pool that closed. The caller then does the read itself, on its own thread. `workerCallable()` says whether a pool is running at all; `pool.called()`
+counts the calls each worker answered (it is not in `disclose()`, which `/release` publishes).
+
+| Call | Asked by | Answered with |
+|---|---|---|
+| `act-look` | every world act (`world-apex.mjs § actLook`), before its law | `worldOrient(args, key, { roll, note: false })`, then `worldEyes(args, key, { lights: false })` unless orient refused: the same reads a worker answers as GET `/world/orient` and `/world/eyes`. The act's access line carries `act.look`: the worker slot it went to (known at the send, so a look that never answered still names it), `answered`, and once it answered `queue_ms`, `exec_ms`, `return_ms` and the worker's own pen `leases` for that look (a call runs under a timing context of its own on the worker, as a handed-over read does). The act waits at most `ACT_LOOK_WAIT_MS` (13 s, about the worker look's p99 on prod) and otherwise reads both itself; the call carries that `deadline`, and a worker that reaches it after the deadline reads nothing and answers null (it skips eyes too when the deadline passes during orient). The act (its law, its verb, its write) stays on the main thread |
+
 ## MESSAGE
 
 | Cache | Moved by | Kind |
@@ -138,11 +150,17 @@ measurement was cut).
 `door` `world-act` / `household-act` / `town-act` (a POST to `/world/apex`, `/household` or `/town/apex` whose body names a `do`) or `mcp-act` (an MCP request holding at
 least one world, household or town act; `batch` is its call count), `route: "main"`, and `act: { seg: { <name>: { n, sum_ms, max_ms } } }`. `admit_ms` / `routed_ms` is
 the act's admission, the credential's resolution included; `exec_ms` is routed → finish. The segments are sums of durations that overlap and nest (a `dispatch` holds the
-apex's own phases and `handler` holds the verb), so read a nested one against its parent: `body` (the body's arrival), `standing`, `law_moved`, `dispatch`, `orient`,
-`eyes`, `ledger_scan` (the enter/exit ledger scan, on the ACTS pool, which `leases` does not cover), `spine`, `gather`, `holdings`, `households`, `nonce_kept`, `handler`,
+apex's own phases and `handler` holds the verb), so read a nested one against its parent: `body` (the body's arrival), `standing`, `law_moved`, `dispatch`, `look` (the
+act's orient and eyes asked of a read worker, POS-1219: the main thread's wait for its answer), `orient` and `eyes` (read on the main thread: no pool, or no worker
+answered within the bound), `ledger_scan` (the enter/exit ledger scan, on the ACTS pool, which `leases` does not cover), `spine`, `gather`, `holdings`, `households`, `nonce_kept`, `handler`,
 `land`, `creatures`; and for enter and exit the crossing's own reads and write: `crossing_law`, `world_state`, `ledger`, `standpoint`, `acts_read`, `lends`,
 `dungeon_locks`, `door_holdings`, `vessel_service`, `walking`, `walk_stop`, `land_write` and `record` (the pen write: the town lock's wait, the child process and the commit
-as ONE segment). Argument validation is not timed. A name that is absent did not run on this act; a name with `n` 0 never appears.
+as ONE segment); and for a leave-mark (POS-1221), its handler's steps, nested in `handler`: `m_world` (the world read), `m_forecast` (the placement
+forecast), `m_journal` or `m_draft` (the write's road: the journal, or a draft to the sketchbook), and inside the journal `m_live` (the live marks it is judged
+among), `m_parent` (the declared-parent guard), `m_ground` and `m_escrow` (the ground's minimum stake and the escrow behind it), `m_nest` (the nesting parent,
+against every mark), `m_relations` (overlaps and contains, against every mark), `m_witness` and `m_write` (the write itself); then `m_disclose` (the four
+disclosures, summed) and `m_stake` (a stake carried with the mark). Argument validation is not timed. A name that is absent did not run on this act; a name with
+`n` 0 never appears.
 
     # where a slow enter or exit spent it: the segments of the ten slowest world acts today
     jq -s -c '[.[]|select(.timing.door=="world-act" and .call.do=="enter")]|sort_by(-.ms)|.[:10][]|{ms,admit:.timing.admit_ms,exec:.timing.exec_ms,seg:(.timing.act.seg|map_values(.sum_ms))}' access-$(date -u +%F).jsonl
