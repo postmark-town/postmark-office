@@ -37,6 +37,7 @@ import {
   updateProfileAvatar, updateHomeImage,
 } from "../src/edit.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
+import { seedLetterFields } from "./fixture.mjs"; // POS-1165: a clone that stands for the town carries the reviewed shared field policy
 import { townClone as houseKeyTown, townModuleUrl as houseKeyModule, NO_TOWN as HOUSE_KEY_NO_TOWN } from "./fixture-paths.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -73,6 +74,7 @@ function town(files = {}) {
     mkdirSync(dirname(join(clone, rel)), { recursive: true });
     writeFileSync(join(clone, rel), text);
   }
+  seedLetterFields(clone);
   sh(clone, "add", "-A");
   sh(clone, ...BOT, "commit", "-qm", "fixture town");
   sh(clone, "push", "-q", "-u", "origin", "main");
@@ -501,6 +503,7 @@ const STUB_SETTLE = `
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { penCommit } from ${JSON.stringify(writeUrl)};
+
 export async function settleUnderLock({ handle, clone }) {
   const files = ["tools/households.json", "tools/github-ids.json"].map((rel) => join(clone, rel));
   writeFileSync(files[0], JSON.stringify({ households: { newcomers: { residents: [handle] } } }) + "\\n");

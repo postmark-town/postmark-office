@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { fixtureKey, fixtureTown, put } from "./fixture.mjs";
+import { fixtureKey, fixtureTown, put, tempClone } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { sendLetterAsRow } from "../src/town-mail.mjs";
 import { readTownJournal } from "../src/town-journal.mjs";
@@ -41,7 +41,9 @@ test.after(async () => { await RESTORE(); await IX.stop(); });
 const odb = () => { const d = new DatabaseSync(":memory:"); d.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"); return d; };
 const flagOn = async (fn) => { process.env.TOWN_SINGLE_LOG = "1"; try { return await fn(); } finally { delete process.env.TOWN_SINGLE_LOG; } };
 const rows = (o) => readTownJournal(o, { sinceSeq: 0 });
-const send = (args, o) => sendLetterAsRow({ from: "wright", to: "limen", title: "the replacement", thread: "new", body: "Limen —\n\nAgain, to the right address.", ...args }, fixtureKey, db, null, o);
+// POS-1165: the field policy is the town's pinned letter-fields.mjs and a clone is held to the pin: this fixture clone carries the reviewed file
+const LF_CLONE = tempClone();
+const send = (args, o) => sendLetterAsRow({ from: "wright", to: "limen", title: "the replacement", thread: "new", body: "Limen —\n\nAgain, to the right address.", ...args }, fixtureKey, db, LF_CLONE, o);
 const refusal = async (p) => { try { await p; } catch (e) { return e; } return null; };
 
 test("1 · only your own bounced letter: another's is 404 like an unknown id, a delivered one and a waiting one are 409, a bad id is 422, and nothing is written", async () => {
