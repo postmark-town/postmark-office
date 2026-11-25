@@ -53,15 +53,17 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // 29 since POS-816: the invite pass, right after the welcome pass.
 // 31 since POS-904: the Bluesky publisher, after the world step.
 // 32 since POS-1203: the durable rooms pass (closed rooms and ended events fixed as records), after positions.
-test("the step list is the script's: 32 steps, 5 fatal and 27 soft, no step twice", () => {
-  assert.equal(STEPS.length, 32);
-  assert.equal(new Set(STEPS).size, 32);
+// 33 since STAR-237 (hotfix w48.6, taken by the train): the Hearth joins, right after the sparks and before the snapshot (it writes the town clone the snapshot copies).
+test("the step list is the script's: 33 steps, 5 fatal and 28 soft, no step twice", () => {
+  assert.equal(STEPS.length, 33);
+  assert.equal(new Set(STEPS).size, 33);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("positions"), STEPS.indexOf("positions") + 2), ["positions", "rooms"], "the durable rooms pass runs in the tick, after positions");
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[18], "snapshot", "after the fifteen locked soft steps (the invite pass among them since POS-816, the event-sparks pass since POS-1035)");
+  assert.equal(STEPS[19], "snapshot", "after the sixteen locked soft steps (the invite pass among them since POS-816, the event-sparks pass since POS-1035, the Hearth joins since STAR-237)");
   assert.equal(STEPS[17], "sparks", "the event-sparks pass runs under the lock after the mint's commit, before the snapshot");
+  assert.equal(STEPS[18], "hearth_joins", "the Hearth joins run right after the sparks, still under the lock, before the snapshot copies the town clone");
   assert.deepEqual(STEPS.slice(-4), ["hhkeys_log", "world", "bluesky", "publish"]);
 });
 
@@ -258,6 +260,11 @@ test("buildReceipt fills every unrecorded step as notrun, always names a source,
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "yesterday", at: "2026-10-13T08:08:00Z", exit: 0 }), /bad timestamps/);
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "2026-10-13T08:07:00Z", at: "2026-10-13T08:08:00Z", exit: 256 }), /bad exit/);
   for (const ok of ["exit:1", "exit:128", "ledger-red", "prereq:mint", "signal:TERM", "no-change", "switch-off", "unchecked", "write-failed"]) assert.match(ok, REASON_RE);
+  // STAR-237: the Hearth joins' own word, on an ok step: the pay is owed and a hand's to make; the row and its digest are never in a receipt
+  assert.deepEqual(buildReceipt({ stepsText: "hearth_joins\tok\towed:hearth_entry", source: "scheduled", run: "a", started: "2026-10-13T08:07:00Z", at: "2026-10-13T08:08:00Z", exit: 0 }).steps.hearth_joins,
+    { s: "ok", r: "owed:hearth_entry" });
+  assert.deepEqual(buildReceipt({ stepsText: "hearth_joins\tok\towed:sha256:0123", source: "scheduled", run: "a", started: "2026-10-13T08:07:00Z", at: "2026-10-13T08:08:00Z", exit: 0 }).steps.hearth_joins,
+    { s: "ok" }, "a digest in the reason slot is dropped, the status kept");
   // POS-1030: what became of a mint commit whose push answered no, and the mint refused onto one still unsettled
   for (const ok of ["landed-unacked", "unmade", "unconfirmed", "moved", "gone", "prereq:unlanded"]) assert.match(ok, REASON_RE);
   for (const bad of ["exit:1234", "prereq:Mint", "signal:KILL", "ledger-red ", "error: see log", "", "unmade ", "landed"]) assert.doesNotMatch(bad, REASON_RE);
@@ -310,7 +317,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 26 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 28 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line
