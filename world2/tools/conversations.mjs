@@ -68,7 +68,7 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
-import { markIdOf, sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
+import { markIdOf, sayIdOf, sayLines, circleIndex, findConversation, ROOM_VOICES_MAX } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
 import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
 import { roomsOf, roomsOfInSteps, roomIdOf, roomKeyOf, isRoomId } from "../../src/rooms.mjs"; // POS-1185: which room a say is in, decided once — shared with voices.mjs, never a second copy
 export { roomsOf, roomsOfInSteps }; // the record's rooms, for every reader of this module (the door's kept rooms, an event's rooms)
@@ -554,14 +554,16 @@ export function conversationsBody(page, { now, earshotM, boundaries = [], voiceC
 }
 
 /** A named room or circle's answer, found among `clusters` (every room of the record, or the one room the door read for it). */
-export function conversationFound(clusters, find, { now, earshotM, boundaries = [], voiceCap = 80 }) {
+export function conversationFound(clusters, find, { now, earshotM, boundaries = [], voiceCap = 80, voicesBefore = null }) {
   const marks = edgesAt(boundaries, now);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
   return {
     now: new Date(now).toISOString(),
     earshot_m: earshotM,
     settlement_since: marks.length ? new Date(since).toISOString() : null,
-    find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, now, marks), voiceCap }), source: "record" }),
+    find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, now, marks), voiceCap }), source: "record",
+      // POS-1232: the opt-in room voice page: the LIST's own paged thread (tie-safe), its cap bounded
+      roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, paged: pagedThread(c, { live: roomOpen(c.latest, now, marks), voiceCap: cap, voicesBefore }) }; } }),
   };
 }
 
