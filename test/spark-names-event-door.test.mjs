@@ -5,7 +5,9 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { __setPoolForTest } from "../src/world2-pen.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { PLAIN_REASONS } from "../src/fault-words.mjs";
 
 const store = await startStore({ db: "pos1204_door" });
@@ -13,10 +15,30 @@ const skip = store.skip ?? false;
 const ROOT = join(import.meta.dirname, "..");
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
+
+// POS-1234 (WLD-197): THIS TEST NEVER TOUCHES THE SUITE'S SHARED, PINNED WORLD CLONE. The real leave executor seats a draft slot (wt-N) in
+// the world clone and runs `git fetch --prune origin` there (world-branches.mjs § seatDraftCheckout). Against the shard's shared clone that
+// (1) pulled the newer settlement tags into a clone the suite pins, so the blessed engine moved ahead of the checkout other tests read, and
+// (2) contended for `.git/worktrees/wt-0/index.lock` with whatever else held that slot. So the door runs on a PRIVATE clone of it, with no
+// origin to fetch from, made before anything imports the clone's path (world-store.mjs reads WORLD_CLONE once, at import).
+const SHARED = saved.WORLD_CLONE || join(ROOT, "world-clone");
+const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
+const sharedState = () => `${git(SHARED, "for-each-ref", "--format=%(refname) %(objectname)")}\n${git(SHARED, "worktree", "list", "--porcelain")}`;
+const SHARED_BEFORE = sharedState();
+const PRIVATE_DIR = mkdtempSync(join(tmpdir(), "pos1234-world-"));
+const PRIVATE = join(PRIVATE_DIR, "world-clone");
+execFileSync("git", ["clone", "-q", "--local", "--no-checkout", SHARED, PRIVATE]);
+// the shared clone's `main` is its REMOTE-tracking ref (the pin); the private one holds it as its own local main, then drops the remote
+git(PRIVATE, "fetch", "-q", "--no-tags", "origin", "+refs/remotes/origin/main:refs/heads/main");
+git(PRIVATE, "remote", "remove", "origin");
+process.env.WORLD_CLONE = PRIVATE;
+const { __setPoolForTest } = await import("../src/world2-pen.mjs");
+
 let pool, owner;
 after(async () => {
   for (const k of FLAGS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; }
   __setPoolForTest(null); if (pool) await pool.end(); if (owner) await owner.end(); await store.stop();
+  rmSync(PRIVATE_DIR, { recursive: true, force: true });
 });
 
 const SHA = "d".repeat(40);
@@ -31,7 +53,7 @@ const spark = (event, over = {}) => ({ slug: "pic", kind: "sited", class: "spark
 async function setup() {
   pool = new (await import("pg")).default.Pool({ connectionString: store.url("office_api") });
   owner = await store.connect("world2_owner");
-  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1", WORLD_CLONE: join(ROOT, "world-clone") });
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1", WORLD_CLONE: PRIVATE });
   __setPoolForTest(pool);
   const { reloadLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
   await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : LAW }) });
@@ -68,4 +90,9 @@ test("a lookup that FAILS is a 503 'could not be checked', never 'names no event
         // the safe record-read reason (fault-words § PLAIN_REASONS.record), never the store's own text; the raw error goes to the log
         && e.hint.includes(`(${PLAIN_REASONS.record})`) && !/relation|posts|does not exist|sql/i.test(`${e.defect} ${e.hint}`));
   } finally { await owner.query("ALTER TABLE posts_away RENAME TO posts"); }
+});
+
+test("POS-1234: the door ran on its PRIVATE clone — the suite's shared pinned world clone has no new ref, tag or draft slot", { skip }, () => {
+  assert.notEqual(process.env.WORLD_CLONE, SHARED, "the door was pointed at the private clone");
+  assert.equal(sharedState(), SHARED_BEFORE, "the shared clone's refs and worktrees are exactly as the door found them");
 });
