@@ -151,7 +151,7 @@ export function likenessChoice({ name = "likeness" } = {}) {
     <p class="muted">${esc(W.promise)} ${esc(W.yes_means)} ${esc(W.no_means)}</p>
     <p><label><input type="radio" name="${esc(name)}" value="yes"> Yes, you may</label>
     &nbsp; <label><input type="radio" name="${esc(name)}" value="no"> No</label></p>
-    <p class="muted">Left unanswered, it reads as no. ${esc(W.talk_it_over)}</p>
+    <p class="muted">Left unanswered, it reads as no. ${esc(W.talk_it_over.split(". ")[0])}. You can change it later, at any time, on your household's likeness page.</p>
     </fieldset>`;
 }
 
