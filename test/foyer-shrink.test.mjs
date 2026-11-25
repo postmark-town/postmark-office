@@ -64,7 +64,7 @@ import { tmpdir } from "node:os";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { DatabaseSync } from "node:sqlite";
 
-import { fixtureTown, metaOf } from "./fixture.mjs";
+import { fixtureTown, metaOf, seedLetterFields } from "./fixture.mjs";
 import {
   CARD_TEACH, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READS, READING_LAW,
   ACT_SHADOW_READS, assertActCardsReachable,
@@ -122,6 +122,7 @@ function mailClone() {
     writeFileSync(join(d, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n\n# ${h}\n`);
   }
   writeFileSync(join(d, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n");
+  seedLetterFields(d);
   const git = (...a) => execFileSync("git", ["-C", d, ...a], { encoding: "utf8" });
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

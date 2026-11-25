@@ -24,7 +24,7 @@ import { copyBlock, crossingSailsAt, currentCrossing, nextCrossingForDoorstep, C
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { validateLetter, enqueueLetter } from "../src/write.mjs";
 import { sendLetterAsRow } from "../src/town-mail.mjs";
-import { tempClone, fixtureKey, putValues, fixtureTown } from "./fixture.mjs";
+import { tempClone, fixtureKey, putValues, fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH;
@@ -139,6 +139,7 @@ function mailClone() {
     writeFileSync(join(d, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n\n# ${h}\n`);
   }
   writeFileSync(join(d, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n");
+  seedLetterFields(d);
   const git = (...a) => execFileSync("git", ["-C", d, ...a], { encoding: "utf8" });
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
@@ -148,11 +149,11 @@ const logDb = () => { const d = new DatabaseSync(":memory:"); d.exec("CREATE TAB
 const reply = { from: "wright", to: "limen", title: "after the boat", thread: SAILED_AFTER, body: "Limen —\n\nyour letter came on the boat." };
 
 test("THE OLD REFUSAL, GONE: a thread the copy does not hold is accepted", () => {
-  const plan = validateLetter(reply, fixtureKey, null);        // the store's held probe
+  const plan = validateLetter(reply, fixtureKey, null, null, { clone: tempClone() });        // the store's held probe
   assert.equal(plan.thread, SAILED_AFTER, "the thread rides as written");
   assert.equal(plan.threadUnseen, true);
   // and a thread the copy does hold is the plain plan, byte for byte as before
-  const known = validateLetter({ ...reply, thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, null);
+  const known = validateLetter({ ...reply, thread: "limen-2026-07-01-to-wright-the-gap" }, fixtureKey, null, null, { clone: tempClone() });
   assert.equal("threadUnseen" in known, false);
 });
 
@@ -286,7 +287,7 @@ test("THE OLD REFUSAL, GONE AT THE DOOR: a resident the copy does not hold yet, 
   try {
     const letter = { from: "wright", to: "newcomer", title: "welcome aboard", thread: "new", body: "Newcomer —\n\nwelcome." };
     // the copy alone still says no: this is the refusal the door used to give
-    assert.throws(() => validateLetter(letter, fixtureKey, null), (e) => e.code === 422 && /no resident "newcomer"/.test(e.defect));
+    assert.throws(() => validateLetter(letter, fixtureKey, null, null, { clone: tempClone() }), (e) => e.code === 422 && /no resident "newcomer"/.test(e.defect));
     const { result } = await sendAtDoor(letter, fixtureKey, { clone, odb: null });
     assert.match(result.commit, /^[0-9a-f]{40}$/, "the letter was written");
     assert.ok(result.letter_id.endsWith("-to-newcomer-welcome-aboard"));
@@ -307,7 +308,7 @@ test("an office not pointed at the record keeps the copy's answer: no registry, 
   const keep = { on: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
   delete process.env.WORLD2_PG; delete process.env.WORLD2_PG_URL;
   try {
-    await assert.rejects(sendAtDoor({ from: "wright", to: "newcomer", title: "x", thread: "new", body: "y" }, fixtureKey, { clone: "unused", odb: null }),
+    await assert.rejects(sendAtDoor({ from: "wright", to: "newcomer", title: "x", thread: "new", body: "y" }, fixtureKey, { clone: tempClone(), odb: null }),
       (e) => e.code === 422 && e.defect === "no resident \"newcomer\"");
   } finally {
     if (keep.on !== undefined) process.env.WORLD2_PG = keep.on;

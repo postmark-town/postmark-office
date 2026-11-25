@@ -28,7 +28,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
 import { startStore } from "./helpers/embedded-store.mjs";
-import { ingest, readHead, SEAL_SUBJECT } from "../world2/tools/town-index-ingest.mjs";
+import { ingest, prepareDelta, readHead, SEAL_SUBJECT, tableFingerprints } from "../world2/tools/town-index-ingest.mjs";
 import { TOWN_TABLES } from "../src/town-index.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -222,6 +222,118 @@ test("the ingest refuses what it cannot apply, and writes nothing", async (t) =>
 
   // a seed over a head
   await assert.rejects(ingest(c, { townRepo: town, sha: rewritten, seed: true }), /already has a head/);
+});
+
+// ── POS-1098: THE DELTA'S TRANSACTION HOLDS ONLY THE STORE'S WORK ─────────────────────────────────────────────────
+//
+// Jetto's sampler (2026-11-23): the town-index ingest sat ~27 s `idle in transaction` after `SELECT sha FROM projection_heads`, every run:
+// the git reads and readTown ran after BEGIN. They now run before it (prepareDelta), from the head read first; under the lock the head is read
+// again and a head that moved is prepared again. `prepare` is the seam the test watches the boundary through, and the client is watched for
+// BEGIN / COMMIT / ROLLBACK. Falsifier: prepare the delta after BEGIN again and the first test below goes red.
+/** `c`, logging its transaction boundaries into `events`; `onQuery(sql)` may throw to fail a statement, or run something before it goes through. */
+const watched = (events, onQuery = null) => new Proxy(c, {
+  get(t, k) {
+    if (k !== "query") { const v = t[k]; return typeof v === "function" ? v.bind(t) : v; }
+    return async (q, ...a) => {
+      const sql = String(q?.text ?? q).trim();
+      const word = sql.split(/\s+/)[0].toUpperCase();
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(word)) events.push(word);
+      if (onQuery) await onQuery(sql);
+      return t.query(q, ...a);
+    };
+  },
+});
+const preparing = (events) => (o) => { events.push("prepare"); return prepareDelta(o); };
+
+test("POS-1098: the delta's git reads and readTown run BEFORE the transaction opens; one transaction holds the writes, and the result is the full derivation", async (t) => {
+  if (skip) return t.skip(skip);
+  const head = await readHead(c);
+  at(head);
+  put("TOWN_BULLETIN/notice.md", "---\ntitle: notice\n---\n\nThe boats run late on market days.\n");
+  const edit = commit("bulletin: market days");
+  const events = [];
+  const out = await ingest(watched(events), { townRepo: town, sha: edit, prepare: preparing(events) });
+  assert.deepEqual(events, ["prepare", "BEGIN", "COMMIT"], "prepared first, then one transaction");
+  assert.ok(Number.isFinite(out.ms.git) && Number.isFinite(out.ms.readTown), "the two phases' own time is still in the result");
+  assert.equal(await readHead(c), edit);
+  await assertEqualToDerivation("outside the transaction");
+  // a run with nothing to do (the head is the sha) prepares nothing and writes nothing, as before
+  const again = [];
+  const quiet = await ingest(watched(again), { townRepo: town, sha: edit, prepare: preparing(again) });
+  assert.deepEqual(writesOf(quiet), {});
+  assert.ok(!again.includes("prepare"), "nothing to prepare at the head");
+});
+
+test("POS-1098: a history rewritten under the index still refuses, and now before any transaction was begun", async (t) => {
+  if (skip) return t.skip(skip);
+  const head = await readHead(c);
+  const events = [];
+  await assert.rejects(ingest(watched(events), { townRepo: town, sha: sha.seed, prepare: preparing(events) }), /the town's history was rewritten under the index/);
+  assert.deepEqual(events, ["prepare"], "refused in the preparation: no BEGIN, no ROLLBACK");
+  assert.equal(await readHead(c), head);
+});
+
+test("POS-1098: a head that moves between the preparation and the lock is never trusted: rolled back with nothing written, prepared again from the new head, then applied", async (t) => {
+  if (skip) return t.skip(skip);
+  const head = await readHead(c);
+  at(head);
+  put("TOWN_BULLETIN/notice.md", "---\ntitle: notice\n---\n\nThe boats run early on festival days.\n");
+  const m1 = commit("bulletin: festival days");
+  put("TOWN_BULLETIN/welcome.md", "---\ntitle: welcome\n---\n\nHello, and mind the tide.\n");
+  const m2 = commit("bulletin: welcome, tidal");
+  const other = await store.connect("law_ingester");     // another ingest, on its own connection
+  try {
+    const events = [];
+    let moved = false;
+    const spy = watched(events, async (sql) => {
+      if (!moved && /pg_advisory_xact_lock/.test(sql)) { moved = true; await ingest(other, { townRepo: town, sha: m1 }); }   // it takes the lock and commits first
+    });
+    const out = await ingest(spy, { townRepo: town, sha: m2, prepare: preparing(events) });
+    assert.deepEqual(events, ["prepare", "BEGIN", "ROLLBACK", "prepare", "BEGIN", "COMMIT"], "the first transaction was rolled back, the delta prepared again, the second committed");
+    assert.equal(out.head, m1, "applied from the head the other ingest left");
+    assert.equal(await readHead(c), m2);
+    await assertEqualToDerivation("after a moved head");
+  } finally { await other.end().catch(() => {}); }
+});
+
+test("POS-1098: a head that keeps moving is a strict refusal after a bounded number of tries, and writes nothing of its own", async (t) => {
+  if (skip) return t.skip(skip);
+  const head = await readHead(c);
+  at(head);
+  const shas = [];
+  for (let i = 1; i <= 5; i++) { put("TOWN_BULLETIN/notice.md", `---\ntitle: notice\n---\n\nTide table, revision ${i}.\n`); shas.push(commit(`bulletin: tide table ${i}`)); }
+  const other = await store.connect("law_ingester");
+  try {
+    const events = [];
+    let n = 0;
+    const spy = watched(events, async (sql) => { if (/pg_advisory_xact_lock/.test(sql) && n < 3) await ingest(other, { townRepo: town, sha: shas[n++] }); });
+    await assert.rejects(ingest(spy, { townRepo: town, sha: shas[4], prepare: preparing(events) }), /the index head moved under this ingest 3 times running: nothing was written/);
+    assert.equal(await readHead(c), shas[2], "only the other ingests moved the head");
+    assert.equal(events.filter((e) => e === "COMMIT").length, 0, "this ingest committed nothing");
+    assert.equal(events.filter((e) => e === "prepare").length, 3);
+    // and once the other writer is quiet it lands
+    await ingest(c, { townRepo: town, sha: shas[4] });
+    assert.equal(await readHead(c), shas[4]);
+    await assertEqualToDerivation("after the retries");
+  } finally { await other.end().catch(() => {}); }
+});
+
+test("POS-1098: a failed write rolls the whole transaction back: no partial publication, every table as it was", async (t) => {
+  if (skip) return t.skip(skip);
+  const head = await readHead(c);
+  at(head);
+  put("TOWN_BULLETIN/notice.md", "---\ntitle: notice\n---\n\nThe fog bell is mended.\n");
+  const edit = commit("bulletin: the fog bell");
+  const before = await tableFingerprints(c);
+  const events = [];
+  const failing = watched(events, async (sql) => { if (/^INSERT INTO town_bulletin/i.test(sql)) throw new Error("the write failed mid-ingest (a test)"); });
+  await assert.rejects(ingest(failing, { townRepo: town, sha: edit, prepare: preparing(events) }), /the write failed mid-ingest/);
+  assert.deepEqual(events, ["prepare", "BEGIN", "ROLLBACK"]);
+  assert.equal(await readHead(c), head, "the head did not move");
+  assert.deepEqual(await tableFingerprints(c), before, "no table holds a row of the failed delta (the history rows written before the failure went with it)");
+  await ingest(c, { townRepo: town, sha: edit });         // and the same delta lands cleanly afterwards
+  assert.equal(await readHead(c), edit);
+  await assertEqualToDerivation("after a failed write");
 });
 
 // POS-341 part 4: with STAMP_LINES=store the delta folds the quest rows on the

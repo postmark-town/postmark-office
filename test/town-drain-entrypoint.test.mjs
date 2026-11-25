@@ -53,7 +53,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { openOauthDb } from "../src/oauth.mjs";
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { appendTownJournal, ensureTownJournal } from "../src/town-journal.mjs";
 import { letterDate, outboxRelPath } from "../src/write.mjs";
 import { MAIL_ACT } from "../src/town-mail.mjs";
@@ -77,6 +77,7 @@ function townClone(handles = ["wright", "limen"]) {
     JSON.stringify({ schema_version: 1, households: {} }, null, 2) + "\n");
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"),
     "# the mail ledger\n\n- 2026-07-01 · a-line · someone → someone\n");
+  seedLetterFields(dir);
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q");
   git("add", "-A");
