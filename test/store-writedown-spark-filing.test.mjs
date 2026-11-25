@@ -57,14 +57,14 @@ test("the journal's own filing (the resident-facing dir) agrees: a spark's draft
   assert.match(JSON.stringify(marks[0]), /WORLD\/marks\/wright\/halloween-x\/mark\.md/);
 });
 
-test("CONTROLS: nothing else changes: sited and nested filing, the root fallback for an unsited non-spark, and a published spark keeps its filing", () => {
+test("CONTROLS: nothing else changes: sited and nested filing, an unsited non-spark at its maker's id (POS-1212), and a published spark keeps its filing", () => {
   // a sited mark files at its id, as ever
   assert.equal(pathFor({ id: "alpha/garden", kind: "sited", by: "alpha", slug: "garden" }), "WORLD/marks/alpha/garden/mark.md");
   // a naming mark nests under its parent, as ever
   assert.equal(pathFor({ id: "alpha/call-it-garden", kind: "naming", parent_id: "alpha/garden" }, { parentPathOf: () => "WORLD/marks/alpha/garden" }),
     "WORLD/marks/alpha/garden/call-it-garden/mark.md");
-  // an unsited, parentless non-spark still takes the root fallback (this fix is the spark's alone)
-  assert.equal(pathFor({ id: "alpha/a-note", kind: "note" }), `${SKETCHBOOK_ROOT}/a-note/mark.md`);
+  // POS-1212: the spark's own-id filing is now the default for every parentless kind, so an unsited, parentless non-spark files at its maker's id too (this test stays as the control)
+  assert.equal(pathFor({ id: "alpha/a-note", kind: "note" }), "WORLD/marks/alpha/a-note/mark.md");
   // gate A: a spark canon already holds keeps the filing it has (an existing filing never moves)
   assert.equal(pathFor({ id: "wright/old-spark", kind: "spark" }, { publishedPathOf: () => "WORLD/marks/let-there-be-light/old-spark/mark.md" }),
     "WORLD/marks/let-there-be-light/old-spark/mark.md");
@@ -73,4 +73,18 @@ test("CONTROLS: nothing else changes: sited and nested filing, the root fallback
   const p = pathsOf(plan);
   assert.equal(p["alpha/garden"], "WORLD/marks/alpha/garden/mark.md");
   assert.equal(p["wright/halloween-y"], "WORLD/marks/wright/halloween-y/mark.md");
+});
+
+test("POS-1212 × #1214: a spark keeps its own-id filing EVEN WITH A SUPPLIED PARENT (until POS-1216 ships); a non-spark with the same parent nests, and one the resolver cannot find is held", () => {
+  const parentDir = "WORLD/marks/vermillion/lake-caves";
+  // the door's own draft answer set parent: "vermillion/lake-caves" on a spark (POS-1209's evidence); it still files at its id, never under that parent
+  assert.equal(pathFor({ id: "wright/halloween-z", kind: "spark", parent_id: "vermillion/lake-caves" }, { parentPathOf: () => parentDir }), "WORLD/marks/wright/halloween-z/mark.md");
+  assert.equal(pathFor({ id: "wright/halloween-z", kind: "spark", parent_id: "vermillion/lake-caves" }, { parentPathOf: () => null }), "WORLD/marks/wright/halloween-z/mark.md",
+    "and a parent the resolver cannot find does not hold a spark: it never asked");
+  const plan = planStoreWriteDown([spark("wright/halloween-w", { parent_id: "vermillion/lake-caves" })], { publishedPathOf: () => null });
+  assert.equal(pathsOf(plan)["wright/halloween-w"], "WORLD/marks/wright/halloween-w/mark.md");
+  assert.deepEqual(plan.held, []);
+  // the non-spark control: the same parent nests it, and an unfindable one holds it by name
+  assert.equal(pathFor({ id: "wright/a-name", kind: "naming", parent_id: "vermillion/lake-caves" }, { parentPathOf: () => parentDir }), `${parentDir}/a-name/mark.md`);
+  assert.equal(pathFor({ id: "wright/a-name", kind: "naming", parent_id: "vermillion/lake-caves" }, { parentPathOf: () => null }), null);
 });

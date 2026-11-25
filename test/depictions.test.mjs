@@ -131,7 +131,7 @@ test("keepSheet: the household's own, a media URL kept as canon at once; another
   const kept = [];
   const keep = async (row) => { kept.push(row); return { id: "9", ...row, made_at: "2026-10-21T12:00:00.000Z", kept: true }; };
   const key = { household: "lr-gh", handles: new Set(["wick", "postmaster"]) };
-  const deps = { keep, registry: registry(), urlOk: (u) => u.startsWith(M) };
+  const deps = { keep, registry: registry(), urlOk: (u) => u.startsWith(M), namesOf: async () => new Map() };   // POS-1202: a keep reads the standing name; this test has no record, so the seam answers "none"
   const out = await keepSheet({ handle: "wick", url: `${M}/lr-gh/new.webp` }, key, deps);
   assert.deepEqual(kept, [{ subject: "wick", kind: "sheet", url: `${M}/lr-gh/new.webp`, made_by: "lantern-row", source: "the household's own" }],
     "made_by is the household on the record, not the key's login");

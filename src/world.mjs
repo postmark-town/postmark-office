@@ -111,6 +111,7 @@ export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
+import { footprintCaps, footprintRefusal } from "./mark-footprint.mjs"; // POS-1126: the ruled footprint caps, read from the law's mark properties
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { trailingFlight } from "./store-pool.mjs"; // POS-1048: one enter-record scan for a whole burst of acts
 import { actSpan } from "./read-timing.mjs"; // POS-1110: that scan's wait, timed under the act's request (measurement only)
@@ -1999,6 +2000,11 @@ function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
       // POS-1035 (call 3): the say this one answers, by act number — the ONE stored edge circles are derived from. Public
       // like the words: it leaves the box in the notary's archive with the rest of the payload.
       ...(voice.reply_to != null ? { reply_to: voice.reply_to } : {}),
+      // POS-1185 (Darko 2026-11-22): the conversation this say joined, decided once when it was spoken (voices.mjs § nameRoom) and
+      // recorded here so no later say can change it: the id of the room, `t<its first say's instant, ms>-<that speaker>` — its own
+      // id when it founds one. A room is the says that carry its id. Public like the words and `place`. An act written before this
+      // has none, and is read as it was named when spoken (rooms.mjs). Not a place: POS-1152's `place_mark` is where a root say stood.
+      ...(typeof voice.root === "string" && voice.root ? { conversation: voice.root } : {}),
     },
     effect: "the words were spoken where the actor stood and heard by whoever was within earshot; hearing fades, the record does not",
     writtenAt: new Date(voice.at).toISOString(),
@@ -2136,6 +2142,8 @@ hearing.refresh().catch(() => {});
 export const hearingWindowAt = (at) => hearing.read(at);
 /** Every published settlement this office keeps in memory (ms, ascending): where a conversation splits (POS-779). */
 export const settlementsKnown = () => hearing.settlements();
+/** Every published settlement world main holds (ms, ascending), for the conversations RECORD's reads (POS-1185): no room is too old to open. */
+export const settlementsRecorded = () => hearing.recorded();
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
@@ -4730,6 +4738,22 @@ export async function markStandsOnOwnGround(clean, canon = null) {
 // insert and every guard in it, never a door. journalWithdraw is exported the same way.
 // `plan` (POS-1035): every read, judgement and guard of a real leave, then the entry it would write handed back instead of written
 // — for an act that must land with others in ONE transaction (the event's completion: world-journal § prepareActFlipped).
+/**
+ * THE OUTLINE CAP, AT EVERY DOOR THAT WRITES A MARK (POS-1126, WLD-193; mark-footprint.mjs is the rule).
+ * Darko, 2026-11-17: "yeah 256 is good": a mark's 2D `points:` outline holds at most 256 points. The number is the mark class's
+ * `outline-point-cap` property, read here through classDials and nowhere held; a dial the law has not published is no boundary.
+ * Throws the door's own 422 and writes nothing, so a `preview: true` that reaches it answers the same refusal as the write. The cap
+ * judges any ring a write carries (a parcel's, a constitution mark's); it never judges a footprint's size: Darko, 2026-11-18 14:42 EST,
+ * "I'm actually just going to err on not having a cap for now", Wright: "There's no size refusal." An amendment is judged on what it carries.
+ */
+export function footprintGate(clean) {
+  if (clean?.points === undefined) return;
+  const caps = footprintCaps(classDials("mark"));
+  if (caps.points == null) return;
+  const r = footprintRefusal(clean, { caps });
+  if (r) throw Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, hint: r.hint });
+}
+
 export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null, plan = false } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
@@ -4755,6 +4779,10 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         "a slug is unique per author — pass amend: true to supersede it (a newer declaration on your own node, edit-law's revision family), or pick another slug");
     if (clean.amend === true && !exists)
       throw bounce(404, `no mark "${id}" to amend`, "ids are <by>/<slug> — leave it first, or drop amend: true");
+
+    // ── THE OUTLINE CAP (POS-1126): before the preview answers and before any write, for every caller of this pass —
+    // the public door, the event's spark, the town's own amend tools. An amendment is judged against what it supersedes.
+    footprintGate(clean);
 
     // ── THE CARRY, FORECAST (POS-441, ruled by Darko 2026-10-07) ────────────
     //
@@ -4977,11 +5005,23 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     // household's live drafts). The door's disclosures downstream (overhang, the
     // publish note) run on this answer exactly as they run on a written one.
     if (clean.preview === true) {
-      const landing = pathFor({ ...declaration, id }, { publishedPathOf: filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))) });
+      // POS-1212: the preview asks the SAME question the write asks, with the same resolver (canon's filing, else the live drafts and canon's marks), so the
+      // `dir` it says is the `dir` the act answers; an omitted resolver is never read as a bad parent
+      const filedPathOfPreview = filedPathOfAt(WORLD_CLONE, String(mainRef(WORLD_CLONE)));
+      const landing = pathFor({ ...declaration, id }, {
+        publishedPathOf: filedPathOfPreview,
+        parentPathOf: (pid) => {
+          const filed = filedPathOfPreview(pid);
+          if (filed) return filed.replace(/\/mark\.md$/, "");
+          const p = liveById.get(pid) ?? canon.byId.get(pid);
+          const pp = p ? pathFor({ ...p, id: pid }) : null;
+          return pp ? pp.replace(/\/mark\.md$/, "") : null;
+        },
+      });
       return {
         preview: true, id, kind: clean.kind, parent, ...(relations ?? {}), would: amending ? "amend" : "leave",
         at: clean.at ?? null, extent: clean.extent ?? null,
-        dir: String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, ""),
+        dir: landing ? String(landing).replace(/^WORLD[/]marks[/]/, "").replace(/[/]mark[.]md$/, "") : null,
         branch: draftBranch(household), put_forward: putForward,
         ...(amending ? { amended: true, moved: false, _verdict: verdict } : {}),
         ...(carries ? { carries } : {}),
@@ -5061,13 +5101,14 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         const filed = filedPathOf(pid);
         if (filed) return filed.replace(/\/mark\.md$/, "");
         const p = liveById.get(pid) ?? canon.byId.get(pid);
-        return p ? pathFor({ ...p, id: pid }).replace(/\/mark\.md$/, "") : null;
+        const pp = p ? pathFor({ ...p, id: pid }) : null;
+        return pp ? pp.replace(/\/mark\.md$/, "") : null;
       },
     });
     return {
       id, kind: clean.kind, parent, ...(relations ?? {}),
       at: clean.at ?? null, extent: clean.extent ?? null,
-      dir: String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, ""),
+      dir: willLandAt ? String(willLandAt).replace(/^WORLD\/marks\//, "").replace(/\/mark\.md$/, "") : null,
       branch: draftBranch(household),
       // Which store is the RECORD for this act, as every flipped lane's answer
       // says it. `record` comes from the write itself rather than from
@@ -5254,6 +5295,8 @@ function overCapHint(by, slug) {
 export const ON_BEHALF_PLACERS = Object.freeze(["illuminator", "worldkeeper", "wright"]);
 const PLACED_BY_KEY = "_placed_by";
 const CONSENT_KEY = "_consent";
+/** An operator's repair names its reason on the act (POS-1025/b), underscored like the placer's. */
+export const REPAIR_REASON_KEY = "_repair_reason";
 
 /** Null when this is not a placement on another's behalf (the caller answers the unchanged 403); otherwise who placed, on whose asking, under which household. */
 async function placingOnBehalf(by, payload, key, bounce) {
@@ -5402,7 +5445,9 @@ async function namedMadeRecord(payload, by, key, bounce) {
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 // `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
 // draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
-async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AND ONLY ITS AMEND PASSES IT (POS-1025/b; mark-repair.mjs § repairMarkAtOffice): the
+// mark's own author and household, judged by every guard below as their own amend; no payload can set it.
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
@@ -5459,8 +5504,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const by = byOther ? payload.by : named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
-  const onBehalf = key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
-  if (!key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+  // AN OPERATOR'S REPAIR (POS-1025/b) amends as the mark's own author: its hand is judged at the repair door and
+  // rides the act's provenance scope (act-provenance.mjs § withOperator), never this key's residents
+  const onBehalf = operator || key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
+  if (!operator && !key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
   if (!onBehalf && (payload.consent !== undefined || payload.placed_by !== undefined))
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
       `"${by}" is your own resident — leave the mark without them`);
@@ -5652,7 +5699,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // THE ADMIN ROLE (WLD-21, Darko 2026-10-18): an admin household may make the
     // three passage classes exactly (the world's admin-makers.mjs), asked only
     // after makers said no; the refusal's words for everyone else are unchanged (G6).
-    if (!droppedUnit && !makers.may && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
+    // An operator repairing a town mark AS THE TOWN (POS-1025/b) is the town's pen, the one road a town-only class arrives by.
+    if (!droppedUnit && !makers.may && !operator?.asTown && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
@@ -5793,7 +5841,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
   // RESIDENT'S household, never the placer's (POS-233): it is their act, their
   // live layer, their sketchbook and their cap, and their own amend must find it.
-  const household = onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
@@ -5852,6 +5900,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     ...(payload.preview === true ? { preview: true } : {}),
     ...(setDown ? { _set_down: setDown } : {}),
     ...(onBehalf ? { [PLACED_BY_KEY]: onBehalf.placer, [CONSENT_KEY]: onBehalf.consent } : {}),
+    // the operator's reason, underscored as `_placed_by` is: the act's payload carries it, a mark file never does
+    ...(operator ? { [REPAIR_REASON_KEY]: operator.reason } : {}),
     // `stamps` now RIDES the declaration instead of being stripped here. It was
     // stripped because 1.0 routes escrow through the stake verb and the record
     // had no use for it — but under the stake-is-the-boundary ruling the amount
@@ -5870,6 +5920,11 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       const problems = w.sp.sparkProblems({ ...clean, id: `${by}/${slug}` }, { radiusM, isDate });
       if (problems.length) throw bounce(422, problems[0], problems.length > 1 ? `and: ${problems.slice(1).join("; ")}` : "the World's spark class says what a spark carries (tools/spark.mjs)");
     }
+    // A SPARK MAY NAME ITS EVENT (POS-1204; Darko CORE-163/d 2026-11-23 19:25 EST; Wright 2026-11-24 01:20Z). The World owns the property (its `event`, text);
+    // this door owns whether the event exists: a name that is no event is refused with the reason BEFORE anything is written. A KNOWN event is enough: an ended
+    // one too ("a picture that arrives later still joins the album"), with no live-now, attendance or room requirement, and a lookup that FAILS is never read
+    // as "no such event". The event's gallery then takes the spark once it stands (event-sparks.mjs § eventGalleryOf).
+    if (typeof clean.event === "string" && clean.event !== "") await requireKnownEvent(clean.event);
   }
 
   // ── THE MISTS ON THE PLACEMENT RECEIPT (WLD-38; was POS-468 B's veto) ─────
@@ -5905,6 +5960,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const exec = join(HERE, "leave-exec.mjs");
   let result;
+  // THE OUTLINE CAP on the git door too (POS-1126): its exec judges no geometry (a draft costs nothing), so the cap is asked here, from
+  // the canon's declaration, before the exec or a preview of it. The journal pass below asks it itself, against the live layer.
+  if (!singleLogEnabled()) footprintGate(clean);
   if (singleLogEnabled()) {
     // POS-5 slice 1. The journal door throws its bounces directly (they are the
     // same grammar the exec answers with, one process earlier), so only the
@@ -6002,7 +6060,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
 // exec cannot: WHOSE hand (the mark's by must be on your key — only the hand
 // that left a mark may withdraw it) and the LEDGER (escrow anchors a mark; the
 // stake ledger lives town-side, so the check runs here before anything spawns).
-export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AS FOR leaveMarkAct (POS-1025/b): the mark's own author and household, withdrawn
+// under every guard below, the escrow first. A set-down unit or holder goes back to its dropper only by the dropper's
+// own withdrawal, so a repair refuses it by name rather than end it with nothing returned.
+export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const mark = String(args.mark ?? "").trim();
@@ -6032,9 +6093,9 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
   if (!mark || !mark.includes("/")) throw bounce(422, "which mark?", "pass mark: '<by>/<slug>' — ids as the telling shows them");
   const by = mark.slice(0, mark.indexOf("/"));
   const slug = mark.slice(mark.indexOf("/") + 1);
-  if (!key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
+  if (!operator && !key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
     `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "(none)"}`);
-  const household = String(key?.household ?? "").trim();
+  const household = operator ? operator.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household");
 
   // Escrow anchors — the law world_stake_read already states. Your own stake
@@ -6068,6 +6129,16 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
     // ledger read fail and hand in the class law; the office passes neither.
     const guard = withdrawEscrowGuard({ mark, escrow: escrowOf ?? ((m) => ledgerEscrowOf(m)) });
     try {
+      if (operator) {
+        const [{ droppedUnitOnGitLane }, { setDownHolderOnGitLane }] = await Promise.all([import("./world-units.mjs"), import("./set-down-return.mjs")]);
+        for (const asked of [droppedUnitOnGitLane, setDownHolderOnGitLane]) {
+          const r = await asked({ mark, by, household }, units ?? null);
+          if (r?.code === 503) throw bounce(r.code, r.defect, r.hint);
+          if (r) throw bounce(409, `"${mark}" was set down from a resident's hands, and only its dropper's own withdrawal sends it back`,
+            "a repair moves nothing between hands: withdrawn by an operator it would end with nothing returned. Ask its dropper to withdraw it, or amend it instead. Nothing was written.");
+        }
+        return await journalWithdraw({ by, slug, household, guard, cause: { repair: operator.reason } });
+      }
       // A SET-DOWN THAT DID NOT LAND (setDownMade's own undo, `undoSetDown`, never a resident's call): the
       // thing and all it holds are still in hand, so its draft goes without the empty-holder guard, under the
       // guard that proves it (WLD-138; set-down-return.mjs § stillInHandGuard)
@@ -6414,6 +6485,19 @@ async function nestingParent(candidate, marks) {
   if (typeof engine.placementParent === "function")
     return candidate._parentMarkId ?? engine.placementParent(candidate, all) ?? engine.worldRootOf?.(all)?.id ?? null;
   return null;
+}
+
+// POS-1204: a spark's `event` must name an event the office's record holds (any phase, an ended or cancelled one included). Three outcomes, never conflated:
+// the row (known: nothing to say), no row (422, by name), or a read that could not be answered (503: the event could not be checked; it is NOT "no such event").
+async function requireKnownEvent(id) {
+  const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
+  let row;
+  try { row = await (await import("./events-store.mjs")).eventRowAtOffice(id); }
+  catch (e) {
+    throw bounce(503, "the event could not be checked just now", `the calendar lives in the office's record, which could not be read (${plainReason(e, "record", "the calendar, for a spark's event")}); nothing was written — ask again shortly`);
+  }
+  if (!row)
+    throw bounce(422, `properties.event ${JSON.stringify(String(id).slice(0, 60).replace(/[^ -~]/g, "?"))} names no event`, "an event's id is <host>/<slug>, as town { read: \"calendar\" } lists it (an event that has ended is fine); nothing was written");
 }
 
 // WHAT THE PLACEMENT OVERLAPS AND CONTAINS (POS-1156): the two lists beside `parent`,
@@ -7805,7 +7889,7 @@ export const WORLD_TOOLS = [
       // visitors, and this field on a say says they were read.
       rules_read: { type: "boolean", description: "visitors (berths) only: true says you have read the town's rules for visitors (GET /berth shows them, and so does the answer to your first say). Recorded once; residents never need it." },
       // CIRCLES (POS-1035; CORE-70 calls 3, 11, 21, 25). The reply edge rides a say with text; the three selectors are reads.
-      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in the room you are speaking into (the same conversation, even across a settlement while the room carries on). Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
+      reply_to: { type: ["number", "object"], description: "with text: the say you are answering — its `id` (the number on every line of the say read), or { handle, at } (who said it and exactly when — the `at` or `at_ms` the say read shows; a nearby instant is refused, not guessed). It must be in an open conversation within earshot of where you stand (even one carried across a settlement), and your reply joins that say's conversation. Omit it and name someone here in your words, and your say links to their latest say — the receipt's `said` tells you when a name linked it." },
       circle: { type: "number", description: "no text: read one circle whole — the say with this id and every reply under it, with the says above it as context. Paged: pass the `next` it returns." },
       after: { type: "number", description: "with circle: the `after` from that circle's previous page's `next`." },
       with: { type: "string", description: "no text: where this resident is talking in your room — their says, each with the say it answers as context, and the circles they are in." },

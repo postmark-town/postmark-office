@@ -52,10 +52,12 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
 // 29 since POS-816: the invite pass, right after the welcome pass.
 // 31 since POS-904: the Bluesky publisher, after the world step.
-// 32 since STAR-237: the Hearth joins, right after the sparks and before the snapshot (it writes the town clone the snapshot copies).
-test("the step list is the script's: 32 steps, 5 fatal and 27 soft, no step twice", () => {
-  assert.equal(STEPS.length, 32);
-  assert.equal(new Set(STEPS).size, 32);
+// 32 since POS-1203: the durable rooms pass (closed rooms and ended events fixed as records), after positions.
+// 33 since STAR-237 (hotfix w48.6, taken by the train): the Hearth joins, right after the sparks and before the snapshot (it writes the town clone the snapshot copies).
+test("the step list is the script's: 33 steps, 5 fatal and 28 soft, no step twice", () => {
+  assert.equal(STEPS.length, 33);
+  assert.equal(new Set(STEPS).size, 33);
+  assert.deepEqual(STEPS.slice(STEPS.indexOf("positions"), STEPS.indexOf("positions") + 2), ["positions", "rooms"], "the durable rooms pass runs in the tick, after positions");
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
@@ -315,7 +317,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 27 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 28 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line

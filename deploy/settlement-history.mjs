@@ -82,17 +82,19 @@ export function lineFor(receipt) {
     published: ch.published ?? 0,
     left_drafted: ch.left_drafted ?? 0,
     quarantined: ch.quarantined ?? 0,
-    // THE RETIREMENT, on the rolling line and not only in the last receipt
-    // (G1 lane 1). This log exists to answer "has it published anything in
-    // three days", and the store falling behind canon is the same shape of
-    // question: a single receipt says what the last crossing retired, and
-    // nothing could say whether the register has heard anything in a week.
+    // THE SETTLEMENT AND WHETHER THE STORE HEARD IT (POS-1025), on the rolling
+    // line and not only in the last receipt. The printout's record is what moves
+    // the store's world-marks head, so a run of printouts nobody recorded is the
+    // register drifting from canon with nothing saying so (the question the
+    // retire step's `retired` answered before the clearing took that decision).
     //
-    // `null` rather than 0 when the step did not run, because a crossing that
-    // retired nothing and a crossing that holds no store pen are different
-    // facts, and this is the file whose founding lesson is that a zero which
-    // means two things reads as a quiet day.
-    retired: receipt?.retired?.ran === true ? (receipt.retired.count ?? 0) : null,
+    // `recorded` is three-valued on purpose: true (the store recorded it, or had
+    // already), false (the crossing printed and the record or the tag refused),
+    // null (nothing was printed to record: a refusal, or a dry run).
+    settlement: receipt?.settlement ?? null,
+    recorded: receipt?.record?.status === "recorded" ? true
+      : (receipt?.record?.status === "refused" || receipt?.tag?.status === "refused") ? false
+      : (receipt?.printout?.status === "already-printed" ? true : null),
     world_from: receipt?.world_from ?? "",
     world_to: receipt?.world_to ?? "",
   };

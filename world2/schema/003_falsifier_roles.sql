@@ -151,6 +151,13 @@ lawful AS (
     -- Narrowed by its row policies to the acting household's own rows; INSERT only,
     -- because a refusal is never edited, and expiry is a definer function, not a DELETE.
     ('office_api',   'refused_acts',     'INSERT'),
+    -- 103_durable_rooms.sql (POS-1203, CORE-170): the fixed record of a closed room and an ended event's own window membership. INSERT only: a
+    -- fixed record is never edited or removed by a role the office holds (the producer inserts with ON CONFLICT DO NOTHING).
+    ('office_api',   'durable_rooms',             'INSERT'),
+    ('office_api',   'durable_room_says',         'INSERT'),
+    ('office_api',   'durable_event_memberships', 'INSERT'),
+    ('office_api',   'durable_event_rooms',       'INSERT'),
+    ('office_api',   'durable_event_room_says',   'INSERT'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.
@@ -225,6 +232,17 @@ lawful AS (
     -- sealed against, copied beside the marks; INSERT only, the same reason.
     ('clearing_job', 'register_versions',       'INSERT'),
     ('clearing_job', 'world_snapshot_register', 'INSERT'),
+    -- 095_settlement_printout.sql (POS-1025). The publications registry the
+    -- settlement decides on before its seal (the commons rule reads it). INSERT
+    -- opens a row and UPDATE only ever closes one (to_window): a registry entry
+    -- that changes is closed and reopened, so the registry as sealed at any
+    -- window stays readable. No DELETE.
+    ('clearing_job', 'settlement_publications', 'INSERT'),
+    ('clearing_job', 'settlement_publications', 'UPDATE'),
+    -- 095 § 4 (POS-1025/d, "Save first, then pay"): the clearing saves each window's decision once,
+    -- and the settlement crossing seals it by copying it into world_snapshots. INSERT only: a saved
+    -- decision is never changed or deleted.
+    ('clearing_job', 'settlement_decisions',    'INSERT'),
     ('law_ingester', 'law_projection',   'INSERT'),
     ('law_ingester', 'law_projection',   'DELETE'),
     ('law_ingester', 'stamp_projection', 'INSERT'),

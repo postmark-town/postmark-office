@@ -50,7 +50,10 @@ export const SOFT_STEPS = Object.freeze([
   "settlements", "carried", "chests", "amends", "drops",
   // a named creature's ending at the settlement (WLD-25), the same run's fifth soft step
   "endings",
-  "positions", "hhkeys", "hhkeys_log",
+  "positions",
+  // rooms: the closed rooms and ended events fixed as durable records (POS-1203, CORE-170), after positions, in the tick that already runs
+  "rooms",
+  "hhkeys", "hhkeys_log",
   // the world graph snapshot (POS-268 5b moved it off the rehydrate; review-593 c)
   "world",
   // the town's day on Bluesky (POS-904): the crossing's and the blessed settlement's posts, after the world step

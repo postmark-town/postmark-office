@@ -13,9 +13,9 @@
 //
 // THE RIG is carry-at-the-clearing.test.mjs's: a real Postgres
 // (test/helpers/embedded-store.mjs) with the whole schema, 076 included, and the
-// real `retire-unpublished.mjs` and `clearing-job.mjs` run as children under the
-// `clearing_job` pen, because the return is an insert that pen is narrowed to by
-// a trigger and a row policy, and only Postgres can say what they let in.
+// settlement's take (retireMarks, returnToDrafts) and the real `clearing-job.mjs`
+// run under the `clearing_job` pen, because the return is an insert that pen is
+// narrowed to by a trigger and a row policy, and only Postgres can say what they let in.
 //
 // The fixture: Rei's garage stands on open ground, locked at WIN-1 by a claim
 // whose data carries the docket's plumbing (`_act_id`, `_journal_seq`) and a
@@ -24,15 +24,12 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { alertsFor } from "../src/alerts.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RETIRE = join(ROOT, "world2", "tools", "retire-unpublished.mjs");
 const JOB = join(ROOT, "world2", "tools", "clearing-job.mjs");
 const TOWN_SHA = "t".repeat(40);
 const LAW_SHA = "l".repeat(40);
@@ -45,8 +42,6 @@ const OPENED = new Date(Date.UTC(2026, 9, 7, 5, 45, 40));
 const store = await startStore({ db: "taken_to_drafts_test" });
 after(() => store.stop());
 const skip = store.skip ?? false;
-const scratch = mkdtempSync(join(tmpdir(), "taken-to-drafts-"));
-after(() => rmSync(scratch, { recursive: true, force: true }));
 
 const IDS = {
   garage: "c0000000-0000-4000-8000-000000000001",
@@ -100,16 +95,26 @@ async function seed() {
   });
 }
 
-function retire(slugs) {
-  const sweep = join(scratch, `sweep-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  writeFileSync(sweep, JSON.stringify({ unpublished: slugs.map((id) => ({ id })) }));
-  const r = spawnSync(process.execPath, [RETIRE, "--sweep", sweep], {
-    cwd: ROOT, encoding: "utf8",
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
-  });
-  let out = null;
-  try { out = JSON.parse(r.stdout); } catch { /* the assertion below prints it */ }
-  return { code: r.status, out, raw: `${r.stdout}\n${r.stderr}` };
+// THE TAKE, as the settlement's decision makes it (settlement-decides.mjs § the commons unpublish, POS-1025):
+// retireMarks then returnToDrafts, under the clearing_job pen, in one transaction, at the open window. Until the
+// printout cutover the same two calls ran in retire-unpublished.mjs, after the sweep; that tool retired with it.
+async function retire(slugs) {
+  const { retireMarks, returnToDrafts } = await import("../world2/tools/materialize.mjs");
+  const { UNPUBLISH_CAUSE } = await import("../world2/tools/settlement-decides.mjs");
+  const c = await store.connect("clearing_job");
+  const q = (text, args) => c.query(text, args);
+  try {
+    await q("BEGIN");
+    const { rows: [w] } = await q("SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+    const windowId = Number(w.id);
+    const report = await retireMarks(q, { slugs, windowId, cause: UNPUBLISH_CAUSE });
+    const drafts = await returnToDrafts(q, { slugs: report.retired.map((r) => r.slug), windowId, cause: UNPUBLISH_CAUSE });
+    await q("COMMIT");
+    return { code: 0, out: { ...report, drafts }, raw: "" };
+  } catch (e) {
+    await q("ROLLBACK").catch(() => {});
+    return { code: 1, out: null, raw: String(e?.stack ?? e) };
+  } finally { await c.end(); }
 }
 const draftsOf = (slug) => read("SELECT id::text, status, claimant, household, stake, slug, class, body, geometry, data, window_id, supersedes FROM claims WHERE status = 'draft' AND slug = $1", [slug]);
 
@@ -127,7 +132,7 @@ async function asHouse(keys, fn) {
 
 test("G1: the take writes the mark back as a private draft of its author, at its last place, at ✦0, with the plumbing left behind", { skip }, async () => {
   await seed();
-  const run = retire(["rei/the-garage"]);
+  const run = await retire(["rei/the-garage"]);
   assert.equal(run.code, 0, run.raw);
   assert.deepEqual(run.out.retired.map((r) => r.slug), ["rei/the-garage"]);
   assert.deepEqual(run.out.drafts, { returned: [{ slug: "rei/the-garage", household: "hh:starforge" }], kept: [], unreturned: [] });
@@ -158,14 +163,14 @@ test("NOTHING TWICE: a re-run retires nothing and returns nothing; a house that 
     `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
      VALUES ($1, 'sited', 'sable', 'hh:rabbit', 'draft', 'the lamp, relit', $2, 0, '{"date":"2026-10-14"}', 'sable/the-lamp')`,
     [WIN, JSON.stringify({ slug: "sable/the-lamp", at: { x: 4100, y: 4000 }, extent: EXT })]));
-  const first = retire(["rei/the-garage", "sable/the-lamp"]);
+  const first = await retire(["rei/the-garage", "sable/the-lamp"]);
   assert.equal(first.code, 0, first.raw);
   assert.deepEqual(first.out.drafts.returned.map((r) => r.slug), ["rei/the-garage"]);
   assert.deepEqual(first.out.drafts.kept, [{ slug: "sable/the-lamp" }]);
   const lamp = await draftsOf("sable/the-lamp");
   assert.deepEqual(lamp.map((r) => r.body), ["the lamp, relit"], "the house's own draft stands, alone");
 
-  const again = retire(["rei/the-garage", "sable/the-lamp"]);
+  const again = await retire(["rei/the-garage", "sable/the-lamp"]);
   assert.equal(again.code, 0, again.raw);
   assert.deepEqual(again.out.retired, []);
   assert.deepEqual(again.out.already_retired.map((r) => r.slug), ["rei/the-garage", "sable/the-lamp"]);
@@ -175,7 +180,7 @@ test("NOTHING TWICE: a re-run retires nothing and returns nothing; a house that 
 
 test("AN OWNER THE ROLL DOES NOT NAME: the mark is retired, named unreturned, and nothing else waits on it", { skip }, async () => {
   await seed();
-  const run = retire(["ghost/the-lantern", "rei/the-garage"]);
+  const run = await retire(["ghost/the-lantern", "rei/the-garage"]);
   assert.equal(run.code, 0, run.raw);
   assert.deepEqual(run.out.retired.map((r) => r.slug), ["ghost/the-lantern", "rei/the-garage"]);
   assert.deepEqual(run.out.drafts.returned.map((r) => r.slug), ["rei/the-garage"]);
@@ -233,7 +238,7 @@ test("THE PEN IS NARROW (076): clearing_job may plant only the return of a mark 
 
 test("G1, THE ROUND TRIP: staked, the returned draft goes pending, and the clearing stands the same mark back up", { skip }, async () => {
   await seed();
-  assert.equal(retire(["rei/the-garage"]).code, 0);
+  assert.equal((await retire(["rei/the-garage"])).code, 0);
   // the stake door's SUBMIT (world2-claims.mjs § promoteDraftOnStake), as the
   // household: draft -> pending in the open window, with the stamp on the ledger
   await asHouse(["hh:starforge"], (c) => c.query(
@@ -257,7 +262,7 @@ const ask = (handles, now, worldIds = async () => new Set()) => alertsFor(handle
 
 test("G3, THE ALERT (mark-taken): for the house that owns it, for 14 settlements, until it is put forward again; never for a file-side retirement", { skip }, async () => {
   await seed();
-  assert.equal(retire(["rei/the-garage", "sable/the-lamp"]).code, 0);
+  assert.equal((await retire(["rei/the-garage", "sable/the-lamp"])).code, 0);
   // a mark marks-ingest retired (a file-side change on main) is not a take
   await owner((c) => c.query("UPDATE marks SET status = 'retired', retired_window = $1, retired_cause = 'marks-ingest' WHERE id = $2", [WIN, IDS.ghost]));
   const at = "2026-10-07T06:00:00.000Z";   // the settlement, never the window's opening (05:45:40Z)
@@ -282,7 +287,7 @@ test("G3, THE ALERT (mark-taken): for the house that owns it, for 14 settlements
 
 test("THE ALERT (escrow-on-missing-mark): stamps on a mark that isn't in the world, the holder's own; never a mark that stands, is being put forward, or is on world main", { skip }, async () => {
   await seed();
-  assert.equal(retire(["rei/the-garage"]).code, 0);   // retired; its returned DRAFT stays, and a draft is not asked about (review F2)
+  assert.equal((await retire(["rei/the-garage"])).code, 0);   // retired; its returned DRAFT stays, and a draft is not asked about (review F2)
   await owner(async (c) => {
     await c.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
                    VALUES ($1, 'sited', 'sable', 'hh:rabbit', 'pending', 'put forward', '{}', 1, '{}', 'sable/the-new-kite')`, [WIN]);
@@ -318,7 +323,7 @@ test("G1, ITS HOUSEHOLD: the draft goes to the house the mark stood in, under th
                    VALUES ($1, 'rei/the-old-shed', 'sited', 'rei', 'gh:201', 'a shed', $2, $3::box, 'standing', $4, '{}')`,
       [SHED, geometry, box({ x: 4300, y: 4000 }, EXT), WIN - 1]);
   });
-  const run = retire(["rei/the-old-shed"]);
+  const run = await retire(["rei/the-old-shed"]);
   assert.equal(run.code, 0, run.raw);
   assert.deepEqual(run.out.drafts.returned, [{ slug: "rei/the-old-shed", household: "gh:201" }], "the mark's own house, never a house the pen chose");
   const { sessionKeysVia } = await import("../src/household-deriver.mjs");

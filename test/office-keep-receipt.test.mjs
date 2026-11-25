@@ -195,6 +195,8 @@ console.log(process.env.STUB_DROPS_FAIL ? "drops: NOT reconciled (non-fatal) —
 console.log(process.env.STUB_ENDINGS_FAIL ? "endings: NOT ended (non-fatal) — stub" : "endings: ended 0 at S1, cutoff 2026-10-26T18:00:00.000Z");
 `,
   "world2/tools/position-snapshot.mjs": plain("positions", `console.log("positions: none owed");`),
+  // The durable rooms pass (POS-1203), its own step in the tick that already runs: STUB_ROOMS_RC is the pass's own exit, as the shell maps it
+  "deploy/durable-rooms-pass.mjs": plain("rooms", `if (process.env.STUB_ROOMS_RC) process.exit(Number(process.env.STUB_ROOMS_RC));`),
   // The world step (POS-268 5b; review-593 a and c), in shell builtins only, since the run's PATH
   // has no env or sed: it records which store passwords it was handed, and STUB_FAIL=world makes it
   // exit 4 (the credential unreadable).
@@ -350,7 +352,7 @@ const steps = (r) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => 
 const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", invite: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
-  sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", hearth_joins: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
+  sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", hearth_joins: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok", rooms: "ok",
   hhkeys: "ok", hhkeys_log: "ok", world: "ok", bluesky: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
@@ -420,6 +422,10 @@ const SOFT = [
   // WLD-25: a named creature's ending, the same
   ["endings (non-fatal: settlements stays ok)", { STUB_ENDINGS_FAIL: "1" }, { endings: "refused:write-failed" }],
   ["positions", { STUB_FAIL: "positions" }, { positions: "refused:exit:7" }],
+  // POS-1203: the durable rooms pass refused (a write it could not make; asked again next tick), or has nothing it can tell yet (exit 3), and the tick goes on
+  ["rooms", { STUB_FAIL: "rooms" }, { rooms: "refused:exit:7" }],
+  ["rooms (a write that failed: exit 1, refused, the next tick asks again)", { STUB_ROOMS_RC: "1" }, { rooms: "refused:exit:1" }],
+  ["rooms (migration 103 not landed, or no settlement yet: skipped)", { STUB_ROOMS_RC: "3" }, { rooms: "skip:prereq:no_migration" }],
   ["hhkeys (the predicate left no JSON: the append succeeds, the step is refused)", { STUB_FAIL: "hhkeys" }, { hhkeys: "refused:unchecked" }],
   // POS-904: the Bluesky publisher refused (a crash's exit, here 7) is its own refused step, and the tick goes on
   ["bluesky", { STUB_FAIL: "bluesky" }, { bluesky: "refused:exit:7" }],

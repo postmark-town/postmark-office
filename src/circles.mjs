@@ -93,22 +93,51 @@ export function sayLine(v, circle = null) {
 }
 
 /**
+ * WHEN CIRCLES WENT LIVE (POS-1218; Wright's pick on that issue, 2026-11-24). The instant prod's office first listened on
+ * `release/2026-w48`, the first release to carry circles (release-train run 45011782402; the box's own journal reads "listening" at
+ * 10:19:06.729220Z). It is the speech TIME that says which era a say belongs to: a missing `reply_to` or `place_mark` never does,
+ * since a modern room has independent openers with neither (act 60672 is one, with no mark). Nothing is read from distance, names
+ * or the absence of edges, and no say is moved out of the room it was spoken in.
+ */
+export const CIRCLES_LIVE_AT = "2026-11-22T10:19:06.729Z";
+export const CIRCLES_LIVE_MS = Date.parse(CIRCLES_LIVE_AT);
+
+/**
+ * PRE-CIRCLES SPEECH: an identified say, spoken before circles went live, that names no parent and that nothing held in this read
+ * answers. It has an act number but never had a circle, so a room's old identified openers read as ONE flowing conversation (the
+ * room's `timeline`, with every id intact), not as a stub apiece. `answered` is the set of say ids a held reply names (spoken at or
+ * after its parent): a pre-circles say that something DOES answer keeps the recorded edge and stays the root of that circle, as
+ * before — the named fallback for a shape no ruling covers (a reply to old speech). Pure and by time alone.
+ */
+export const spokenBeforeCircles = (v) => Number.isFinite(v?.at) && v.at < CIRCLES_LIVE_MS;
+export const PRE_CIRCLES_NOTE = "spoken before circles went live (`before`), these were never threaded: they read as the room's one flowing `timeline`, each with its own `id` and no `circle`. Later says here are circles as usual";
+
+/**
  * THE INDEX over one room's voices: who replies to whom, as stored. A parent counts only when this read holds it AND it was spoken
  * before its reply (an edge pointing forward in time is a broken record, not a circle). A reply whose parent is not held is
- * BROKEN here: it is never quietly promoted to a top circle; it is listed in `broken` and each tree read names it.
+ * BROKEN here: it is never quietly promoted to a top circle; it is listed in `broken` and each tree read names it. An identified
+ * parentless say spoken before circles went live (CIRCLES_LIVE_AT) is a line of the room's `timeline`, not a top circle (`pre`).
  */
 export function circleIndex(voices) {
   const ordered = [...voices].sort((a, b) => a.at - b.at || (sayIdOf(a.id) ?? 0) - (sayIdOf(b.id) ?? 0));
   const byId = new Map();
   for (const v of ordered) { const id = sayIdOf(v.id); if (id != null) byId.set(id, v); }
+  const answered = new Set();
+  for (const v of ordered) {
+    const p = sayIdOf(v.reply_to);
+    const parent = p == null ? null : byId.get(p);
+    if (parent && parent.at <= v.at && p !== sayIdOf(v.id)) answered.add(p);
+  }
   const children = new Map();
   const tops = [];
   const broken = [];
   const timeline = [];
+  const pre = new Set(); // act numbers of the identified says that read as pre-circles speech
   for (const v of ordered) {
     const id = sayIdOf(v.id);
     if (id == null) { timeline.push(v); continue; }
     const parentId = sayIdOf(v.reply_to);
+    if (parentId == null && spokenBeforeCircles(v) && !answered.has(id)) { pre.add(id); timeline.push(v); continue; }
     if (parentId == null) { tops.push(v); continue; }
     const parent = byId.get(parentId);
     if (!parent || parent.at > v.at || parentId === id) { broken.push(v); continue; }
@@ -119,7 +148,7 @@ export function circleIndex(voices) {
   // The top circle a say sits in, or null when its chain reaches a parent this read does not hold.
   function rootOf(v) {
     const start = sayIdOf(v?.id);
-    if (start == null) return null;
+    if (start == null || pre.has(start)) return null; // pre-circles speech sits in no circle
     if (rootCache.has(start)) return rootCache.get(start);
     const seen = new Set();
     let cur = v;
@@ -166,7 +195,7 @@ export function circleIndex(voices) {
     if (v) walk(v, 0);
     return out;
   }
-  return { byId, children, tops, broken, timeline, rootOf, pathOf, subtree };
+  return { byId, children, tops, broken, timeline, pre, rootOf, pathOf, subtree };
 }
 
 /**
@@ -292,6 +321,10 @@ export function circleView(voices, { caller = null, budget = CIRCLE_BUDGET_BYTES
   if (more.length) view.more_circles = more;
 
   if (index.broken.length) view.broken = index.broken.map(brokenNote);
+  // POS-1218: say plainly that some of the timeline's lines are identified speech from before circles (their ids ride on the lines;
+  // none is a circle). Counted over the whole room, kept or folded; absent when the room holds none. Set before the timeline is
+  // sized, so the budget measures it.
+  if (index.pre.size) view.pre_circles = { before: CIRCLES_LIVE_AT, says: index.pre.size, note: PRE_CIRCLES_NOTE };
   if (index.timeline.length) {
     // OLD TALK, a plain timeline (call 13): newest kept while the budget allows, the rest counted.
     const kept = [];
@@ -356,6 +389,8 @@ export function circleRead(voices, id, { after = null, budget = CIRCLE_BUDGET_BY
   if (path == null) page.broken = brokenNote(index.byId.get(want));
   // POS-1152: the circle's start-place, from the root its ancestry reaches; a broken chain has no root and borrows nothing
   else { const rootSay = index.byId.get(path[0]); if (sayIdOf(rootSay?.reply_to) == null && markIdOf(rootSay?.place_mark)) page.place_mark = rootSay.place_mark; }
+  // POS-1218: a say from before circles is read as itself (its id answers, nothing is denied); it is a line of the room's timeline, not a circle
+  if (index.pre.has(want)) page.pre_circles = { before: CIRCLES_LIVE_AT, note: PRE_CIRCLES_NOTE };
   let i = from;
   for (; i < tree.length; i++) {
     page.lines.push(lineOf(tree[i].v, { depth: tree[i].depth }));
@@ -421,9 +456,11 @@ export function withRead(voices, handle, { budget = CIRCLE_BUDGET_BYTES, decorat
 const nameRe = (handle) => new RegExp(`(^|[^a-z0-9_.-])${handle.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9_-])`);
 
 /**
- * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` is the room the speaker is speaking into — the same room
- * is the earshot rule (call 21: "yes to room, no to settlement"), so a say outside it is refused, never linked. `replyTo` is:
- *   · an act number (or its digits) — that say, if it is in this room;
+ * RESOLVING `reply_to` WHEN A SAY IS SPOKEN (calls 3, 21, 25). `roomVoices` are the says the speaker can answer: every say of the
+ * open conversations within earshot of where they stand (call 21: "yes to room, no to settlement"; POS-1185: rooms no longer fuse,
+ * so that can be more than one room, and the reply joins the room of the say it answers). A say outside them is refused, never
+ * linked. `replyTo` is:
+ *   · an act number (or its digits) — that say, if it is among them;
  *   · `{ handle, at }` — that resident's say at EXACTLY that instant (ISO or ms, normalized to ms): none, or more than one, is
  *     refused by name — a nearby say is never chosen;
  *   · absent — NAME-LINKING: if the words name someone who has spoken in this room (their handle, as a word), the say links to
@@ -456,22 +493,47 @@ export function resolveReplyTo(roomVoices, { replyTo = null, speaker = null, tex
       return refuse("reply_to by handle needs both `handle` and `at`", "reply_to: { handle: \"<who>\", at: \"<the instant they spoke, ISO or at_ms>\" } — or pass the say's id");
     const theirs = threaded.filter((v) => v.handle === handle);
     if (!theirs.length)
-      return refuse(`${handle} has not spoken in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21); listen with say {} to see who is talking here");
+      return refuse(`${handle} has not spoken in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21); listen with say {} to see who is talking here");
     // THE EXACT INSTANT, never a nearby one (CORE-82 read, Rivet 18:18Z): the rulings say handle plus time, and the say read gives
     // every line its `at` and `at_ms` — the same instant, normalized to ms here. No say at it, or two, is refused; none is guessed.
     const exact = theirs.filter((v) => v.at === t);
     if (exact.length === 1) return found(exact[0], "handle_time");
     if (exact.length > 1)
       return refuse(`${handle} has ${exact.length} says at exactly ${iso(t)} (${exact.map((v) => sayIdOf(v.id)).join(", ")})`, "pass the id of the one you mean");
-    return refuse(`${handle} said nothing in this room at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
+    return refuse(`${handle} said nothing within your hearing at exactly ${iso(t)}`, "pass the say's `at` or `at_ms` exactly as the say read showed it, or its id");
   }
   const id = sayIdOf(asked);
   if (id == null) return refuse("reply_to is a say's id (a whole number) or { handle, at }", "the ids ride on every line of the say read as `id`");
   const hit = threaded.find((v) => sayIdOf(v.id) === id);
   if (!hit)
-    return refuse(`say ${id} is not in the room you are speaking into`, "a reply must come from the same room as the say it answers (call 21): walk back within earshot of that conversation, or read it with say { circle: " + id + " }");
+    return refuse(`say ${id} is not in a conversation you can hear from where you stand`, "a reply answers a say in an open conversation within earshot of you, and joins that conversation (call 21): walk back within earshot of it, or read it with say { circle: " + id + " }");
   return found(hit, "id");
 }
+
+/**
+ * THE SAY A `reply_to` NAMES among `voices` — an id, or `{ handle, at }` at exactly that instant, and only when it names ONE say — or
+ * null. It decides nothing about whether that say may be answered (`resolveReplyTo` does, over the says in reach): the say door asks
+ * this only AFTER a refusal, to tell a say whose conversation has closed from one that is merely out of reach (POS-1185), so each
+ * refusal can say what the caller can do about it.
+ */
+export function replyTargetIn(voices, replyTo) {
+  const threaded = voices.filter((v) => sayIdOf(v.id) != null);
+  if (replyTo != null && typeof replyTo === "object" && !Array.isArray(replyTo)) {
+    const handle = String(replyTo.handle ?? "").trim();
+    const t = typeof replyTo.at === "number" ? replyTo.at : /^\d{10,15}$/.test(String(replyTo.at ?? "")) ? Number(replyTo.at) : Date.parse(String(replyTo.at ?? ""));
+    if (!handle || !Number.isFinite(t)) return null;
+    const exact = threaded.filter((v) => v.handle === handle && v.at === t);
+    return exact.length === 1 ? exact[0] : null;
+  }
+  const id = sayIdOf(replyTo);
+  return id == null ? null : threaded.find((v) => sayIdOf(v.id) === id) ?? null;
+}
+
+/** The refusal for a reply to a say whose conversation has closed (WLD-242: "A reply to a say whose room has closed is refused"). */
+export const closedRoomRefusal = (id) => ({
+  defect: `say ${id} is in a conversation that has closed`,
+  hint: `that conversation has closed, and a reply cannot reopen it. Say it fresh, with no reply_to, and it starts or joins a conversation where you are. The closed one is still there to read: say { circle: ${id} }`,
+});
 
 /** `?circle=<say id>[&after=<id>]` or `?room=<thread id>` on a conversations read — a named conversation; null for a page read. */
 export function findOf(searchParams) {

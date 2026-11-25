@@ -674,7 +674,7 @@ async function fromTownIndex(res, fn, onNull = null, onError = null, then = null
 // when the store cannot be reached. The pending paper rows are read first
 // (paper-fresh.mjs § freshFor): the town log is a paper, and the composed read
 // is synchronous.
-async function residentCard(who, key) {
+async function residentCard(who, key, { registry = null } = {}) {
   const fresh = await freshFor(who, { odb, clone: TOWN_CLONE, asOf: AS_OF });
   const got = await townIndexStore.storeAnswer(async (c) => withLastActiveOn(c, "card", await townIndexStore.resident(c, who, fresh)));
   if (got.refused) return { refused: got.refused };
@@ -703,6 +703,10 @@ async function residentCard(who, key) {
   // here. Garnish like the marks: a record that cannot be read leaves the card.
   const looks = await import("./entity-predicates.mjs").then((m) => m.appearanceFor(who)).catch(() => null);
   if (looks && !looks.unavailable) card.appearance = looks;
+  // POS-1201: the official sheet's pointer beside it (depictions.mjs § sheetPointerOf, the one helper both skins call), composed here, after the
+  // town-index lease above was released; absent when the record cannot be asked, never an invented "none"
+  const sheet = await import("./depictions.mjs").then((m) => m.sheetPointerOf(who, { registry })).catch(() => null);
+  if (sheet) card.official_sheet = sheet;
   // their pronouns beside the name, from their profile (profiles.mjs § pronounsOf);
   // absent when unwritten, never guessed
   const pronouns = pronounsOf(card);
@@ -728,8 +732,10 @@ async function mapLanes(items, fn) {
   return out;
 }
 async function withPublicCards(page) {
+  // POS-1201: the sheet pointer asks the registry once for the page, not once per card
+  const registry = await import("./likeness.mjs").then((m) => m.likenessRegistry()).catch(() => null);
   const cards = await mapLanes(page.residents ?? [], async (row) => {
-    const got = await residentCard(row.handle, null);
+    const got = await residentCard(row.handle, null, { registry });
     if (got.refused) throw new CardRefused(got.refused);
     return got.card;
   });

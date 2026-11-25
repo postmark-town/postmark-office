@@ -590,6 +590,22 @@ else
   keep_step positions refused "exit:$?"; echo "[office-keep] positions snapshot NOT written (non-fatal) — $snapped — the next tick tries again; world2/tools/position-snapshot.mjs --verify says where it stands" >&2
 fi
 
+# ── the durable rooms (POS-1203, CORE-170; migration 103) ────────────────────
+# Rooms, galleries and conversations are durable (Darko, 2026-11-23): a room that has truly closed and an event that has ended are FIXED as records by
+# the office's own recurring work, in THIS tick, no timer or service of its own. After the settlements rows above (it reads the World's published
+# settlements), after the sparks pass (a spark's production and a stake's return never wait on it), outside the town lock (it reads the store and
+# the World's refs, and writes insert-only rows as the pen). New only: what is already stored is never read back into a write. NON-FATAL like the
+# steps around it, and a failed write is asked again by the next tick (deploy/durable-rooms-pass.mjs says what it found, counts and ids only).
+# 0 ok; 3 skip (migration 103 not landed here, or no published settlement yet); anything else refused.
+durable_rc=0
+node deploy/durable-rooms-pass.mjs --world "$WORLD_CLONE" || durable_rc=$?
+case "$durable_rc" in
+  0) keep_step rooms ok ;;
+  3) keep_step rooms skip prereq:no_migration ;;
+  *) keep_step rooms refused "exit:$durable_rc"
+     echo "[office-keep] durable rooms pass had a refusal (non-fatal) — the next tick asks again" >&2 ;;
+esac
+
 # ── one household, one mint key: the alarm's log line (Darko, 2026-10-04) ────
 # The town's own predicate (tools/household-keys.mjs) over the frozen snapshot:
 # every declared household mints under ONE key and no key spans two houses.
