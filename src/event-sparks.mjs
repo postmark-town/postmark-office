@@ -8,6 +8,9 @@
 //     scoped to the window, the cluster with a voice within earshot of the place. Its thread is the conversations page's own;
 //   · who was THERE — `present`: the households with a PUBLIC act at the place in the window (call 4). Never RSVPs, never who is
 //     standing there now, never a guessed membership: the act's own `household`, as the record attributed it when it was taken.
+//   · WHO, by name — `participants` (POS-1217, CORE-177): the actors of those same acts, each once, under the canonical `actor` the record
+//     kept. Same acts, window, cap-at-now, 60 m and private-draft filter as `present`; never a speaker list (a say is one of the acts, and a
+//     walker who never spoke is as there as one who did), never a household's members or RSVPs, never the companion a human stood beside.
 // The site reads these; it never works out a room, a window or attendance itself (CORE-82).
 //
 // THE SPARK'S FRAME (POS-1035-room-spark-frame.md, frozen). A real room's absolute bounds become the record's centred frame —
@@ -23,6 +26,7 @@ import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
 import { importTownTool, isPinStop, pinStopHint } from "./town-tool.mjs"; // POS-994: the town's modules are the office's pinned copies
+import { humanHouseOf, speakerFieldsOf } from "./speaker-line.mjs"; // POS-1217: a human's hand is told by the same rule, and presented by the same book, as a conversation's line
 
 // ── THE HOSTING STAKE (call 22; Darko 11:00 EST and 17:37:45Z) ───────────────
 //
@@ -259,6 +263,38 @@ export function presentFrom(rows, { window, place }) {
 }
 
 /**
+ * POS-1217 (CORE-177): who was there, by the actor the record kept. The distinct `actor`s of `rows` (the same public acts, each placed
+ * `{x, y}`, attributed to a household and read through the same window and 60 m as `presentFrom`), each once, sorted by handle:
+ * `{ handle, household, human? }`.
+ *   · `handle`    the act's canonical actor, byte for byte: a resident's own handle, or a human's own hand (`human-of-<house>`).
+ *   · `household` the household the FIRST qualifying act of that actor was attributed to (the same attribution `present` reads).
+ *   · `human`     true on a human's own hand (the one rule that tells it, speaker-line.mjs § humanHouseOf), absent on a resident.
+ * Never the companion a human stood beside (`payload.stood_with` lends standing, not authorship: it is not read here), never a household's
+ * members or RSVPs, never a guess from the household: an act with no recorded actor lists no one (its household still reads in `present`).
+ */
+export function participantsFrom(rows, { window, place }) {
+  const seen = new Map();
+  for (const r of rows) {
+    const t = ms(r.at);
+    if (!r.household || !Number.isFinite(t) || t < window.from || t > window.to) continue;
+    if (!r.point || !near(r.point, place)) continue;
+    if (typeof r.actor !== "string" || r.actor.trim() === "" || seen.has(r.actor)) continue;
+    seen.set(r.actor, { handle: r.actor, household: String(r.household), ...(humanHouseOf(r.actor) ? { human: true } : {}) });
+  }
+  return [...seen.values()].sort((a, b) => (a.handle < b.handle ? -1 : a.handle > b.handle ? 1 : 0));
+}
+
+/**
+ * A human's own hand, told as a conversation's line tells it (speaker-line.mjs § speakerFieldsOf over the public book): `speaker`,
+ * `town_name`, `pronouns`, `house`, `house_slug`, and only what that house's PUBLIC profile holds. A resident's entry is untouched
+ * (CORE-178 owns how a resident is drawn). With no book (the registry could not be read) or no such house a human gains nothing and
+ * keeps the canonical handle: unknown, never guessed. Never `beside`: the shoulder a human spoke on is not an attendee.
+ */
+export function presentParticipants(participants, book) {
+  return participants.map((p) => (p.human ? { ...p, ...speakerFieldsOf(p.handle, book) } : p));
+}
+
+/**
  * THE EVIDENCE, in two halves so a held connection never carries the composition (POS-1203; the pen's idle-in-transaction bound is 30 s, and grouping history is CPU):
  *   · `eventEvidenceInputs(client, event, …)` is QUERIES ONLY: the fixed record, the says nobody has fixed, the marks, the presence acts, the fixed closed rooms of the window.
  *   · `composeEventEvidence(inputs, { collect })` is PURE: voices, rooms (the one grouping, rooms.mjs § roomsOf), the merge with the fixed rooms, the answer.
@@ -293,7 +329,7 @@ export async function eventEvidenceInputs(client, event, { now = Date.now(), edg
         [talk.VOICE_ACTIONS, iso(scoped.to), ...(Number.isFinite(oldest) ? [iso(oldest)] : [])])).rows;
   }
   const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
-  const { rows: actRows } = await client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
+  const { rows: actRows } = await client.query(`SELECT id, at, actor, action, household, at_anchor, at_dx, at_dy FROM acts
                    WHERE action = ANY($1) AND household IS NOT NULL AND at >= $2 AND at <= $3 AND ${publicActSql()}
                    ORDER BY at, id`, [PRESENCE_ACTS, iso(scoped.from), iso(scoped.to)]);
   const archived = archive ? await archivedRoomRows(client, { from: scoped.from, to: scoped.to, place, earshotM: talk.SAY_DIAL_SPEC.earshot_m[0], withSays: until === window.to }) : { rooms: [], says: new Map() };
@@ -325,6 +361,7 @@ export function composeEventEvidence(inputs, { collect = null } = {}) {
   }
   const placed = actRows.map((r) => ({ ...r, point: talk.composeAnchor({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf) }));
   const present = presentFrom(placed, { window: scoped, place });
+  const participants = participantsFrom(placed, { window: scoped, place });
   const complete = until === window.to;
   return {
     window: { from: iso(window.from), to: iso(window.to), ...(complete ? {} : { as_of: iso(until) }) },
@@ -336,6 +373,8 @@ export function composeEventEvidence(inputs, { collect = null } = {}) {
     ...(found.note ? { room_note: found.note } : {}),
     present,
     present_basis: `households with a public act (${PRESENCE_ACTS.join(", ")}) within ${EVENT_PLACE_M} m of the event's place inside its window — never RSVPs, never who is there now`,
+    participants,
+    participants_basis: `the actors of those same acts, each once, by the handle the record kept (a human's own hand is the human's, never the resident they stood beside) — never RSVPs, never a household's members, never who is there now; an act with no recorded actor lists no one`,
     ...(unplacedInWindow ? { unplaced_says: unplacedInWindow } : {}),
   };
 }
