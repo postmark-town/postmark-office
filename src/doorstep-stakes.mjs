@@ -14,9 +14,11 @@
 // unpublish") takes a published mark out of the world when ALL of:
 //
 //   · it is in the sweep's own registry (`WORLD/settlement-publications.json`)
-//     with `class: "commons"` — "Anything absent from the registry is founding
-//     estate and stays published"; `home` and `constitution` rows are never
-//     candidates;
+//     with `class: "commons"`, or (WLD-252, Darko 2026-11-25 08:53 EST) it has
+//     no row at all and its walk reaches market ground now: registry absence
+//     is no exemption, and a mark with no row is asked as the engine's
+//     `unregisteredEntry`, from its one current filing (the engine's own
+//     `filingIndexAt`, the sweep's); `home` and `constitution` never are;
 //   · the stakes handed to the crossing hold NO open stamps on it
 //     (`(escrow.get(id) ?? 0) > 0` keeps it);
 //   · its registered path is on main;
@@ -86,6 +88,13 @@ const defaultRegistry = async (ref) => {
 };
 // The rule: the engine's own function, or null (disclosed) when it predates it.
 const defaultRule = async () => (await import("./world.mjs")).engineUnpublishVerdict();
+// WLD-252: the engine's own spelling of a mark with no row, and its own filing index at the ref (the sweep's), or null when the engine predates them:
+// then a mark with no row is judged as that engine's sweep judges it, which is never.
+const defaultUnregistered = async () => (await import("./world.mjs")).engineUnregisteredEntry();
+const defaultFilingAt = async (ref) => {
+  const { engineFilingIndexAt, WORLD_CLONE } = await import("./world.mjs");
+  return engineFilingIndexAt(WORLD_CLONE, ref);
+};
 // The registered path, asked of the tree at the ref the registry was read at.
 const defaultPathAt = async (ref) => {
   const [{ pathAtRef }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
@@ -150,10 +159,12 @@ export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${ma
  * At-risk rows first (by id), then the rest (by id) — the one order a morning
  * reader needs. Each row: the id, its kind, its whole body (Darko, 2026-10-14
  * 22:33: a read that shows a mark carries its body; WLD-51 part 3), the sweep's
- * class (null = not in the registry, founding estate), the escrow, the verdict,
- * and — on an at-risk row — the act.
+ * class (null = not in the registry), the escrow, the verdict, and — on an
+ * at-risk row — the act. WLD-252: `unregisteredEntry` is the engine's (null =
+ * the engine predates it, and its sweep never takes a mark with no row), and
+ * `currentPathOf(id)` the engine's filing index at the ref (null = unread).
  */
-export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark = null, rule = null, pathOnMain = () => null } = {}) {
+export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark = null, rule = null, pathOnMain = () => null, unregisteredEntry = null, currentPathOf = () => null } = {}) {
   const mine = new Set(handles.filter(Boolean));
   const rows = [];
   for (const m of marks ?? []) {
@@ -161,16 +172,19 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
     const entry = registry?.[m.id] ?? null;
     const cls = entry?.class ?? null;
     const escrow = byMark instanceof Map ? (byMark.get(m.id) ?? 0) : null;
-    // Founding estate (no row) is never swept; a row is the rule's to judge,
-    // with the mark's standing as the fold walked it (`tier`), which the
-    // sweep asks too: a mark that walks home is never taken (the safety half).
-    // And whether it is printed as held, which the sweep asks too: a thing in
-    // someone's hands is published but unplaced, never taken while held
-    // (POS-688; WLD-51). Until this was handed in, a held thing at ✦0 read as
-    // at risk here while the sweep kept it.
+    // A row is the rule's to judge, with the mark's standing as the fold walked
+    // it (`tier`), which the sweep asks too: a mark that walks home is never
+    // taken (the safety half). And whether it is printed as held, which the
+    // sweep asks too: a thing in someone's hands is published but unplaced,
+    // never taken while held (POS-688; WLD-51). Until this was handed in, a
+    // held thing at ✦0 read as at risk here while the sweep kept it.
+    // WLD-252: a mark with NO row is the same rule's too, asked as the engine
+    // spells it, from where it is filed now; an engine that has no such
+    // spelling is one whose sweep never takes it, so it is not at risk there.
     const atRisk = escrow === null ? null
-      : !entry ? false
+      : !entry && typeof unregisteredEntry !== "function" ? false
       : typeof rule !== "function" ? null
+      : !entry ? rule(unregisteredEntry(null), { escrow, standing: m.tier ?? null, held: heldBy(m) != null, currentPath: () => currentPathOf(m.id) }).unpublish
       : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null, held: heldBy(m) != null }).unpublish;
     rows.push({
       mark: m.id, kind: m.kind ?? null, body: m.body ?? null, class: cls, escrow, at_risk: atRisk,
@@ -234,6 +248,8 @@ export async function stakesFor(handles, {
   escrow = defaultEscrow,
   rule = defaultRule,
   pathAt = defaultPathAt,
+  unregistered = defaultUnregistered,   // WLD-252: the engine's `unregisteredEntry`, or null
+  filingAt = defaultFilingAt,           // WLD-252: `(ref) => (id) => path | null`, the engine's filing index at that ref
   now = new Date(),
   limit = null,
   offset = 0,   // POS-1102: where the marks part's page starts, the lists' own `offset`; with `allocationPage` it pages both parts in step
@@ -267,8 +283,12 @@ export async function stakesFor(handles, {
     : "the sweep's unpublish rule could not be read from the world engine (tools/unpublish-verdict.mjs at the blessed ref) — no row below is judged, and an unjudged row is never called safe";
   let pathOnMain = () => null;
   try { pathOnMain = (await pathAt(ref)) ?? pathOnMain; } catch { /* every registered path reads unread: null, disclosed by the rows */ }
+  let unregisteredEntry = null;
+  try { unregisteredEntry = (await unregistered()) ?? null; } catch { unregisteredEntry = null; }
+  let currentPathOf = () => null;
+  try { currentPathOf = (await filingAt(ref)) ?? currentPathOf; } catch { /* a mark with no row reads its filing unread: null, never safe */ }
 
-  const rows = stakesRowsFrom({ handles: scope, marks: state?.marks ?? [], registry: published, byMark: esc?.byMark ?? null, rule: verdict, pathOnMain });
+  const rows = stakesRowsFrom({ handles: scope, marks: state?.marks ?? [], registry: published, byMark: esc?.byMark ?? null, rule: verdict, pathOnMain, unregisteredEntry, currentPathOf });
   const dates = new Map((state?.marks ?? []).map((m) => [m?.id, m?.date]));
   const escrowRead = esc?.byMark instanceof Map;
   const measured = escrowRead && !ruleNote;

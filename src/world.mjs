@@ -4429,6 +4429,21 @@ export async function engineUnpublishVerdict() {
     return typeof mod.unpublishVerdict === "function" ? mod.unpublishVerdict : null;
   } catch { return null; }
 }
+// WLD-252: the same file's spelling of a mark with NO registry row, or null when the engine predates it (its sweep never takes such a mark).
+export async function engineUnregisteredEntry() {
+  try {
+    const mod = await engineImport("unpublish-verdict.mjs");
+    return typeof mod.unregisteredEntry === "function" ? mod.unregisteredEntry : null;
+  } catch { return null; }
+}
+// WLD-252: where the sweep finds a mark with no row: the engine's own filing index (settlement-sweep.mjs § filingIndexAt) over `repo` at `ref`,
+// `(id) => path | null` (null for no filing, or two). Null when the engine has none: such a mark's filing then reads unread, never safe.
+export async function engineFilingIndexAt(repo, ref) {
+  try {
+    const mod = await engineImport("settlement-sweep.mjs");
+    return typeof mod.filingIndexAt === "function" ? mod.filingIndexAt(repo, ref) : null;
+  } catch { return null; }
+}
 
 // The town's parcel dial as a box, for the door's ring rule (POS-322).
 export async function parcelDial() {
