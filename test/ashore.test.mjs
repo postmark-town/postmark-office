@@ -19,7 +19,7 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../src/residency.mjs";
 import { harborGated } from "../src/harbor-gate.mjs";
@@ -61,6 +61,7 @@ function townClone() {
   }
   writeFileSync(join(dir, REGISTRY_PATH), serializeRegistry(REGISTRY()));
   writeFileSync(join(dir, PINS_PATH), serializePins(PINS()));
+  seedLetterFields(dir);
   git(dir, "init", "-q");
   git(dir, "config", "core.autocrlf", "false");
   git(dir, "add", "-A");

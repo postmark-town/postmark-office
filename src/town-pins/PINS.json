@@ -43,6 +43,10 @@
         "tools/stamp-mint.mjs"
       ]
     },
+    "tools/letter-fields.mjs": {
+      "blob": "a7e03087bcb7a81d9cc894f4511964ed2c5d343e",
+      "closure": []
+    },
     "tools/mail-state.mjs": {
       "blob": "1d6212940c636cf73ec06e398eb88c442108c7d5",
       "closure": []
