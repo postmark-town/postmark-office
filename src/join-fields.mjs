@@ -33,7 +33,10 @@
 // row (one-contract.mjs § FIELD_ALIASES). No end is set for it (read-grammar.mjs §
 // CURSOR_RENAMES_UNTIL's convention: a future deprecation is its own issue). Inside the office
 // the value keeps its old internal name, `card` (the parked berth row, the town log's payload,
-// the card builder), so a declaration parked before this change still runs at its co-sign.
+// the card builder), so a declaration parked before this change is still read by its co-sign. Its values are judged by
+// today's limits there: a line or architecture over them is refused, and the agent begins again (no migration, no exemption).
+// The public doors refuse both names even when equal (one-contract.mjs § aliasFields); `fullAddressOf` below is the office's
+// own reading, which takes one value sent twice.
 
 import { graphemeCount, NAME_LIMIT, NAME_BYTES } from "./resident-name.mjs";
 

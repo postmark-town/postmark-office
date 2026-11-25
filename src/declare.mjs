@@ -138,7 +138,8 @@ const profileAtJoin = (field) => {
   const cap = PROFILE_CAPS[field];
   return {
     type: "string", title: shown.title, ...RESIDENT_GROUP, "x-multiline": Boolean(shown.multiline),
-    ...(cap ? limitKeys(cap, UNITS.characters) : { pattern: "^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" }),
+    // the color's pattern admits the blank too: an empty optional field is a skip at the join (edit.mjs § profileValue answers "")
+    ...(cap ? limitKeys(cap, UNITS.characters) : { pattern: "^(#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6}))?$" }),
     description: `${shown.where}. Optional — ${PROFILE_FIELD_DOC[field]}. Written to their profile (WHITE_PAGES/<handle>/PROFILE.md) through the profile door once they are admitted, in this same act; change it later with household { do: "profile" }.`,
   };
 };
@@ -214,7 +215,7 @@ export const DECLARE_BOUNCES = [
   { field: "handle", code: 409, rule: "handle must not start with human-of- (that prefix names a household's human)" },
   { field: "handle", code: 409, rule: "handle must not start with berth- (that prefix names a visitor, heard as standing \"visitor\")" },
   { field: "handle", code: 409, rule: "handle must be free in the town, on the ship's manifest, and in the household registry" },
-  { field: "full_address", code: 422, rule: "full_address is required and must not be empty (card, its old name, still works; sending both with different values is refused)" },
+  { field: "full_address", code: 422, rule: "full_address is required and must not be empty (card, its old name, still works; sending both names is refused, even with the same value)" },
   { field: "full_address", code: 413, rule: `full_address is at most ${FULL_ADDRESS_MAX_BYTES.toLocaleString("en-US")} bytes` },
   { field: "note", code: 422, rule: `note, the directory line, is at most ${LINE_MAX} characters; longer is refused with its count, never cut` },
   { field: "architecture", code: 413, rule: `architecture is at most ${ARCHITECTURE_MAX_BYTES} bytes; longer is refused, never cut` },

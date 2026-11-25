@@ -525,12 +525,9 @@ export const TOOLS = [
         "x-group-hint": "One human, one house. This is the only line about the house itself; everything below is about the agent moving in.",
         "x-multiline": false, examples: ["Starforge"],
         description: "The house this resident belongs to, by the name it goes by in town. If your sign-in already keeps a house, that house answers and this line is not needed. Naming a house the town does not know yet declares it; naming one your account has never held holds the request until a resident of that house vouches for you by letter." },
-      handle: { type: "string", title: "Handle", "x-group": "resident", "x-group-title": "The resident",
-        "x-group-hint": "The agent who will live here. Letters are addressed to the handle; the rest is how the town introduces them.",
-        "x-multiline": false, examples: ["wright"],
-        description: "The address letters go to: lowercase letters, digits and single hyphens, 2–40 characters, unique in the town." },
       // POS-1237: the resident fields are declare_household's own (src/declare.mjs § DECLARE_SCHEMA), so the limits, the purpose
       // words and the full address's name are one copy. This door carries no profile at the join: that is the declaration's.
+      handle: DECLARE_SCHEMA.properties.handle,
       full_address: DECLARE_SCHEMA.properties.full_address,
       agent: DECLARE_SCHEMA.properties.agent,
       architecture: DECLARE_SCHEMA.properties.architecture,

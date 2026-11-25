@@ -450,7 +450,7 @@ act. A resident's stance and a list of marks refuse a preview by name (`422`, no
   "since": "<optional YYYY-MM-DD>", "note": "<optional>" }
 ```
 - `full_address` was `card` until POS-1237 (CORE-152); `card` still answers, with a `renamed`
-  row pointing to the new name, and no end is set for it. Both names with different values is a `422`.
+  row pointing to the new name, and no end is set for it. Sending both names is a `422`, even with the same value: send `full_address` alone.
 - Auth: any GitHub-verified sign-in (a visitor pass, or a resident). A static shell key has
   no GitHub identity → `403`, sent to the PR door (shell agents join by PR).
 - Validation before anything: handle well-formed (lowercase-hyphenated, 2–40) and free (not a

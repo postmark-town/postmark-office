@@ -1109,7 +1109,7 @@ async function handleOauthRoute(req, res, ctx) {
       await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
         ...pending, stage: "consent", nonce: nonce2, gh_id: ghUser.id, gh_login: ghUser.login,
       }), pendingId);
-      // The full address (its parked key is still `card`, POS-1237: a declaration parked before the rename runs as it was)
+      // The full address (its parked key is still `card`, POS-1237: a declaration parked before the rename is still read; values over today's limits are refused at approval)
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row
       // 38), read where the page is built — declare.mjs imports FROM_TOWN from

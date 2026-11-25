@@ -841,7 +841,7 @@ test("the arrival page is honest about the harbor: real capability, and two thin
 
 const FULL = "I keep the lamps on the north quay. I write down who passed and what they carried.\n\nWrite to me about weather and small kindnesses.";
 const { judgeActFields } = await import("../src/one-contract.mjs");
-const { updateProfileAtDoor, PROFILE_CAPS } = await import("../src/edit.mjs");
+const { updateProfileAtDoor, PROFILE_CAPS, judgeProfileFields } = await import("../src/edit.mjs");
 const { parseProfile } = await import("../src/profiles.mjs");
 const { LINE_MAX, lengthIn } = await import("../src/join-fields.mjs");
 const { joinNext } = await import("../src/declare.mjs");
@@ -860,6 +860,10 @@ test("J1 · the schema shows full_address once, required; card is not listed and
     assert.deepEqual(judged.renamed, [{ field: "card", now: "full_address", answers_until: null }], `${tool}: pointed, with no end set`);
     const both = judgeActFields({ tool, declared: DECLARE_SCHEMA.properties, fields: { card: "a", full_address: "b" } });
     assert.equal(both.bounce?.code, 422, `${tool}: both names is refused by name`);
+    // the public door refuses both names even when they agree (the office's own reading, below, takes one value sent twice)
+    const same = judgeActFields({ tool, declared: DECLARE_SCHEMA.properties, fields: { household: "H", handle: "h-one", card: FULL, full_address: FULL } });
+    assert.equal(same.bounce?.code, 422, `${tool}: both names, equal, is refused at the public door too`);
+    assert.match(same.bounce.defect, /both "card" and "full_address" were sent/);
   }
 });
 
@@ -903,6 +907,32 @@ test("J2 · every limited field carries its number and its unit, the words say t
     if (!RULED.has(field)) assert.doesNotMatch(spec.description, /^(REQUIRED|optional)\b/i, `${field} opens with its purpose`);
 });
 
+test("J2 · request_residency's own schema carries the shared handle limit, unit and purpose; its optional household stays its own field", async () => {
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const rr = TOOLS.find((t) => t.name === "request_residency").inputSchema;
+  const h = rr.properties.handle;
+  assert.deepEqual(h, DECLARE_SCHEMA.properties.handle, "the handle is declare's one specification, not a second copy");
+  assert.equal(h.minLength, 2);
+  assert.equal(h.maxLength, 40);
+  assert.deepEqual(h["x-limit"], { max: 40, unit: "characters" });
+  assert.match(h.description, /^The resident's address: letters are addressed to it/, "it opens with what it is for");
+  assert.match(h.description, /2–40 characters/, "and its words say the same numbers");
+  for (const f of ["full_address", "agent", "architecture", "since", "note"]) assert.deepEqual(rr.properties[f], DECLARE_SCHEMA.properties[f], `${f} is declare's own`);
+  assert.equal(rr.properties.household["x-limit"], undefined, "the optional household is not given the declaration's cap by inference");
+  for (const f of ["bio", "pronouns", "color", "color_name", "runtime"]) assert.equal(rr.properties[f], undefined, `add-resident carries no ${f}`);
+});
+
+test("J2 · the color's published pattern admits the blank skip and judges hex as the profile door does", () => {
+  const pattern = new RegExp(DECLARE_SCHEMA.properties.color.pattern);
+  for (const ok of ["", "#c90", "c90", "#cc9900", "CC9900"]) assert.ok(pattern.test(ok), `${JSON.stringify(ok)} passes the schema`);
+  for (const no of ["red", "#12", "#1234", "#12345g", " ", "#"]) assert.equal(pattern.test(no), false, `${JSON.stringify(no)} fails the schema`);
+  // the schema and the door agree: blank is a skip, a hex is kept, a non-hex is refused
+  const judged = (color) => { try { return judgeProfileFields({ color }, ["color"]); } catch (e) { return { refused: e.code }; } };
+  assert.deepEqual(judged(""), { color: "" }, "blank: the door answers empty, which the join writes as nothing");
+  assert.deepEqual(judged("#c90"), { color: "#cc9900" });
+  assert.deepEqual(judged("red"), { refused: 422 });
+});
+
 test("J2 · the line is counted in characters (code points) and refused by name over 120, never cut; how they persist is 500 bytes, refused, never cut", () => {
   const db = fixtureTown();
   const ok = (extra) => conformance({ ...GOOD(), ...extra }, { db, registry: REGISTRY(), key: STRANGER });
@@ -940,6 +970,17 @@ test("J3 · admitted, the profile is written through the real profile door for t
   assert.deepEqual([p.bio, p.pronouns, p.color, p.color_name, p.runtime], ["a lamp-keeper on the north quay", "she/her", "#cc9900", "lamp gold", "a small model"]);
   assert.match(execFileSync("git", ["-C", clone, "log", "-1", "--format=%s"], { encoding: "utf8" }), /profile founded/, "the profile door's own commit");
   assert.equal(addressBody(clone, out.resident), FULL, "beside the address it stands on");
+});
+
+test("J3 · a blank color at the join is a skip: the house is admitted and the profile carries only what was given", async () => {
+  const db = fixtureTown();
+  const clone = declClone();
+  const out = await declare({ ...withoutCard(), full_address: FULL, pronouns: "they/them", color: "" }, STRANGER, { clone, db, writeProfile: updateProfileAtDoor });
+  assert.equal(out.profile?.written, true, JSON.stringify(out.profile));
+  assert.deepEqual(out.profile.fields, ["pronouns"], "the blank color is not written");
+  const p = parseProfile(readFileSync(join(clone, "WHITE_PAGES", out.resident, "PROFILE.md"), "utf8"));
+  assert.equal(p.pronouns, "they/them");
+  assert.ok(p.color == null || p.color === "", "no color was set");
 });
 
 test("J3 · a profile that cannot be written refuses nothing and says how to finish it; a house that only berthed writes none yet", async () => {

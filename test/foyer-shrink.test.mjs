@@ -323,6 +323,9 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   // works and its answer points to the new name. Every join field now carries its limit (`maxLength` where it counts
   // characters, and `x-limit: { max, unit }` on the declare card); the directory line (`note`) is at most 120 characters at
   // every door, refused by name, never cut. declare may carry a bio and the optional profile fields, and answers `next`."
+  // And in the lead's FIX at 406c167a: add-resident's `handle` takes declare's one specification, so it gained
+  // `/acts/0/fields/handle/{maxLength,minLength}` (its 2–40). Read off the assertion's own diff: those 2 leaves, nothing
+  // else; applied here by hand. PSA addition: "add-resident's handle now carries its 2–40 limit in the schema, as declare's does."
   // ⚑ REGENERATED 2026-11-18 FOR POS-1136 (Darko 14:53 EST, "the town declaring opposed to something should remove it, even parcels"; Wright
   // 20:38Z): the act `declare-stance-on` gained the optional field `preview`, the town's no-write preview (as: "town", one mark). ADDITIVE and
   // proven so: the golden gained exactly `/acts/10/fields/preview/{type,description}` (2 leaves) and removed or retyped none, by hand, not

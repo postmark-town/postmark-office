@@ -20,6 +20,8 @@
     },
     "handle": {
      "description": "string",
+     "maxLength": "number",
+     "minLength": "number",
      "required": "boolean",
      "type": "string"
     },
