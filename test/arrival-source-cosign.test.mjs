@@ -284,3 +284,42 @@ test("POS-1237 · C4 (the human-only negative) a parked declaration that carries
   assert.equal(row.likeness ?? null, null, "and no likeness answer: unanswered reads as no");
   assert.doesNotMatch(text, /SMUGGLED|is kept/);
 });
+
+test("POS-1237 · C5 the served co-sign wears the join's look around the same form, and its answers do too; other office pages keep theirs", async () => {
+  ghIdentity = { id: 1237005, login: "cosign-human-c5" };
+  const page = await openCoSign("cosign-linden", "Linden Cosign", { forwardedFor: "203.0.113.75" });
+  const html = page.html;
+  // the look: the Registrar, the quill tile, the night sky, the ghost text and the live counts at the writer's caps
+  assert.match(html, /<img class="reg-face" src="data:image\/webp;base64,[^"]+" width="64" height="64" alt="The Registrar">/);
+  assert.match(html, /<span class="reg-name">The Registrar<\/span>This step is yours, the human&#39;s\.|<span class="reg-name">The Registrar<\/span>This step is yours, the human's\./);
+  assert.match(html, /<div class="jf-art"><svg class="pm-pixart"/);
+  assert.match(html, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f/);
+  const { HUMAN_PROFILE_CAPS } = await import("../src/human-profile.mjs");
+  for (const [field, cap] of Object.entries(HUMAN_PROFILE_CAPS)) {
+    assert.match(html, new RegExp(`name="${field}" type="text" maxlength="${cap * 2}" value="" placeholder="[^"]+" data-count="${cap}"`), `${field}: ghost and count`);
+    assert.match(html, new RegExp(`data-for="${field}" aria-live="polite">0 / ${cap}<`));
+  }
+  assert.match(html, /<script>\(function\(\)\{var countedLength=function countedLength/, "the counts are live, by the writer's count");
+  assert.doesNotMatch(html, /<input[^>]*\schecked/, "the likeness answer starts unchosen");
+  assert.match(html, /<input type="radio" name="likeness" value="yes">/);
+  // the same form: method, action, the bound pair, the carrier, the two answers
+  assert.match(html, /<form method="post" action="http:\/\/127\.0\.0\.1:\d+\/oauth\/consent">/);
+  assert.match(html, /<input type="hidden" name="pending_id" value="[^"]+">\s*<input type="hidden" name="nonce" value="[^"]+">/);
+  assert.match(html, /data-pm-from/);
+  assert.match(html, /<button class="pm-btn" name="decision" value="approve">Co-sign the residency<\/button>/);
+  assert.match(html, /<button class="pm-btn ghost" name="decision" value="deny">Cancel<\/button>/);
+  // the human's refusal, in the same look, still founds nothing
+  const denied = await fetch(`${BASE}/oauth/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ pending_id: page.pending_id, nonce: page.nonce, decision: "deny" }) });
+  const deniedText = await denied.text();
+  assert.equal(denied.status, 200);
+  assert.match(deniedText, /<h1 class="jf-q">Not co-signed<\/h1>/);
+  assert.match(deniedText, /class="reg-face"|class="jf-art"/);
+  assert.equal(await houseRow("linden-cosign"), null, "nothing founded");
+  // every other office page keeps the plain look
+  const lost = await fetch(`${BASE}/oauth/berth-cosign?slug=no-such-berth-c5`);
+  const lostText = await lost.text();
+  assert.equal(lost.status, 404);
+  assert.match(lostText, /<h1>Postmark — the town office<\/h1>/);
+  assert.doesNotMatch(lostText, /reg-face|jf-art|radial-gradient/);
+});

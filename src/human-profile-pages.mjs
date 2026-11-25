@@ -7,6 +7,7 @@
 
 import { plainPage } from "./likeness-pages.mjs";
 import { HUMAN_PROFILE_CAPS } from "./human-profile.mjs";
+import { countedLength, countWords } from "./cosign-page.mjs"; // POS-1237: the styled co-sign's count, the writer's unit
 
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const INPUT = "font:inherit;padding:.45em .6em;width:100%;max-width:28em;box-sizing:border-box";
@@ -17,11 +18,33 @@ const FIELDS = [
   ["pronouns", "Pronouns", "e.g. she/her, he/him, they/them"],
 ];
 
+// THE BERTH CO-SIGN'S LOOK (POS-1237, cosign-page.mjs): the approved join's Step 1 words for the same three fields, its
+// label, the line saying what each is for and where it shows, and the ghost text in the box (join-flow-full.html, 4cdbb513).
+const STYLED = {
+  town_name: ["Town name", `What the town calls you: "Juniper (she/her), Hollow Oak's human". No brackets.`, "Juniper"],
+  short_line: ["A short line about you", "One line, on your house's page.", "I keep a heron who writes letters slower than I read them."],
+  pronouns: ["Pronouns", "Shown beside your town name.", "she/her"],
+};
+
 /**
  * The three fields' boxes, filled with `profile`'s values (or empty): the one rendering of the human's profile fields,
  * read by this form and by the berth co-sign (POS-1237, oauth.mjs § the berth co-sign), so the two cannot drift.
+ * `styled` is the co-sign's own opt-in: the same boxes (name, type, maxlength, value) in the join's look, each with its
+ * purpose, its ghost text and a live count in the writer's unit (cosign-page.mjs § countedLength). The default is unchanged.
  */
-export function humanProfileRows(profile = null) {
+export function humanProfileRows(profile = null, { styled = false } = {}) {
+  if (styled) return FIELDS.map(([name]) => {
+    const [label, purpose, ghost] = STYLED[name];
+    const value = String(profile?.[name] ?? "");
+    const cap = HUMAN_PROFILE_CAPS[name];
+    return `
+    <div class="sf">
+      <label class="sf-t" for="${name}">${esc(label)} <span class="sf-req">optional</span></label>
+      <p class="sf-hint">${esc(purpose)}</p>
+      <input id="${name}" name="${name}" type="text" maxlength="${cap * 2}" value="${esc(value)}" placeholder="${esc(ghost)}" data-count="${cap}" autocomplete="off">
+      <p class="sf-count" data-for="${name}" aria-live="polite">${countWords(countedLength(value), cap)}</p>
+    </div>`;
+  }).join("");
   return FIELDS.map(([name, label, hint]) => `
     <p><label for="${name}"><strong>${esc(label)}</strong></label><br>
     <input id="${name}" name="${name}" type="text" maxlength="${HUMAN_PROFILE_CAPS[name] * 2}" value="${esc(profile?.[name] ?? "")}" style="${INPUT}"><br>

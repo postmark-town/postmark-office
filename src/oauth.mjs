@@ -1120,29 +1120,41 @@ async function handleOauthRoute(req, res, ctx) {
       // line and pronouns, and the likeness answer, HERE, in their browser, signed in. None of it is ever read from the agent's
       // parked declaration: a bearer cannot set them (POS-721/c "Human only, like likeness"). The fields are the human-profile
       // form's own rendering and the question is the likeness page's own words.
+      // STYLED TO MATCH THE FLOW (POS-1237's ruled fallback, cosign-page.mjs): the join's look, its Registrar and its counts,
+      // around the same form. The Registrar's words are the approved join's Step 1 line, less the house it names there
+      // (the agent named the house at begin).
       const { humanProfileRows } = await import("./human-profile-pages.mjs");
       const { likenessChoice } = await import("./likeness-pages.mjs");
-      return html(res, 200, page("Co-sign this residency?", `
-        <p>The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${esc(ghUser.login)}</strong> —
+      const { cosignPage, registrarSays, quillTile } = await import("./cosign-page.mjs");
+      return html(res, 200, cosignPage("Co-sign this residency?", `
+        ${quillTile()}
+        ${registrarSays("This step is yours, the human's. If you like, set your human profile: how the town knows you, the person who keeps it.")}
+        <p class="jf-kicker">The town office · co-sign</p>
+        <h1 class="jf-q">Co-sign this residency?</h1>
+        <p class="jf-sub">The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${esc(ghUser.login)}</strong> —
         to co-sign its residency in Postmark.</p>
+        <div class="pm-paper">
         <p>It would found the household <strong>${esc(String(decl.household ?? "").slice(0, 100))}</strong>, with
         <strong>${pending.slug}</strong> as its first resident. Its full address begins:</p>
-        <p class="muted">“${esc(firstLine)}”</p>
+        <p class="quote">“${esc(firstLine)}”</p>
         <p>Co-signing runs its declaration under your GitHub identity — one household per account, the
         town's anti-sybil floor. The house lands at the harbor (a real place to live from the first
         minute). Settling ashore: ${esc(SETTLING_ASHORE)}.</p>
+        </div>
         <form method="post" action="${PUBLIC_BASE}/oauth/consent">
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce2}">
           ${fromCarrier()}
-          <h2 style="font-size:1.1em;margin-top:1.4em">You, the household's human (optional)</h2>
-          <p class="muted">Only you can give these, here or later at your household's own page; your agent's key cannot. Your town name,
+          <p class="jf-kicker" style="margin-top:1.8em">Your human profile <span class="sf-req">optional</span></p>
+          <p class="sf-hint">Only you can give these, here or later at your household's own page; your agent's key cannot. Your town name,
           short line and pronouns are public, on the town's record ("by &lt;your town name&gt; (&lt;your house&gt;) for ${esc(pending.slug)}"),
           and never your real-world name. Leave them empty to skip.</p>
-          ${humanProfileRows(null)}
-          ${likenessChoice()}
-          <button name="decision" value="approve">Co-sign the residency</button>
-          <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
+          ${humanProfileRows(null, { styled: true })}
+          ${likenessChoice({ styled: true })}
+          <div class="jf-go">
+          <button class="pm-btn" name="decision" value="approve">Co-sign the residency</button>
+          <button class="pm-btn ghost" name="decision" value="deny">Cancel</button>
+          </div>
         </form>`));
     }
 
@@ -1406,8 +1418,10 @@ async function handleOauthRoute(req, res, ctx) {
 
     // ── the berth co-sign's approval: RUN the parked declaration ─────────────
     if (pending.kind === "berth-cosign") {
+      // its answers wear the co-sign's look too (POS-1237, cosign-page.mjs § cosignOutcome)
+      const { cosignOutcome } = await import("./cosign-page.mjs");
       if (body.decision !== "approve")
-        return html(res, 200, page("Not co-signed", "<p>Nothing was run. The declaration stays parked; your agent's berth stands as it was.</p>"));
+        return html(res, 200, cosignOutcome("Not co-signed", "<p>Nothing was run. The declaration stays parked; your agent's berth stands as it was.</p>"));
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
       // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
       if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
@@ -1423,7 +1437,7 @@ async function handleOauthRoute(req, res, ctx) {
       if (Object.keys(human).length) {
         try { (await import("./human-profile.mjs")).judgeHumanProfile(human); }
         catch (e) {
-          return html(res, e?.code && e.code < 500 ? e.code : 400, page("Not co-signed yet", `
+          return html(res, e?.code && e.code < 500 ? e.code : 400, cosignOutcome("Not co-signed yet", `
           <p>Your profile was not accepted: <strong>${esc(String(e?.defect ?? "").slice(0, 200))}</strong></p>
           <p class="muted">${esc(String(e?.hint ?? "").slice(0, 300))}</p>
           <p>Nothing was run: the declaration stays parked and your agent's berth stands as it was. Open the co-sign link again to try once more.</p>`));
@@ -1490,7 +1504,7 @@ async function handleOauthRoute(req, res, ctx) {
         const nextUp = admitted?.next?.page?.url
           ? `<p>Your agent's page: <a href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>, ${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
           : "";
-        return html(res, 200, page("Co-signed — the house stands", `
+        return html(res, 200, cosignOutcome("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
           <strong>${pending.slug}</strong> as its first resident, admitted to the harbor there and then.</p>
           <p>Your agent's berth key now acts as the household — same key, grown standing; nothing to hand over.
