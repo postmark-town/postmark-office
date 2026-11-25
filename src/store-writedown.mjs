@@ -536,21 +536,13 @@ export function pathCollision(m, path, { publishedPathOf = null, canonBytesAt = 
 }
 
 /**
- * THE PLAN, PURE. Marks in, per-household write-downs out. No git, no store, no
- * clock — the same property `planDrain` has and for the same reason: the sorting
- * decision is falsifiable without building a repo.
- *
- * `publishedPathOf` answers where canon already keeps a mark, and it is injected
- * rather than read, so the pure half stays pure. GATE A before GATE B, exactly
- * as `planDrain` does it.
+ * WHERE EACH MARK OF A BATCH FILES, AND WHICH ARE HELD (WLD-230). PURE. The write-down planner's own two questions, asked once
+ * and named, so the settlement's pre-seal decision (world2/tools/settlement-decides.mjs; Wright 2026-11-22 00:13Z: "the collision
+ * check belongs to settlement-decides") asks exactly what the printout's planner (§ planStoreWriteDown) will: `planPath(m)` (Gate
+ * A/B; a nested mark under its parent, canon's filing or this batch's own plan for it) and `holds`, `Map(id → hold)`, for every mark
+ * whose filing is another id's published file and every mark whose actual filing was planned under one (§ A FILING IS ONE IDENTITY'S).
  */
-export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null, toFileFrame = null, withdrawals = [] } = {}) {
-  const byHousehold = new Map();
-  const bucket = (h) => {
-    if (!byHousehold.has(h)) byHousehold.set(h, { household: h, upserts: [], removals: [] });
-    return byHousehold.get(h);
-  };
-
+export function filingHolds(marks, { publishedPathOf = null, canonBytesAt = null } = {}) {
   // ── A NESTED MARK FILES UNDER ITS PARENT (S93, 2026-10-03) ──────────────────
   //
   // `pathFor` files a mark that is neither sited nor a parcel (a naming mark, a
@@ -592,19 +584,6 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     return path;
   };
 
-  // THE BATCH'S OWN PLACES, handed to the framer before anything is framed
-  // (POS-441, the carry): a mark written this crossing at a new world position
-  // frames its nested children, and is the parent their declared-parent check
-  // reads, where it stands NOW — not where the last fold left it. Only the
-  // world-framed records say a world place; a file-framed one is its file's own
-  // numbers and did not move.
-  if (typeof toFileFrame?.batch === "function")
-    toFileFrame.batch(marks.filter((m) => m.at_frame === "world" && m.fileRec?.at)
-      .map((m) => ({ id: m.id, at: m.fileRec.at, extent: m.fileRec.extent ?? null, points: m.fileRec.points ?? null })));
-
-  const unchanged = [];
-  const framed = [];
-  const held = [];
   // ── THE HOLD, AND WHO FILES UNDER IT (WLD-230, Truey's review of 2bc96df0) ──────────────────────────────────────────────
   // A held mark is not written, and neither is a mark whose ACTUAL filing was planned under it: the planner would file it at
   // `<held mark's planned path>/<slug>/mark.md`, inside the OTHER author's directory (the loader derives a parent from the directory),
@@ -615,6 +594,15 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
   const rootHolds = new Map();
   for (const m of marks) {
     const p = planPath(m, new Set());
+    // POS-1212: NO FILING IS A HOLD BY NAME, at write planning (Wright, 2026-11-24 13:21Z). A mark that declares a `parent_id` we cannot find has told us where it
+    // belongs, and filing it at its maker's id would be a guess; it is held (not written, reported, its row untouched) rather than placed under the root, the
+    // fallback that is gone. A mark with no maker is held the same way. A supplier's own `plannedPath` never gets here (it is a path).
+    if (!p && !m.plannedPath && (m.fileRec?.kind ?? m.kind ?? null)) {
+      const declared = m.fileRec?.parent_id ?? null;
+      rootHolds.set(m.id, { id: m.id, by: m.by ?? null, slug: m.slug ?? null, household: m.household ?? null, locked_window: m.locked_window ?? null,
+        path: null, held_by_filing_of: null, declared_parent: declared, crossing_output: declared ? "parent-unresolved" : "no-maker" });
+      continue;
+    }
     const c = p ? pathCollision(m, p, { publishedPathOf, canonBytesAt }) : null;
     if (c) rootHolds.set(m.id, c);
   }
@@ -636,6 +624,46 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       path: plannedPathOf.get(m.id) ?? null, held_by_filing_of: root.held_by_filing_of, depends_on: filedUnder.get(m.id), held_under: r,
       crossing_output: "parent-held" });
   }
+  const holds = new Map();
+  for (const m of marks) {
+    const h = rootHolds.get(m.id) ?? rootHolds.get(`dependent:${m.id}`) ?? null;
+    if (h) holds.set(m.id, h);
+  }
+  return { planPath: (m) => planPath(m, new Set()), holds };
+}
+
+/**
+ * THE PLAN, PURE. Marks in, per-household write-downs out. No git, no store, no
+ * clock — the same property `planDrain` has and for the same reason: the sorting
+ * decision is falsifiable without building a repo.
+ *
+ * `publishedPathOf` answers where canon already keeps a mark, and it is injected
+ * rather than read, so the pure half stays pure. GATE A before GATE B, exactly
+ * as `planDrain` does it.
+ */
+export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null, toFileFrame = null, withdrawals = [] } = {}) {
+  const byHousehold = new Map();
+  const bucket = (h) => {
+    if (!byHousehold.has(h)) byHousehold.set(h, { household: h, upserts: [], removals: [] });
+    return byHousehold.get(h);
+  };
+
+  // Where each mark files, and which are HELD (WLD-230): § filingHolds, the one answer the settlement's pre-seal decision asks too.
+  const { planPath, holds } = filingHolds(marks, { publishedPathOf, canonBytesAt });
+
+  // THE BATCH'S OWN PLACES, handed to the framer before anything is framed
+  // (POS-441, the carry): a mark written this crossing at a new world position
+  // frames its nested children, and is the parent their declared-parent check
+  // reads, where it stands NOW — not where the last fold left it. Only the
+  // world-framed records say a world place; a file-framed one is its file's own
+  // numbers and did not move.
+  if (typeof toFileFrame?.batch === "function")
+    toFileFrame.batch(marks.filter((m) => m.at_frame === "world" && m.fileRec?.at)
+      .map((m) => ({ id: m.id, at: m.fileRec.at, extent: m.fileRec.extent ?? null, points: m.fileRec.points ?? null })));
+
+  const unchanged = [];
+  const framed = [];
+  const held = [];
   for (const m of marks) {
     // `kind` RIDES SEPARATELY AND IT IS LOAD-BEARING. `pathFor` takes GATE A/B —
     // the freeze's "an existing filing never moves", then "a new mark files at
@@ -649,13 +677,9 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     // checking a file existed.
     const kind = m.fileRec?.kind ?? m.kind ?? null;
     if (!m.plannedPath && !kind) {
-      // A MISSING `kind` IS A MISFILING, NOT A MISSING FIELD. `pathFor` takes
-      // Gate A/B only for `sited` and `parcel`; with no kind it falls through to
-      // the root-prefix branch and files the mark at
-      // `WORLD/marks/let-there-be-light/<slug>/mark.md` — a real path, which
-      // parses, which the sweep will publish, and which is not where the mark
-      // lives. Nothing downstream can tell that apart from a deliberate filing.
-      // So it refuses here rather than landing somewhere plausible.
+      // A MISSING `kind` IS A MISSING FIELD THE FILING CANNOT BE TRUSTED WITHOUT. `pathFor` asks the kind whether a record is sited (which never nests) or
+      // a continuation (which files under its declared parent); with no kind it cannot tell which, and a plausible path that is silently wrong is what the
+      // sweep would publish. So it refuses here rather than landing somewhere plausible.
       throw new FoldInputRefusal(
         "mark-without-kind",
         `${m.id} carries no \`kind\`, and \`pathFor\` needs one to take the freeze's Gate A/B `
@@ -663,18 +687,18 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
         + "the root prefix instead of at its identity: a plausible path, silently wrong, that the sweep would publish.",
       );
     }
-    const path = planPath(m, new Set());
+    const path = planPath(m);
+    // WLD-230 (and POS-1212): a mark whose filing is another id's, or that has NO filing (a declared parent we cannot find; no maker), is held, reported,
+    // not written, not framed, never thrown (see § A FILING IS ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a
+    // file it will not write.
+    const collision = holds.get(m.id) ?? null;
+    if (collision) { held.push(collision); continue; }
     if (!path) {
       throw new FoldInputRefusal(
         "mark-without-path",
         `${m.id} resolves to no path — neither canon's filing nor its id can place it`,
       );
     }
-
-    // WLD-230: the filing at this path is another id's. Held, reported, not written, not framed, never thrown (see § A FILING IS
-    // ONE IDENTITY'S). Before the framer, so a held mark's own frame questions are not asked of a file it will not write.
-    const collision = rootHolds.get(m.id) ?? rootHolds.get(`dependent:${m.id}`) ?? null;
-    if (collision) { held.push(collision); continue; }
 
     // ── THE ONE FRAMER, at the one place a row becomes a file (2026-09-18) ────
     //

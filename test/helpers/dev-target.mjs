@@ -9,7 +9,8 @@
 //
 // The store is seeded the way the box's was: the registry from the town's two
 // printouts, then the town index from a snapshot (town-index-ingest --seed), as
-// law_ingester. The town clone has no remote, so nothing it does can leave the
+// law_ingester; then the settlement printout's cutover preconditions (POS-1025):
+// the settlements backfilled from the world's tags and its registry seeded. The town clone has no remote, so nothing it does can leave the
 // machine; the office's GITHUB_API_URL names a loopback port the rehearsal's
 // stub takes. A store that cannot start FAILS (embedded-store.mjs § NO_STORE).
 
@@ -23,6 +24,7 @@ import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
 import { standinClone } from "./clone-sparse.mjs";
+import { seedLetterFields } from "../fixture.mjs"; // POS-1165
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
@@ -37,6 +39,21 @@ export { freePort };
  * its office never writes (test/helpers/clone-sparse.mjs § standinPatterns); a full clone
  * here was ~25,000 files written on every sandbox setup or reset.
  */
+/**
+ * POS-1165: the door judges a letter's fields through the office's PINNED copy of the town's tools/letter-fields.mjs, and the clone is held to that
+ * pin, so the stand-in's scratch town must hold the reviewed file. A town that predates it (the suite's clone) gets it as ONE harness commit, made
+ * AFTER the seed tag, so the seed stays the source's own commit (the re-sign reads prod's key there). A town that ALREADY holds exactly that file (a
+ * newer source, or one seeded before) has nothing to commit, so nothing is committed: no empty commit, no abort, and the seed is the source's HEAD
+ * all the same. Answers true when it committed.
+ */
+export function carryLetterFields(town) {
+  seedLetterFields(town);
+  g(town, "add", "tools/letter-fields.mjs");
+  if (!g(town, "status", "--porcelain", "--", "tools/letter-fields.mjs")) return false;
+  g(town, "commit", "-qm", "harness: the reviewed letter-field policy the office's pins name (POS-1165)");
+  return true;
+}
+
 function scratchClone(which, source, dest) {
   standinClone(which, source, dest);
   g(dest, "checkout", "-q", "-B", "main"); // the box's clones sit on main, and the settlement pins it
@@ -113,6 +130,7 @@ export async function localDevTarget({
     // refs/tags/sandbox/seed". The stand-in tags its own scratch clone instead: its HEAD, the pinned
     // town, prod-signed as the box's seed is, before the re-sign, whatever tag the source carries.
     g(town, "tag", "-f", "sandbox/seed", "HEAD");
+    carryLetterFields(town); // POS-1165: AFTER the seed tag, so the seed stays the source's own commit
     const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's
@@ -248,6 +266,29 @@ export async function localDevTarget({
     // THE LAW the candle computes against (the dev store holds a world-law head; a
     // clearing refuses without one), ingested from the world clone as law_ingester.
     await ingestLaw(store, world);
+
+    // THE PRINTOUT'S CUTOVER PRECONDITIONS (POS-1025, deploy/DEPLOY.md § 095), as the dev box holds them.
+    // The settlements table current with the world's tags (the keeping tick's settlements-backfill), so the
+    // clearing numbers its seal past every real settlement/S<n> the world carries; and the sweep's registry
+    // copied into the store once (publications-seed), so the first printout renders the registry the world
+    // already carries rather than an empty one. The first printout's base is the rehearsal's own cutover step.
+    const noPg = { ...process.env };
+    for (const k of Object.keys(noPg)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL)$/.test(k)) delete noPg[k];
+    execFileSync(process.execPath, [join(OFFICE, "world2", "tools", "settlements-backfill.mjs"), "--world-repo", world, "--apply", "--prod", "--quiet", "--pg-url", store.url("office_api")],
+      { cwd: OFFICE, env: noPg, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const { seedRowsOf, seedPublications, REGISTRY_REL } = await import("../../world2/tools/publications-seed.mjs");
+    const worldMain = g(world, "rev-parse", "HEAD");
+    const onMain = new Set(g(world, "ls-tree", "-r", "--name-only", worldMain, "--", "WORLD/marks").split("\n").filter(Boolean));
+    const seedRows = seedRowsOf(g(world, "show", `${worldMain}:${REGISTRY_REL}`), (p) => onMain.has(p));
+    const so = await store.connect("world2_owner");
+    try {
+      await so.query("BEGIN");
+      const seeded = await seedPublications((text, args) => so.query(text, args), seedRows);
+      if (seeded.status !== "seeded") throw new Error(`the stand-in's publications seed: ${seeded.status} ${seeded.why ?? ""}`);
+      await so.query("COMMIT");
+    } catch (e) { await so.query("ROLLBACK").catch(() => {}); throw e; }
+    finally { await so.end(); }
+    log(`store: settlements current with the world's tags; the registry seeded (${seedRows.length} rows)`);
 
     const officePort = await freePort();
     const ghPort = await freePort();

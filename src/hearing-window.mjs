@@ -81,11 +81,20 @@ export async function publishedSettlementAt(repo) {
   return Number.isFinite(ms) ? ms : null;
 }
 
-/** The instants (ms) of world main's newest `count` sweep commits, newest first. */
+/** The instants (ms) of world main's newest `count` sweep commits, newest first. `count: null` is every one world main holds. */
 export async function publishedSettlementsAt(repo, { count = HEARING_HISTORY } = {}) {
-  const out = await run(repo, ["log", `-${count}`, "--format=%cI", `--grep=${SWEEP_SUBJECT}`, ...MAIN_REFS]);
+  const out = await run(repo, ["log", ...(count == null ? [] : [`-${count}`]), "--format=%cI", `--grep=${SWEEP_SUBJECT}`, ...MAIN_REFS]);
   return out.split("\n").map((l) => Date.parse(l)).filter(Number.isFinite);
 }
+
+/**
+ * EVERY published sweep, for the RECORD's reads (POS-1185; Darko 2026-11-22: "everything to be readable and findable (no orphans)").
+ * The ear needs about a month of settlements (HEARING_HISTORY, unchanged: hearing never reaches further). The conversations RECORD
+ * needs all of them: a say older than the oldest settlement a read knows sits in an epoch whose start is unknown and is not grouped,
+ * so with only the newest 60 every room older than a month opened nothing. World main keeps every sweep commit, so this asks for
+ * them all, once, and the minute's ask for the newest 60 keeps the list current after that.
+ */
+export const everyPublishedSettlementAt = (repo) => publishedSettlementsAt(repo, { count: null });
 
 /** The newest settlement tag's commit date (ms), or null — the fallback. */
 export async function blessedSettlementAt(repo) {
@@ -101,9 +110,10 @@ export async function blessedSettlementAt(repo) {
  * awaitable, for the boot and for tests.
  */
 export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, clock = () => Date.now(),
-  published = publishedSettlementAt, blessed = blessedSettlementAt, history = publishedSettlementsAt } = {}) {
+  published = publishedSettlementAt, blessed = blessedSettlementAt, history = publishedSettlementsAt, everything = everyPublishedSettlementAt } = {}) {
   let known = null;       // { since, source, disclosure }
   let past = [];          // the published sweeps before it, newest first (ms)
+  let every = null;       // every published sweep world main holds (ms), for the record's reads; null until the one whole ask has answered
   let askedAt = -Infinity;
   let inFlight = null;
 
@@ -112,21 +122,28 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
     askedAt = clock();
     inFlight = (async () => {
       try { past = await history(repo); } catch { /* the last history stands */ }
-      try {
-        const at = await published(repo);
-        if (at != null) { known = { since: at, source: "world main's newest settlement commit", disclosure: null }; return known; }
-      } catch { /* fall through to the tag */ }
-      try {
-        const at = await blessed(repo);
-        if (at != null) {
-          known = { since: at, source: "the newest settlement tag",
-            disclosure: "world main's newest settlement could not be read, so the ear's window opens at the newest BLESSED settlement, which can be one or more crossings older" };
-          return known;
-        }
-      } catch { /* the last answer stands */ }
+      await openWindow();
+      // POS-1185: the record's whole list is asked LAST, after the ear has its window and its 60 (hearing never waits on it), and
+      // once (again at the next refresh while it has not answered); `past` keeps it current after
+      if (every == null) { try { every = await everything(repo); } catch { /* the newest sweeps stand in until it answers */ } }
       return known;
     })().finally(() => { inFlight = null; });
     return inFlight;
+  }
+
+  /** Where the ear's window opens: world main's newest sweep, else the newest blessed tag, else the last answer stands. */
+  async function openWindow() {
+    try {
+      const at = await published(repo);
+      if (at != null) { known = { since: at, source: "world main's newest settlement commit", disclosure: null }; return; }
+    } catch { /* fall through to the tag */ }
+    try {
+      const at = await blessed(repo);
+      if (at != null) {
+        known = { since: at, source: "the newest settlement tag",
+          disclosure: "world main's newest settlement could not be read, so the ear's window opens at the newest BLESSED settlement, which can be one or more crossings older" };
+      }
+    } catch { /* the last answer stands */ }
   }
 
   /**
@@ -156,5 +173,17 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
     return [...all].filter(Number.isFinite).sort((a, b) => a - b);
   }
 
-  return { read, refresh, settlements };
+  /**
+   * Every published settlement world main holds (ms, ascending), for the RECORD's reads only (POS-1185): where a conversation in
+   * the record splits, however old. Hearing keeps `settlements()` above. Until the whole ask has answered this is the same list
+   * hearing has, so a record read then groups what it can and says what it could not. Memory only, like `read`.
+   */
+  function recorded() {
+    if (clock() - askedAt >= refreshMs) refresh().catch(() => {});
+    const all = new Set([...(every ?? []), ...past]);
+    if (known?.since != null) all.add(known.since);
+    return [...all].filter(Number.isFinite).sort((a, b) => a - b);
+  }
+
+  return { read, refresh, settlements, recorded };
 }

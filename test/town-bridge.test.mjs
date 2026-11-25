@@ -23,7 +23,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
-import { fixtureTown } from "./fixture.mjs";
+import { fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { runTownDrain, townLockHeld, TOWN_DOORS, drainLine } from "../src/town-bridge.mjs";
@@ -144,6 +144,7 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   stageEngine(dir); // POS-994: the clone carries the stand-in engine the pins vouch for
+  seedLetterFields(dir); // POS-1165: and the reviewed shared field policy
   git("init", "-q");
   // the bytes a door writes are the bytes the clone holds: a Windows checkout
   // must not turn the batch's fast-forward into a CRLF rewrite (the box never does)

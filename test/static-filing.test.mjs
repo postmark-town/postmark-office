@@ -91,15 +91,14 @@ test("predication still NESTS — \"it is its parent continued\", and the freeze
   assert.equal(named, "WORLD/marks/alpha/the-lamp/its-name/mark.md");
 });
 
-test("THE FLIP: a predicated mark whose parent cannot be resolved keeps the root fallback, NOT the id path", () => {
-  // The one place the two rules could have been collapsed into "always file at
-  // the id". They must not be: an unresolvable parent is a resolution failure,
-  // and filing the predicate at its own id would silently turn a description of
-  // a mark into a top-level record describing nothing.
+test("THE FLIP: a predicated mark whose parent cannot be resolved has NO filing (held by name), NOT the root and NOT the id path", () => {
+  // The one place the two rules must not be collapsed into "always file at the id". An unresolvable declared parent is a resolution failure, and filing the
+  // predicate at its own id would silently turn a description of a mark into a top-level record describing nothing. Since POS-1212 (Wright, 2026-11-24 13:21Z)
+  // the root fallback is gone too: the answer is null, and the write-down's planner holds the mark by name (store-writedown.mjs § filingHolds).
   assert.equal(
     pathFor({ id: "alpha/lamp-colour", slug: "lamp-colour", by: "alpha", kind: "predicated", parent_id: "alpha/the-lamp" },
       { parentPathOf: () => null }),
-    "WORLD/marks/let-there-be-light/lamp-colour/mark.md");
+    null);
 });
 
 test("GATE A BEFORE GATE B: a mark that already has a filing keeps it — \"it never moves again\"", () => {
@@ -170,8 +169,8 @@ test("the fossil's directory is taken VERBATIM — never recomposed from parent 
     odd);
 });
 
-test("a record with no `by` and no id to read one from takes the fallback rather than filing at WORLD/marks/undefined", () => {
-  assert.equal(pathFor({ slug: "orphan", kind: "sited" }), "WORLD/marks/let-there-be-light/orphan/mark.md");
+test("a record with no `by` and no id to read one from has NO filing: not WORLD/marks/undefined, and not the root (POS-1212)", () => {
+  assert.equal(pathFor({ slug: "orphan", kind: "sited" }), null);
   assert.equal(pathFor({ id: "", slug: "", kind: "sited" }), null);
 });
 

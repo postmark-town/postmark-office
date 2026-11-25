@@ -249,6 +249,9 @@ test("CONSTRAINT 3 — a media-host failure discloses rather than failing the in
   const junk = await worldInvestigate({ mark: "fixture/media-picture", with_image: true });
   assert.ok(!("_mcp_content" in junk), "non-image bytes were handed over as an image block");
   assert.match(junk.image_note, /not an image/i);
+  // POS-1204 regression: the sniff's OWN reason rides the note — never a record-read explanation borrowed from another call site
+  assert.match(junk.image_note, /\(that is not a JPEG, PNG, WebP, or SVG image\)/);
+  assert.doesNotMatch(junk.image_note, /calendar|record|could not be read|spark's event/i);
 });
 
 // ── CONSTRAINT 4 ─────────────────────────────────────────────────────────────

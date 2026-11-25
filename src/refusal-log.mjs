@@ -143,7 +143,7 @@ let lastPrune = 0;
 let absentSaid = false;
 const inflight = new Set();
 let skipped = 0;
-/** How many refusals are kept at once (the pen's pool holds three connections). */
+/** How many refusals are kept at once (the pen's pool holds six connections). */
 export const INFLIGHT_MAX = 1;   // one while the doorstep's pool question (POS-1064) is open
 /** The most residents a row records for its key, and the longest handle; a key past either is not recorded, never cut. */
 export const HELD_MAX = 100;
@@ -208,7 +208,7 @@ function saidAtMost(what, cause = null) {
 
 /**
  * Fire and forget: keep a refusal in the background, and let a test wait for it (`refusalLogSettled`).
- * AT MOST INFLIGHT_MAX AT ONCE: each record takes the pen three times, the pen's pool holds three
+ * AT MOST INFLIGHT_MAX AT ONCE: each record takes the pen three times, the pen's pool holds six
  * connections and a real act waits in the same line, so a burst keeps the first few and counts the
  * rest (`refusalLogSkipped`), said in the log with the next unexpected failure. A skipped refusal is
  * the one cost of a burst; no act is slowed by it.

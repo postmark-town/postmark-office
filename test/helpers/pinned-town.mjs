@@ -48,6 +48,11 @@ export function pinTown(town, root = `${town}-pins-${process.pid}-${++pinSeq}`) 
   mkdirSync(root, { recursive: true }); // a town holding no pinned module still gets its (empty) pins
   const present = MODULES.filter((m) => existsSync(join(town, "tools", m)));
   const files = collect((p) => readFileSync(join(town, p)), present);
+  // POS-1165: a MODULE THE FIXTURE TOWN PREDATES (tools/letter-fields.mjs, the one letter-field policy validateLetter runs) is LENT from the office's own
+  // reviewed pins (src/town-pins/), so a fixture town's pins hold every module the office's code reaches. The fixture clone carries the same file
+  // (test/fixture.mjs § seedLetterFields), so the loader's check of the clone against the pin still holds; nothing about the pin policy changes.
+  for (const m of MODULES.filter((m) => m === "letter-fields.mjs" && !present.includes(m)))
+    for (const [p, v] of collect((p) => readFileSync(join(PIN_ROOT, p)), [m])) if (!files.has(p)) files.set(p, v);
   for (const [p, { bytes }] of files) {
     mkdirSync(dirname(join(root, p)), { recursive: true });
     writeFileSync(join(root, p), bytes);

@@ -13,7 +13,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureTown, put, setMeta } from "./fixture.mjs";
+import { fixtureTown, put, setMeta, seedLetterFields } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { serializeRegistry, slugFromName, houseForAccount, houseForName, planRegistryJoin } from "../src/residency.mjs";
@@ -96,6 +96,7 @@ before(async () => {
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({
     wright: { login: "keeminlee", id: 999, pinned: "2026-07-05" },
   }));
+  seedLetterFields(clone);
   const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" });
   g("init", "-q"); g("add", "-A");
   g("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

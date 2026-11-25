@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
-import { fixtureKey, fixtureTown } from "./fixture.mjs";
+import { fixtureKey, fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { MAIL_ACT, MAIL_DOOR, replayLetter } from "../src/town-mail.mjs";
 import { enqueueLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -25,6 +25,7 @@ function mailClone() {
     writeFileSync(join(dir, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n`);
   }
   writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n");
+  seedLetterFields(dir);
   const git = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
   git("init", "-q");
   git("add", "-A");

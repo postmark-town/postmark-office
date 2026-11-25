@@ -53,37 +53,38 @@ test("THE CONTROL: a decided crossing lands as exactly one line, carrying the fi
     // that the log could not tell from a scheduled refusal.)
     by_hand: false,
     published: 4, left_drafted: 20, quarantined: 1,
-    // `retired: null` on a receipt with no retire block — the crossing did not
-    // run the step, which is not the same fact as running it and retiring none.
-    // (Added with the G1 retire step; this control asserts the exact field set,
-    // so it is the test that notices when the line's shape moves.)
-    retired: null,
+    // POS-1025: the settlement's number and whether the store recorded its
+    // printout, both null on a receipt that names neither (this control asserts
+    // the exact field set, so it is the test that notices when the line's shape
+    // moves; `retired` went with the retire step).
+    settlement: null, recorded: null,
     world_from: "aaaa", world_to: "bbbb",
   });
   assert.deepEqual(readHistory(append("", receipt())), [line]);
 });
 
-// ── the retirement on the rolling line (G1 lane 1) ──────────────────────────
+// ── the printout's record on the rolling line (POS-1025) ────────────────────
 
-test("the rolling line carries what the store retired, so a week of them is readable", () => {
-  const line = lineFor(receipt({ retired: { ran: true, count: 2 } }));
-  assert.equal(line.retired, 2);
+test("the rolling line carries the settlement and that the store recorded it", () => {
+  const line = lineFor(receipt({ settlement: 214, printout: { status: "printed" }, tag: { status: "tagged" }, record: { status: "recorded" } }));
+  assert.equal(line.settlement, 214);
+  assert.equal(line.recorded, true);
 });
 
-test("a crossing that ran the step and retired nothing reads 0, not null", () => {
-  const line = lineFor(receipt({ retired: { ran: true, count: 0 } }));
-  assert.equal(line.retired, 0, "0 is the receipt that the step RAN");
+test("a printout whose tag or record refused reads false: pushed, and not recorded", () => {
+  assert.equal(lineFor(receipt({ printout: { status: "printed" }, tag: { status: "refused" } })).recorded, false);
+  assert.equal(lineFor(receipt({ printout: { status: "printed" }, tag: { status: "tagged" }, record: { status: "refused" } })).recorded, false);
 });
 
-test("a crossing that never ran the step reads null, and the two zeroes stay apart", () => {
-  // This file's founding lesson, applied to its own new field: a zero meaning
-  // "nothing to retire" and a zero meaning "nobody looked" must not print the
-  // same way, or a store falling behind canon reads as a quiet week.
-  const notRun = lineFor(receipt({ retired: { ran: false, reason: "no store pen" } }));
-  const ranEmpty = lineFor(receipt({ retired: { ran: true, count: 0 } }));
-  assert.equal(notRun.retired, null);
-  assert.equal(ranEmpty.retired, 0);
-  assert.notEqual(notRun.retired, ranEmpty.retired);
+test("a crossing that printed nothing reads null, and false and null stay apart", () => {
+  // This file's founding lesson, applied to its own new field: "printed and not
+  // recorded" and "nothing was printed" must not print the same way.
+  const refused = lineFor(receipt({ status: "refused", printout: { status: "refused" } }));
+  const unrecorded = lineFor(receipt({ printout: { status: "printed" }, record: { status: "refused" } }));
+  assert.equal(refused.recorded, null);
+  assert.equal(unrecorded.recorded, false);
+  // a retry after the record finds it already printed: recorded, by the earlier attempt
+  assert.equal(lineFor(receipt({ status: "quiet", printout: { status: "already-printed" } })).recorded, true);
 });
 
 // ── §1 a lost race inside the retry is not a decision ───────────────────────

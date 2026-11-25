@@ -42,6 +42,9 @@ export const MODULES = [
   "stamp-mint.mjs", "stamp-verify.mjs", "ballot.mjs", "world-stake.mjs", "quest-progress.mjs",
   "envelope.mjs", "mail-state.mjs", "epoch-close.mjs", "witness-chain.mjs", "crossings.mjs",
   "household-keys.mjs",
+  // POS-1165 (POS-1036's office piece, Darko 2026-11-14 "Same check at merge"): the ONE letter-field policy (thread grammar, body size, the
+  // stake trio) the town's witness applies at merge and validateLetter applies at the door. Dependency-free, so its closure is itself.
+  "letter-fields.mjs",
 ];
 
 // The relative-import reader is the loader's own (src/town-tool.mjs), so the pins

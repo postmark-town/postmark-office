@@ -152,8 +152,9 @@ import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 // amend, withdraw) is a withdraw, and which canon still holds. It is STATE, not a
 // window: a withdrawal owed since S250 is carried by the first crossing that
 // looks, with no act from its author. It is bounded by what it repairs — a
-// mark leaves the set when its file leaves canon, and the retire step
-// (retire-unpublished.mjs) retires its row in the same crossing — so on an
+// mark leaves the set when its row retires, which the settlement's decision
+// does before the seal (settlement-decides.mjs § the withdrawal, POS-1025;
+// retire-unpublished.mjs after the sweep until the printout cutover) — so on an
 // ordinary crossing it is empty.
 //
 // THE CARRY ABOVE MUST NOT UNDO IT. A withdrawn mark whose file has left canon

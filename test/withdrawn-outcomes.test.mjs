@@ -16,8 +16,9 @@
 //   · PURE: `claimEffectsFrom` handed `marks` rows, so a flip needs no store: the
 //     positive case and the four direct flips (cause, pre-retirement, cursor, scope).
 //   · A REAL POSTGRES (test/helpers/embedded-store.mjs, the whole schema), where the
-//     retirement is produced by the REAL writer, `retire-unpublished.mjs`, run as a
-//     child under the `clearing_job` pen with a sweep that names the marks, so the
+//     retirement is produced by the REAL writes, the settlement decision's own
+//     (settlement-decides.mjs: materialize.mjs § retireMarks and returnToDrafts, since
+//     POS-1025 retired `retire-unpublished.mjs`), under the `clearing_job` pen, so the
 //     row the reader meets is the row the store really writes. The reads go through
 //     the office's own seam (`__setPoolForTest`, an `office_api` connection), through
 //     `readClaimEffects`, and then through every surface that shows the answer:
@@ -29,21 +30,17 @@
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { claimEffectsFrom, readClaimEffects, doorstepRulings, unplacedWithdrawals, WITHDRAW_RETIRE_CAUSE } from "../src/claim-effects.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { marksBlock } from "../src/household-read-v2.mjs";
 import { toYou } from "../src/world-happened.mjs";
 import { __setPoolForTest } from "../src/world2-claims.mjs";
-import { WITHDRAW_CAUSE } from "../world2/tools/retire-unpublished.mjs";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const RETIRE = join(ROOT, "world2", "tools", "retire-unpublished.mjs");
+// THE WRITER (POS-1025): the retirement is the settlement's own decision now, made before its seal by
+// world2/tools/settlement-decides.mjs with materialize.mjs's two writes (retireMarks, returnToDrafts), which
+// retire-unpublished.mjs used to make after the push. Its causes are that step's constants.
+import { WITHDRAW_CAUSE, UNPUBLISH_CAUSE } from "../world2/tools/settlement-decides.mjs";
+import { retireMarks, returnToDrafts } from "../world2/tools/materialize.mjs";
 
 // ── the clock of the fixture ────────────────────────────────────────────────
 // A window opens at 05:45:40 / 17:45:40Z, and the settlement it opened for runs at
@@ -139,8 +136,6 @@ test("UNDATABLE: a retirement whose window the store cannot date writes no event
 const store = await startStore({ db: "withdrawn_outcomes_test" });
 after(() => store.stop());
 const skip = store.skip ?? false;
-const scratch = mkdtempSync(join(tmpdir(), "withdrawn-outcomes-"));
-after(() => rmSync(scratch, { recursive: true, force: true }));
 after(() => { __setPoolForTest(null); for (const k of ["WORLD2_PG", "WORLD2_PG_URL"]) delete process.env[k]; });
 
 const IDS = (n) => `d0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -187,15 +182,24 @@ async function seed() {
         IDS(12), WIN - 1, "2026-11-13T05:00:00Z", "2026-11-13T17:45:30Z"]);
   });
 }
-function retire({ withdrawn = [], unpublished = [] }) {
-  const sweep = join(scratch, `sweep-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-  writeFileSync(sweep, JSON.stringify({ unpublished: unpublished.map((id) => ({ id })), withdrawn: withdrawn.map((id) => ({ id })) }));
-  const r = spawnSync(process.execPath, [RETIRE, "--sweep", sweep], {
-    cwd: ROOT, encoding: "utf8",
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
-  });
-  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  return JSON.parse(r.stdout);
+/**
+ * The settlement's retirements, written by the decision step's own writes (settlement-decides.mjs: retireMarks for the
+ * owner's withdrawal and the commons unpublish, returnToDrafts for the unpublished), under the `clearing_job` pen in one
+ * transaction, at the window the clearing rules (the open one, as the retire step took it). The rows the reader meets are
+ * the rows the store really writes.
+ */
+async function retire({ withdrawn = [], unpublished = [] }) {
+  const c = await store.connect("clearing_job");
+  const q = (text, args) => c.query(text, args);
+  try {
+    await q("BEGIN");
+    const { rows: [{ id: windowId }] } = await q("SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+    const out = { withdrawn: await retireMarks(q, { slugs: withdrawn, windowId, cause: WITHDRAW_CAUSE }) };
+    out.unpublished = await retireMarks(q, { slugs: unpublished, windowId, cause: UNPUBLISH_CAUSE });
+    out.drafts = await returnToDrafts(q, { slugs: out.unpublished.retired.map((r) => r.slug), windowId, cause: UNPUBLISH_CAUSE });
+    await q("COMMIT");
+    return out;
+  } catch (e) { await q("ROLLBACK").catch(() => {}); throw e; } finally { await c.end(); }
 }
 
 // the office reading its own store, as the doors do: the `office_api` pen, no household key
@@ -216,7 +220,7 @@ const slugsOf = (r, kind = "mark-withdrawn") => r.events.filter((e) => e.kind ==
 
 test("THE WRITER'S ROWS: only the withdraw door's retirement, of the house's own marks, reads as the event, with the cause the store recorded", { skip }, async () => {
   await seed();
-  const run = retire({ withdrawn: ["rei/the-garage", "ash/the-hook", "sable/the-kite", "rei/the-borrowed"], unpublished: ["rei/the-lamp"] });
+  const run = await retire({ withdrawn: ["rei/the-garage", "ash/the-hook", "sable/the-kite", "rei/the-borrowed"], unpublished: ["rei/the-lamp"] });
   assert.deepEqual(run.withdrawn.retired.map((r) => r.slug).sort(), ["ash/the-hook", "rei/the-borrowed", "rei/the-garage", "sable/the-kite"]);
   assert.deepEqual(await read("SELECT slug, status, retired_window, retired_cause FROM marks WHERE status = 'retired' ORDER BY slug"), [
     { slug: "ash/the-hook", status: "retired", retired_window: WIN, retired_cause: "settlement-withdraw" },
@@ -238,7 +242,7 @@ test("THE WRITER'S ROWS: only the withdraw door's retirement, of the house's own
 
 test("THE CURSOR, through the store: the settlement's crossing holds it; an older retirement is outside a newer window", { skip }, async () => {
   await seed();
-  retire({ withdrawn: ["rei/the-garage"] });
+  await retire({ withdrawn: ["rei/the-garage"] });
   // an older retirement (the retire-only completion after an earlier crossing), written by the owner as the writer would at WIN - 1
   await owner((c) => c.query("UPDATE marks SET status = 'retired', retired_window = $1, retired_cause = 'settlement-withdraw' WHERE slug = 'rei/the-bench'", [WIN - 1]));
   await officeReads(async () => {
@@ -254,7 +258,7 @@ test("THE CURSOR, through the store: the settlement's crossing holds it; an olde
 
 test("UNREADABLE: a store that answered the docket and not the marks cannot say 'nothing was withdrawn'", { skip }, async () => {
   await seed();
-  retire({ withdrawn: ["rei/the-garage"] });
+  await retire({ withdrawn: ["rei/the-garage"] });
   await officeReads(async () => {
     const r = await effectsFor(["rei"]);
     assert.equal(r.readable, false, "not a confident empty complete answer");
@@ -273,7 +277,7 @@ test("UNREADABLE: a store that answered the docket and not the marks cannot say 
 
 test("UNDATED: a retirement whose window the store cannot date is named, with the rest of the answer kept", { skip }, async () => {
   await seed();
-  retire({ withdrawn: ["rei/the-garage"] });
+  await retire({ withdrawn: ["rei/the-garage"] });
   // the foreign key makes a missing window a defect, not a state, so the damage is made on the rows the office is handed
   await officeReads(async () => {
     const r = await effectsFor(["rei"]);
@@ -321,7 +325,7 @@ test("THE WORDS: the outcomes description and to_you's note both say latest-stat
 
 test("THE WHOLE SHARED PATH: the house line, to_you, the doorstep and the house's outcomes agree on the event and its cursor", { skip }, async () => {
   await seed();
-  retire({ withdrawn: ["rei/the-garage"] });
+  await retire({ withdrawn: ["rei/the-garage"] });
   await officeReads(async () => {
     const effects = await effectsFor(["rei"]);
     const event = effects.events.find((e) => e.kind === "mark-withdrawn");

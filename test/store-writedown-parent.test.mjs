@@ -65,21 +65,22 @@ test("S93 · a chain: a name on a sited mark inside a new parcel files two deep"
   assert.equal(pathsOf(plan)["beta/call-it-the-shed"], "WORLD/marks/beta/shed/call-it-the-shed/mark.md");
 });
 
-test("S93 · no parent anywhere: the root fallback, as before (the control)", () => {
+test("S93 / POS-1212 · a declared parent we cannot find is HELD BY NAME at write planning; a mark with no parent files at its maker's id", () => {
   const plan = planStoreWriteDown([
     mark("gamma/call-it-nowhere", "naming", { parent_id: "gamma/missing" }),
     mark("gamma/a-name-alone", "naming", {}),
   ], { publishedPathOf: () => null });
   const p = pathsOf(plan);
-  assert.equal(p["gamma/call-it-nowhere"], "WORLD/marks/let-there-be-light/call-it-nowhere/mark.md");
-  assert.equal(p["gamma/a-name-alone"], "WORLD/marks/let-there-be-light/a-name-alone/mark.md");
+  assert.equal(p["gamma/call-it-nowhere"], undefined, "it declared a parent: filing it at the root, or at its maker's id, would be a guess");
+  assert.deepEqual(plan.held.map((h) => [h.id, h.crossing_output, h.declared_parent]), [["gamma/call-it-nowhere", "parent-unresolved", "gamma/missing"]]);
+  assert.equal(p["gamma/a-name-alone"], "WORLD/marks/gamma/a-name-alone/mark.md", "no parent: the maker's id, whatever its kind; the root fallback is gone");
 });
 
-test("S93 · a parent_id cycle answers the root fallback instead of looping", () => {
+test("S93 / POS-1212 · a parent_id cycle is held by name instead of looping", () => {
   const plan = planStoreWriteDown([
     mark("delta/a", "naming", { parent_id: "delta/b" }),
     mark("delta/b", "naming", { parent_id: "delta/a" }),
   ]);
-  const p = pathsOf(plan);
-  assert.ok(p["delta/a"] && p["delta/b"], "both plan, neither hangs");
+  assert.deepEqual(Object.keys(pathsOf(plan)), [], "neither files, neither hangs");
+  assert.deepEqual(plan.held.map((h) => h.crossing_output).sort(), ["parent-unresolved", "parent-unresolved"]);
 });

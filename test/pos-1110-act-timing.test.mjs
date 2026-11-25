@@ -170,7 +170,9 @@ test("2 · an act door's line carries `act.seg` beside the read line's fields; a
 test("2 · the worst-case act line (every named segment, a full `call`, a long client) fits the access line's bound with its `timing` intact", async () => {
   const NAMES = ["body", "standing", "law_moved", "dispatch", "orient", "eyes", "ledger_scan", "spine", "gather", "holdings", "households", "nonce_kept", "handler",
     "crossing_law", "world_state", "ledger", "standpoint", "acts_read", "lends", "dungeon_locks", "door_holdings", "vessel_service", "record", "walking", "walk_stop",
-    "land_write", "land", "creatures"];
+    "land_write", "land", "creatures",
+    "look", // POS-1219: an act's look asked of a read worker
+    "m_world", "m_forecast", "m_journal", "m_draft", "m_live", "m_parent", "m_ground", "m_escrow", "m_nest", "m_relations", "m_witness", "m_write", "m_disclose", "m_stake"]; // POS-1221: a leave-mark's steps
   const { tm } = await within(async () => { for (const n of NAMES) { await actSpan(n, () => sleep(0)); await actSpan(n, () => sleep(0)); } });
   const timing = lineOf(tm, "mcp-act");
   assert.equal(Object.keys(timing.act.seg).length, NAMES.length);

@@ -12,6 +12,10 @@
 //   - a sweep whose look FAILED (`checked: false`): `{ checked: false, why }`, so a blind night is not read as a quiet one;
 //   - a sweep that found captures: `{ checked: true, parcels_checked, events_total, events }`, EVERY event, each whitelisted below.
 // Until the World carries the check, no receipt has the key: delivery of the flag awaits both releases (World main, Office train).
+//
+// SINCE POS-1025 THE PRINTOUT ASKS IT. The settlement prints itself and runs the World's fold, so the World's question is asked there
+// (world2/tools/settlement-printout.mjs § parcelCapturesAfterFold), of the World it prints onto, and its receipt line carries the same
+// `parcel_captures` object this maps; "a sweep" below reads "the printout". A refused printout published nothing and carries no note.
 
 const text = (v) => (typeof v === "string" && v ? v : null);
 const num = (v) => (Number.isFinite(v) ? v : null);

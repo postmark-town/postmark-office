@@ -557,9 +557,12 @@ test("the §1c contract — a nested declaration's path follows the mark it desc
   assert.equal(byId["alpha/lamp-colour"].path,
     "WORLD/marks/alpha/the-lamp/lamp-colour/mark.md",
     "predicated/naming take the directory of the mark they describe, and follow it to the mark's NEW home at its id — the freeze moved the subject, not the rule");
-  assert.equal(pathFor({ slug: "orphan", kind: "predicated", parent_id: "nobody/nothing" }),
-    "WORLD/marks/let-there-be-light/orphan/mark.md",
-    "and an unresolvable parent still falls back to the root — a predicate filed at its own id would describe nothing");
+  // POS-1212: a declared parent that cannot be found has NO filing (null: the planner holds it by name); the root fallback is gone
+  assert.equal(pathFor({ id: "alpha/orphan", slug: "orphan", by: "alpha", kind: "predicated", parent_id: "nobody/nothing" }, { parentPathOf: () => null }), null);
+  assert.equal(pathFor({ slug: "orphan", kind: "predicated", parent_id: "nobody/nothing" }), null,
+    "and a record with no maker and no resolver has no filing either: never the root");
+  assert.equal(pathFor({ id: "alpha/orphan", slug: "orphan", by: "alpha", kind: "predicated", parent_id: "nobody/nothing" }), "WORLD/marks/alpha/orphan/mark.md",
+    "a caller with NO resolver at all (a preview's `dir`) cannot say where a parent is, which is no evidence of a bad parent: it gets the id path");
 });
 
 // ── the door guards, as store lookups ────────────────────────────────────────
