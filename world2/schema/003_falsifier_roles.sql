@@ -151,6 +151,13 @@ lawful AS (
     -- Narrowed by its row policies to the acting household's own rows; INSERT only,
     -- because a refusal is never edited, and expiry is a definer function, not a DELETE.
     ('office_api',   'refused_acts',     'INSERT'),
+    -- 103_durable_rooms.sql (POS-1203, CORE-170): the fixed record of a closed room and an ended event's own window membership. INSERT only: a
+    -- fixed record is never edited or removed by a role the office holds (the producer inserts with ON CONFLICT DO NOTHING).
+    ('office_api',   'durable_rooms',             'INSERT'),
+    ('office_api',   'durable_room_says',         'INSERT'),
+    ('office_api',   'durable_event_memberships', 'INSERT'),
+    ('office_api',   'durable_event_rooms',       'INSERT'),
+    ('office_api',   'durable_event_room_says',   'INSERT'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.

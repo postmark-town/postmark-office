@@ -53,6 +53,43 @@ test("a sealed registry row the planner HELD is refused by name, with whose fili
   assert.equal(registryRowRefusal({ slug: "a/b", path: null, household: "h", held: undefined }).reason, "registry-unprintable", "no hold list is no hold");
 });
 
+test("POS-1212 — a mark held for want of a FILING (a declared parent it cannot find; no maker) is carried through the seal and refused by its own name, never as a collision with null words", async () => {
+  const { filingHolds } = await import("../src/store-writedown.mjs");
+  const { sealedFilingHeld, filingHeldWords } = await import("../world2/tools/settlement-decides.mjs");
+  // the planner's REAL answer, then what the decision seals and what the clearing prints, then the printout's refusal
+  const mk = (id, kind, fileRec) => { const [by, ...rest] = id.split("/"); return { id, by, slug: rest.join("/"), household: by, kind, plannedPath: null, locked_window: 331, fileRec: { kind, by, date: "2026-11-24", ...fileRec }, bytes: null }; };
+  const { holds } = filingHolds([mk("quill/call-it-nowhere", "naming", { parent_id: "quill/never-heard-of" }), mk("quill/a-sound-mark", "keepsake", {})], { publishedPathOf: () => null });
+  assert.deepEqual([...holds.keys()], ["quill/call-it-nowhere"], "only the unfileable mark is held");
+  const hold = holds.get("quill/call-it-nowhere");
+  assert.deepEqual([hold.crossing_output, hold.declared_parent, hold.path, hold.held_by_filing_of], ["parent-unresolved", "quill/never-heard-of", null, null]);
+  // what settlement-decides hands the seal (its filing_held entries), and what clearing-job seals
+  const decidedHeld = [{ slug: "quill/call-it-nowhere", path: hold.path, held_by_filing_of: hold.held_by_filing_of, crossing_output: hold.crossing_output, declared_parent: hold.declared_parent }];
+  const sealed = sealedFilingHeld(decidedHeld);
+  assert.deepEqual(sealed, [{ slug: "quill/call-it-nowhere", held: "parent-unresolved", path: null, declared_parent: "quill/never-heard-of" }]);
+  assert.match(filingHeldWords(sealed[0]), /it declares parent quill\/never-heard-of, which cannot be found, so it has no filing/);
+  assert.doesNotMatch(filingHeldWords(sealed[0]), /null|undefined|WLD-230|'s on main/, "no collision words, no null");
+  assert.match(filingHeldWords({ slug: "q/x", held: "no-maker" }), /it has no maker, so it has no filing/);
+  // CONTROL: a collision is sealed and worded exactly as before
+  const collision = sealedFilingHeld([{ slug: LYRA, path: SETH_PATH, held_by_filing_of: "seth/signed-la-linterna", crossing_output: "path-held-by-another-id" },
+    { slug: NOTE, path: "p", held_by_filing_of: "seth/signed-la-linterna", crossing_output: "parent-held", held_under: LYRA }]);
+  assert.deepEqual(collision.map((c) => c.held), ["filing-collision", "filing-collision"]);
+  assert.equal(collision[1].held_under, LYRA);
+  assert.match(filingHeldWords(collision[0]), new RegExp(`its filing ${SETH_PATH.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is seth/signed-la-linterna's on main \\(WLD-230\\)`));
+  // a slug already taken away by the settlement's words is not sealed twice
+  assert.deepEqual(sealedFilingHeld(decidedHeld, new Set(["quill/call-it-nowhere"])), []);
+  // the printout, handed the planner's hold for a sealed-published row, refuses by ITS name and says what it is
+  const r = registryRowRefusal({ slug: "quill/call-it-nowhere", path: null, household: "quill", held: [{ id: "quill/call-it-nowhere", ...hold }] });
+  assert.equal(r.reason, "filing-held-unfileable");
+  assert.match(r.detail, /the write-down held it \(parent-unresolved\): it declares parent quill\/never-heard-of, which could not be found, so it has no filing/);
+  assert.match(r.detail, /nothing was printed/);
+  assert.doesNotMatch(r.detail, /published file|null|undefined/, "never a collision's words");
+  const noMaker = registryRowRefusal({ slug: "/orphan", path: null, household: null, held: [{ id: "/orphan", crossing_output: "no-maker", path: null, held_by_filing_of: null }] });
+  assert.equal(noMaker.reason, "filing-held-unfileable");
+  assert.match(noMaker.detail, /it has no maker, so it has no filing/);
+  // and it still refuses a sealed unprintable row: it is not taught to print around the hold
+  assert.ok(r, "refused, not printed");
+});
+
 test("the printout commit ends in the Window: trailer the backfill prefers, and keeps the subject its readers know", () => {
   const m = printoutMessage({ settlement: 90, window: 211, snapshotId: 4, digest: "d".repeat(64), townSha: "t".repeat(40), written: 2, removed: 1, reframed: 0,
     from: { sealed_settlement: 89, window_id: 210 }, quiet: false });
