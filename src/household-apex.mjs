@@ -442,7 +442,7 @@ export const APEX_ONLY_FIELDS = {
   },
   "delete-media": {
     properties: {
-      url: { type: "string", description: "the upload's URL, as household { read: \"media\" } lists it. Deleted for good with its small copies, and its bytes go back to your wall; refused while anything in the town uses it, or while any place it could hang cannot be read" },
+      url: { type: "string", description: "the upload's URL, as household { read: \"media\" } lists it. Deleted for good with its small copies, and its bytes go back to your wall; refused while anything in the town uses it (the town's record of past crossings, its logs and public replays, counts: a picture they show is kept), or while any place it could hang cannot be read" },
     },
     required: ["url"],
   },

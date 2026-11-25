@@ -623,9 +623,23 @@ function cloneWith(files) {
   return dir;
 }
 const ELSEWHERE = `https://media.postmark.town/media/someone/${"9".repeat(64)}.png`; // a picture the fixture town hangs, so its sources answer
-const sourcesHanging = (...urls) => ({
-  worldClone: cloneWith({ "WORLD/marks/a/mark.md": `image: ${ELSEWHERE}\n${urls.map((u) => `image: ${u}`).join("\n")}` }),
+/** The public replays' directory (POS-737/b): `<crossing>.json` files, here holding `says`. */
+const replayDirWith = (...says) => {
+  const dir = tempDir("pm-media-del-replays-");
+  says.forEach((s, i) => writeFileSync(join(dir, `${i + 1}.json`), JSON.stringify({ crossing: i + 1, say: s })));
+  return dir;
+};
+// Until 2026-11-25 the world's log and the public replays were not read (the accepted replay gap).
+// POS-737/b (Darko, "1 as rec"): history counts as in use, so the fixture town has a log and a replay,
+// and `history` names what each one shows.
+const sourcesHanging = (...urls) => sourcesWithHistory({ hanging: urls });
+const sourcesWithHistory = ({ hanging = [], log = ELSEWHERE, replay = ELSEWHERE } = {}) => ({
+  worldClone: cloneWith({
+    "WORLD/marks/a/mark.md": `image: ${ELSEWHERE}\n${hanging.map((u) => `image: ${u}`).join("\n")}`,
+    "STATE/log/1.jsonl": JSON.stringify({ say: log }),
+  }),
   townClone: cloneWith({ "WHITE_PAGES/a/PROFILE.md": `avatar_url: ${ELSEWHERE}` }),
+  replayDir: replayDirWith(replay),
   pool: null, storeSources: [], officeFiles: [],
 });
 
@@ -669,8 +683,45 @@ test("delete-media: an own upload nothing uses is deleted, with the receipt, the
 });
 
 test("delete-media: every source the sweep reads has a resident's words for `in_use`", () => {
-  const names = ["world", "drafts", "town", "office:likeness-gallery.json", ...STORE_SOURCES.map((s) => `store:${s.table}`)];
+  const names = ["world", "world-history", "replays", "drafts", "town", "office:likeness-gallery.json", ...STORE_SOURCES.map((s) => `store:${s.table}`)];
   assert.deepEqual(names.filter((n) => !(n in SOURCE_WORDS)), [], "a new source names its words here");
+});
+
+// LAW (Darko, 2026-11-25 08:34 EST, POS-737/b, "1 as rec"): "history counts as in use ... the World's logs
+// (STATE/log/*) and the public replays (/world-engine/replay/*.json)."
+test("delete-media (POS-737/b): a file named only in a World log, or only in a public replay, is refused in the resident's words and frees nothing", async () => {
+  for (const [where, words, over] of [
+    ["a World log", "the world's record (a past crossing's log)", (u) => ({ log: u })],
+    ["a public replay", "a public replay of a past crossing", (u) => ({ replay: u })],
+  ]) {
+    const db = odb();
+    const hung = await upload(svg(`history-${where.split(" ").pop()}`), key(), db);
+    const deleted = [];
+    const r = await deleteMediaAtOffice({ url: hung.url }, key(), { odb: db, sources: sourcesWithHistory(over(hung.url)), del: async (k) => { deleted.push(k); } });
+    assert.deepEqual([r.error, r.code, r.defect], ["bounce", 409, "that file is still in use"], `${where}: ${JSON.stringify(r)}`);
+    assert.deepEqual(r.in_use, [words], `${where}: it says where`);
+    assert.match(r.hint, /The town's record of a past crossing .* a picture it shows stays/, `${where}: and that a record is not taken down`);
+    assert.deepEqual(deleted, [], `${where}: storage untouched`);
+    assert.deepEqual((await mediaLedgerRows(db, "testers")).map((u) => u.url), [hung.url], `${where}: the upload stands`);
+    assert.equal((await mediaQuota(db, "testers")).used, hung.bytes, `${where}: no quota released`);
+  }
+});
+
+test("delete-media (POS-737/b): the door reads the replay directory from the office's env, and without it nothing is deleted (503, naming it)", async () => {
+  const db = odb();
+  const up = await upload(PNG, key(), db);
+  const s = sourcesWithHistory();
+  const env = (extra = {}) => ({ WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone, ...extra });
+  const deleted = [];
+  const ask = (e) => deleteMediaAtOffice({ url: up.url }, key(), { odb: db, env: e, del: async (k) => { deleted.push(k); } });
+  const without = await ask(env());
+  assert.deepEqual([without.code, without.defect], [503, "the town could not check every place this file could hang, so nothing was deleted"], JSON.stringify(without));
+  assert.ok(without.unread.includes("replays"), "the unbound replay directory is named");
+  // bound: the replay source reads (the store's tables are still unreadable here: this odb has no pool)
+  const bound = await ask(env({ MEDIA_SWEEP_REPLAY_DIR: s.replayDir }));
+  assert.equal(bound.unread.includes("replays"), false, "bound, the door's own env reaches the reference set");
+  assert.equal(bound.unread.includes("world-history"), false);
+  assert.deepEqual(deleted, [], "and nothing was deleted either way");
 });
 
 test("delete-media through the household verb: on the menu, its card readable by name, dispatched to the door, and the media read names it", async () => {

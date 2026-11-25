@@ -232,11 +232,13 @@ export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limi
 // sweep's own reference set, every source, fail closed.
 
 /** The media read's one line about this door. */
-export const DELETE_TEACH = 'household { do: "delete-media", args: { url } } deletes one of these uploads for good, with its small copies, if nothing in the town uses it. It checks every place a picture can hang, not only the surfaces above, and is refused while anything uses the file or any place cannot be read. Its bytes go back to your wall at once.';
+export const DELETE_TEACH = 'household { do: "delete-media", args: { url } } deletes one of these uploads for good, with its small copies, if nothing in the town uses it. It checks every place a picture can hang, not only the surfaces above, and the record of past crossings (its logs and public replays), and is refused while anything uses the file or any place cannot be read. Its bytes go back to your wall at once.';
 
 /** Where a source the reference set names is, in a resident's words (`in_use`). */
 export const SOURCE_WORDS = Object.freeze({
   world: "a mark in the world",
+  "world-history": "the world's record (a past crossing's log)",
+  replays: "a public replay of a past crossing",
   drafts: "a draft mark",
   town: "the town's files (a profile, a home, a window or a letter)",
   "store:marks": "a standing mark",

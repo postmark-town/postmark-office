@@ -3632,7 +3632,15 @@ Box steps (Jetto's hand, never a lane's):
 
 ## 102: a household deletes its own upload that nothing uses (POS-737/c, the w49 ship)
 
-Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both": a household gets a delete for its own pictures that nothing uses, with a receipt. The door is `household { do: "delete-media", args: { url } }` (`CONTRACT.md` has the caller's words; the law is `src/media-sweep.mjs § THE HOUSEHOLD'S OWN DELETE`). It decides on the daily sweep's own reference set, so it reads what the sweep reads: `WORLD_CLONE`, `TOWN_CLONE` and `MEDIA_SWEEP_EXTRA_CLONES` from `/etc/postmark-office.env` (080 § step 2 already puts a clone of unpublished work there, which both the office and the sweep's unit load), and the store through the office's own paper. No unit, timer, env line or grant changes.
+Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both": a household gets a delete for its own pictures that nothing uses, with a receipt. The door is `household { do: "delete-media", args: { url } }` (`CONTRACT.md` has the caller's words; the law is `src/media-sweep.mjs § THE HOUSEHOLD'S OWN DELETE`). It decides on the daily sweep's own reference set, so it reads what the sweep reads: `WORLD_CLONE`, `TOWN_CLONE` and `MEDIA_SWEEP_EXTRA_CLONES` from `/etc/postmark-office.env` (080 § step 2 already puts a clone of unpublished work there, which both the office and the sweep's unit load), and the store through the office's own paper. No unit, timer or grant changes; one env line is new (POS-737/b, below).
+
+**History counts as in use (POS-737/b; Darko, 2026-11-25 08:34 EST, "1 as rec").** The reference set also reads the world's `STATE/log/` at the same two refs (no new setting: `WORLD_CLONE` is already bound), and the public replays, which need one operator's binding in `/etc/postmark-office.env`, the file the office and the sweep's unit both load:
+
+```
+MEDIA_SWEEP_REPLAY_DIR=/var/www/postmark-town-site/world-engine/replay
+```
+
+The webroot is a symlink the site refresh swaps at every :10 and :40; the sweep resolves it once at the start of a run, and the directory must be readable by `meepo`. **The code fails closed without it:** unset, missing, unreadable or holding no `*.json` file, the `replays` source is unread, so the sweep frees nothing (`refused` names `replays`) and a household's delete answers 503. So the env line goes in before the first apply run, or at the deploy; the order is otherwise free. Read it back with one dry run: `sources` carries `world-history` and `replays` with a `found` count and no `error` (`replays` also carries `files`, the corpus size). The spot-check run (`--max-delete 100`) waits for this to be live, and is the operator's, on Darko's go.
 
 **102** widens 080's check on `office_media.deleted_cause` to admit `'household'`, and does nothing else. The order is free: the office on this code against a store without 102 refuses only the household's delete (503, "the store has not taken 102_media_deleted_by_household.sql; nothing was deleted"), and the office before this code never writes the cause.
 

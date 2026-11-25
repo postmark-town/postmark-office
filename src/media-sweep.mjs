@@ -6,8 +6,15 @@
 // pictures, posts, events) after a 30-day grace, with its -96/-256 copies. The
 // ledger row moves to a deleted state and its bytes leave the household's wall.
 // It runs report-only first. An operator takedown verb (immediate, with a
-// receipt) ships with it. The replay gap is accepted: old records keep the
-// pointer, never the bytes.
+// receipt) ships with it. Until 2026-11-25 this said "The replay gap is
+// accepted: old records keep the pointer, never the bytes", and the sweep did
+// not read the world's history.
+//
+// RULED (Darko, 2026-11-25 08:34 EST, POS-737/b, "1 as rec"): history counts as
+// in use. "Before freeing anything, the sweep must also read the World's logs
+// (STATE/log/*) and the public replays (/world-engine/replay/*.json)." That
+// reverses the replay gap above, for the sweep and for the household's own
+// delete alike, since both read this one reference set.
 //
 // WHY A SWEEP AND NOT A HOOK. The bytes are content-addressed per household, so
 // one file can hang on a mark, a face, a house picture and a bug post at once,
@@ -21,8 +28,19 @@
 //
 //   world     the world clone's tree at the blessed ref AND at main (main can
 //             carry a candidate ahead of the blessing), every path but
-//             STATE/log/ (the history: the accepted replay gap)
+//             STATE/log/ (which is its own source, next)
+//   world-history  STATE/log/ at those same two refs: the world's record, every
+//             crossing's emissions and journal (POS-737/b). The directory must
+//             exist at each ref: a ref without it is unreadable, never empty.
+//   replays   the public replays, `<dir>/*.json`, `dir` being the operator's
+//             binding (MEDIA_SWEEP_REPLAY_DIR: the site's served
+//             world-engine/replay directory). Resolved once at the start of a
+//             run, so a refresh that swaps the webroot mid-run cannot split the
+//             read. Not configured, missing, unreadable or holding no replay
+//             file is unreadable (POS-737/b).
 //   drafts    every draft/<household> ref in the world clone, the same paths
+//             (STATE/log/ stays out: a draft's log is main's, which world-history
+//             has read)
 //   town      the town clone's tree at HEAD and origin/main: letters,
 //             PROFILE.md, WINDOW, HOME, households.json, MEEPS, everything.
 //             `git grep` on the commit, so a sparse checkout cannot hide a file
@@ -33,9 +51,9 @@
 //   store     the store's current-state tables (STORE_SOURCES), each row read
 //             as text: standing marks, posts, responses, the households'
 //             home_images and the town index's homes, residents, letters,
-//             threads and bulletin. Never a history table: acts, mark versions,
-//             snapshots and the town log keep pointers to files the record has
-//             let go of, and that is the replay gap, accepted.
+//             threads and bulletin. Never a store history table (acts, mark
+//             versions, snapshots, the town log): the history the ruling names
+//             is the world's STATE/log and the public replays, above.
 //
 // FAIL CLOSED. Deletion is irreversible, so a source that cannot answer is never
 // read as "found nothing": if any source fails, the run writes nothing at all
@@ -101,7 +119,8 @@
 // `deleted_by` is the resident who asked.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 
 import { asPaper } from "./paperwork.mjs";
 import { faultLogged } from "./fault-words.mjs"; // a storage refusal's own words go to the log; the resident reads the office's (POS-578)
@@ -140,12 +159,12 @@ const gitOut = (repo, args) => execFileSync("git", ["-C", repo, ...args],
  * Every media key on the trees of `refs` in `repo`, minus `exclude` paths. One
  * `git grep` over the commits: exit 1 is "no match", anything else is a refusal.
  */
-export function gitKeys(repo, refs, { exclude = [] } = {}) {
+export function gitKeys(repo, refs, { exclude = [], only = null } = {}) {
   const keys = new Set();
   if (!refs.length) return keys;
   let out;
   try {
-    out = gitOut(repo, ["grep", "-h", "-o", "-I", "-E", MEDIA_URL_ERE, ...refs, "--", ".", ...exclude.map((p) => `:(exclude)${p}`)]);
+    out = gitOut(repo, ["grep", "-h", "-o", "-I", "-E", MEDIA_URL_ERE, ...refs, "--", ...(only ?? ["."]), ...exclude.map((p) => `:(exclude)${p}`)]);
   } catch (e) {
     if (e.status === 1) return keys; // no line matched
     throw new Error(`git grep in ${repo} failed: ${String(e.stderr ?? e.message).trim().slice(0, 200)}`);
@@ -173,6 +192,34 @@ export function townRefs(repo) {
 }
 
 export const WORLD_HISTORY = Object.freeze(["STATE/log"]);
+
+/**
+ * Every media key in the world's history (`STATE/log/`) at `refs` (POS-737/b).
+ * `git grep` over a pathspec that matches nothing answers "no match", the same
+ * as a history with no picture, so each ref's history directory is asked for
+ * first: a ref that does not hold it is a refusal, never an empty history.
+ */
+export function historyKeys(repo, refs, paths = WORLD_HISTORY) {
+  for (const ref of refs) for (const p of paths) {
+    try { gitOut(repo, ["cat-file", "-e", `${ref}:${p}`]); }
+    catch { throw new Error(`${repo} holds no ${p}/ at ${ref}, so the world's history cannot be read`); }
+  }
+  return gitKeys(repo, refs, { only: paths });
+}
+
+/**
+ * Every media key in the public replays: `*.json` in `root`, an already
+ * resolved directory. No replay file at all is a refusal, never an empty
+ * history, and so is any file that cannot be read.
+ */
+export function replayKeys(root) {
+  const files = readdirSync(root).filter((f) => f.endsWith(".json")).sort();
+  if (!files.length) throw new Error(`${root} holds no replay file (*.json), so the public replays cannot be read`);
+  const keys = new Set();
+  // an escaped slash in a JSON value reads as one, as the store's rows do
+  for (const f of files) keysIn(readFileSync(join(root, f), "utf8").replace(/\\+\//g, "/"), keys);
+  return { keys, files: files.length };
+}
 
 // ── the store sources ───────────────────────────────────────────────────────
 
@@ -245,7 +292,11 @@ export async function storeKeys(pool, { table, where = null }) {
  * (the household's own delete says where a file is in use); the set itself
  * does not change.
  */
-export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [], officeFiles = [OFFICE_GALLERY], locate = null }) {
+export async function referenceSet({ worldClone, townClone, replayDir = null, pool, storeSources = STORE_SOURCES, extraClones = [], officeFiles = [OFFICE_GALLERY], locate = null }) {
+  // The replays' directory is resolved ONCE, here, before any source is read: the
+  // site's webroot is a symlink the refresh swaps, and a run reads one release of it.
+  let replayRoot = null, replayWhy = null;
+  try { replayRoot = replayDir ? realpathSync(replayDir) : null; } catch (e) { replayWhy = e; }
   const keys = new Set();
   const sources = [];
   const take = async (name, expectSome, fn) => {
@@ -262,6 +313,11 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
   await take("world", true, worldClone && (() => {
     const refs = worldRefs(worldClone);
     return { found: gitKeys(worldClone, refs, { exclude: WORLD_HISTORY }), refs };
+  }));
+  // POS-737/b: the world's own record counts as in use
+  await take("world-history", false, worldClone && (() => {
+    const refs = worldRefs(worldClone);
+    return { found: historyKeys(worldClone, refs), refs };
   }));
   await take("drafts", false, worldClone && (() => {
     const refs = draftRefs(worldClone);
@@ -282,6 +338,14 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
     });
   for (const src of storeSources)
     await take(`store:${src.table}`, false, pool && (async () => ({ found: await storeKeys(pool, src) })));
+  // POS-737/b: the public replays, read from the directory resolved at the top. Last, so the slow
+  // sources have all run and the one read that a webroot swap could split is the one the top pinned.
+  await take("replays", false, () => {
+    if (replayWhy) throw replayWhy;
+    if (!replayRoot) throw new Error("not configured: the public replays' directory is MEDIA_SWEEP_REPLAY_DIR, and nothing is freed without it");
+    const { keys: found, files } = replayKeys(replayRoot);
+    return { found, files };
+  });
   return { keys, sources, ok: sources.every((s) => !s.error) };
 }
 
@@ -293,6 +357,9 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
 export const sweepClonesFrom = (env = process.env) => ({
   worldClone: env.WORLD_CLONE || null,
   townClone: env.TOWN_CLONE || null,
+  // the site's served `world-engine/replay` directory (POS-737/b), a path the
+  // office's user can read; unset, the replays are an unread source and nothing is freed
+  replayDir: env.MEDIA_SWEEP_REPLAY_DIR || null,
   extraClones: String(env.MEDIA_SWEEP_EXTRA_CLONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
 });
 
@@ -343,7 +410,7 @@ export async function deleteObjects(row, del = r2Delete) {
  * also the run's receipt.
  */
 export async function runSweep({
-  odb, worldClone, townClone, pool, apply = false, now = Date.now(), graceMs = GRACE_MS,
+  odb, worldClone, townClone, replayDir = null, pool, apply = false, now = Date.now(), graceMs = GRACE_MS,
   maxDelete = MAX_DELETE_DEFAULT, del = r2Delete, storeSources, extraClones = [], officeFiles = undefined,
 }) {
   const paper = asPaper(odb);
@@ -352,7 +419,7 @@ export async function runSweep({
   if (!(await mediaLedgerHasStates(paper))) {
     return { ...report, refused: "the ledger has no states: the store has not taken 080_media_freed.sql, so nothing can be freed or recorded" };
   }
-  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones, officeFiles });
+  const refs = await referenceSet({ worldClone, townClone, replayDir, pool, storeSources, extraClones, officeFiles });
   report.sources = refs.sources;
   if (!refs.ok) {
     return { ...report, refused: `a source could not be read (${refs.sources.filter((s) => s.error).map((s) => s.name).join(", ")}), so nothing was written: "could not look" is never "not hung"` };
@@ -450,7 +517,7 @@ const receiptOf = (r, extra = {}) => ({
  *   { already: true, purged: true, freed_bytes: 0, receipt }   freed before
  */
 export async function deleteOwnUpload({
-  odb, household, by, url, worldClone, townClone, pool, storeSources, extraClones = [], officeFiles = undefined,
+  odb, household, by, url, worldClone, townClone, replayDir = null, pool, storeSources, extraClones = [], officeFiles = undefined,
   now = Date.now(), del = r2Delete, log = console.log,
 }) {
   const paper = asPaper(odb);
@@ -484,15 +551,18 @@ export async function deleteOwnUpload({
   row = await read();
   if (row.deleted_at != null) return finishClaimed(paper, row, { now, del, log }); // the sweep claimed it first
   const token = row.unreferenced_since;
+  // POS-737/b: the town's past record counts as in use, and a record is not edited, so that part never goes
+  const REMEMBERED = new Set(["world-history", "replays"]);
   const inUse = (holders) => refusal(409, "that file is still in use",
-    "it hangs somewhere in the town, so it cannot be deleted: take it down from there first, then ask again. A mark's picture is in use until the change is published at a settlement",
+    "it hangs somewhere in the town, so it cannot be deleted: take it down from there first, then ask again. A mark's picture is in use until the change is published at a settlement"
+    + (holders.some((h) => REMEMBERED.has(h)) ? ". The town's record of a past crossing (a log or a public replay) shows it too, and that record is kept as it was: a picture it shows stays" : ""),
     { in_use: holders });
   const hungMeanwhile = () => refusal(409, "that file is still in use",
     "a door hung it while the town was checking, so nothing was deleted: take it down from there first, then ask again");
   if (token == null) return hungMeanwhile(); // a hanging door cleared the clock between the stamp and this read
 
   const key = rowKey(row);
-  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones, officeFiles, locate: key });
+  const refs = await referenceSet({ worldClone, townClone, replayDir, pool, storeSources, extraClones, officeFiles, locate: key });
   if (!refs.ok) {
     await unstamp();
     const failed = refs.sources.filter((s) => s.error);

@@ -18,9 +18,13 @@
 // branch keeps the files it names, for work not yet published where the
 // world and town clones can see it.
 //
+// MEDIA_SWEEP_REPLAY_DIR: the site's served world-engine/replay directory (the
+// public replays). History counts as in use (POS-737/b), so the replays are a
+// source like the clones: unset or unreadable, the run refuses and frees nothing.
+//
 // Env (the office's own, /etc/postmark-office.env): WORLD_CLONE, TOWN_CLONE,
-// OFFICE_PAPERWORK_STORE, WORLD2_PG, WORLD2_PG_URL, and the R2_* storage keys for
-// a live run.
+// MEDIA_SWEEP_REPLAY_DIR, OFFICE_PAPERWORK_STORE, WORLD2_PG, WORLD2_PG_URL, and
+// the R2_* storage keys for a live run.
 //
 // THE FIRST LIVE RUN IS WRIGHT'S, on Darko's go. The unit ships dry.
 //

@@ -192,8 +192,12 @@ answers under `result`.
   `POST /household` with the same body. `handle` names which resident asks (the key's only one
   by default) and is recorded as `deleted_by`. The `url` is one the household's own
   `read: "media"` lists. The decision is the daily sweep's own reference set (the world at the
-  blessing and main, every draft, the town tree, the store's current tables, the likeness
-  gallery and any clone the operator names), never the read's `embedded` hint.
+  blessing and main, the world's own record of past crossings (`STATE/log`), the public
+  replays of those crossings, every draft, the town tree, the store's current tables, the likeness
+  gallery and any clone the operator names), never the read's `embedded` hint. **History counts
+  as in use** (POS-737/b; Darko, 2026-11-25 08:34 EST, "1 as rec"): a picture a past crossing's
+  log or a public replay still shows is refused (409, `in_use` naming "the world's record" or
+  "a public replay"), and stays refused, since that record is not edited.
   **Refused, with nothing written:** another household's file (403); a small copy's URL or an
   address the door never mints (422); a file the household does not hold (404); a file anything
   still uses (409, `in_use` naming where, in a resident's words); a place that could not be read
