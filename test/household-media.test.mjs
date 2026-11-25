@@ -748,16 +748,29 @@ test("delete-media through the household verb: on the menu, its card readable by
 // LAW (Darko, 2026-11-25 08:34 EST, POS-737/b): history counts as in use, so the delete reads the world's
 // whole log. That read runs inside the office's own process, on POST /household, and a synchronous child
 // stalls every other request for its length. ORACLE: another timer, due 1 ms in, runs BEFORE the delete
-// finishes, on every outcome. A synchronous collector settles the whole delete inside one turn of the
-// event loop, so the timer can only run after it: the old implementation fails this order.
+// finishes, and a 1 ms heartbeat keeps beating while the sources are read, on every outcome. The
+// synchronous collector this replaced beat 3 to 5 times; the async one 39 or more (measured below).
 async function inFlight(run) {
   const order = [];
+  let beats = 0;
+  const heart = setInterval(() => { beats += 1; }, 1);
   const other = new Promise((r) => setTimeout(() => { order.push("another timer ran"); r(); }, 1));
+  const t0 = Date.now();
   const done = run().then((v) => { order.push("the delete finished"); return v; });
   await Promise.all([other, done]);
-  return { order, result: await done };
+  clearInterval(heart);
+  console.log(`[liveness] ${beats} heartbeats (1 ms) in ${Date.now() - t0} ms while the delete ran`);
+  return { order, beats, ms: Date.now() - t0, result: await done };
 }
 const PROGRESSED = ["another timer ran", "the delete finished"];
+// MEASURED (this box, 2026-11-25): the async collector beat 39 to 81 times per delete (1 to 2.5 s); the synchronous
+// one it replaced beat 3 to 5 times in 2 to 6 s, because its git children froze the loop between two async file reads.
+// The floor sits between the two, well clear of both; the order check above is the exact form of the same claim.
+const MIN_BEATS = 20;
+const alive = (x, label) => {
+  assert.deepEqual(x.order, PROGRESSED, `${label}: another timer ran before the delete finished`);
+  assert.ok(x.beats >= MIN_BEATS, `${label}: the office kept turning while the collector read (${x.beats} heartbeats in ${x.ms} ms, wanted ${MIN_BEATS})`);
+};
 
 test("delete-media (POS-737 FIX): another timer runs while the sources are read, on a refused, an unread and a freed outcome; the answers are as before", async () => {
   // refused: a file the world's log shows (History counts as in use)
@@ -765,12 +778,12 @@ test("delete-media (POS-737 FIX): another timer runs while the sources are read,
   const logged = await upload(svg("liveness-log"), key(), db);
   const deleted = [];
   const refused = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, sources: sourcesWithHistory({ log: logged.url }), del: async (k) => { deleted.push(k); } }));
-  assert.deepEqual(refused.order, PROGRESSED, "refused: the office kept turning while the collector read");
+  alive(refused, "refused");
   assert.deepEqual([refused.result.code, refused.result.defect], [409, "that file is still in use"]);
   // unread: the replay directory is not bound
   const s = sourcesWithHistory();
   const unread = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, env: { WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone }, del: async (k) => { deleted.push(k); } }));
-  assert.deepEqual(unread.order, PROGRESSED, "unread: the same");
+  alive(unread, "unread");
   assert.equal(unread.result.code, 503);
   assert.ok(unread.result.unread.includes(SOURCE_WORDS.replays));
   assert.deepEqual(deleted, [], "and nothing was deleted on either");
@@ -778,7 +791,7 @@ test("delete-media (POS-737 FIX): another timer runs while the sources are read,
   // freed: the control that the deletion path itself is the one being timed
   const free = await upload(svg("liveness-free"), key(), db);
   const freed = await inFlight(() => deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources: sourcesWithHistory(), del: async (k) => { deleted.push(k); } }));
-  assert.deepEqual(freed.order, PROGRESSED, "freed: the same");
+  alive(freed, "freed");
   assert.deepEqual([freed.result.deleted, freed.result.purged], [true, true]);
   assert.deepEqual(deleted, freed.result.receipt.objects, "exactly the freed file's objects (an SVG has no small copies)");
 });
