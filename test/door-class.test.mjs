@@ -387,10 +387,19 @@ test("D8 · AN UNREAD ANSWER DOES NOT ERASE A CLASS IT CANNOT PLACE: a gate amen
   for (const law of [null, await dc.doorLaw()])
     assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: parcel, klass: undefined, kind: "sited", id: parcel.id, by: "dw", law, graph: null })).refusal, null,
       `a classless parcel → a bare sited mark leaves no class (law ${law ? "read, graph unread" : "unreadable"})`);
+  // and with the World's mark-kind.mjs unreadable too (kinds: null, the residual FIX at 2b4036d3): the office's copy of the same rule
+  assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: parcel, klass: undefined, kind: "sited", id: parcel.id, by: "dw", law: null, kinds: null, graph: null })).refusal, null,
+    "a classless parcel → a bare sited mark leaves no class with nothing of the World's readable");
   // and an EXPLICIT class is still the class: the same gate in the new form (kind sited, class gate) amended bare is refused as before
   const classed = { ...WICKET, kind: "sited", class: "gate" };
-  assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: classed, klass: undefined, kind: "sited", id: classed.id, by: "dw", law: null, graph: g })).refusal?.code, 503,
-    "an explicit gate class dropped while the graph cannot place it is refused");
+  for (const kinds of [undefined, null])
+    assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: classed, klass: undefined, kind: "sited", id: classed.id, by: "dw", law: null, kinds, graph: g })).refusal?.code, 503,
+      `an explicit gate class dropped while the graph cannot place it is refused (mark-kind ${kinds === null ? "unreadable" : "read"})`);
+  // the copy answers as the World's own reader over every rule it has: nodes, explicit classes, standing words, ordinary kinds
+  const world = await dc.markKinds();
+  for (const m of [parcel, classed, WICKET, STOOL, DOOR, GATE, { kind: "naming" }, { kind: "predicated" }, { kind: "predicate" }, { kind: "post" },
+    { kind: "class", class: "gate" }, { kind: "property" }, { kind: "parcel", class: "plot" }, { kind: "thing", class: "" }, {}, null])
+    assert.equal(dc.instanceClassOfAccepted(m), world.instanceClassOf(m), `the office's copy reads ${JSON.stringify(m)} as the World does`);
 });
 
 test("D9 · A LIVE LAYER THAT CANNOT BE READ IS THE RECORD UNREACHABLE (503), never a mark with no draft judged against canon", { skip: SKIP }, async () => {

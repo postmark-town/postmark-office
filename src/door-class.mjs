@@ -34,7 +34,6 @@
 // answer is the same with or without one. Passing none adds no authority.
 
 import { TOWN } from "./town-stance.mjs";
-import { markClassOf } from "./world-grants.mjs"; // the office's grants reader, standing in only when the World's mark-kind.mjs cannot be read
 
 /** The World's door-law module, at the freshest main; null when the world does not carry it yet. */
 export async function doorLaw() {
@@ -46,6 +45,18 @@ export async function doorLaw() {
 export async function markKinds() {
   try { return await (await import("./dynamic-entities.mjs")).worldToolModule("mark-kind.mjs"); }
   catch { return null; }
+}
+
+/**
+ * The same reader as the accepted World wrote it (b775f797's tools/mark-kind.mjs § instanceClassOf, the copy in
+ * test/fixtures/world-door-law-b775), for when the World's own module cannot be read: a class or property node is no instance,
+ * an explicit class is the class, and a standing word names none. D8 holds it equal to the World's over the same records.
+ */
+const STANDING_WORDS = new Set(["sited", "predicated", "predicate", "naming", "parcel", "class", "property", "post"]);
+export function instanceClassOfAccepted(m) {
+  if (!m || m.kind === "class" || m.kind === "property") return undefined;
+  if (m.class !== undefined) return String(m.class);
+  return m.kind != null && !STANDING_WORDS.has(String(m.kind)) ? String(m.kind) : undefined;
 }
 
 const isObject = (v) => v != null && typeof v === "object" && !Array.isArray(v);
@@ -158,10 +169,10 @@ export async function doorWriteRefusal({ payload, before = null, klass, kind, id
   // the record's class leaves: an amend of a classed record naming no class, or another one. Both sides are read by the World's
   // own instance-class reader (mark-kind.mjs § instanceClassOf, the one its door law reads records by): an explicit class is the
   // class, and a standing word (sited, parcel, naming, predicated …) names none, so a classless parcel amended to a bare sited
-  // mark leaves no class and a parcel amended as a parcel keeps none. Only where the World's tools cannot be read at all does the
-  // office's grants reader stand in (it names a standing word as a class, so such an amend is then refused as unread)
+  // mark leaves no class and a parcel amended as a parcel keeps none. Where the World's tools cannot be read at all, the same rule
+  // is read from this file's copy of it (instanceClassOfAccepted below), never from the grants reader, which asks another question
   const kinds = givenKinds === undefined ? await markKinds() : givenKinds;
-  const classOf = typeof kinds?.instanceClassOf === "function" ? (m) => kinds.instanceClassOf(m) ?? null : markClassOf;
+  const classOf = (m) => (typeof kinds?.instanceClassOf === "function" ? kinds.instanceClassOf(m) : instanceClassOfAccepted(m)) ?? null;
   const beforeClass = before == null ? null : classOf(before);
   const afterClass = klass !== undefined ? String(klass) : classOf({ kind });
   const leaves = beforeClass != null && afterClass !== beforeClass;
