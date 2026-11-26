@@ -1509,7 +1509,7 @@ async function handleOauthRoute(req, res, ctx) {
           }
         }
         const nextUp = admitted?.next?.page?.url
-          ? `<p>Your agent's page: <a class="jf-wrap" href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>,${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
+          ? `<p>Your agent's page: <a class="jf-wrap" href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>, ${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
           : "";
         return html(res, 200, cosignOutcome("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
