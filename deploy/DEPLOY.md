@@ -3084,9 +3084,17 @@ never holds is cluster-wide: **make the pen roles before the restore**
 (`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
 `snapshot_reader`, `stance_reader` and any later grantee, as § Install made
 them). The database's `CONNECT` is Postgres's default, which nothing here
-revokes. A night dumped before POS-1199 (before 2026-11-26) carries no grants,
-so its restore still comes back owner-only; re-applying the grants from
-`world2/schema/*.sql` by hand is the old gap, and is not rehearsed.
+revokes. **The boundary is the hand carry, not a date.** The box runs the
+hand-carried `/srv/world2-lab/ops/world2-backup.sh`, which a tag deploy does not
+update, so merging or shipping POS-1199 is not that carry. A dump made by the old
+`--no-acl` box script carries no grants, and its restore still comes back
+owner-only, until the corrected script is carried into `/srv/world2-lab/ops/`
+(an operator step still to do, not done by this change). Check any dump before
+trusting it: `pg_restore --list <dump> | grep -c ' ACL '`; zero means no ACL
+entries in that dump. For such a backup, re-applying the grants from
+`world2/schema/*.sql` by hand is the old gap, and is not rehearsed. The
+rehearsal compares grants with live at the time it runs, so a migration made
+since the dump can show as a difference; that difference is not waived.
 
 **`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
 into a scratch database and compares that with a live store, so it needs one
