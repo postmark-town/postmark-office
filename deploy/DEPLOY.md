@@ -3061,7 +3061,8 @@ Postgres change), or on any machine that can read the bucket:
                                                      # it uploads last, so a night without one didn't finish
     aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
     cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
-    pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> world2-<stamp>.dump
+    # the pen roles first: they are cluster-wide, never in a dump (§ Install); a missing one stops the restore by name
+    pg_restore --exit-on-error --no-owner -d <new-empty-db> world2-<stamp>.dump
 
 Then put back what rode beside the dump, as `LATEST.json` names it:
 - **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
@@ -3071,10 +3072,19 @@ Then put back what rode beside the dump, as `LATEST.json` names it:
   because its roles are in the dump.
 
 What comes back is up to 24 hours old (the dump's RPO), since the WAL and the
-base backups don't leave the box. **The grants are a named gap.** The dump is
-taken `--no-owner --no-acl`, so it carries the schema and the rows but not the
-pens' grants. They live in the schema files (`world2/schema/*.sql`), and
-re-applying them to a restored store has not been rehearsed.
+base backups don't leave the box. **The grants ride the dump (POS-1199).** It
+is taken `--no-owner` with its ACLs, so every grant and revoke the migrations
+made, and the default privileges, come back with the restore: the office's
+pools, the clearing's pen and the read workers answer on the restored store, as
+the restore rehearsal checks (its grants check compares every privilege with
+live; its office check reads the restored store as `office_api`). What a dump
+never holds is cluster-wide: **make the pen roles before the restore**
+(`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
+`snapshot_reader`, `stance_reader` and any later grantee, as § Install made
+them). The database's `CONNECT` is Postgres's default, which nothing here
+revokes. A night dumped before POS-1199 (before 2026-11-26) carries no grants,
+so its restore still comes back owner-only; re-applying the grants from
+`world2/schema/*.sql` by hand is the old gap, and is not rehearsed.
 
 **`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
 into a scratch database and compares that with a live store, so it needs one

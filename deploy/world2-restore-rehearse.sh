@@ -134,13 +134,15 @@ cleanup() {
 trap cleanup EXIT
 
 # ── restore ─────────────────────────────────────────────────────────────────
-# --no-owner/--no-acl because the dump was taken that way; the roles exist on
-# this cluster but a restore that depended on them would not be portable to the
-# rescue box, which is the box this rehearsal is standing in for.
-say "== pg_restore --clean --if-exists --no-owner --no-acl -d $SCRATCH <dump>"
+# --no-owner because the dump was taken that way: the restoring owner owns. THE GRANTS ARE RESTORED (POS-1199): the dump
+# carries them (world2-backup.sh § 1), and a restore that drops them comes back with every pen but the owner refused,
+# which is exactly what a rescue box must not find out during an outage. The pen roles are cluster-wide, never in a
+# dump, so they must exist first; a missing one stops the restore here, by name (DEPLOY.md § The S3 route). A dump
+# taken before POS-1199 has no grants to restore, and the grants check below says so.
+say "== pg_restore --no-owner -d $SCRATCH <dump>"
 r0=$(date +%s)
 pg_restore --host "$PGH" --port "$PGP" --username world2_owner --dbname "$SCRATCH" \
-  --no-owner --no-acl --exit-on-error "$DUMP" 2>"$ERRF"
+  --no-owner --exit-on-error "$DUMP" 2>"$ERRF"
 rrc=$?
 r1=$(date +%s)
 if [ "$rrc" -ne 0 ]; then
@@ -176,6 +178,86 @@ for t in $TABLES; do
   case "$t" in office_role_audit) RS_AUDIT="$a $b" ;; office_roles) RS_ROLES="$a $b" ;; esac
 done
 say "   $rows_total rows restored across $(echo "$TABLES" | wc -w) tables"
+
+# ── the grants, restored vs live (POS-1199) ─────────────────────────────────
+# The counts above are the owner's, and the owner reads everything, so a restore with no grants passes them. This is
+# the check that cannot: every privilege on the store's public tables, columns, sequences, functions and schema, and its
+# default privileges, read from the catalog of each side and compared line by line. A NULL ACL is read as the default it
+# means (acldefault), so a lost REVOKE shows as a privilege the restore GAINED, never as silence. Any line on one side
+# only is a finding: a grant the restore lost refuses a pen, and one it gained widens one. Grantors are not compared (the
+# restoring owner grants everything on a --no-owner restore). The CI rehearsal runs this block as it stands
+# (.github/scripts/restore-grants-rehearsal.mjs): keep the two markers.
+# >>> grants
+GRANTS_SQL="SELECT kind || ' ' || name || ' ' || CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END || ' ' || priv FROM (
+  SELECT 'relation' AS kind, c.relname AS name, a.grantee, a.privilege_type AS priv
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault((CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END)::\"char\", c.relowner))) a
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+  UNION ALL SELECT 'column', c.relname || '.' || att.attname, a.grantee, a.privilege_type
+    FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN LATERAL aclexplode(att.attacl) a
+   WHERE n.nspname = 'public' AND att.attacl IS NOT NULL
+  UNION ALL SELECT 'function', p.oid::regprocedure::text, a.grantee, a.privilege_type
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f'::\"char\", p.proowner))) a
+   WHERE n.nspname = 'public'
+  UNION ALL SELECT 'schema', n.nspname, a.grantee, a.privilege_type
+    FROM pg_namespace n CROSS JOIN LATERAL aclexplode(coalesce(n.nspacl, acldefault('n'::\"char\", n.nspowner))) a
+   WHERE n.nspname = 'public'
+  UNION ALL SELECT 'default:' || d.defaclobjtype::text, coalesce(pg_get_userbyid(d.defaclrole), ''), a.grantee, a.privilege_type
+    FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+) g ORDER BY 1"
+say "== grants, restored vs live ($DB)"
+GRANTS_DIR="$(mktemp -d -t w2-grants.XXXXXX)"
+# each side sorted the one way comm reads (byte order), whatever the database's collation
+if psql_owner --dbname "$SCRATCH" -tAc "$GRANTS_SQL" > "$GRANTS_DIR/restored.raw" 2>"$GRANTS_DIR/err" \
+   && psql_owner --dbname "$DB" -tAc "$GRANTS_SQL" > "$GRANTS_DIR/live.raw" 2>>"$GRANTS_DIR/err" \
+   && LC_ALL=C sort -u "$GRANTS_DIR/restored.raw" > "$GRANTS_DIR/restored" && LC_ALL=C sort -u "$GRANTS_DIR/live.raw" > "$GRANTS_DIR/live"; then
+  G_LOST=$(comm -13 "$GRANTS_DIR/restored" "$GRANTS_DIR/live" | grep -c .)
+  G_GAINED=$(comm -23 "$GRANTS_DIR/restored" "$GRANTS_DIR/live" | grep -c .)
+  if [ "$G_LOST" -eq 0 ] && [ "$G_GAINED" -eq 0 ]; then
+    say "   match: $(grep -c . "$GRANTS_DIR/live") privileges, every one restored and none gained"
+  else
+    say "   GRANTS DIFFER: $G_LOST lost by the restore, $G_GAINED gained by it"
+    comm -13 "$GRANTS_DIR/restored" "$GRANTS_DIR/live" | head -n 10 | sed 's/^/   lost:   /'
+    comm -23 "$GRANTS_DIR/restored" "$GRANTS_DIR/live" | head -n 10 | sed 's/^/   gained: /'
+    bad=$((bad + 1))
+  fi
+else
+  say "   NOT-RUN: the catalog could not be read — $(head -c 300 "$GRANTS_DIR/err")"
+  NOTRUN="$NOTRUN grants"
+fi
+rm -rf "$GRANTS_DIR"
+# <<< grants
+
+# ── the office answers from the RESTORED store, as its own pen (POS-1199) ───
+# Wright: "rehearse a restore that ends with the office answering". The office's own read (last-active.mjs § stampRows,
+# through world2-pen.mjs § officeRead, the office's pool) asks the restored store, as office_api, for the newest
+# actor's last act. Answered with a time is the pass. The office's own disclosure (it could not read the store) is a
+# finding: on a restore without grants this is the line that says so. No office_api credential, or no act to ask about,
+# is NOT-RUN, which never reads as a pass. The CI rehearsal runs this block as it stands: keep the two markers.
+# >>> office-answers
+say "== the office answers from the restored store, as office_api"
+OA_PW="$(w2_secret PG_OFFICE_API_PASSWORD)"
+OA_HANDLE="$(psql_owner --dbname "$SCRATCH" -tAc "SELECT actor FROM acts ORDER BY at DESC, id DESC LIMIT 1" 2>/dev/null)"
+if [ -z "$OA_PW" ]; then say "   NOT-RUN: PG_OFFICE_API_PASSWORD unreadable from $WORLD2_ENV_FILE"; NOTRUN="$NOTRUN office"
+elif [ -z "$OA_HANDLE" ]; then say "   NOT-RUN: the restored store holds no act to ask the office about"; NOTRUN="$NOTRUN office"
+else
+  OA_OUT="$(cd "$WORLD2_OFFICE" && WORLD2_PG=1 WORLD2_PG_URL="postgres://office_api:$OA_PW@$PGH:$PGP/$SCRATCH" \
+    node --input-type=module -e '
+      const { stampRows } = await import(process.cwd() + "/src/last-active.mjs");
+      const row = { handle: process.argv[1] };
+      const disclosed = await stampRows([row]);
+      process.stdout.write(JSON.stringify({ handle: row.handle, last_active: row.last_active, disclosed }));
+      process.exit(disclosed ? 1 : row.last_active ? 0 : 3);
+      ' "$OA_HANDLE" 2>&1)"
+  case $? in
+    0) say "   answered: $OA_OUT" ;;
+    1) say "   THE OFFICE COULD NOT READ THE RESTORED STORE: $OA_OUT"; bad=$((bad + 1)) ;;
+    *) say "   THE OFFICE GAVE NO ANSWER: $(printf '%s' "$OA_OUT" | head -c 400)"; bad=$((bad + 1)) ;;
+  esac
+fi
+# <<< office-answers
 
 
 # ── roles.db, restored and counted ──────────────────────────────────────────
