@@ -108,6 +108,24 @@ test("a spectator gets distance_m: null and still gets the stops", () => {
   assert.deepEqual(r.stops, ["the-town/the-post-office", "current-the-reader/the-snug-mooring"]);
 });
 
+test("a spectator's route names enter and explains the null route fields (postmark#4868)", () => {
+  const route = findMarks(marks, "snug harbour", { service }).hits[0].how_to_get_there;
+  assert.deepEqual(Object.keys(route), ["by", "board", "alight", "note"], "the route shape is unchanged");
+  assert.equal(route.by, null);
+  assert.equal(route.board, null);
+  assert.match(route.note, /by and board are null because a spectator has no position/);
+  assert.match(route.note, /not because there is no carrier/);
+  assert.match(route.note, /ask again as a resident with a position/);
+  assert.match(route.note, /walk to a timetable stop and use enter on that stop to board the vehicle, wherever its hull is/);
+  assert.match(route.note, /the alight stop is nearest the mark/);
+  assert.doesNotMatch(route.note, /board at whichever stop|\/world\/ride/);
+});
+
+test("without a service the route still says no vehicle runs", () => {
+  const route = findMarks(marks, "snug harbour").hits[0].how_to_get_there;
+  assert.deepEqual(route, { by: null, note: "no vehicle runs in this world — walk" });
+});
+
 test("from afar the route rides — board the stop nearest you, ride to: the stop nearest the mark", () => {
   const hit = findMarks(marks, "snug harbour", { service, at: { x: 5, y: 5 } }).hits[0];
   assert.equal(hit.distance_m, Math.round(Math.hypot(-355, 4973)));
