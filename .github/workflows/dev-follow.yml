@@ -1,0 +1,250 @@
+name: Dev office follows the open train (and a dev-preview label)
+
+# POS-1256 (Darko, 2026-11-26: "yes please set up 1 2 and 3 now and put the new join flow on it").
+#
+#   a push to the OPEN train (the newest train/<year>-w<week>) carries that head to the dev office,
+#     unless the push changes that train's deploy/DEPLOY.md dev box steps: then nothing is carried and
+#     the notice "dev waits for a hand" goes where it will be seen (the run summary, a warning
+#     annotation, and a comment on the PR that merged it);
+#   the `dev-preview` label on an office PR carries that PR's head to dev, recorded as the holder in
+#     dev's release.json. One holder at a time: a second label is refused, naming the holder, and the
+#     label is taken off. A push to the PR re-carries it. Removing the label or closing the PR returns
+#     dev to the open train's head.
+# The decisions live in .github/scripts/dev-follow-lib.mjs (tested by test/dev-follow.test.mjs); this file
+# is the box steps, step for step what release-train.yml does for a tag (and what
+# deploy/dev-office-carry.sh does by hand), aimed at dev only.
+#
+# WHAT IT NEVER TOUCHES: prod (the root, service and port below are dev's, fixed, not an input), a fork's
+# PR (the job's `if`, and the decision refuses one too), a tag, or any train.
+#
+# ADOPTION GATE (the shape OFFICE_AUTODEPLOY gives release-train.yml): until the repository variable
+# OFFICE_DEV_FOLLOW is `on`, a run reads nothing, carries nothing and says so in its summary.
+#   adopt:  gh variable set OFFICE_DEV_FOLLOW --body on  -R postmark-town/postmark-office
+#   revert: gh variable set OFFICE_DEV_FOLLOW --body off -R postmark-town/postmark-office
+#
+# WHY pull_request AND NOT pull_request_target: GitHub gives a fork's pull_request run no secrets, so a
+# fork can never reach the box's key; the PR's head is archived as data and never run on the runner.
+#
+# CONCURRENCY: one dev deploy at a time, on the group release-train.yml's dev dispatch uses, and never
+# cancelling a running one (a run cancelled between the rsync and the restart leaves new code under the old
+# process). GitHub keeps one running and ONE pending run per group and drops older pending ones, so an
+# event can be dropped; every run therefore decides from what it can read (origin's trains, dev's
+# release.json, the holder PR), never from its event alone.
+#
+# THE CONCURRENCY IS ON THE JOB, not the workflow: a run whose job is skipped (every other PR's push) must
+# not queue in the group and displace a pending carry.
+
+on:
+  push:
+    branches: ["train/**"]
+  pull_request:
+    types: [labeled, unlabeled, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  DEV_ROOT: /srv/postmark-office-dev
+  DEV_SERVICE: postmark-office-dev
+  DEV_PORT: "4381"
+
+jobs:
+  carry:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event.label.name == 'dev-preview' ||
+        contains(github.event.pull_request.labels.*.name, 'dev-preview')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: office-deploy-dev
+      cancel-in-progress: false
+    steps:
+      - name: The adoption gate
+        id: gate
+        env:
+          ADOPT: ${{ vars.OFFICE_DEV_FOLLOW }}
+        run: |
+          set -euo pipefail
+          if [ "$ADOPT" != "on" ]; then
+            {
+              echo "## Dev follow: stood down"
+              echo ""
+              echo "OFFICE_DEV_FOLLOW is not 'on' (it is '${ADOPT:-unset}'), so nothing was read or carried."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      # A push checks out the pushed commit. A PR event checks out the PR's BASE branch, so the scripts that
+      # decide and carry are the base's and not the PR's, and a closed PR's missing merge ref is never needed;
+      # the PR's own head is fetched by its sha when it is carried (dev-follow.mjs resolveCommit).
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Open the door to the box
+        if: steps.gate.outputs.go == 'true'
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          set -euo pipefail
+          for v in SSH_KEY HOST USER; do
+            [ -n "${!v}" ] || { echo "::error::secret EC2_$v is not set on this repository."; exit 1; }
+          done
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # What dev runs, read off the box: its release.json (tag, sha, and the holder when a PR has dev).
+      # A missing file reads as {} (unreadable to the decision); a failed ssh fails the run, which is
+      # not the same as an empty answer.
+      - name: Read what dev runs
+        if: steps.gate.outputs.go == 'true'
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" \
+            "if [ -f '$DEV_ROOT/release.json' ]; then cat '$DEV_ROOT/release.json'; else echo '{}'; fi" > box-release.json
+          cat box-release.json
+
+      - name: Decide
+        id: plan
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/dev-follow.mjs plan \
+            --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" \
+            --repo "$GITHUB_REPOSITORY" --box box-release.json --out plan.json
+
+      - name: Tell the PR what was decided
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.notices == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/dev-follow.mjs notify --plan plan.json --repo "$GITHUB_REPOSITORY" --when now
+
+      # ── the payload: exactly the commit's tracked tree, and the receipt with the holder ─────────────
+      - name: Stage the tree
+        id: stage
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        env:
+          SHA: ${{ steps.plan.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          git -c core.autocrlf=false -c core.eol=lf archive "$SHA" | tar -x -C stage
+          node .github/scripts/dev-follow.mjs receipt --plan plan.json --run "$RUN_URL" --out stage/release.json
+          # The repo-owned directories, as release-train.yml derives them (telemetry/, .github/ and .omc/ are never synced).
+          find stage -maxdepth 1 -mindepth 1 -type d -printf '%f\n' \
+            | grep -vx -e telemetry -e .github -e .omc \
+            | sort > dirs.txt
+          echo "directories to sync:"; sed 's/^/  /' dirs.txt
+
+      # The box-side script comes from main, never from the carried commit (release-train.yml's rule).
+      - name: Take the box-side deploy script from main
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        run: |
+          set -euo pipefail
+          git fetch -q origin '+refs/heads/main:refs/remotes/origin/main'
+          git show refs/remotes/origin/main:deploy/remote-deploy.sh > remote-deploy.sh \
+            || { echo "::error::deploy/remote-deploy.sh is missing on origin/main."; exit 1; }
+          [ -s remote-deploy.sh ] || { echo "::error::deploy/remote-deploy.sh on origin/main is empty."; exit 1; }
+          chmod +x remote-deploy.sh
+
+      - name: Preflight the box
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          EVENT: hand-carry
+        run: |
+          set -euo pipefail
+          # Run-unique path, as release-train.yml has it. The event is hand-carry: a train or a PR is carried to
+          # dev and is never measured against what prod runs (deploy/remote-deploy.sh names the three events).
+          REMOTE="/tmp/postmark-dev-follow.${{ github.run_id }}.sh"
+          echo "REMOTE_SCRIPT=$REMOTE" >> "$GITHUB_ENV"
+          SSH="ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes"
+          scp -i ~/.ssh/deploy_key -o BatchMode=yes remote-deploy.sh "$USER@$HOST:$REMOTE"
+          $SSH "$USER@$HOST" "chmod +x '$REMOTE' && '$REMOTE' preflight '$DEV_ROOT' '$DEV_SERVICE' '$DEV_PORT' '$SHA' '$EVENT'"
+
+      - name: Copy the commit onto dev
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          set -euo pipefail
+          RSH="ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes"
+          echo "== root files (no --delete: the office root is shared with the box's own state) =="
+          rsync -az --exclude='/*/' -e "$RSH" stage/ "$USER@$HOST:$DEV_ROOT/"
+          echo "== repo-owned directories (--delete) =="
+          while read -r d; do
+            [ -n "$d" ] || continue
+            echo "-- $d/"
+            rsync -az --delete -e "$RSH" "stage/$d/" "$USER@$HOST:$DEV_ROOT/$d/"
+          done < dirs.txt
+
+      - name: Restart and probe
+        id: apply
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          SHA: ${{ steps.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" \
+            "'$REMOTE_SCRIPT' apply '$DEV_ROOT' '$DEV_SERVICE' '$DEV_PORT' '$TAG' '$SHA'"
+
+      - name: Sweep the box-side script
+        if: always() && env.REMOTE_SCRIPT != ''
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" "rm -f '$REMOTE_SCRIPT'" || true
+
+      - name: Tell the PR dev was carried
+        if: steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true' && success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/dev-follow.mjs notify --plan plan.json --repo "$GITHUB_REPOSITORY" --when after-carry
+
+      # Dev is behind Cloudflare Access, so only the loopback probe in `apply` can prove it; that is the receipt.
+      - name: Say what happened
+        if: always() && steps.gate.outputs.go == 'true' && steps.plan.outputs.carry == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          {
+            echo "## Dev carry"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| ref | \`${TAG:-<none>}\` |"
+            echo "| commit | \`${SHA:-<none>}\` |"
+            echo "| restart+probe | $OUTCOME |"
+            echo ""
+            echo "Receipt: \`ssh meepo-ec2 curl -s http://127.0.0.1:4381/release\` names this commit."
+          } >> "$GITHUB_STEP_SUMMARY"
