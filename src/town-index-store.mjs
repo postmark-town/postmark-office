@@ -1602,7 +1602,8 @@ async function metricsMailRows(q) {
     bounces: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'bounce'"),
     letters: await count(q, "SELECT COUNT(*) AS n FROM town_letters"),
     threads: await count(q, "SELECT COUNT(*) AS n FROM town_threads"),
-    residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
+    // POS-1240: the mail pulse's resident total is the PUBLIC roll's (one population with the roster and the town card, queries.mjs § ONE ROLL): the Pen is not one
+    residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $1", [PEN_HANDLE]),
   };
   const threadJsons = newest ? (await q.query("SELECT json FROM town_threads ORDER BY root")).rows.map((t) => t.json) : [];
   return { newest, dayCountRows, totals, threadJsons };

@@ -147,6 +147,24 @@ test("SEARCH (REST /search, MCP search_town): the resident bucket and its matchi
   assert.ok(JSON.stringify(mcpPen.letters).includes(PEN_LETTER));
 });
 
+test("MAIL METRICS (REST /metrics/mail, MCP read_metrics): totals.residents is the public population's; every other total, the daily series and the active threads are unchanged", async (t) => {
+  if (skip) return t.skip(skip);
+  const { callTool } = await import("../src/mcp.mjs");
+  const unwrap = (r) => (typeof r === "string" ? JSON.parse(r) : r?.content?.[0]?.text ? JSON.parse(r.content[0].text) : r);
+  const viaRest = await rest("/metrics/mail");
+  assert.equal(viaRest.status, 200, JSON.stringify(viaRest.body).slice(0, 200));
+  assert.equal(viaRest.body.totals.residents, ALL_PUBLIC.length, "the Pen is not a resident in the mail pulse's count");
+  const viaMcp = unwrap(await callTool("read_metrics", {}, {}));
+  assert.equal(viaMcp.totals.residents, ALL_PUBLIC.length);
+  // the other totals are the table's, untouched: the same read straight from the store, field for field
+  const direct = (await store.storeAnswer((c) => store.metricsMail(c, {}))).out;
+  const { residents: _r1, ...restDirect } = direct.totals, { residents: _r2, ...restRest } = viaRest.body.totals;
+  assert.deepEqual(restRest, restDirect, "deliveries, bounces, letters and threads are not touched");
+  assert.ok(Array.isArray(viaRest.body.days) && viaRest.body.days.length > 0);
+  assert.deepEqual(viaRest.body.days, direct.days, "nor is the daily series");
+  assert.equal(direct.totals.residents, ALL_PUBLIC.length);
+});
+
 test("REPEATED SAME-HEAD READS: the kept page is the filtered one, each reader has its own copy, and the operational roll is not changed by the kept page", async (t) => {
   if (skip) return t.skip(skip);
   store.__resetRosterForTest();
