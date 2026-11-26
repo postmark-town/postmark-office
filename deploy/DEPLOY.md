@@ -379,6 +379,28 @@ systemctl show postmark-office-dev.service -p Environment -p ActiveEnterTimestam
 `dev-seed-advance.sh` and `sandbox-reset.sh` run the freshen and name the same folder;
 `tools/dev-rehearsal.mjs` reads it at `<dev tree>/town-pins-dev`.
 
+### The dev world ref (POS-1256)
+
+Dev's World normally stands on `sandbox/seed`. To try one World head on dev (a World PR's
+head, say), name it in a meepo-owned file the nightly freshen reads; no tag moves. Box steps,
+on dev only, when the release carrying this reaches dev. **The freshen's root copy is not
+carried, so install it first** (the same line as § The dev office's own pins), then name the head:
+```sh
+D=/srv/postmark-office-dev
+sudo install -m 755 -o meepo -g meepo $D/deploy/postmark-dev-freshen.sh $D/postmark-dev-freshen.sh
+sudo -u meepo bash -c 'printf "%s\n" <40-hex world sha, or refs/tags/<name>> > /srv/postmark-office-dev/dev-world-ref'
+sudo systemctl start postmark-dev-freshen.service     # the world-clone stands on it; the town clone stays on the seed
+sudo -u meepo git -C $D/world-clone rev-parse HEAD    # the named sha
+```
+Back to the seed: empty the file (`sudo -u meepo bash -c ': > /srv/postmark-office-dev/dev-world-ref'`) and start the freshen again. An absent or empty file is the seed. Any other content
+stops the freshen before it touches a clone. The nightly freshen keeps the named head until the
+file is emptied.
+
+This moves the World **clone** only. The dev store's world-law pin and world graph snapshot are
+derived from the world sha and follow only by `deploy/dev-seed-advance.sh` steps 6 and 7 (as the
+law pen; the pin moves only to a descendant of itself). A head that changes law needs them.
+`sandbox-reset.sh` resets to the seed and then starts the freshen, so a reset ends on the named head too.
+
 ### The dev seed advance (POS-791)
 
 Moving dev's `sandbox/seed` is its own step, one tool, run by hand on its own day

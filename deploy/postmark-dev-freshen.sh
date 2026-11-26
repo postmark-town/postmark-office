@@ -63,6 +63,15 @@
 # this script exits 0 (postmark-dev-freshen.service § ExecStartPost); the script
 # itself restarts nothing, so a failed freshen leaves the dev office as it was.
 #
+# DEV MAY TRY ONE WORLD (POS-1256). If $DEV/dev-world-ref exists and holds anything
+# but whitespace, the WORLD clone (never the town clone) is reset to what it names,
+# a full 40-hex sha or refs/tags/<name>, instead of sandbox/seed; an absent or empty
+# file is the seed, as before. A sha is fetched by name first, so a head that is no
+# branch tip can be named. Any other content stops the unit before a clone is touched.
+# The file is meepo-owned and read only here (and by sandbox-reset.sh through this unit);
+# prod and UAT never read it. It moves the CLONE only: the dev store's world-law pin and
+# graph snapshot follow only by dev-seed-advance.sh steps 6 and 7 (DEPLOY.md § The dev world ref).
+#
 # POSTMARK_DEV_ROOT, POSTMARK_DEV_FLOCK and the two key paths exist for
 # test/box-rollcall.test.mjs only; the unit sets none, so the box runs the
 # defaults below.
@@ -77,11 +86,28 @@ exec "$FLOCK" -x -w 120 "$DEV/town.lock" bash -c '
   pins="$dev/town-pins-dev"
   export TOWN_PINS_DIR="$pins"
   pin() { node "$dev/tools/town-pins.mjs" --write --town "$dev/town-clone" --ref HEAD --out "$pins"; }
+  seed=refs/tags/sandbox/seed
+  world_ref=$seed
+  if [ -f "$dev/dev-world-ref" ]; then
+    want=$(sed "s/^[[:space:]]*//;s/[[:space:]]*$//" < "$dev/dev-world-ref")
+    if [ -n "$want" ]; then
+      if [[ "$want" =~ ^[0-9a-f]{40}$ ]] || { [[ "$want" =~ ^refs/tags/[A-Za-z0-9._/-]+$ ]] && [[ "$want" != *..* ]]; }; then
+        world_ref=$want
+      else
+        echo "dev-world-ref names $want, which is neither a full sha nor refs/tags/<name>: nothing was reset" >&2
+        exit 1
+      fi
+    fi
+  fi
   for c in "$dev/world-clone" "$dev/town-clone"; do
+    ref=$seed
+    if [ "$c" = "$dev/world-clone" ]; then ref=$world_ref; fi
     git -C "$c" fetch -q --tags --force origin
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then git -C "$c" fetch -q origin "$ref"; fi
     git -C "$c" switch -q main 2>/dev/null || true
-    git -C "$c" reset -q --hard refs/tags/sandbox/seed
+    git -C "$c" reset -q --hard "$ref"
   done
+  if [ "$world_ref" != "$seed" ]; then echo "dev world-clone stands on $world_ref, named by $dev/dev-world-ref, not on the seed"; fi
   git -C "$dev/world-clone" fetch -q --prune origin "+refs/heads/draft/*:refs/remotes/origin/draft/*"
   pin
   node "$dev/tools/dev-ledger-resign.mjs" --town "$dev/town-clone" --key "$key" --not-key "$prodpub"
