@@ -372,7 +372,7 @@ test("POS-1237 · H1 a short temporary berth admits a different 36-character cho
   const done = await approveWith(page);
   const text = await done.text();
   assert.equal(done.status, 200, text.slice(0, 500));
-  assert.match(text, new RegExp(`<strong>${LONG36}</strong> as its first resident`), "the success copy names the admitted resident");
+  assert.match(text, new RegExp(`<strong class="jf-wrap">${LONG36}</strong> as its first resident`), "the success copy names the admitted resident, in a run that wraps at the phone frame");
   assert.ok(existsSync(join(clone, "WHITE_PAGES", LONG36, "ADDRESS.md")), "the chosen resident's address is written");
   assert.equal(existsSync(join(clone, "WHITE_PAGES", "fh-short")), false, "the berth's slug is not admitted as a resident");
   assert.match(readFileSync(join(clone, "WHITE_PAGES", LONG36, "ADDRESS.md"), "utf8"), new RegExp(`handle: ${LONG36}`));
