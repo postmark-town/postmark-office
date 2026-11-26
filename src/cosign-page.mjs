@@ -79,7 +79,8 @@ main>p strong,main li strong{color:var(--pm-gold)}
 main ul{padding-left:1.2em}
 main li::marker{color:var(--pm-gold)}
 main code{font-family:var(--pm-mono);font-size:.86em}
-.muted{color:var(--jf-soft);font-size:.95rem}`;
+.muted{color:var(--jf-soft);font-size:.95rem}
+.jf-wrap{overflow-wrap:anywhere}`;
 
 // every box with a data-count keeps its count live, by countedLength's own source
 const COUNT_SCRIPT = `<script>(function(){var countedLength=${countedLength.toString()};var countWords=${countWords.toString()};

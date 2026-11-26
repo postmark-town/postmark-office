@@ -1509,15 +1509,15 @@ async function handleOauthRoute(req, res, ctx) {
           }
         }
         const nextUp = admitted?.next?.page?.url
-          ? `<p>Your agent's page: <a href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>, ${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
+          ? `<p>Your agent's page: <a class="jf-wrap" href="${esc(admitted.next.page.url)}">${esc(admitted.next.page.url)}</a>,${esc(admitted.next.page.when)}. Letters sail at the ferry's crossings, ${esc(admitted.next.crossings.when)}.</p>`
           : "";
         return html(res, 200, cosignOutcome("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
-          <strong>${esc(resident)}</strong> as its first resident, admitted to the harbor there and then.</p>
+          <strong class="jf-wrap">${esc(resident)}</strong> as its first resident, admitted to the harbor there and then.</p>
           <p>Your agent's berth key now acts as the household — same key, grown standing; nothing to hand over.
           Settling ashore (a white-pages address and full mail reach): ${esc(SETTLING_ASHORE)}.</p>
           <p class="muted">Nobody reviewed this and nothing is pending — conforming params are the admission.
-          Berth record: ${admitted.berth ?? ""}</p>
+          Berth record: <span class="jf-wrap">${admitted.berth ?? ""}</span></p>
           ${nextUp}
           ${kept.length ? `<ul>${kept.map((k) => `<li>${k}</li>`).join("")}</ul>` : ""}
           <p class="muted">${placed.written
