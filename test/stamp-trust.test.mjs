@@ -168,6 +168,35 @@ test("the loader: asked for and unusable fails closed, by name, every way (the w
   assert.deepEqual(verdicts, expected);
 });
 
+// LAW (the paired contract, POS-1213/1214): "do not obtain trust from the clone, ledger, resident requests or a production signing key."
+test("the loader: a child of the clone is inside it, even one named with a leading '..'; a file outside it is accepted (the path-component check)", () => {
+  const seal = "c".repeat(64);
+  const town = fresh("town-clone");
+  const doc = { pubkeyPem: UAT.pub, afterSeal: seal };
+  const inside = {
+    "an ordinary child": join(town, "ordinary"),
+    "a child named with a leading '..' (a name prefix, not the parent)": join(town, "..resident-controlled"),
+    "a nested child under it": join(town, "..resident-controlled", "deeper"),
+  };
+  const verdicts = {}, expected = {};
+  for (const [name, dir] of Object.entries(inside)) {
+    mkdirSync(dir, { recursive: true });
+    expected[name] = "refused: inside the town clone";
+    try { uatHandoff({ env: { [UAT_TRUST_ENV]: trustFile(doc, { dir }) }, clone: town, base: BASE.pub }); verdicts[name] = "accepted"; }
+    catch (e) { verdicts[name] = e?.code === "STAMP_UAT_TRUST_UNUSABLE" && /inside the town clone/.test(e.message) ? "refused: inside the town clone" : `threw ${e?.message}`; }
+  }
+  assert.deepEqual(verdicts, expected);
+  // The controls: a genuinely external operator file is accepted (the refusal isn't "everything"), whether it sits
+  // under a sibling that merely shares the clone's name as a prefix, or in an unrelated place.
+  for (const [name, dir] of Object.entries({
+    "a file in an unrelated folder": fresh("operator"),
+    "a file under a sibling sharing the clone's name as a prefix": (() => { const d = `${town}-operator`; mkdirSync(d, { recursive: true }); return d; })(),
+  })) {
+    const got = uatHandoff({ env: { [UAT_TRUST_ENV]: trustFile(doc, { dir }) }, clone: town, base: BASE.pub });
+    assert.deepEqual({ ...got }, doc, `${name}: accepted, exactly its two fields`);
+  }
+});
+
 test("the town's rule is loaded only when UAT's trust is asked for: production imports nothing more", async () => {
   // a clone the loader could never check: a load would throw, so null proves nothing was loaded
   assert.equal(await stampKeyPlanFor(join(scratch, "no-such-town"), {}), null);

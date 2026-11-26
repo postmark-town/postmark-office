@@ -92,7 +92,10 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
     let town;
     try { town = realpathSync(clone); } catch { town = clone; }
     const rel = relative(town, real);
-    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) throw new StampTrustUnusable(where, "it is inside the town clone, and trust never comes from the town it checks");
+    // A path component, never a name prefix: `..resident-controlled/x` is a child of the clone, while `../x` (the
+    // first segment exactly `..`) and an absolute relative (another drive) are outside it.
+    const outside = isAbsolute(rel) || rel.split(/[\\/]/)[0] === "..";
+    if (!outside) throw new StampTrustUnusable(where, "it is inside the town clone, and trust never comes from the town it checks");
   }
   let text, doc;
   try { text = readFileSync(real, "utf8"); } catch (e) { throw new StampTrustUnusable(where, `it can't be read (${e?.code ?? "no error code"})`); }
