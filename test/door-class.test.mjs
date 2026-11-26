@@ -26,7 +26,7 @@
 //   D6  explain names door, and what extends it, as the town's
 //   D7  (the FIX at b4b43884) the makers exemption is a door amended into its own door class only: a gate re-classed as a town-only
 //       vault meets the makers gate
-//   D8  an unread answer never erases a class it cannot place (a gate amended to a bare sited mark); a known non-door still passes
+//   D8  an unread answer never erases a class it cannot place (a gate amended to a bare sited mark); a known non-door, and a classless parcel made a bare sited mark, still pass
 //   D9  a live layer that cannot be read is the record unreachable (503), never "no draft" judged against canon
 //
 //   node --import ./test/helpers/sparse-guard.mjs --import ./test/helpers/town-pins-env.mjs --test --test-concurrency=1 test/door-class.test.mjs
@@ -381,6 +381,16 @@ test("D8 · AN UNREAD ANSWER DOES NOT ERASE A CLASS IT CANNOT PLACE: a gate amen
   // a parcel amended as a parcel keeps its class: the leave door keeps `parcel` as a standing kind, and both sides are read alike
   const parcel = { id: "dw/a-plot", by: "dw", slug: "a-plot", kind: "parcel", at: { x: 900, y: 900 } };
   assert.equal((await dc.doorWriteRefusal({ payload: { kind: "parcel" }, before: parcel, klass: undefined, kind: "parcel", id: parcel.id, by: "dw", law: null, graph: null })).refusal, null);
+  // THE STRUCTURAL KIND (the delta review's INFO, Rivet 21:48Z): the World's instance-class reader (mark-kind.mjs § instanceClassOf)
+  // gives a parcel with no explicit class NO class, so amending it to a bare sited mark drops nothing, unread law or not
+  assert.equal((await dc.markKinds())?.instanceClassOf(parcel), undefined, "control: the World's reader names no class for a classless parcel");
+  for (const law of [null, await dc.doorLaw()])
+    assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: parcel, klass: undefined, kind: "sited", id: parcel.id, by: "dw", law, graph: null })).refusal, null,
+      `a classless parcel → a bare sited mark leaves no class (law ${law ? "read, graph unread" : "unreadable"})`);
+  // and an EXPLICIT class is still the class: the same gate in the new form (kind sited, class gate) amended bare is refused as before
+  const classed = { ...WICKET, kind: "sited", class: "gate" };
+  assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: classed, klass: undefined, kind: "sited", id: classed.id, by: "dw", law: null, graph: g })).refusal?.code, 503,
+    "an explicit gate class dropped while the graph cannot place it is refused");
 });
 
 test("D9 · A LIVE LAYER THAT CANNOT BE READ IS THE RECORD UNREACHABLE (503), never a mark with no draft judged against canon", { skip: SKIP }, async () => {

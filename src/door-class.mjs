@@ -34,11 +34,17 @@
 // answer is the same with or without one. Passing none adds no authority.
 
 import { TOWN } from "./town-stance.mjs";
-import { markClassOf } from "./world-grants.mjs"; // the office's one reader of a record's class, in either form (LOGOS v2, O1)
+import { markClassOf } from "./world-grants.mjs"; // the office's grants reader, standing in only when the World's mark-kind.mjs cannot be read
 
 /** The World's door-law module, at the freshest main; null when the world does not carry it yet. */
 export async function doorLaw() {
   try { return await (await import("./dynamic-entities.mjs")).worldToolModule("door-law.mjs"); }
+  catch { return null; }
+}
+
+/** The World's reader of what a record IS (tools/mark-kind.mjs § instanceClassOf, the one door-law.mjs reads records by), at the freshest main; null when unreadable. */
+export async function markKinds() {
+  try { return await (await import("./dynamic-entities.mjs")).worldToolModule("mark-kind.mjs"); }
   catch { return null; }
 }
 
@@ -142,17 +148,22 @@ function provedNoDoor(klass, graph, law) {
  * anyone asking whether it was a door's. So an unread answer refuses that transition unless the graph proves the old
  * class is no door; a known non-door write, and a write that keeps its class, are left exactly as before.
  */
-export async function doorWriteRefusal({ payload, before = null, klass, kind, id, by, town = false, law: given, graph: givenGraph } = {}) {
+export async function doorWriteRefusal({ payload, before = null, klass, kind, id, by, town = false, law: given, graph: givenGraph, kinds: givenKinds } = {}) {
   const law = given === undefined ? await doorLaw() : given;
   const unread = (why, instead = "leave the mark without into, lands_at or requires") => ({
     refusal: { code: 503, defect: "the town's door law could not be read, so this door cannot tell whether the write changes a door",
       hint: `${why}. A door is the town's to make and to change, and an unread law is never a yes. Nothing was written; try again shortly, or ${instead}.` },
     doorAmend: false, verdict: null });
   const KEEP_CLASS = "amend it keeping the class it has";
-  // the record's class leaves: an amend of a classed record naming no class, or another one. Both sides are read by the one
-  // resolver, so a parcel amended as a parcel (a standing kind the leave door keeps as `kind`) keeps its class
-  const beforeClass = before == null ? null : markClassOf(before);
-  const afterClass = klass !== undefined ? String(klass) : markClassOf({ kind });
+  // the record's class leaves: an amend of a classed record naming no class, or another one. Both sides are read by the World's
+  // own instance-class reader (mark-kind.mjs § instanceClassOf, the one its door law reads records by): an explicit class is the
+  // class, and a standing word (sited, parcel, naming, predicated …) names none, so a classless parcel amended to a bare sited
+  // mark leaves no class and a parcel amended as a parcel keeps none. Only where the World's tools cannot be read at all does the
+  // office's grants reader stand in (it names a standing word as a class, so such an amend is then refused as unread)
+  const kinds = givenKinds === undefined ? await markKinds() : givenKinds;
+  const classOf = typeof kinds?.instanceClassOf === "function" ? (m) => kinds.instanceClassOf(m) ?? null : markClassOf;
+  const beforeClass = before == null ? null : classOf(before);
+  const afterClass = klass !== undefined ? String(klass) : classOf({ kind });
   const leaves = beforeClass != null && afterClass !== beforeClass;
   const graphFor = async () => (givenGraph === undefined ? officeDoorGraph() : givenGraph);
   if (typeof law?.doorWriteVerdict !== "function" || typeof law?.doorFieldWrites !== "function") {
