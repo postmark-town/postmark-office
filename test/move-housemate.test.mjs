@@ -651,6 +651,13 @@ test("H7 · a count or credential fact that cannot be read says UNAVAILABLE, nev
     assert.equal(none.sign_in.pinned_account, null);
     assert.equal(none.bound_to_source, "unknown", "no pin to read: unknown");
 
+    // NO SECRET IS READ: the queries themselves, recorded, never ask for a key's hash (a report can be clean while its SELECT is not)
+    const seen = [];
+    const spy = { query: (sql, params) => { seen.push(sql); return p.query(sql, params); }, connect: () => p.connect() };
+    await credentialImpact({ pool: spy, handle: "mover", from: "keepers", to: "harbor", rows });
+    assert.ok(seen.length >= 2 && seen.every((q) => /oauth_tokens/.test(q)), "control: the spy saw the key queries");
+    assert.ok(seen.every((q) => !/token_hash|SELECT \*/i.test(q)), "no key hash is ever selected");
+
     // NO SECRET: the report as a whole carries no hash and no body
     const all = JSON.stringify({ c: await credentialImpact({ pool: p, handle: "mover", from: "keepers", to: "harbor", rows }), h: await historyCounts({ pool: p, handle: "mover", from: "keepers" }) });
     assert.doesNotMatch(all, /synthetic-hash|SYNTHETIC-NOTE-BODY|token_hash/);
