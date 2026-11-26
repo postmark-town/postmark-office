@@ -1734,6 +1734,18 @@ test("POS-778 · unknown query parameters are named with the nearest known one; 
   assert.doesNotMatch(unknownPostsParam(["zzzzzzzz"]).defect, /did you mean/);
 });
 
+test("#4758 · a paging word is pointed at offset or limit, never at a filter (page was 'did you mean stage', start was 'state')", async () => {
+  const { unknownPostsParam } = await import("../src/town-posts.mjs");
+  assert.match(unknownPostsParam(["class", "page"]).defect, /no parameter `page`; did you mean `offset`\?/);
+  assert.match(unknownPostsParam(["start"]).defect, /did you mean `offset`\?/);
+  assert.match(unknownPostsParam(["per_page"]).defect, /did you mean `limit`\?/);
+  assert.match(unknownPostsParam(["Page"]).defect, /did you mean `offset`\?/, "case does not matter");
+  // a real typo of a filter still goes by distance
+  assert.match(unknownPostsParam(["stags"]).defect, /did you mean `stage`\?/);
+  // a curated word whose target this read does not take falls back to distance, never names an unknown parameter
+  assert.doesNotMatch(unknownPostsParam(["page"], ["class", "state"]).defect, /offset/);
+});
+
 // ── POS-777 · the read hint is an absolute url ──────────────────────────────
 
 test("POS-777 · a bug post's post / advance / amend answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=bug, built from PUBLIC_BASE", async () => {
