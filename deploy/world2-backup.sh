@@ -134,11 +134,19 @@ fail() {                                    # one exit path, one state file
 #  narrowing to `claims` alone would produce a file that cannot be restored into
 #  anything." The owner is also the one credential 007's row policy does not
 # apply to, so it is the only one that can dump a draft at all.
+#
+# THE GRANTS RIDE THE DUMP (POS-1199; Jetto, 2026-11-23: "the nightly dump is --no-acl, so prod's grants never reach a
+# restore … a restore from that dump gives every role but the owner 'permission denied'"; Wright: "keep the grants
+# alongside every backup, either by dumping with ACLs or by writing a grants script beside each dump"). So no --no-acl:
+# every GRANT and REVOKE the migrations made on the store's tables, sequences, functions and schema, and its default
+# privileges, are in the archive, and world2-restore-rehearse.sh restores them and checks them against live. What a
+# dump never holds is cluster-wide, the roles themselves and the database's CONNECT: a restore needs the pen roles made
+# first (DEPLOY.md § The S3 route), and refuses by name when one is missing. --no-owner stays: the restoring owner owns.
 OWNER_PW="$(w2_secret PG_WORLD2_OWNER_PASSWORD)"
 [ -n "$OWNER_PW" ] || fail "PG_WORLD2_OWNER_PASSWORD unreadable from $WORLD2_ENV_FILE" dump
 DUMP="$DUMPS/world2-$STAMP.dump"
 PGPASSWORD="$OWNER_PW" pg_dump --host "${WORLD2_PGHOST:-localhost}" --port "${WORLD2_PGPORT:-5432}" \
-  --username world2_owner --dbname "$DB" --format=custom --no-owner --no-acl --file "$DUMP" 2>/tmp/w2-dump.err
+  --username world2_owner --dbname "$DB" --format=custom --no-owner --file "$DUMP" 2>/tmp/w2-dump.err
 rc=$?
 [ "$rc" -eq 0 ] || fail "pg_dump exit $rc — $(cat /tmp/w2-dump.err)" dump
 chmod 600 "$DUMP"
@@ -393,7 +401,7 @@ cat > "$SHIP/LATEST.json" <<JSON
   },
   "intake": {$INTAKE_STATUS},
   "intake_why": "POS-346: wallet registrations and each rail's seen-but-unwitnessed payments exist on the box and nowhere else until they become store rows",
-  "restore": "aws s3 cp s3://<bucket>/world2/<stamp>/<file> . && aws s3 cp s3://<bucket>/world2/<stamp>/<file>.sha256 . && sha256sum -c <file>.sha256 && pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> <file> (a hand-run, only ever into a new, empty database, never against the live store; DEPLOY.md § The S3 route. Nights before the git ship's retirement are also in the archived GitHub repo: whole before 2026-11-04 as dumps/<file>, in parts from then: cat dumps/<file>.part-* > <file>)",
+  "restore": "aws s3 cp s3://<bucket>/world2/<stamp>/<file> . && aws s3 cp s3://<bucket>/world2/<stamp>/<file>.sha256 . && sha256sum -c <file>.sha256 && pg_restore --exit-on-error --no-owner -d <new-empty-db> <file> (a hand-run, only ever into a new, empty database, never against the live store, after the pen roles exist: the dump carries their grants, not the roles; DEPLOY.md § The S3 route. Nights before the git ship's retirement are also in the archived GitHub repo: whole before 2026-11-04 as dumps/<file>, in parts from then: cat dumps/<file>.part-* > <file>)",
   "restore_roles": "aws s3 cp the roles-<stamp>.db beside the dump to /srv/postmark-office/roles.db (the office opens it at boot; it is a whole database, not a delta); an in-store night has no file, its roles are in the dump",
   "restore_intake": "aws s3 cp each <name>-<file> back to the source path named under intake (each watcher reads its file whole on its next tick)"
 }
