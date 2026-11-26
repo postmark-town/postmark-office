@@ -563,6 +563,8 @@ test("CLI, the live door decides: a stamp naming the open train's head over a do
   assert.equal(dead.outputs.status, "wait");
   const notDeployed = cli(w, "plan", planFlags(ev, stamp, {}), { event: ev.body });
   assert.equal(notDeployed.outputs.status, "wait", "the door answering {} (the workflow's stand-in for a failed curl) is a dead door");
+  const unstamped = cli(w, "plan", planFlags(ev, stamp, { deployed: false, tag: stamp.tag, sha: stamp.sha }), { event: ev.body });
+  assert.equal(unstamped.outputs.status, "wait", "a door that says deployed: false names nothing, whatever else it carries");
 });
 
 test("CLI, the holder's label comes off: dev goes back to the open train's head; and a plan whose gh lookup of the holder fails treats dev as free", () => {

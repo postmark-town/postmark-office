@@ -105,35 +105,19 @@ function devSectionMap(md) {
   return map;
 }
 
-// The second rule, wider than the sections (Truey's review of #1248, finding 2; a false hold is cheap and
-// a missed one fails dev's units): real "Dev first" steps sit in sections whose heading never names dev
-// (the settlement printout, switch 2's guard, the store mint at the crossing). So ANY line of the file, in a
-// code fence or out, that names dev as a word, or `postmark-office-dev`, or `/srv/postmark-office-dev`, or
-// says "dev first", counts, and a line of that kind added, removed or reworded between the two copies holds
-// the carry. (`--omit=dev` is the word dev too: a false hold, accepted.) `world2_dev` is not the word dev.
+// The second rule, wider than the headings (Truey's review of #1248, finding 2; a false hold is cheap and a
+// missed one fails dev's units): real "Dev first" steps sit in sections whose heading never names dev (the
+// settlement printout, switch 2's guard, the store mint at the crossing). So a section ALSO counts when any
+// line in it, in a code fence or out, names dev as a word, `postmark-office-dev`, `/srv/postmark-office-dev`,
+// or says "dev first"; and ANY edit in such a section holds the carry, even to a line that names nothing
+// (the w44 ship edited a prod step inside "Switch 2's guard", whose step 1 is "Dev first, under load").
+// `--omit=dev` is the word dev too: a false hold, accepted. `world2_dev` is not the word dev.
+// (The last three alternatives are inside the first; they are spelled out so the list reads as ruled.)
 const DEV_LINE = /\bdev\b|postmark-office-dev|\/srv\/postmark-office-dev|dev first/i;
 
-function devLineCounts(md) {
-  const counts = new Map();
-  let heading = "(before the first heading)";
-  let fence = null;
-  for (const raw of String(md ?? "").split(/\r?\n/)) {
-    const f = /^\s*(```+|~~~+)/.exec(raw);
-    if (f) { if (fence === null) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
-    const h = fence === null && !f ? /^#{1,6}\s+(.*\S)\s*$/.exec(raw) : null;
-    if (h) heading = h[1];
-    const line = collapse(raw);
-    if (!line || !DEV_LINE.test(line)) continue;
-    const key = `${line}\u0000${heading}`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return counts;
-}
-
 /**
- * Whether the dev box steps differ between two copies of deploy/DEPLOY.md (null for a copy that
- * does not exist). Two rules, either holds: a dev SECTION (heading names dev, or the body says a release
- * reaches dev) added, removed or reworded; or a LINE naming dev (DEV_LINE) added, removed or reworded.
+ * Whether the dev box steps differ between two copies of deploy/DEPLOY.md (null for a copy that does not
+ * exist): a dev section (see above) added, removed or reworded, in either copy.
  * @returns {{changed: boolean, sections: string[]}}
  */
 export function devBoxStepsChanged(beforeMd, afterMd) {
@@ -141,14 +125,6 @@ export function devBoxStepsChanged(beforeMd, afterMd) {
   const b = devSectionMap(afterMd);
   const sections = [];
   for (const k of new Set([...a.keys(), ...b.keys()])) if (a.get(k) !== b.get(k)) sections.push(k);
-  const la = devLineCounts(beforeMd);
-  const lb = devLineCounts(afterMd);
-  for (const k of new Set([...la.keys(), ...lb.keys()])) {
-    if ((la.get(k) ?? 0) === (lb.get(k) ?? 0)) continue;
-    const heading = k.slice(k.indexOf("\u0000") + 1);
-    const named = `${heading} (a line naming dev)`;
-    if (!sections.includes(heading) && !sections.includes(named)) sections.push(named);
-  }
   return { changed: sections.length > 0, sections };
 }
 
