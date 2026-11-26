@@ -244,7 +244,7 @@ if [ -z "$OA_PW" ]; then say "   NOT-RUN: PG_OFFICE_API_PASSWORD unreadable from
 elif [ -z "$OA_HANDLE" ]; then say "   NOT-RUN: the restored store holds no act to ask the office about"; NOTRUN="$NOTRUN office"
 else
   OA_OUT="$(cd "$WORLD2_OFFICE" && WORLD2_PG=1 WORLD2_PG_URL="postgres://office_api:$OA_PW@$PGH:$PGP/$SCRATCH" \
-    node --input-type=module -e '
+    node --no-warnings --input-type=module -e '
       const { stampRows } = await import(process.cwd() + "/src/last-active.mjs");
       const row = { handle: process.argv[1] };
       const disclosed = await stampRows([row]);
