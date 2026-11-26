@@ -13,15 +13,23 @@
 //        what does not carry, the credential impact; and reaches no writer
 //   H1b  the command's --dry-run; a real run takes no default credential precondition
 //   H2   every refusal, by name, before any write, dry run and real
-//   H2b  the key is judged first (planHouseKey); no stamp may move; an unreadable fold is unavailable, never "unchanged"
-//   H3   THE MOVE: only `residents` changes on the two rows; the source row stays; every carried field's falsifier;
-//        history, pins and balances unchanged; one commit; the ledger line lands where the dry run said and replays green
+//   H2b  the key is judged first (planHouseKey); the STAMPS_MOVE refusal is wired to the fold's verdict (a WIRING
+//        check through an injected fold, not a falsifier of the town's real fold); an unreadable fold is unavailable
+//   H3   THE MOVE: `residents` and the mover's own home picture change on the two rows, nothing else; the source row
+//        stays; every carried field's falsifier; the picture is printed under the new house; history, pins and
+//        balances unchanged; one commit, its receipt labelled operator-attested; the ledger line lands where the dry
+//        run said and replays green
 //   H3b  a target housemate still off the house key gets its line in the same act, and the dry run names it
 //   H4   only the owner writes
 //   H5   RESUMABLE: no duplicate publication, from the store and the sealed ledger, through another drain, and refused
-//        by name on a shallow clone or with no evidence
+//        by name on a shallow clone or with no evidence; H5e: a mover keyed to the target BEFORE the move still
+//        resumes an interrupted publication, and only a published move answers SAME_HOUSE
 //   H6   the transaction re-reads under its lock and rolls back, also from a failure after its first write
-//   H7   unavailable counts and credential facts say so; no secret is ever read or printed
+//   H7   unavailable counts and credential facts say so, and the verdict is never a plain false; no secret is read
+//   H9   THE SPELLING SETS (Wright, 2026-11-26), both pin shapes, whole sets, with seeded `solo:` draft rows read
+//        through the store's own row policy: a mover pinned to a source account moves and every spelling stays the
+//        source's; a mover pinned to an unlisted account refuses SPELLINGS_MOVE and writes nothing; the
+//        membership-derived admission the deriver used to make fails the same control
 //
 //   node --import ./test/helpers/sparse-guard.mjs --import ./test/helpers/town-pins-env.mjs --test test/move-housemate.test.mjs
 
@@ -38,11 +46,13 @@ import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { loadRegistryRows, moveHousemateInStore, MOVE_ROW_REFUSALS } from "../src/registry-store.mjs";
-import { renderPublicRegistry } from "../src/registry-rows.mjs";
+import { renderPublicRegistry, registryFromRows, pinsFromRows, homePictureIn } from "../src/registry-rows.mjs";
+import { houseKeysOf, __clearHouseCache } from "../src/household-deriver.mjs";
+import { withHousehold } from "../src/world2-claims.mjs";
 import { notLandedError, penTransaction, penCommit } from "../src/write.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
-import { moveHousemate, planHousemate, describe, main, lineDiff, HOUSEMATE_REFUSALS } from "../tools/move-housemate.mjs";
+import { moveHousemate, planHousemate, describe, main, lineDiff, HOUSEMATE_REFUSALS, ATTESTED } from "../tools/move-housemate.mjs";
 import { historyCounts, credentialImpact } from "../src/housemate-evidence.mjs";
 
 const TOWN = townClone();
@@ -64,8 +74,10 @@ const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); });
 
 // THE TOWN: `keepers` keeps four residents and wears an old key and an account; `harbor` is the house they move to;
-// `zeds` is next door. `mover` is the one who moves. Source-owned things the move must leave alone: a home picture
-// for each of two residents, an invitation credit, an account, a former key.
+// `zeds` is next door. `mover` is the one who moves, pinned to the source's own account (601): the listed-account
+// shape. `scribe` is pinned to an account no house lists (602): the unlisted-account shape (H9). Source-owned things
+// the move must leave alone: warden's home picture (the mover's goes with the mover), an invitation credit, an
+// account, a former key.
 const HOUSES = () => ({
   keepers: { name: "Keepers", accounts: [{ login: "keep-gh", id: 601 }], residents: ["warden", "clerk", "mover", "scribe"], since: "2026-07-16",
     declared_by: "fixture", formerly: ["old-keepers"], invited_by: { by: "zeds", named: "zed", at: "2026-10-24T12:00:00.000Z" },
@@ -85,6 +97,15 @@ const PINS = () => ({
 const KEYED = ["- 2026-09-02 · registry: pilot = hh:harbor", "- 2026-10-25 · registry: mover = hh:keepers", "- 2026-10-25 · registry: warden = hh:keepers",
   "- 2026-10-25 · registry: clerk = hh:keepers", "- 2026-10-25 · registry: scribe = hh:keepers"]; // every resident of both houses is on its house key before the move
 const CARD_HOUSE = { warden: "Keepers", clerk: "Keepers", mover: "Keepers", scribe: "Keepers", pilot: "Harbor", zed: "Zeds" };
+
+// THE WHOLE SPELLING SETS, written out (household-deriver.mjs § houseKeysOf: the live key, the former keys, the
+// accounts, then the solo spellings: residents, handles pinned to an account it lists, its account logins, their pins'
+// logins). After the mover leaves, keepers still holds `solo:mover` through the pin road, so only the ORDER moves.
+const KEEPERS_SET = ["hh:keepers", "hh:old-keepers", "gh:601",
+  "solo:warden", "solo:clerk", "solo:mover", "solo:scribe", "solo:keep-gh", "solo:scribe-gh"];
+const KEEPERS_SET_AFTER = ["hh:keepers", "hh:old-keepers", "gh:601",
+  "solo:warden", "solo:clerk", "solo:scribe", "solo:mover", "solo:keep-gh", "solo:scribe-gh"];
+const HARBOR_SET = ["hh:harbor", "gh:701", "solo:pilot", "solo:harbor-gh"];
 
 /** The store seeded, and a sealed clone whose printouts are the store's own print. */
 async function town({ houses = HOUSES(), pins = PINS(), ledger = KEYED, berth = false } = {}) {
@@ -214,23 +235,28 @@ test("H1 · the dry run names every row, file line and ledger line, what does no
   assert.equal(plan.resuming, false);
   assert.deepEqual(plan.pin, { handle: "mover", untouched: true });
 
-  // 1. the two store rows, before and after: only `residents` moves, and the source row is kept
+  // 1. the two store rows, before and after: `residents` moves, the mover's own picture goes with them, the source row is kept
   assert.deepEqual(plan.store.source.before.residents, ["warden", "clerk", "mover", "scribe"]);
   assert.deepEqual(plan.store.source.after.residents, ["warden", "clerk", "scribe"]);
   assert.deepEqual(plan.store.target.before.residents, ["pilot"]);
   assert.deepEqual(plan.store.target.after.residents, ["pilot", "mover"]);
-  for (const k of ["source", "target"]) for (const f of ["accounts", "formerly", "home_images", "invited_by"])
+  for (const k of ["source", "target"]) for (const f of ["accounts", "formerly", "invited_by"])
     assert.deepEqual(plan.store[k].after[f], plan.store[k].before[f], `${k}.${f} is shown unchanged`);
   assert.deepEqual(plan.store.target.after.formerly, [], "nothing goes into the target's formerly");
   assert.deepEqual(plan.store.target.after.accounts, [701], "and it gains none of the source's accounts");
-  assert.deepEqual(plan.store.target.after.home_images, ["pilot"], "or the mover's home picture");
+  assert.deepEqual([plan.store.source.before.home_images, plan.store.source.after.home_images], [["mover", "warden"], ["warden"]],
+    "the mover's picture leaves the source's map; warden's stays");
+  assert.deepEqual([plan.store.target.before.home_images, plan.store.target.after.home_images], [["pilot"], ["mover", "pilot"]],
+    "and joins the target's");
 
   // 2. the town files: the registry's exact lines, the card, the berth
   assert.deepEqual(plan.registry.source.after.residents, ["warden", "clerk", "scribe"]);
   assert.deepEqual(plan.registry.target.after.residents, ["pilot", "mover"]);
   assert.ok(plan.registry.diff.lines.length > 0 && plan.registry.diff.lines.every((l) => /^[-+]/.test(l)), "exact + and - lines");
   assert.ok(plan.registry.diff.lines.some((l) => l.startsWith("-") && /mover/.test(l)) && plan.registry.diff.lines.some((l) => l.startsWith("+") && /mover/.test(l)));
-  assert.deepEqual(plan.registry.home_picture_printed, { before: true, after: false }, "the printed file stops showing the mover's picture: a consequence the dry run states, not one the move hides");
+  assert.deepEqual(plan.registry.home_picture_printed, { before: true, after: true }, "the printed file keeps showing the mover's picture, under the new house");
+  assert.equal(plan.registry.target.after.home_images?.mover, "https://media.postmark.town/keepers/mm.png");
+  assert.equal(plan.registry.source.after.home_images?.mover, undefined);
   assert.deepEqual(plan.cards.map((c) => [c.path, c.before, c.after]), [
     ["WHITE_PAGES/mover/ADDRESS.md", "Keepers", "Harbor"],
     ["HARBOR/berths/mover.md", "keepers", "Harbor"],
@@ -243,10 +269,14 @@ test("H1 · the dry run names every row, file line and ledger line, what does no
   assert.deepEqual(plan.ledger.landing, { file: "WHITE_PAGES/stamp-ledger.md", after_entry: text.filter((l) => /^- \d{4}-\d{2}-\d{2} · /.test(l)).length,
     tail_dated: "2026-10-25", first_line: text.length + 1, last_line: text.length + 1 });
 
-  // 4. WHAT DOES NOT CARRY: the history counts, by table and spelling, from the SOURCE's spelling set
+  // 4. WHAT DOES NOT CARRY: the WHOLE spelling sets, before and after (never a prefix of them), and the three deltas
+  assert.deepEqual(plan.spellings.source, { before: KEEPERS_SET, after: KEEPERS_SET_AFTER },
+    "every spelling keepers held, it still holds: the mover's solo spellings through the pin road (601 is keepers' account)");
+  assert.deepEqual(plan.spellings.target, { before: HARBOR_SET, after: HARBOR_SET }, "and harbor gains none of them");
+  assert.deepEqual([plan.spellings.leaving_source, plan.spellings.joining_target, plan.spellings.held_by_both, plan.spellings.empty], [[], [], [], true]);
+  // the history counts, by table and spelling, from the SOURCE's spelling set as its own sessions declare it
   const H = evidence.history;
-  assert.deepEqual(H.spelling_set.slice(0, 3), ["hh:keepers", "hh:old-keepers", "gh:601"], "the live key, its former key, its account");
-  assert.ok(H.spelling_set.slice(3).every((k) => /^solo:/.test(k)), "then the solo spellings its residents wore (household-deriver.mjs § houseKeysOf)");
+  assert.deepEqual(H.spelling_set, KEEPERS_SET, "the live key, its former key, its account, then every solo spelling it holds (household-deriver.mjs § houseKeysOf)");
   assert.deepEqual(H.tables.acts, { scope: "public", in_source_set: 3, by_spelling: { "hh:keepers": 2, "gh:601": 1 }, outside_source_set: 1 }, "acts: warden's act is not the mover's; the hh:harbor act is not the source's");
   assert.deepEqual(H.tables.claims.by_spelling, { "hh:keepers": 2, "hh:old-keepers": 1 });
   assert.equal(H.tables.claims.in_source_set, 3);
@@ -258,7 +288,7 @@ test("H1 · the dry run names every row, file line and ledger line, what does no
   assert.deepEqual(H.tables["notes (letter_notes)"].by_spelling, { "hh:keepers": 1 });
   assert.equal(H.ground.count, 2);
   assert.deepEqual(H.ground.slugs, ["sited:mover/lamp (standing)", "parcel:mover/yard (standing)"]);
-  assert.match(plan.stays_with_source.home_picture, /^set/);
+  assert.equal(plan.home_picture, "set; it leaves keepers's row and goes with mover to harbor's");
   assert.match(plan.stays_with_source.invite_credit, /the source carries one/);
   // balance and stake, unchanged, and a control that the fold sees stamps at all
   assert.equal(plan.stamps.unchanged, true);
@@ -286,11 +316,18 @@ test("H1 · the dry run names every row, file line and ledger line, what does no
   for (const line of printed.split("\n")) tc.diagnostic(`dry-run | ${line}`);
   for (const s of ["DRY RUN — nothing written.", "from: keepers (stays)", "pin: household_pins mover — unchanged",
     'residents   ["warden","clerk","mover","scribe"] -> ["warden","clerk","scribe"]', 'residents   ["pilot"] -> ["pilot","mover"]', "(unchanged)",
-    "nothing goes into harbor's formerly", "NOTE: mover's home picture is printed today and is NOT printed after the move", "WHITE_PAGES/mover/ADDRESS.md: household: Keepers -> Harbor", "HARBOR/berths/mover.md: household: keepers -> Harbor",
+    "nothing goes into harbor's formerly", "only mover's own home picture goes with them",
+    "mover's home picture in the printout: printed today, printed after (under harbor)",
+    "WHITE_PAGES/mover/ADDRESS.md: household: Keepers -> Harbor", "HARBOR/berths/mover.md: household: keepers -> Harbor",
     `- ${D} · registry: mover = hh:harbor · sig: <the office pen>`, `lands after entry ${plan.ledger.landing.after_entry}`,
+    `keepers's spelling set before: ${KEEPERS_SET.join(", ")}`, `keepers's spelling set after:  ${KEEPERS_SET_AFTER.join(", ")}`,
+    `harbor's spelling set after:  ${HARBOR_SET.join(", ")}`,
+    "keys leaving keepers: none", "keys joining harbor: none", "keys held by both: none", "all three are empty: no spelling changes house",
     "acts: 3 spelled in the source's set (gh:601 1, hh:keepers 2)", "spelled outside the source's set: 1",
-    "static keys naming mover: 2", "bound to keepers: true", "harness keys: UNAVAILABLE", "--credential-ready"])
+    "static keys naming mover: 2", "bound to keepers: true", "harness keys: UNAVAILABLE", "--credential-ready",
+    `(${ATTESTED}: the tool cannot check it)`])
     assert.ok(printed.includes(s), `the dry run says: ${s}\n${printed}`);
+  assert.doesNotMatch(printed, /NOT printed after the move/, "the picture is carried, so the dry run does not warn it is lost");
   assert.doesNotMatch(printed, /synthetic-hash|SYNTHETIC-NOTE-BODY/, "no key hash and no note body is ever printed");
 });
 
@@ -359,7 +396,7 @@ test("H2a · a printout behind the store for ANOTHER house refuses (the collater
   assert.ok(clean(t.dir));
 });
 
-test("H2b · the key is judged first, and no stamp may move", { skip: SKIP }, async () => {
+test("H2b · the key is judged first, and the no-stamp-moves refusal is wired to the fold's verdict", { skip: SKIP }, async () => {
   const t = await town();
   const before = await storeRows();
   // the real planHouseKey: the ledger's tail is after the date
@@ -369,7 +406,10 @@ test("H2b · the key is judged first, and no stamp may move", { skip: SKIP }, as
   const today = { refusal: { defect: "this house's residents have already earned stamps today" }, detail: "mover already has stamps on 2026-11-10" };
   await assert.rejects(withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, keyPlan: () => today, credentialReady: READY, ...NO_WRITERS })),
     (e) => e.defect === HOUSEMATE_REFUSALS.HOUSE_KEY.defect && /already has stamps/.test(e.detail));
-  // a fold that moves: the town's folds over the planned lines differ from the ledger as it stands
+  // A WIRING CHECK, NOT A FALSIFIER OF THE REAL FOLD: an INJECTED fold reports a change, and the refusal fires on its
+  // verdict. That proves STAMPS_MOVE is wired to `stamps(...)`; it does not show the town's real fold can differ over
+  // registry lines (no fixture here makes it). The dating rule's real protection is planHouseKey's replay, run for
+  // real above and in H3 and H3b.
   const moves = async () => ({ handle: "mover", balance: { before: 5, after: 4 }, staked: { before: 0, after: 0 }, unchanged: false });
   await assert.rejects(withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, stamps: moves, credentialReady: READY, ...NO_WRITERS })),
     (e) => e.defect === HOUSEMATE_REFUSALS.STAMPS_MOVE.defect && /balance 5 -> 4/.test(e.detail));
@@ -388,7 +428,7 @@ test("H2b · the key is judged first, and no stamp may move", { skip: SKIP }, as
 
 // ── H3 the move ─────────────────────────────────────────────────────────────
 
-test("H3 · THE MOVE: only `residents` changes on two rows, the source stays whole, history and pins and balances are as they were; one commit, green", { skip: SKIP }, async () => {
+test("H3 · THE MOVE: `residents` and the mover's picture change on two rows, the source stays whole, history and pins and balances are as they were; one commit, green", { skip: SKIP }, async () => {
   await seedHistory();
   const t = await town({ berth: true });
   const before = await storeRows();
@@ -401,7 +441,10 @@ test("H3 · THE MOVE: only `residents` changes on two rows, the source stays who
   const out = await withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, owner: asOwner, credentialReady: READY }));
   assert.match(out.commit, /^[0-9a-f]{40}$/);
   assert.equal(git(t.dir, "rev-parse", `${out.commit}^`), h0, "one commit");
-  assert.match(git(t.dir, "log", "-1", "--format=%B", out.commit), /moves from keepers to harbor · keepers stays — the pin and past acts unchanged .*POS-1162; credential: POS-448 receipt/);
+  assert.match(git(t.dir, "log", "-1", "--format=%B", out.commit),
+    /moves from keepers to harbor · keepers stays — the pin and past acts unchanged .*POS-1162; credential receipt, operator-attested, not verified: POS-448 receipt/,
+    "the public commit never reads the receipt as verified");
+  assert.ok(describe(out.plan, out).includes(`credential receipt (${ATTESTED}): ${READY}`), "and neither does the real run's output");
 
   const s = await storeRows();
   // EVERY CARRIED FIELD'S FALSIFIER: each of these goes red if the move inherits movedTargetRow or the source DELETE
@@ -410,14 +453,16 @@ test("H3 · THE MOVE: only `residents` changes on two rows, the source stays who
   const keepers = s.households.find((h) => h.slug === "keepers");
   const was = before.households.find((h) => h.slug === "keepers");
   assert.deepEqual(keepers.residents, ["warden", "clerk", "scribe"], "the mover left; the source keeps its remaining residents, in order");
-  assert.deepEqual({ ...keepers, residents: null }, { ...was, residents: null }, "the source row is whole: name, ord, accounts, formerly, home pictures, invitation credit, likeness, since");
-  assert.deepEqual(keepers.home_images, was.home_images, "the source keeps the mover's home picture");
+  assert.deepEqual({ ...keepers, residents: null, home_images: null }, { ...was, residents: null, home_images: null }, "the source row is whole: name, ord, accounts, formerly, invitation credit, likeness, since");
+  assert.deepEqual(keepers.home_images, { warden: "https://media.postmark.town/keepers/ww.png" }, "the mover's picture left the source's row; warden's stays");
   assert.deepEqual(keepers.invited_by, was.invited_by, "the source keeps its invitation credit");
   assert.deepEqual(keepers.formerly, ["old-keepers"]);
   const harbor = s.households.find((h) => h.slug === "harbor");
   const harborWas = before.households.find((h) => h.slug === "harbor");
   assert.deepEqual(harbor.residents, ["pilot", "mover"]);
-  assert.deepEqual({ ...harbor, residents: null }, { ...harborWas, residents: null }, "the target row gains nothing but the resident: no formerly entry, no account, no home picture");
+  assert.deepEqual({ ...harbor, residents: null, home_images: null }, { ...harborWas, residents: null, home_images: null }, "the target row gains nothing but the resident and their picture: no formerly entry, no account");
+  assert.deepEqual(harbor.home_images, { pilot: "https://media.postmark.town/harbor/pp.png", mover: "https://media.postmark.town/keepers/mm.png" },
+    "THE PICTURE GOES WITH THE RESIDENT: the same URL, on the row that holds them now");
   assert.deepEqual(harbor.formerly, []);
   assert.deepEqual(harbor.accounts, [{ login: "harbor-gh", id: 701 }]);
   assert.deepEqual(s.households.find((h) => h.slug === "zeds"), before.households.find((h) => h.slug === "zeds"), "the house next door is untouched");
@@ -431,6 +476,11 @@ test("H3 · THE MOVE: only `residents` changes on two rows, the source stays who
   const printed = JSON.parse(readFileSync(join(t.dir, REGISTRY_PATH), "utf8")).households;
   assert.deepEqual(printed.keepers.residents, ["warden", "clerk", "scribe"], "the source is still printed");
   assert.deepEqual(printed.harbor.residents, ["pilot", "mover"]);
+  assert.equal(printed.harbor.home_images?.mover, "https://media.postmark.town/keepers/mm.png", "the public record prints the picture under the new house");
+  assert.equal(printed.keepers.home_images?.mover, undefined, "and not under the old one");
+  assert.equal(homePictureIn(registryFromRows(await loadRegistryRows()), "mover"), "https://media.postmark.town/keepers/mm.png",
+    "the site's own reader (registry-rows.mjs § homePictureIn, over the store) still finds it");
+  assert.equal(homePictureIn({ households: printed }, "mover"), "https://media.postmark.town/keepers/mm.png", "and over the printed file");
   assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "mover", "ADDRESS.md"), "utf8"), /^household: Harbor$/m);
   assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "mover", "ADDRESS.md"), "utf8"), /^handle: mover$/m, "the handle stays");
   assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "clerk", "ADDRESS.md"), "utf8"), /^household: Keepers$/m, "the source's other residents' cards are not touched");
@@ -560,6 +610,41 @@ test("H5d · A RESUMED CARD MUST MATCH: a household line naming neither house re
   assert.ok(clean(t.dir));
 });
 
+test("H5e · KEYED BEFORE THE MOVE: a mover the ledger already keys to the target still finishes an interrupted publication; only the published move answers SAME_HOUSE", { skip: SKIP }, async () => {
+  // The lead's FIX (2026-11-26): a mover may be keyed `hh:<target>` before the move (a berth the declaration keyed), so
+  // the key line is no evidence the act landed. Before this fix the retry below threw SAME_HOUSE and the card and the
+  // berth stayed on the old house for good.
+  const PREKEYED = [KEYED[0], "- 2026-10-25 · registry: mover = hh:harbor", KEYED[2], KEYED[3], KEYED[4]];
+  const t = await town({ ledger: PREKEYED, berth: true });
+  const planned = await dry(t);
+  assert.equal(planned.plan.resuming, false);
+  assert.deepEqual(planned.plan.ledger.lines, [], "control: the mover's key line is already sealed, so the act signs none");
+  await assert.rejects(stall(t), (e) => e.code === 503 && /run the same command again/.test(e.detail));
+  const moved = await storeRows();
+  assert.deepEqual(moved.households.find((h) => h.slug === "harbor").residents, ["pilot", "mover"], "the store moved");
+  assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "mover", "ADDRESS.md"), "utf8"), /^household: Keepers$/m, "the card did not");
+  assert.match(readFileSync(join(t.dir, "HARBOR", "berths", "mover.md"), "utf8"), /^household: keepers$/m, "nor the berth");
+  const lines = registryLines(t.dir);
+
+  const again = await withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, credentialReady: READY, owner: NEVER("the owner's connection"), move: NEVER("the store transaction") }));
+  assert.equal(again.plan.resuming, true, "the retry RESUMES from the durable evidence instead of answering SAME_HOUSE");
+  assert.match(again.commit, /^[0-9a-f]{40}$/);
+  assert.deepEqual(await storeRows(), moved, "the store did not move again");
+  assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "mover", "ADDRESS.md"), "utf8"), /^household: Harbor$/m);
+  assert.match(readFileSync(join(t.dir, "HARBOR", "berths", "mover.md"), "utf8"), /^household: Harbor$/m);
+  assert.deepEqual(JSON.parse(readFileSync(join(t.dir, REGISTRY_PATH), "utf8")).households.harbor.residents, ["pilot", "mover"]);
+  assert.deepEqual(registryLines(t.dir), lines, "no key line written twice (none was owed)");
+  assert.deepEqual(VERIFY.verifyStampLedger(t.dir).problems ?? [], []);
+  assert.ok(clean(t.dir));
+
+  // and now it IS done: the next run answers SAME_HOUSE, writing nothing
+  const h1 = head(t.dir);
+  await assert.rejects(withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, credentialReady: READY, ...NO_WRITERS })),
+    (e) => e.defect === HOUSEMATE_REFUSALS.SAME_HOUSE.defect && /cards and printout already say so/.test(e.detail));
+  assert.equal(head(t.dir), h1);
+  assert.ok(clean(t.dir));
+});
+
 // ── H6 the lock ─────────────────────────────────────────────────────────────
 
 const rowsOf = async () => (await storeRows()).households.map((h) => [h.slug, h.residents]);
@@ -643,13 +728,24 @@ test("H7 · a count or credential fact that cannot be read says UNAVAILABLE, nev
       assert.equal(m.bound_to_source, true, "a path that says yes still says yes");
     } finally { await ownerQuery("ALTER TABLE oauth_tokens_away RENAME TO oauth_tokens"); }
 
-    // all paths readable and none bound: false (the control that "unknown" above is the unreadable table, not a default)
+    // every STORE path readable and none bound: STILL "unknown", never false. The harness keys are never readable from
+    // the store, so no answer here clears the question (Wright, 2026-11-26: "An unavailable credential fact reads as
+    // unknown, never false"); the line beside the verdict says why
     const clear = await credentialImpact({ pool: p, handle: "scribe", from: "keepers", to: "harbor", rows });
     assert.deepEqual(clear.static_keys, { count: 0, keys: [] });
-    assert.equal(clear.bound_to_source, false);
+    assert.deepEqual(clear.live_sign_in_keys, { by_kind: {} }, "control: the store paths did read");
+    assert.match(clear.harness_keys.unavailable, /not in the store/);
+    assert.equal(clear.bound_to_source, "unknown");
+    const said = describe((await dry(t)).plan, { dryRun: true, evidence: { history: null, credentials: clear } });
+    assert.match(said, /bound to keepers: unknown \(nothing read says yes, and a key the harness holds cannot be read\)/);
+    assert.doesNotMatch(said, /bound to keepers: false/);
     const none = await credentialImpact({ pool: p, handle: "ghost", from: "keepers", to: "harbor", rows });
     assert.equal(none.sign_in.pinned_account, null);
     assert.equal(none.bound_to_source, "unknown", "no pin to read: unknown");
+    // a pin with no GitHub id cannot be matched to an account: "unknown", not "not listed"
+    const idless = { ...rows, pins: rows.pins.map((r) => (r.handle === "scribe" ? { ...r, gh_id: null } : r)) };
+    const blank = await credentialImpact({ pool: p, handle: "scribe", from: "keepers", to: "harbor", rows: idless });
+    assert.deepEqual([blank.sign_in.listed_in_source, blank.sign_in.listed_in_target], ["unknown", "unknown"]);
 
     // NO SECRET IS READ: the queries themselves, recorded, never ask for a key's hash (a report can be clean while its SELECT is not)
     const seen = [];
@@ -666,6 +762,122 @@ test("H7 · a count or credential fact that cannot be read says UNAVAILABLE, nev
   const out = await withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, dryRun: true, open: async () => null, ...NO_WRITERS }));
   assert.deepEqual(out.evidence.history, { unavailable: "the office is not pointed at the record" });
   assert.match(describe(out.plan, { dryRun: true, evidence: out.evidence }), /history counts: UNAVAILABLE — the office is not pointed at the record/);
+});
+
+// ── H9 the spelling sets, through the store's own row policy ────────────────
+//
+// Wright, within Darko's ruling (2026-11-26): "A move never changes which house a historical spelling belongs to. The
+// mover's `solo:<mover>`, and `solo:<pin login>` where its pin is one of the source's accounts, stay in the source's
+// set as former keys, and they never join the target's set." The rows below are DRAFT claims, the rows 024's
+// `claims_read` hides from every session whose declared set does not hold their spelling, so "which house reads it"
+// is asked of Postgres itself, as `office_api`, through `withHousehold` — never of a list this file computed.
+
+const SOLO_ROWS = ["solo:keep-gh", "solo:mover", "solo:scribe", "solo:scribe-gh"];
+/** One draft claim per `solo:` spelling, by an author who is nobody's resident (so no count above sees them). Written once. */
+async function seedSoloDrafts() {
+  const c = await asOwner();
+  try {
+    await c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (9901, now(), now(), 'closed') ON CONFLICT (id) DO NOTHING");
+    for (const spelling of SOLO_ROWS) {
+      const { rows: [{ n }] } = await c.query("SELECT count(*)::int AS n FROM claims WHERE status = 'draft' AND claimant = 'fixture-author' AND household = $1", [spelling]);
+      if (n === 0) await c.query("INSERT INTO claims (window_id, class, claimant, household, status) VALUES (9901, 'mark', 'fixture-author', $1, 'draft')", [spelling]);
+    }
+  } finally { await c.end(); }
+}
+const DRAFTS = "SELECT household FROM claims WHERE status = 'draft' AND claimant = 'fixture-author' ORDER BY household";
+/** The seeded drafts a session of `household` reads, by the policy alone (no WHERE on the set), and the set it declared. */
+const draftsSeenBy = async (p, household) => {
+  __clearHouseCache(); // the deriver's per-pool copy of the store, so a read after the move sees the moved rows
+  return withHousehold(p, household, async (client, keys) => ({ keys: [...keys], seen: (await client.query(DRAFTS)).rows.map((r) => r.household) }));
+};
+/** The seeded drafts a transaction declaring exactly `keys` reads, through the same policy. */
+async function draftsSeenUnder(p, keys) {
+  const c = await p.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT set_config('app.household_keys', $1, true)", [keys.join(",")]);
+    return (await c.query(DRAFTS)).rows.map((r) => r.household);
+  } finally { await c.query("ROLLBACK").catch(() => {}); c.release(); }
+}
+/** THE CONTROL: the admission the deriver made before this fix, by membership alone — every resident's handle and its pin's login. */
+function membershipAdmission(slug, rows) {
+  const registry = registryFromRows(rows), pins = pinsFromRows(rows);
+  const keys = houseKeysOf(`hh:${slug}`, registry, pins);
+  for (const h of registry.households[slug].residents ?? [])
+    for (const s of [h, pins[h]?.login]) if (s && !keys.includes(`solo:${s}`)) keys.push(`solo:${s}`);
+  return keys;
+}
+
+test("H9 · THE LISTED-ACCOUNT PIN: the mover moves, and every row spelled with their handle or login is still the source's to read and never the target's", { skip: SKIP }, async () => {
+  await seedSoloDrafts();
+  const t = await town();
+  const p = await pool();
+  try {
+    const was = { keepers: await draftsSeenBy(p, "hh:keepers"), harbor: await draftsSeenBy(p, "hh:harbor") };
+    assert.deepEqual(was.keepers, { keys: KEEPERS_SET, seen: SOLO_ROWS }, "before: keepers declares its whole set and reads all four rows");
+    assert.deepEqual(was.harbor, { keys: HARBOR_SET, seen: [] }, "before: harbor reads none");
+
+    const planned = await dry(t);
+    assert.deepEqual(planned.plan.spellings.source, { before: KEEPERS_SET, after: KEEPERS_SET_AFTER });
+    assert.deepEqual(planned.plan.spellings.target, { before: HARBOR_SET, after: HARBOR_SET });
+    assert.equal(planned.plan.spellings.empty, true);
+    await withPen(t, () => moveHousemate({ ...ARGS, clone: t.dir, date: D, owner: asOwner, credentialReady: READY }));
+    assert.deepEqual((await storeRows()).households.find((h) => h.slug === "harbor").residents, ["pilot", "mover"], "control: the move happened");
+
+    const now = { keepers: await draftsSeenBy(p, "hh:keepers"), harbor: await draftsSeenBy(p, "hh:harbor") };
+    assert.deepEqual(now.keepers, { keys: KEEPERS_SET_AFTER, seen: SOLO_ROWS }, "after: keepers still reads every row, solo:mover and solo:keep-gh included");
+    assert.deepEqual(now.harbor, { keys: HARBOR_SET, seen: [] }, "after: the town's sessions gain no read of a row spelled with the mover's handle or its human's login");
+
+    // THE OLD ADMISSION FAILS THIS CONTROL: by membership alone, harbor would now declare both and read both rows,
+    // while keepers still holds them (one spelling in two sets, which FALSIFIER 1g's census forbids)
+    const rows = await loadRegistryRows();
+    const old = membershipAdmission("harbor", rows);
+    assert.deepEqual([...old].sort(), [...HARBOR_SET, "solo:mover", "solo:keep-gh"].sort());
+    assert.deepEqual(await draftsSeenUnder(p, old), ["solo:keep-gh", "solo:mover"], "the membership-derived set reads the source's rows: the control discriminates");
+    assert.deepEqual(await draftsSeenUnder(p, now.harbor.keys), [], "and the deriver's real set does not");
+  } finally { await p.end(); }
+});
+
+test("H9b · THE UNLISTED-ACCOUNT PIN: the dry run names the spellings that would leave the source; a real run refuses SPELLINGS_MOVE and writes nothing", { skip: SKIP }, async () => {
+  await seedSoloDrafts();
+  const t = await town();
+  const p = await pool();
+  const SCRIBE = { ...ARGS, handle: "scribe" }; // pinned to 602, an account no house lists
+  const KEEPERS_WITHOUT_SCRIBE = ["hh:keepers", "hh:old-keepers", "gh:601", "solo:warden", "solo:clerk", "solo:mover", "solo:keep-gh"];
+  const HARBOR_WITH_SCRIBE = ["hh:harbor", "gh:701", "solo:pilot", "solo:scribe", "solo:harbor-gh", "solo:scribe-gh"];
+  try {
+    const planned = await withPen(t, () => moveHousemate({ ...SCRIBE, clone: t.dir, date: D, dryRun: true, ...NO_WRITERS }));
+    const S = planned.plan.spellings;
+    assert.deepEqual(S.source, { before: KEEPERS_SET, after: KEEPERS_WITHOUT_SCRIBE }, "whole sets: keepers would lose solo:scribe and solo:scribe-gh");
+    assert.deepEqual(S.target, { before: HARBOR_SET, after: HARBOR_WITH_SCRIBE }, "and harbor would gain them");
+    assert.deepEqual([S.leaving_source, S.joining_target, S.held_by_both, S.empty],
+      [["solo:scribe", "solo:scribe-gh"], ["solo:scribe", "solo:scribe-gh"], [], false]);
+    const text = describe(planned.plan, { dryRun: true, evidence: planned.evidence });
+    for (const s of ["keys leaving keepers: solo:scribe, solo:scribe-gh", "keys joining harbor: solo:scribe, solo:scribe-gh", "keys held by both: none",
+      "NOT EMPTY: a real run refuses SPELLINGS_MOVE"])
+      assert.ok(text.includes(s), `the dry run says: ${s}\n${text}`);
+
+    // the real run refuses by name, before the owner is reached, and writes nothing anywhere
+    const before = await storeRows();
+    const h0 = head(t.dir);
+    const lines = registryLines(t.dir);
+    await assert.rejects(withPen(t, () => moveHousemate({ ...SCRIBE, clone: t.dir, date: D, credentialReady: READY, ...NO_WRITERS })),
+      (e) => e.defect === HOUSEMATE_REFUSALS.SPELLINGS_MOVE.defect
+        && e.detail === "leaving keepers: solo:scribe, solo:scribe-gh; joining harbor: solo:scribe, solo:scribe-gh; held by both: none");
+    assert.deepEqual(await storeRows(), before, "the store is untouched");
+    assert.equal(head(t.dir), h0);
+    assert.ok(clean(t.dir), "the clone is untouched");
+    assert.deepEqual(registryLines(t.dir), lines, "no line signed");
+
+    // and so the rows stay where they are: keepers reads scribe's, harbor reads none
+    assert.deepEqual(await draftsSeenBy(p, "hh:keepers"), { keys: KEEPERS_SET, seen: SOLO_ROWS });
+    assert.deepEqual(await draftsSeenBy(p, "hh:harbor"), { keys: HARBOR_SET, seen: [] });
+    // THE CHANGE THE REFUSAL STOPS, asked of the same policy: the sets the move would have declared hand scribe's
+    // rows from keepers to harbor. No registry field can keep them for keepers (`formerly` is house slugs), so this
+    // move waits for a ruled carrier.
+    assert.deepEqual(await draftsSeenUnder(p, S.target.after), ["solo:scribe", "solo:scribe-gh"]);
+    assert.deepEqual(await draftsSeenUnder(p, S.source.after), ["solo:keep-gh", "solo:mover"]);
+  } finally { await p.end(); }
 });
 
 test("H8 · the printout's exact lines: lineDiff shows what changed and nothing it did not", () => {

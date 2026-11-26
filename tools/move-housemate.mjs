@@ -21,18 +21,31 @@
 // non-secret metadata only, which key or sign-in it acts with and whether that is bound to the source
 // (src/housemate-evidence.mjs § credentialImpact). "A meep's real move waits until POS-448 has given that meep
 // its own town-attributed credential": so a real run takes no default. It refuses unless the operator names
-// that receipt, per meep, with --credential-ready (the receipt is printed and goes into the commit message; the
-// tool cannot check it and does not pretend to). The dry run never waits for it.
+// that receipt, per meep, with --credential-ready. The tool cannot check the receipt, so wherever it prints (the
+// refusal, the output, the commit message in the town's public history) it is labelled "operator-attested, not
+// verified" (Wright, 2026-11-26). The dry run never waits for it.
 //
 // WHAT MOVES, AND WHAT DELIBERATELY DOES NOT:
 //
 //   · THE STORE, in one owner transaction (src/registry-store.mjs § moveHousemateInStore): the handle leaves
-//     the source's `residents` and joins the target's. THE SOURCE ROW STAYS, with every other column. Nothing
-//     goes into the target's `formerly` and it gains none of the source's accounts, key or home pictures:
-//     THAT IS THE RULING, and it is what `movedTargetRow` and the DELETE in `moveResidentInStore` would break.
-//   · ROWS SPELLED `hh:<source>` (acts, claims, marks, letters, notes) KEEP THEIR SPELLING FOR LIFE
+//     the source's `residents` and joins the target's, and the resident's own home picture goes with them
+//     (Wright: "carry it with the resident"; the printout shows a house's pictures only for its residents).
+//     THE SOURCE ROW STAYS, with every other column. Nothing goes into the target's `formerly` and it gains
+//     none of the source's accounts or key: THAT IS THE RULING, and it is what `movedTargetRow` and the DELETE
+//     in `moveResidentInStore` would break.
+//   · ROWS SPELLED IN THE SOURCE'S SET (acts, claims, marks, letters, notes) KEEP THEIR SPELLING FOR LIFE
 //     (024_household_spellings.sql) and stay the source's, through the source's own spelling set
 //     (src/household-deriver.mjs § houseKeysOf). The dry run counts them.
+//   · THE SPELLING SETS DO NOT MOVE (Wright, within Darko's ruling, 2026-11-26: "A move never changes which
+//     house a historical spelling belongs to"). The set admits `solo:` spellings through residency, so a
+//     membership change could carry them. The plan computes both houses' sets from `houseKeysOf` with the real
+//     pins, before and after, and names three deltas: keys leaving the source, keys joining the target, keys
+//     held by both. A dry run prints them; a real run refuses SPELLINGS_MOVE unless all three are empty.
+//     A mover pinned to one of the source's accounts keeps both deltas empty: the source holds its `solo:`
+//     spellings through the pin road and the deriver admits none of them to the target. A mover whose pin is
+//     NOT one of the source's accounts would take `solo:<handle>` and `solo:<pin login>` with them. No
+//     registry field can hold them for the source (`formerly` is house slugs, read as `hh:<entry>` by the
+//     office and the town), so that move refuses until a carrier is ruled.
 //   · THE TOWN FILES, in one pen commit: the registry drain prints tools/households.json from the store; the
 //     resident's ADDRESS (and berth) `household:` line says the target's name where it said the source's name
 //     or key; and the signed, dated key line `registry: <handle> = hh:<target>` goes into the stamp ledger,
@@ -41,7 +54,8 @@
 //     the same act; the dry run names each line and whose it is.
 //   · NOT CHANGED: the pin (`household_pins` carries no household), the handle, the home page, any stamp (the
 //     town's own folds over the ledger are read before and after, for every account, and a difference refuses),
-//     the source's home pictures, accounts, former keys, invitation credit and likeness fields, any history row.
+//     every other resident's home picture, the source's accounts, former keys, invitation credit and likeness
+//     fields, any history row.
 //
 // RESUMABLE (as move-resident is). The store moves before the commit, so a push that cannot land leaves the
 // store moved and the clone as it was. Running the same command again decides from durable facts alone: the
@@ -49,15 +63,19 @@
 // not yet key the handle `hh:<target>`, and a printout this clone holds shows the target standing without the
 // handle while the source held them (the evidence this tool's move is the one waiting; a shallow clone may not
 // reach it). It then finishes each missing step, each a no-op where already done; the key lines are planned
-// from the clone's own ledger, so they are never written twice. Only once the ledger keys the handle to the
-// target does a run refuse SAME_HOUSE.
+// from the clone's own ledger, so they are never written twice. A ledger that keys the handle to the target is
+// NOT taken as the act complete on its own: a mover can be keyed `hh:<target>` before the move (a berth the
+// declaration keyed, house-key.mjs § houseKeyLines), so its key line is no evidence the publication landed.
+// A run refuses SAME_HOUSE only when the ledger keys them there AND nothing is left to publish: no card still
+// names the source, and the clone's printout already shows them in the target and not in the source.
 
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 import { loadRegistryRows, moveHousemateInStore, movedHousemateRows } from "../src/registry-store.mjs";
-import { registryFromRows, renderPublicRegistry } from "../src/registry-rows.mjs";
+import { registryFromRows, pinsFromRows, renderPublicRegistry } from "../src/registry-rows.mjs";
+import { houseKeysOf } from "../src/household-deriver.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
 import { planHouseKey, appendHouseKey, registryWith, currentKeysOf, ledgerTail, LEDGER_REL } from "../src/house-key.mjs";
 import { penCommit, penTransaction, landOrRefuse } from "../src/write.mjs";
@@ -76,7 +94,7 @@ export const HOUSEMATE_REFUSALS = Object.freeze({
   TARGET_IS_SOURCE: { code: 409, defect: "--to is --from: a resident cannot move to the house they are leaving" },
   NOT_IN_SOURCE: { code: 409, defect: "--handle is not a resident of --from" },
   WOULD_EMPTY: { code: 409, defect: "the move would leave --from with no resident: retiring an emptied house is move-resident.mjs's job, not this tool's" },
-  SAME_HOUSE: { code: 409, defect: "--handle already lives in --to, and no house they left is waiting to be published" },
+  SAME_HOUSE: { code: 409, defect: "--handle already lives in --to, the ledger keys them there, and nothing of a move is left to publish" },
   NO_MOVE_EVIDENCE: { code: 409, defect: "--handle lives in --to, but nothing this clone holds shows this tool's move from --from put them there — nothing was written" },
   IN_BOTH_HOUSES: { code: 409, defect: "--handle is listed in both --from and --to — a person reads the rows; nothing was written" },
   CARD_UNMATCHED: { code: 409, defect: "a card of --handle names a household that is neither --to nor --from — a person reads it; nothing was written" },
@@ -86,8 +104,30 @@ export const HOUSEMATE_REFUSALS = Object.freeze({
   COLLATERAL: { code: 409, defect: "printing the registry would change more than the two households — the town's files are behind the store elsewhere; run the registry drain first" },
   HOUSE_KEY: { code: 409, defect: "the house's key line cannot be written today" },
   DRAIN_REFUSED: { code: 409, defect: "the registry drain refused to print" },
-  CREDENTIAL_PRECONDITION: { code: 409, defect: "a real move names the receipt that POS-448 gave this meep its own town-attributed credential (--credential-ready \"<receipt>\"); the dry run does not wait for it — nothing was written" },
+  CREDENTIAL_PRECONDITION: { code: 409, defect: "a real move names the receipt that POS-448 gave this meep its own town-attributed credential (--credential-ready \"<receipt>\", operator-attested, not verified: the tool cannot check it); the dry run does not wait for it — nothing was written" },
+  SPELLINGS_MOVE: { code: 409, defect: "the move would change which house a spelling belongs to (keys leaving --from, joining --to, or held by both): a move never changes which house a historical spelling belongs to, and no registry field can hold them for --from — nothing was written" },
 });
+
+/** Wherever the receipt prints: the tool takes the operator's word for it and cannot check it. */
+export const ATTESTED = "operator-attested, not verified";
+
+/**
+ * THE SPELLING SETS, before and after (Wright, POS-1162, 2026-11-26). Each house's set is `houseKeysOf` over
+ * the registry rows as they stand and as they will stand, with the real pins. Answers both sets for both houses
+ * and the three deltas a real run refuses on: keys leaving the source, keys joining the target, keys the two
+ * houses would both hold. PURE.
+ */
+export function spellingDelta({ before, after, from, to }) {
+  const setOf = (rows, slug) => houseKeysOf(`hh:${slug}`, registryFromRows(rows), pinsFromRows(rows));
+  const source = { before: setOf(before, from), after: setOf(after, from) };
+  const target = { before: setOf(before, to), after: setOf(after, to) };
+  const minus = (a, b) => a.filter((k) => !b.includes(k));
+  const leaving_source = minus(source.before, source.after);
+  const joining_target = minus(target.after, target.before);
+  const held_by_both = source.after.filter((k) => target.after.includes(k));
+  return { source, target, leaving_source, joining_target, held_by_both,
+    empty: !leaving_source.length && !joining_target.length && !held_by_both.length };
+}
 
 const refuse = (r, detail = null) => Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, detail });
 
@@ -195,12 +235,20 @@ export async function planHousemate({ handle, from, to, rows, clone, date, keyPl
   const files = filesHouses(clone);
   const ledgerText = read(clone, LEDGER_REL);
 
-  // RESUMING is decided from DURABLE facts only: the store says the handle is in the target, the sealed ledger says
-  // whether the act's record landed. Never the current printout alone (see printedBeforeMove).
+  // RESUMING is decided from DURABLE facts only: the store says the handle is in the target, the sealed ledger and
+  // the clone's own files say what landed. Never the current printout alone (see printedBeforeMove).
   const resuming = (target.residents ?? []).includes(handle);
   if (resuming) {
     const sealed = ledgerRegistry(ledgerText).latest.get(handle) ?? null;
-    if (sealed === `hh:${to}`) throw refuse(HOUSEMATE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}, and the ledger keys them there`);
+    // A key line to the target is not the act complete: the mover may have been keyed there before the move.
+    // Done means nothing is left to publish: no card still names the source, and the printout has them home.
+    if (sealed === `hh:${to}`) {
+      const named = [source.name, from].filter(Boolean).map((v) => String(v).trim());
+      const staleCards = [`WHITE_PAGES/${handle}/ADDRESS.md`, `HARBOR/berths/${handle}.md`]
+        .filter((rel) => { const said = frontHouseLine(read(clone, rel) ?? ""); return said != null && named.includes(said); });
+      const printedHome = (files[to]?.residents ?? []).includes(handle) && !(files[from]?.residents ?? []).includes(handle);
+      if (!staleCards.length && printedHome) throw refuse(HOUSEMATE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}, the ledger keys them there, and the clone's cards and printout already say so`);
+    }
     if ((source.residents ?? []).includes(handle)) throw refuse(HOUSEMATE_REFUSALS.IN_BOTH_HOUSES, `${handle}: ${from} and ${to}`);
     const proven = printedBeforeMove(clone, { handle, from, to });
     if (!proven?.source_held)
@@ -225,8 +273,16 @@ export async function planHousemate({ handle, from, to, rows, clone, date, keyPl
     ...rows,
     households: rows.households.map((r) => (r.slug === from ? { ...r, ...moved.source } : r.slug === to ? { ...r, ...moved.target } : r)),
   };
-  const sourceAfter = after.households.find((r) => r.slug === from);
   const targetAfter = after.households.find((r) => r.slug === to);
+
+  // THE SPELLING SETS (see the header). "Before" is the store as it stood before the move: on a resume the store
+  // has already moved, so it is the two memberships put back.
+  const unmoved = !resuming ? rows : {
+    ...rows,
+    households: rows.households.map((r) => (r.slug === from ? { ...r, residents: [...(r.residents ?? []), handle] }
+      : r.slug === to ? { ...r, residents: (r.residents ?? []).filter((h) => h !== handle) } : r)),
+  };
+  const spellings = spellingDelta({ before: unmoved, after, from, to });
 
   // COLLATERAL (rekey-household's rule): what the drain would print may differ from the town's files only in the two households.
   const printed = renderPublicRegistry(after);
@@ -277,8 +333,8 @@ export async function planHousemate({ handle, from, to, rows, clone, date, keyPl
       source: { before: files[from] ?? null, after: printedHouses[from] ?? null },
       target: { before: files[to] ?? null, after: printedHouses[to] ?? null },
       diff: lineDiff(read(clone, REGISTRY_PATH), printed.households),
-      // The public printout lists a house's home pictures only for its CURRENT residents (registry-public.mjs § publicHomeImages), and
-      // no transfer of the picture is ruled: so say plainly whether the printed file keeps showing the resident's picture.
+      // The public printout lists a house's home pictures only for its CURRENT residents (registry-public.mjs § publicHomeImages),
+      // so the picture is carried with the resident; say plainly whether the printed file keeps showing it.
       home_picture_printed: {
         before: [files[from], files[to]].some((h) => h?.home_images?.[handle] != null),
         after: [printedHouses[from], printedHouses[to]].some((h) => h?.home_images?.[handle] != null),
@@ -287,8 +343,11 @@ export async function planHousemate({ handle, from, to, rows, clone, date, keyPl
     cards,
     ledger: { lines, signed: keyed?.signed ?? [], checked: keyed?.replay?.checked ?? null, landing: lines.length ? ledgerLanding(clone, lines.length) : null },
     stamps: folds,
+    spellings,
+    home_picture: resuming
+      ? ((target.home_images ?? {})[handle] != null ? `on ${to}'s row (the store has moved)` : "none set")
+      : (source.home_images?.[handle] != null ? `set; it leaves ${from}'s row and goes with ${handle} to ${to}'s` : "none set"),
     stays_with_source: {
-      home_picture: source.home_images?.[handle] != null ? "set (stays on the source's row)" : "none set",
       invite_credit: source.invited_by != null ? "the source carries one (stays on the source's row)" : "none on the source",
       likeness: "not read, not changed (a separate follow-up)",
       accounts: `${(source.accounts ?? []).length} account(s) on the source row, all kept`,
@@ -337,6 +396,11 @@ export async function moveHousemate({ handle, from, to, clone, env = process.env
   const plan = await planHousemate({ handle, from, to, rows, clone, date, keyPlan, stamps, currentKeys });
   if (dryRun) return { dryRun: true, plan, evidence: await evidenceFor({ handle, from, to, rows, env, open }) };
 
+  // A SPELLING MOVES WITH NO MOVE (Wright, POS-1162): a real run goes ahead only when all three deltas are empty.
+  const S = plan.spellings;
+  if (!S.empty) throw refuse(HOUSEMATE_REFUSALS.SPELLINGS_MOVE,
+    `leaving ${from}: ${S.leaving_source.join(", ") || "none"}; joining ${to}: ${S.joining_target.join(", ") || "none"}; held by both: ${S.held_by_both.join(", ") || "none"}`);
+
   // A REAL MOVE TAKES NO DEFAULT (Wright, POS-1162): the receipt that this meep has its own town-attributed key is named per move.
   const receipt = String(credentialReady ?? "").trim();
   if (!receipt || /[\r\n]/.test(receipt)) throw refuse(HOUSEMATE_REFUSALS.CREDENTIAL_PRECONDITION);
@@ -358,7 +422,7 @@ export async function moveHousemate({ handle, from, to, clone, env = process.env
   if (ledger) paths.push(ledger);
 
   const sha = landOrRefuse(() => commit(clone, paths,
-    `registry: ${handle} moves from ${from} to ${to} · ${from} stays — the pin and past acts unchanged (via postmark-office, move-housemate, POS-1162; credential: ${receipt.slice(0, 120)})`));
+    `registry: ${handle} moves from ${from} to ${to} · ${from} stays — the pin and past acts unchanged (via postmark-office, move-housemate, POS-1162; credential receipt, ${ATTESTED}: ${receipt.slice(0, 120)})`));
   if (sha?.error) throw Object.assign(new Error(sha.error.defect), sha.error, { detail: "the store has moved; run the same command again to publish" });
   return { dryRun: false, plan, commit: sha, receipt };
 }
@@ -385,7 +449,7 @@ const countLine = (name, c) => {
 };
 
 /** What the plan touches, every row and file, in plain lines. */
-export function describe(plan, { dryRun, evidence = null }) {
+export function describe(plan, { dryRun, evidence = null, receipt = null }) {
   const out = [];
   out.push(`${dryRun ? "DRY RUN — nothing written." : "MOVED."}${plan.resuming ? " (resuming: the store had already moved)" : ""}`);
   out.push(`resident: ${plan.handle}  ·  from: ${plan.from} (stays)  ·  to: ${plan.to}  ·  date: ${plan.date}`);
@@ -400,7 +464,7 @@ export function describe(plan, { dryRun, evidence = null }) {
       for (const f of ["accounts", "formerly", "home_images", "invited_by"])
         out.push(row(f, before[f]) + (JSON.stringify(before[f]) === JSON.stringify(after[f]) ? "  (unchanged)" : ` -> ${JSON.stringify(after[f])}  <-- CHANGED`));
     }
-    out.push(`  nothing goes into ${plan.to}'s formerly, and ${plan.to} gains none of ${plan.from}'s accounts, key or home pictures`);
+    out.push(`  nothing goes into ${plan.to}'s formerly, and ${plan.to} gains none of ${plan.from}'s accounts or key; only ${plan.handle}'s own home picture goes with them`);
   } else out.push("  no change (already moved)");
   out.push("2. TOWN FILES (one pen commit):");
   const registryText = `  ${REGISTRY_PATH}: the drain prints ${plan.from} residents ${JSON.stringify(plan.registry.source.before?.residents ?? null)} -> ${JSON.stringify(plan.registry.source.after?.residents ?? null)}, ${plan.to} residents ${JSON.stringify(plan.registry.target.before?.residents ?? null)} -> ${JSON.stringify(plan.registry.target.after?.residents ?? null)}; exact lines:`;
@@ -410,8 +474,9 @@ export function describe(plan, { dryRun, evidence = null }) {
   if (d.unavailable) out.push(`    UNAVAILABLE — ${d.unavailable}`);
   else { for (const l of d.lines) out.push(`    ${l}`); if (d.capped) out.push(`    … ${d.total - d.lines.length} more`); }
   const pic = plan.registry.home_picture_printed;
+  out.push(`  ${plan.handle}'s home picture in the printout: ${pic.before ? "printed" : "not printed"} today, ${pic.after ? "printed" : "not printed"} after${pic.after ? ` (under ${plan.to})` : ""}`);
   if (pic.before && !pic.after)
-    out.push(`  NOTE: ${plan.handle}'s home picture is printed today and is NOT printed after the move: the public printout lists a house's pictures only for its current residents, and no transfer of the picture is ruled (it stays on ${plan.from}'s row)`);
+    out.push(`  NOTE: ${plan.handle}'s home picture is printed today and is NOT printed after the move`);
   out.push(pinsText);
   for (const c of plan.cards) out.push(`  ${c.path}: household: ${c.before} -> ${c.after}`);
   if (!plan.cards.length) out.push("  no card line to change");
@@ -423,7 +488,19 @@ export function describe(plan, { dryRun, evidence = null }) {
     for (const l of plan.ledger.lines) out.push(`    ${l.line} · sig: <the office pen>   (${l.role})`);
   } else out.push(`  ${LEDGER_REL}: no line (the clone's ledger already keys the house)`);
   out.push("4. WHAT DOES NOT CARRY OVER:");
-  out.push(`  rows spelled hh:${plan.from}, or one of ${plan.from}'s former keys or account ids, keep their spelling for life and stay ${plan.from}'s:`);
+  out.push(`  rows keep their spelling for life, and a row spelled in ${plan.from}'s set stays ${plan.from}'s while the set holds that spelling:`);
+  const sp = plan.spellings;
+  const keys = (l) => (l.length ? l.join(", ") : "none");
+  out.push(`  ${plan.from}'s spelling set before: ${keys(sp.source.before)}`);
+  out.push(`  ${plan.from}'s spelling set after:  ${keys(sp.source.after)}`);
+  out.push(`  ${plan.to}'s spelling set before: ${keys(sp.target.before)}`);
+  out.push(`  ${plan.to}'s spelling set after:  ${keys(sp.target.after)}`);
+  out.push(`  keys leaving ${plan.from}: ${keys(sp.leaving_source)}`);
+  out.push(`  keys joining ${plan.to}: ${keys(sp.joining_target)}`);
+  out.push(`  keys held by both: ${keys(sp.held_by_both)}`);
+  out.push(sp.empty
+    ? "  all three are empty: no spelling changes house (household-deriver.mjs § houseKeysOf, with the real pins)"
+    : `  NOT EMPTY: a real run refuses SPELLINGS_MOVE. No registry field can hold these for ${plan.from} (formerly is house slugs); a carrier is a ruling, not this tool's`);
   const h = evidence?.history;
   if (!h) out.push("  (history counts are taken by the dry run, not by a real run)");
   else if (h.unavailable != null) out.push(`  history counts: UNAVAILABLE — ${h.unavailable}`);
@@ -433,7 +510,7 @@ export function describe(plan, { dryRun, evidence = null }) {
     if (h.ground.unavailable != null) out.push(`  ground, parcels and homes the resident owns: UNAVAILABLE — ${h.ground.unavailable}`);
     else out.push(`  ground, parcels and homes the resident owns: ${h.ground.count}${h.ground.slugs.length ? ` (${h.ground.slugs.join(", ")}${h.ground.capped ? ", …" : ""})` : ""} — spelled as they were, unchanged`);
   }
-  out.push(`  the source's home picture for ${plan.handle}: ${plan.stays_with_source.home_picture}`);
+  out.push(`  ${plan.handle}'s home picture: ${plan.home_picture}`);
   out.push(`  invitation credit: ${plan.stays_with_source.invite_credit}`);
   out.push(`  likeness: ${plan.stays_with_source.likeness}`);
   out.push(`  accounts: ${plan.stays_with_source.accounts}`);
@@ -457,9 +534,10 @@ export function describe(plan, { dryRun, evidence = null }) {
     if (c.live_sign_in_keys.unavailable != null) out.push(`  live sign-in keys held by the pinned account: UNAVAILABLE — ${c.live_sign_in_keys.unavailable}`);
     else out.push(`  live sign-in keys held by the pinned account: ${c.live_sign_in_keys.by_kind ? JSON.stringify(c.live_sign_in_keys.by_kind) : c.live_sign_in_keys.note}`);
     out.push(`  harness keys: UNAVAILABLE — ${c.harness_keys.unavailable}`);
-    out.push(`  bound to ${plan.from}: ${c.bound_to_source}`);
+    out.push(`  bound to ${plan.from}: ${c.bound_to_source}${c.bound_to_source === "unknown" ? " (nothing read says yes, and a key the harness holds cannot be read)" : ""}`);
   }
-  out.push("  a real move waits, per meep, for POS-448 to give it its own town-attributed credential, and is run with --credential-ready \"<receipt>\"");
+  out.push(`  a real move waits, per meep, for POS-448 to give it its own town-attributed credential, and is run with --credential-ready "<receipt>" (${ATTESTED}: the tool cannot check it)`);
+  if (receipt) out.push(`  credential receipt (${ATTESTED}): ${receipt.slice(0, 120)}`);
   out.push("not changed: the handle, the home page, stamps, the pin, any history row. The office's house caches renew within a minute.");
   return out.join("\n");
 }

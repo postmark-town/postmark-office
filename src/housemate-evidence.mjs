@@ -7,8 +7,10 @@
 //
 // ── THE HISTORY COUNTS ──────────────────────────────────────────────────────
 // Rows keep the spelling they were written with for life (024_household_spellings.sql), so after the move
-// every row spelled `hh:<source>` (or a former key, or one of the source's `gh:<id>` accounts) stays the
-// SOURCE's. The counts below say how many of the mover's rows that is, table by table. The office reads
+// every row spelled in the source's set (`hh:<source>`, a former key, one of its `gh:<id>` accounts, or a
+// `solo:` spelling it holds) stays the SOURCE's, as long as the set itself does not move — which
+// tools/move-housemate.mjs § spellingDelta shows and a real run refuses on. The counts below say how many of
+// the mover's rows that is, table by table. The office reads
 // through `office_api`, and four of these tables are under row-level security that compares `household`
 // with the transaction's declared spelling set (`world2-claims.mjs § withHousehold`). So every count is
 // taken inside `withHousehold(pool, "hh:<source>")`: the source's own spelling set, exactly what its
@@ -126,7 +128,8 @@ export async function credentialImpact({ pool, handle, from, to, rows }) {
   const target = rows.households.find((r) => r.slug === to) ?? null;
   const pin = (rows.pins ?? []).find((p) => p.handle === handle) ?? null;
   const ghId = pin?.gh_id == null ? null : Number(pin.gh_id);
-  const listed = (house) => ghId != null && (house?.accounts ?? []).some((a) => Number(a?.id) === ghId);
+  // A pin with no GitHub id cannot be matched to an account: that is "unknown", not "not listed".
+  const listed = (house) => (ghId == null ? "unknown" : (house?.accounts ?? []).some((a) => Number(a?.id) === ghId));
   const sourceNames = new Set([from, ...(source?.formerly ?? [])].map(houseWord));
   const sourceIds = new Set((source?.accounts ?? []).map((a) => Number(a?.id)));
   const targetNames = new Set([to, ...(target?.formerly ?? [])].map(houseWord));
@@ -172,8 +175,9 @@ export async function credentialImpact({ pool, handle, from, to, rows }) {
     }
   }
 
-  // bound to the source: yes when ANY read path says so; "unknown" when nothing says yes and a path could not be read
-  const unreadable = Boolean(staticKeys.unavailable) || Boolean(liveSignIns.unavailable) || !pin;
+  // bound to the source: yes when ANY read path says so, and otherwise "unknown", NEVER false. The harness keys are
+  // always unreadable from here (below), so no answer this file can give clears the question; a fact it could not
+  // read is not a cleared precondition (Wright, 2026-11-26: "An unavailable credential fact reads as unknown").
   const yes = signIn.listed_in_source === true || (staticKeys.keys ?? []).some((k) => k.bound_to_source);
   return {
     handle,
@@ -181,7 +185,7 @@ export async function credentialImpact({ pool, handle, from, to, rows }) {
     static_keys: staticKeys,
     live_sign_in_keys: liveSignIns,
     harness_keys: { unavailable: "a key a meep's own harness holds (its env or its Letta secrets) is not in the store: not read, not reported" },
-    bound_to_source: yes ? true : (unreadable ? "unknown" : false),
+    bound_to_source: yes ? true : "unknown",
   };
 }
 
