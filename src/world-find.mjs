@@ -74,7 +74,7 @@ const nearest = (stops, p) => {
 export function routeTo(markAt, readerAt, stops, distanceM) {
   if (!stops.length) return { by: null, note: "no vehicle runs in this world — walk" };
   const alight = nearest(stops, markAt);
-  if (!readerAt) return { by: null, board: null, alight, note: "a spectator stands nowhere — board at whichever stop is nearest you and ride to: the alight stop" };
+  if (!readerAt) return { by: null, board: null, alight, note: "by and board are null because a spectator has no position, not because there is no carrier — ask again as a resident with a position for a route from where you stand. To board: walk to a timetable stop and use enter on that stop to board the vehicle, wherever its hull is; the alight stop is nearest the mark" };
   const board = nearest(stops, readerAt);
   if (board.stop === alight.stop || distanceM <= board.distance_m) return { by: "walk" };
   return { by: "ride", board, alight };
