@@ -653,17 +653,16 @@ async function writeLedger(client, townRepo, town, head, sha, changed, tally) {
 }
 
 /**
- * The commits `head..sha`, applied. Every table is written only where its rows
- * moved; the counts of what was written come back in `tally`, per table.
+ * THE DELTA'S NON-STORE WORK, done before any transaction (POS-1098). The git reads (the ancestry check, the commit count, the changed
+ * paths, the history) and `readTown` (the whole checkout, from disk) touch no table, yet they ran after BEGIN and the advisory lock, so
+ * the transaction sat open for all of them (Jetto's sampler, 2026-11-23: about 27 s idle after `SELECT sha FROM projection_heads`, every
+ * run). They depend on the head they run from, so `ingest` reads the head first, prepares from it, and under the lock re-reads the head: a
+ * head that moved is prepared again, never trusted (§ ingest). A history rewritten under the index still refuses here, with nothing begun.
+ * `ms` is the two phases' own time, carried into the result.
  */
-export async function applyDelta(client, { townRepo, head, sha, log = quiet, audit: auditing = false }) {
-  const tally = Object.fromEntries(Object.keys(TOWN_TABLES).map((n) => [n, { inserted: 0, deleted: 0 }]));
-  if (head === sha && !auditing) return { mode: "delta", head, sha, tally, commits: 0 };
-  // Where the time goes, per phase, in the result: the delta's cost is a claim
-  // the report makes, so the tool measures it rather than the report guessing.
+export function prepareDelta({ townRepo, head, sha, log = quiet }) {
   const ms = {};
   let t0 = Date.now();
-  const lap = (name) => { const t = Date.now(); ms[name] = t - t0; t0 = t; };
   try { git(townRepo, "merge-base", "--is-ancestor", head, sha); }
   catch {
     throw new Error(`the head ${head} is not an ancestor of ${sha}: the town's history was rewritten under the index. ` +
@@ -673,9 +672,28 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   // NUL-separated: a path is the resident's to name, a newline included
   const changed = git(townRepo, "diff", "--name-only", "-z", "--no-renames", head, sha).split("\0").filter(Boolean);
   const history = readHistory(townRepo, { range: `${head}..${sha}`, log });
-  lap("git");
+  ms.git = Date.now() - t0; t0 = Date.now();
   const town = readTown(townRepo);
-  lap("readTown");
+  ms.readTown = Date.now() - t0;
+  return { head, sha, commits, changed, history, town, ms };
+}
+
+/**
+ * The commits `head..sha`, applied. Every table is written only where its rows
+ * moved; the counts of what was written come back in `tally`, per table.
+ * `prepared` is prepareDelta's result for exactly this head and sha (ingest hands it, computed before the transaction began); without it
+ * the work is done here, as it always was.
+ */
+export async function applyDelta(client, { townRepo, head, sha, log = quiet, audit: auditing = false, prepared = null, prepare = prepareDelta }) {
+  const tally = Object.fromEntries(Object.keys(TOWN_TABLES).map((n) => [n, { inserted: 0, deleted: 0 }]));
+  if (head === sha && !auditing) return { mode: "delta", head, sha, tally, commits: 0 };
+  if (prepared && (prepared.head !== head || prepared.sha !== sha)) throw new Error(`the delta was prepared for ${prepared.head}..${prepared.sha}, not ${head}..${sha}: nothing was written`);
+  const { commits, changed, history, town, ms: prepMs } = prepared ?? prepare({ townRepo, head, sha, log });
+  // Where the time goes, per phase, in the result: the delta's cost is a claim
+  // the report makes, so the tool measures it rather than the report guessing.
+  const ms = { git: prepMs.git, readTown: prepMs.readTown };
+  let t0 = Date.now();
+  const lap = (name) => { const t = Date.now(); ms[name] = t - t0; t0 = t; };
 
   // history: appended, never re-walked
   await insertRows(client, "repo_log", history.rows, tally);
@@ -888,28 +906,68 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
 }
 
 /**
+ * The delta's one transaction: BEGIN, the advisory lock, the head AGAIN. Only if it is still the head the delta was prepared from is it applied
+ * (applyDelta, then the snapshot if asked) and COMMITted; otherwise nothing was written, the transaction is rolled back, and `null` says so. Any error
+ * rolls the whole transaction back and is rethrown.
+ */
+async function writeUnderLock(client, { townRepo, head, sha, log, snapshot, prepared, prepare }) {
+  await client.query("BEGIN");
+  try {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`town-index-ingest`]);
+    const now = await readHead(client);
+    if (now === head) {
+      const out = await applyDelta(client, { townRepo, head, sha, log, audit: snapshot, prepared, prepare });
+      if (snapshot) out.counts = await recordSnapshot(client, townRepo, sha, "crossing", out.audit ?? null);
+      await client.query("COMMIT");
+      return out;
+    }
+    await client.query("ROLLBACK");
+    return null;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  }
+}
+
+// How many times a delta is prepared again because the head moved between the first read and the lock (each is a whole readTown).
+const PREPARE_ATTEMPTS = 3;
+
+/**
  * One ingest, one transaction, under the pen's advisory lock: seed when asked
  * (or refuse a seed over a head), else the delta; then the snapshot if the
  * checkout stands on a seal.
+ *
+ * THE DELTA'S TRANSACTION HOLDS ONLY THE STORE'S WORK (POS-1098). The head is read first, and everything that touches no table (the git reads,
+ * readTown, the seal's subject) is done from it BEFORE BEGIN. Under the lock the head is read again: if it is still the one prepared from,
+ * the writes go in, atomically, as before; if another ingest moved it, this transaction is rolled back with nothing written and the delta is
+ * prepared again from the new head (a bounded number of times, then the strict error), so a concurrent run is never trusted. The seed
+ * (one-time) still derives inside its transaction: its derivation reads the store's own rows. `prepare` is the seam a test watches the
+ * boundary through (it defaults to prepareDelta).
  */
-export async function ingest(client, { townRepo, sha, seed: seeding = false, reseed = false, snapshot = false, log = quiet }) {
+export async function ingest(client, { townRepo, sha, seed: seeding = false, reseed = false, snapshot = false, log = quiet, prepare = prepareDelta }) {
+  let prepared = null;
+  if (!seeding) {
+    for (let attempt = 1; ; attempt++) {
+      const head = await readHead(client);                      // the first read, no transaction: only to say what to prepare from
+      if (!head) throw new Error("the index has no head yet: seed it first (--seed). A delta needs somewhere to start.");
+      if (snapshot) {
+        const subject = git(townRepo, "log", "-1", "--format=%s", sha).trim();
+        if (subject !== SEAL_SUBJECT) throw new Error(`--snapshot: ${sha} is not a crossing's seal ("${subject}")`);
+      }
+      prepared = head === sha && !snapshot ? { head, sha, commits: 0, changed: [], history: { rows: [] }, town: null, ms: { git: 0, readTown: 0 } }
+        : prepare({ townRepo, head, sha, log });
+      const out = await writeUnderLock(client, { townRepo, head, sha, log, snapshot, prepared, prepare });
+      if (out) return out;
+      if (attempt >= PREPARE_ATTEMPTS) throw new Error(`the index head moved under this ingest ${PREPARE_ATTEMPTS} times running: nothing was written; run it again`);
+      log.warn?.(`  the head moved while the delta was being prepared: preparing it again (attempt ${attempt + 1} of ${PREPARE_ATTEMPTS})`);
+    }
+  }
   await client.query("BEGIN");
   try {
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`town-index-ingest`]);
     const head = await readHead(client);
-    let out;
-    if (seeding) {
-      if (head && !reseed) throw new Error(`the index already has a head (${head}); a seed would replace every row. Pass --reseed to mean it.`);
-      out = await seed(client, { townRepo, sha, log });
-    } else {
-      if (!head) throw new Error("the index has no head yet: seed it first (--seed). A delta needs somewhere to start.");
-      out = await applyDelta(client, { townRepo, head, sha, log, audit: snapshot });
-      if (snapshot) {
-        const subject = git(townRepo, "log", "-1", "--format=%s", sha).trim();
-        if (subject !== SEAL_SUBJECT) throw new Error(`--snapshot: ${sha} is not a crossing's seal ("${subject}")`);
-        out.counts = await recordSnapshot(client, townRepo, sha, "crossing", out.audit ?? null);
-      }
-    }
+    if (head && !reseed) throw new Error(`the index already has a head (${head}); a seed would replace every row. Pass --reseed to mean it.`);
+    const out = await seed(client, { townRepo, sha, log });
     await client.query("COMMIT");
     return out;
   } catch (e) {

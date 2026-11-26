@@ -21,7 +21,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 
-import { fixtureKey, fixtureTown } from "./fixture.mjs";
+import { fixtureKey, fixtureTown, tempClone } from "./fixture.mjs";
+// POS-1165: amend re-judges the body through the shared field policy, held to the clone's pin: this fixture clone carries the reviewed file
+const LF_CLONE = tempClone();
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 import { hotLetters, hotMailBlock, sendLetterAsRow } from "../src/town-mail.mjs";
@@ -93,10 +95,10 @@ test("the fold refuses a later word that is not the sender's, follows a withdraw
 test("amend: only the last version stands for the sender, the receipt says only it sails, and the log keeps all three bodies", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow(letter, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow(letter, fixtureKey, db, LF_CLONE, o);
     lockLog.length = 0;
-    const r1 = await amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThe second draft." }, fixtureKey, { db, odb: o, lock });
-    const r2 = await amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThe last word." }, fixtureKey, { db, odb: o, lock });
+    const r1 = await amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThe second draft." }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock });
+    const r2 = await amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThe last word." }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock });
     assert.equal(r1.amended, true);
     assert.equal(r2.version, 3);
     assert.match(r2.note, /^only this version sails/);
@@ -124,12 +126,12 @@ test("amend: only the last version stands for the sender, the receipt says only 
 test("amend: the same body writes nothing; an empty body and a body over the send's courtesy are refused, and nothing is written", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "the same" }, fixtureKey, db, null, o);
-    const same = await amendLetterAtOffice({ id: sent.letter_id, body: letter.body }, fixtureKey, { db, odb: o, lock });
+    const sent = await sendLetterAsRow({ ...letter, title: "the same" }, fixtureKey, db, LF_CLONE, o);
+    const same = await amendLetterAtOffice({ id: sent.letter_id, body: letter.body }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock });
     assert.equal(same.amended, false);
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "  " }, fixtureKey, { db, odb: o, lock }), { code: 422 });
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "  " }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock }), { code: 422 });
     // flip: the validateLetter(...) line in letter-amend.mjs § amendLetterAtOffice
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "x".repeat(100_001) }, fixtureKey, { db, odb: o, lock }), { code: 413 });
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "x".repeat(100_001) }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock }), { code: 413 });
     assert.equal((await rowsOf(o)).length, 1, "only the send row");
   });
 });
@@ -137,8 +139,8 @@ test("amend: the same body writes nothing; an empty body and a body over the sen
 test("amend and withdraw reach only your own pending letter: another household's key is told it has no such letter, and nothing is written", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "mine" }, fixtureKey, db, null, o);
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "hijacked" }, limenKey, { db, odb: o, lock }),
+    const sent = await sendLetterAsRow({ ...letter, title: "mine" }, fixtureKey, db, LF_CLONE, o);
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "hijacked" }, limenKey, { db, clone: LF_CLONE, odb: o, lock }),
       (e) => e.code === 404 && /no letter of yours/.test(e.defect));
     await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, limenKey, { odb: o, lock }), { code: 404 });
     assert.equal((await rowsOf(o)).length, 1);
@@ -150,7 +152,7 @@ test("amend and withdraw reach only your own pending letter: another household's
 test("withdraw: the letter leaves the sender's pending view, the log keeps the withdrawal, and a second withdrawal or a later amendment is refused", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "take it back" }, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow({ ...letter, title: "take it back" }, fixtureKey, db, LF_CLONE, o);
     const r = await withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock });
     assert.equal(r.withdrawn, true);
     assert.match(r.note, /nothing was deleted/);
@@ -158,7 +160,7 @@ test("withdraw: the letter leaves the sender's pending view, the log keeps the w
     const all = await rowsOf(o);
     assert.deepEqual(all.map((x) => x.act), [SEND_ACT, WITHDRAW_ACT], "the send row is still there, beside its withdrawal");
     await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock }), (e) => e.code === 409 && /already withdrawn/.test(e.defect));
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "after all" }, fixtureKey, { db, odb: o, lock }), { code: 409 });
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "after all" }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock }), { code: 409 });
     const read = await pendingLetterRead(o, fixtureKey, sent.letter_id);
     assert.equal(read.withdrawn.seq, all[1].seq, "its own read says it was withdrawn");
   });
@@ -168,7 +170,7 @@ test("a letter whose file already stands in the town's record has sailed and is 
   const o = odb();
   const clone = tempDir("pm-amend-sailed-");
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "on the boat" }, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow({ ...letter, title: "on the boat" }, fixtureKey, db, LF_CLONE, o);
     const file = (await rowsOf(o))[0].payload.file;
     mkdirSync(dirname(join(clone, file)), { recursive: true });
     writeFileSync(join(clone, file), "the record's copy");
@@ -182,9 +184,9 @@ test("a letter whose file already stands in the town's record has sailed and is 
 test("a crossing holding the lock past the wait refuses the act in its own words, and nothing is written", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "the boat is loading" }, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow({ ...letter, title: "the boat is loading" }, fixtureKey, db, LF_CLONE, o);
     const busy = async (_fn, opts) => { throw Object.assign(new Error(opts.busy.defect), opts.busy); };
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "now" }, fixtureKey, { db, odb: o, lock: busy }),
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "now" }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock: busy }),
       (e) => e.code === 503 && /^the town lock is held — by a crossing, the keep tick or another whole-town write/.test(e.defect) && /sailed as written/.test(e.hint));
     await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: busy }), { code: 503 });
     assert.equal((await rowsOf(o)).length, 1);
@@ -193,7 +195,7 @@ test("a crossing holding the lock past the wait refuses the act in its own words
 
 test("an office with no town log has no pending letter to change, and says so", async () => {
   const o = odb();
-  await assert.rejects(() => amendLetterAtOffice({ id: "x", body: "y" }, fixtureKey, { db, odb: o, lock }), (e) => e.code === 503 && /standing-mail tense/.test(e.defect));
+  await assert.rejects(() => amendLetterAtOffice({ id: "x", body: "y" }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock }), (e) => e.code === 503 && /standing-mail tense/.test(e.defect));
   await assert.rejects(() => withdrawLetterAtOffice({ id: "x" }, fixtureKey, { odb: o, lock }), { code: 503 });
 });
 
@@ -255,11 +257,11 @@ test("the hold is BOUNDED: a section that hangs is aborted, the lock let go and 
 test("a bound that let go before the write writes nothing: amend checks its signal before it appends", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "too slow" }, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow({ ...letter, title: "too slow" }, fixtureKey, db, LF_CLONE, o);
     const ac = new AbortController(); ac.abort();
     const late = async (fn) => fn({ signal: ac.signal });
     // flip: the `stillHeld(signal)` line before `later(l, AMEND_ACT, …)` in letter-amend.mjs
-    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "late" }, fixtureKey, { db, odb: o, lock: late }), { code: 503 });
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "late" }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock: late }), { code: 503 });
     await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: late }), { code: 503 });
     assert.equal((await rowsOf(o)).length, 1, "only the send row");
   });
@@ -278,20 +280,20 @@ test("the refusals say which thing happened: a wait that ran out is busy, a lock
 test("ONE LATER WORD AT A TIME, PER LETTER: two amends at once get versions 2 and 3, and the one that says it sails is the one that does", async () => {
   const o = odb();
   await flagOn(async () => {
-    const sent = await sendLetterAsRow({ ...letter, title: "at once" }, fixtureKey, db, null, o);
+    const sent = await sendLetterAsRow({ ...letter, title: "at once" }, fixtureKey, db, LF_CLONE, o);
     // a lock that lets both callers in together, as shared mode does
     const shared = async (fn) => { await new Promise((r) => setImmediate(r)); return fn({}); };
     // and a store that answers on a later turn between the judging and the write, as a real one does
     const slowStore = async () => { await new Promise((r) => setImmediate(r)); return null; };
     // flip: the `oneAtATime(slotOf(key, fields), …)` wrapper in letter-amend.mjs § amendLetterAtOffice
     const [a, b] = await Promise.all([
-      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nFirst." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
-      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nSecond." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nFirst." }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock: shared, blockedRefusal: slowStore }),
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nSecond." }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock: shared, blockedRefusal: slowStore }),
     ]);
     assert.deepEqual([a.version, b.version], [2, 3], "each receipt names its own version");
     assert.equal((await hotLetters(o, fixtureKey))[0].payload.args.body, "Limen —\n\nSecond.", "and the last receipt's body is the one that stands");
     const [c, d] = await Promise.allSettled([
-      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThird." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThird." }, fixtureKey, { db, clone: LF_CLONE, odb: o, lock: shared, blockedRefusal: slowStore }),
       withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: shared }),
     ]);
     assert.equal(c.value.version, 4);

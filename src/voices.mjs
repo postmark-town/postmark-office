@@ -58,7 +58,7 @@ import { NONCE_MAX } from "./town-journal.mjs";
 import { hearable, roomOpen } from "./hearing-window.mjs";
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 import { speakerBook, adoptSpeakerBook, bookToPlain, lineSpeaker, pickSpeaker } from "./speaker-line.mjs"; // POS-1132: how a human is said on a line, and the shoulder they stood on
-import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, replyTargetIn, closedRoomRefusal, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
+import { markIdOf, sayIdOf, sayLines, circleIndex, circleView, circleRead, sinceRead, withRead, resolveReplyTo, replyTargetIn, closedRoomRefusal, findConversation, mcpBytes, CIRCLE_BUDGET_BYTES, ROOM_VOICES_MAX } from "./circles.mjs"; // POS-1035: circles, a view over the same lines
 import { roomsOf, roomFor, roomsHeardFrom, roomIdOf, roomAtOf, roomKeyOf, isRoomId } from "./rooms.mjs"; // POS-1185: which room a say is in, decided once
 
 // The class the dials hang on. Named once, beside the reader, for the same
@@ -1420,7 +1420,9 @@ export function createVoices({
         now: new Date(t).toISOString(),
         earshot_m: earshotM,
         settlement_since: boundaries.length ? new Date(since).toISOString() : null,
-        find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), budget: circleBudget, source: "memory" }),
+        find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, boundaries), voiceCap }), budget: circleBudget, source: "memory",
+          // POS-1232: the opt-in room voice page, from the office's MEMORY here (`source: "memory"` says so; the record's read is the historical one)
+          roomLines: (c) => { const cap = Math.min(voiceCap, ROOM_VOICES_MAX); return { cap, before: voicesBefore, paged: pagedThread(c, { live: roomOpen(c.latest, t, boundaries), voiceCap: cap, voicesBefore, memoryMax }) }; } }),
       };
     }
     const live = [];

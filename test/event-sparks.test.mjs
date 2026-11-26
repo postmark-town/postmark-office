@@ -167,6 +167,47 @@ test("present: the households with a public act at the place in the window — o
   assert.ok(!S.PRESENCE_ACTS.includes("rsvp"), "an RSVP is never presence (call 4)");
 });
 
+// ── POS-1217 (CORE-177): who was there, by the actor the record kept ──
+
+test("participants: the distinct actors of the same qualifying acts — each once, sorted; two of one household stay two; a human's own hand is flagged; no actor lists no one", () => {
+  const w = { window: { from: min(0), to: min(60) }, place: PLACE };
+  const at = (m, actor, household, point = { x: 100, y: 200 }) => ({ at: new Date(min(m)), actor, household, point });
+  const rows = [
+    at(5, "pica", "pica-house"), at(6, "pica", "pica-house"),                      // once
+    at(7, "pica2", "pica-house"),                                                   // a housemate with an act of their own: distinct
+    at(8, "human-of-otter", "otter-house", { x: 150, y: 220 }),                     // a human's own hand, at the companion's standing
+    at(9, "heron", "heron-house", { x: 400, y: 200 }),                              // beyond 60 m
+    at(-5, "early", "badger-house"),                                                // before doors
+    at(61, "late", "badger-house"),                                                 // after the window the read is scoped to
+    at(10, "berth", null),                                                          // no household: not today's `present`, so not here
+    { at: new Date(min(11)), actor: "unplaced", household: "mole-house", point: null },
+    at(12, "", "blank-house"), at(13, "   ", "blank-house"), at(14, null, "blank-house"), at(15, undefined, "blank-house"), at(16, 7, "blank-house"), // no recorded actor
+    at(17, "human-of-", "odd-house"),                                               // not a hand: no house after the prefix
+  ];
+  assert.deepEqual(S.participantsFrom(rows, w), [
+    { handle: "human-of-", household: "odd-house" },
+    { handle: "human-of-otter", household: "otter-house", human: true },
+    { handle: "pica", household: "pica-house" },
+    { handle: "pica2", household: "pica-house" },
+  ]);
+  assert.deepEqual(S.presentFrom(rows, w), ["blank-house", "odd-house", "otter-house", "pica-house"], "the household read is untouched by the new one, and still names a house whose act had no actor");
+  // the first qualifying act's household is the actor's
+  assert.equal(S.participantsFrom([at(5, "mover", "first-house"), at(6, "mover", "second-house")], w)[0].household, "first-house");
+});
+
+test("presentParticipants: a human's hand gains the public presentation a conversation's line has, a resident gains nothing, and no book (or no such house) is unknown — never guessed, never `beside`", () => {
+  const book = new Map([["starforge", { house: "Starforge", house_slug: "starforge", town_name: "DARKO", pronouns: "he/him" }], ["lantern-row", { house: "Lantern Row", house_slug: "lantern-row" }]]);
+  const list = [{ handle: "human-of-lantern-row", household: "lantern-row", human: true }, { handle: "human-of-nowhere", household: "nowhere", human: true },
+    { handle: "human-of-starforge", household: "starforge", human: true }, { handle: "rei", household: "starforge" }];
+  assert.deepEqual(S.presentParticipants(list, book), [
+    { handle: "human-of-lantern-row", household: "lantern-row", human: true, speaker: "the human of Lantern Row", house: "Lantern Row", house_slug: "lantern-row" },
+    { handle: "human-of-nowhere", household: "nowhere", human: true },
+    { handle: "human-of-starforge", household: "starforge", human: true, speaker: "DARKO, of Starforge", town_name: "DARKO", pronouns: "he/him", house: "Starforge", house_slug: "starforge" },
+    { handle: "rei", household: "starforge" },
+  ]);
+  assert.deepEqual(S.presentParticipants(list, null), list, "no registry read: the canonical handles, untouched");
+});
+
 // ── on a disposable store: the calendar's one-event evidence and the lasting list ──
 
 const { startStore } = await import("./helpers/embedded-store.mjs");
@@ -225,6 +266,81 @@ test("an event still on answers its evidence so far; one not yet open, or cancel
   await event("pica/called-off", 0, 60, { state: "cancelled" });
   const { event: off } = await calendarAtOffice({ event: "pica/called-off" }, { now: NOW, env: ENV, settlements: () => [] });
   assert.equal("evidence" in off, false);
+});
+
+// POS-1217: the whole fixture is invented, and one ground of its own (far from every other test's place), so the read below is the only thing that can fill it
+const GROUND = { x: -3000, y: -3000 };
+const REGISTRY = { households: { starforge: { name: "Starforge", residents: ["rei", "vex"], human: "Private Realname One", human_profile: { town_name: "DARKO", pronouns: "he/him", short_line: "a line" } } } };
+
+test("the calendar's one-event read names who was there: two actors of one house stay two, a walker who never spoke is there, a human is the human and not the resident they stood beside, and no member, RSVP or draft is added", async () => {
+  const sp = await import("../src/speaker-line.mjs");
+  const { penHeld } = await import("../src/store-pool.mjs");
+  const pen = await import("../src/world2-pen.mjs");
+  const post = (id, endMin) => owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ($1, 'event', $2, '', 'pica', 'pica-house', NULL, $3, $4, $5, $6, 'announced', $7, 0, 1, 1)`,
+    [id, `the ${id}`, GROUND.x, GROUND.y, new Date(min(0)), new Date(min(endMin)), JSON.stringify({ doors_open: new Date(min(0)).toISOString() })]);
+  await post("pica/lantern-walk", 120);
+  await post("pica/lantern-on", 600);
+  const at = (action, actor, m, household, payload = {}, dx = 0, dy = 0) => act(action, actor, m, GROUND.x + dx, GROUND.y + dy, household, payload);
+  await at("say", "pica", 10, "pica-house", { text: "Welcome, everyone!" });
+  await at("walk", "pica2", 20, "pica-house", {}, 10, 5);                                      // a housemate, never speaks: a second recorded actor of the same house
+  await at("walk", "otter1", 30, "otter-house", {}, 20, 10);                                   // a walker who never spoke
+  await at("say", "human-of-starforge", 40, "starforge", { text: "we made it aboard", stood_with: "vex" }, 5, 0); // the human's own hand; vex lent the standing and did nothing
+  await at("say", "human-of-ghost", 41, "ghost", { text: "hello" });                           // a hand whose house the book does not know
+  await owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household) VALUES
+    ($1, 0, 'maker1', 'leave-mark', 'mark', '{"put_forward": true}', 'world', $3, $4, 'maker-house'),
+    ($2, 0, 'drafter', 'leave-mark', 'mark', '{}', 'world', $3, $4, 'drafter-house')`, [new Date(min(45)), new Date(min(46)), GROUND.x, GROUND.y]); // a put-forward mark is the town's, a private draft is not
+  await at("walk", "", 55, "blank-house");                                                     // an act with no recorded actor
+  await at("walk", "walker90", 90, "late-house");                                              // inside the first event's window, after the second read's `now`
+  await at("rsvp", "badger1", 5, "badger-house");                                              // an RSVP is not presence
+  await at("rsvp", "pica3", 6, "pica-house");                                                  // a household's member with no act at the place
+  await at("walk", "heron1", 50, "heron-house", {}, 900, 900);                                 // beyond 60 m
+  await at("walk", "early1", -5, "early-house");                                               // before the doors
+  await at("walk", "late1", 200, "late-house");                                                // after the event
+  const HANDLES = ["human-of-ghost", "human-of-starforge", "maker1", "otter1", "pica", "pica2"];
+
+  // the book is asked with no lease held, and the control shows the detector sees one when it is held
+  const asked = [];
+  sp.useRegistryLoader(() => { asked.push(penHeld() !== null); return Promise.resolve(REGISTRY); }); // penHeld: the lease's name, or null when none is held
+  const read = (id, now) => calendarAtOffice({ event: id }, { now, env: ENV, settlements: () => [min(-600)] });
+  const { event: ended } = await read("pica/lantern-walk", NOW);
+  const ev = ended.evidence;
+  const askedByTheRead = [...asked];
+
+  assert.deepEqual(ev.participants.map((p) => p.handle), [...HANDLES, "walker90"].sort(), "the actors of the qualifying acts, sorted: not RSVPs, members, drafts, the far, the early, the late or the companion");
+  const by = Object.fromEntries(ev.participants.map((p) => [p.handle, p]));
+  assert.deepEqual(by.pica, { handle: "pica", household: "pica-house" });
+  assert.deepEqual(by.pica2, { handle: "pica2", household: "pica-house" }, "two recorded actors of one household remain two");
+  assert.deepEqual(by.otter1, { handle: "otter1", household: "otter-house" }, "a qualifying actor who never spoke is there");
+  assert.deepEqual(by["human-of-starforge"], { handle: "human-of-starforge", household: "starforge", human: true, speaker: "DARKO, of Starforge", town_name: "DARKO", pronouns: "he/him", house: "Starforge", house_slug: "starforge" },
+    "the human is the human, presented as a conversation's line presents them");
+  assert.equal("vex" in by, false, "the companion lent standing, not authorship: it has no act of its own and is not listed");
+  assert.equal(JSON.stringify(ev.participants).includes("vex"), false, "nor named as the shoulder");
+  assert.deepEqual(by["human-of-ghost"], { handle: "human-of-ghost", household: "ghost", human: true }, "a hand whose house is unknown gains no line, never a guess");
+  assert.equal("beside" in by["human-of-starforge"], false);
+  assert.equal(JSON.stringify(ended).includes("Realname"), false, "the private human's name is nowhere in the read");
+  assert.deepEqual(by.maker1, { handle: "maker1", household: "maker-house" }, "a put-forward mark is a public act");
+  assert.equal("drafter" in by, false, "a private draft is not");
+  assert.match(ev.participants_basis, /never RSVPs, never a household's members/);
+  assert.deepEqual(askedByTheRead, [false], "the registry was asked once, outside the pen's leases");
+  await pen.officeRead(async () => { sp.forgetSpeakerBook(); await sp.speakerBook(); }, { env: ENV });
+  assert.deepEqual(asked, [false, true], "control: inside a lease the same ask is seen holding it");
+  // and the household read is the one it always was
+  assert.deepEqual(ev.present, ["blank-house", "ghost", "late-house", "maker-house", "otter-house", "pica-house", "starforge"],
+    "present: the households, untouched — including the one whose act had no actor, who lists no participant");
+
+  // an event still on: capped at now
+  const { event: on } = await read("pica/lantern-on", min(60));
+  assert.equal(on.evidence.complete, false);
+  assert.deepEqual(on.evidence.participants.map((p) => p.handle), HANDLES, "walker90 acts after now: not there yet");
+  assert.deepEqual(on.evidence.present, ["blank-house", "ghost", "maker-house", "otter-house", "pica-house", "starforge"]);
+
+  // an unreadable registry leaves the human's canonical hand, and nothing else of the read moves
+  sp.useRegistryLoader(() => Promise.resolve(null));
+  const { event: blind } = await read("pica/lantern-walk", NOW);
+  assert.deepEqual(blind.evidence.participants.find((p) => p.human && p.household === "starforge"), { handle: "human-of-starforge", household: "starforge", human: true }, "no book: unknown, not 'the human of starforge'");
+  assert.deepEqual({ ...blind.evidence, participants: null }, { ...ev, participants: null }, "every other field of the evidence is the same read");
+  sp.useRegistryLoader(null);
 });
 
 test("the lasting list: every ended event past the calendar's week, newest end first, paged with ties kept — the recent calendar stays short", async () => {
