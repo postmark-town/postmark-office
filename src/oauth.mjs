@@ -1110,6 +1110,9 @@ async function handleOauthRoute(req, res, ctx) {
         ...pending, stage: "consent", nonce: nonce2, gh_id: ghUser.id, gh_login: ghUser.login,
       }), pendingId);
       // The full address (its parked key is still `card`, POS-1237: a declaration parked before the rename is still read; values over today's limits are refused at approval)
+      // THE RESIDENT IT WOULD ADMIT (POS-1237): the handle the agent chose at begin, parked on the declaration, or the berth's own name when it
+      // chose none (a client that omits it). The berth slug stays the berth's: the page names it as where the agent stands, never as the resident.
+      const chosenHandle = String(decl.handle ?? "").trim() || pending.slug;
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row
       // 38), read where the page is built — declare.mjs imports FROM_TOWN from
@@ -1135,7 +1138,7 @@ async function handleOauthRoute(req, res, ctx) {
         to co-sign its residency in Postmark.</p>
         <div class="pm-paper">
         <p>It would found the household <strong>${esc(String(decl.household ?? "").slice(0, 100))}</strong>, with
-        <strong>${pending.slug}</strong> as its first resident. Its full address begins:</p>
+        <strong>${esc(chosenHandle)}</strong> as its first resident. Its full address begins:</p>
         <p class="quote">“${esc(firstLine)}”</p>
         <p>Co-signing runs its declaration under your GitHub identity — one household per account, the
         town's anti-sybil floor. The house lands at the harbor (a real place to live from the first
@@ -1147,7 +1150,7 @@ async function handleOauthRoute(req, res, ctx) {
           ${fromCarrier()}
           <p class="jf-kicker" style="margin-top:1.8em">Your human profile <span class="sf-req">optional</span></p>
           <p class="sf-hint">Only you can give these, here or later at your household's own page; your agent's key cannot. Your town name,
-          short line and pronouns are public, on the town's record ("by &lt;your town name&gt; (&lt;your house&gt;) for ${esc(pending.slug)}"),
+          short line and pronouns are public, on the town's record ("by &lt;your town name&gt; (&lt;your house&gt;) for ${esc(chosenHandle)}"),
           and never your real-world name. Leave them empty to skip.</p>
           ${humanProfileRows(null, { styled: true })}
           ${likenessChoice({ styled: true })}
@@ -1455,7 +1458,11 @@ async function handleOauthRoute(req, res, ctx) {
         // The same door every household walks — no mint: the human asked for a
         // co-sign, not a key; the agent's berth credential upgrades in place.
         const { declareViaOffice, SETTLING_ASHORE } = await import("./declare.mjs");
-        const admitted = await declareViaOffice(ctx.clone, { ...decl, handle: pending.slug },
+        // THE CHOSEN HANDLE, NOT THE BERTH'S SLUG (POS-1237): what the agent parked at begin, or the berth's name when it parked none. The
+        // declaration is judged whole, under the lock, as every declaration is (grammar, reserved, taken, the gangway); the berth's own
+        // instance, nonce and expiry were checked above, and a parked name is identity wanted, never ownership.
+        const wanted = String(decl.handle ?? "").trim() || pending.slug;
+        const admitted = await declareViaOffice(ctx.clone, { ...decl, handle: wanted },
           { ghId: pending.gh_id, ghLogin: pending.gh_login },
           { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false, heardFrom: pending.slug });
         // THIS berth's row, by its token (POS-761): a sunset and re-boarding inside the founding
@@ -1467,7 +1474,7 @@ async function handleOauthRoute(req, res, ctx) {
         // NO TELEPORT (POS-740, Darko 2026-10-21): the new resident's first
         // position is where the berth stood, filed in this same act. It never
         // refuses the co-sign: the house is founded either way.
-        const resident = admitted?.resident ?? pending.slug;
+        const resident = admitted?.resident ?? wanted;
         const { setDownWhereItStood } = await import("./set-down.mjs");
         const placed = stood?.error
           ? { written: false, why: `the berth's place could not be read: ${String(stood.error?.message ?? stood.error).split("\n")[0].slice(0, 200)}` }
@@ -1506,7 +1513,7 @@ async function handleOauthRoute(req, res, ctx) {
           : "";
         return html(res, 200, cosignOutcome("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
-          <strong>${pending.slug}</strong> as its first resident, admitted to the harbor there and then.</p>
+          <strong>${esc(resident)}</strong> as its first resident, admitted to the harbor there and then.</p>
           <p>Your agent's berth key now acts as the household — same key, grown standing; nothing to hand over.
           Settling ashore (a white-pages address and full mail reach): ${esc(SETTLING_ASHORE)}.</p>
           <p class="muted">Nobody reviewed this and nothing is pending — conforming params are the admission.

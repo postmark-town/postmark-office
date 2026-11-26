@@ -323,3 +323,122 @@ test("POS-1237 · C5 the served co-sign wears the join's look around the same fo
   assert.match(lostText, /<h1>Postmark — the town office<\/h1>/);
   assert.doesNotMatch(lostText, /reg-face|jf-art|radial-gradient/);
 });
+
+// ── POS-1237 · THE CHOSEN FINAL HANDLE (Wright: "the office carries the chosen final handle separately from the temporary berth slug") ──
+//
+// begin's declaration already had `handle`; the co-sign overrode it with the berth's slug. Now the handle the agent chose rides the
+// parked declaration, apart from the slug, and the human's co-sign declares IT: a short temporary berth admits a 32–40-character
+// resident through the same human-confirmation road, with no new route, kind or store. Flip: put `pending.slug` back over the
+// declaration's handle in oauth.mjs (the co-sign's `wanted`) and H1 reds by name.
+
+const LONG36 = "harbor-lantern-keeper-of-the-quay-01";
+const LONG40 = "a-resident-whose-name-fills-the-forty-xx";
+
+async function boardAndBegin(slug, ip, args) {
+  const boarded = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify({ slug }) });
+  assert.equal(boarded.status, 201, await boarded.clone().text());
+  const { key } = await boarded.json();
+  const begun = await fetch(`${BASE}/household`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ do: "begin", args: { full_address: "A name chosen long.\nAnd kept.", ...args } }),
+  });
+  return { key, begun, body: await begun.json() };
+}
+async function coSignPage(slug) {
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=${slug}`, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const html = await (await fetch(r2.headers.get("location"))).text();
+  return { html, pending_id: /name="pending_id" value="([^"]+)"/.exec(html)[1], nonce: /name="nonce" value="([^"]+)"/.exec(html)[1] };
+}
+const bareStanding = async (key) => (await fetch(`${BASE}/household`, { headers: { authorization: `Bearer ${key}` } })).json();
+
+test("POS-1237 · H1 a short temporary berth admits a different 36-character chosen resident through the human's co-sign; the berth's key upgrades to that household", async () => {
+  ghIdentity = { id: 1237101, login: "final-human-h1" };
+  const { key, begun, body } = await boardAndBegin("fh-short", "203.0.113.81", { household: "Final Handle One", handle: LONG36 });
+  assert.equal(begun.status, 200, JSON.stringify(body));
+  assert.equal(body.result.handle, LONG36, "begin answers the resident the co-sign will declare");
+  assert.equal(body.result.berth, "fh-short", "and the berth it stands on, apart");
+  assert.equal(JSON.parse(await parkedOf("fh-short")).handle, LONG36, "parked on the declaration, apart from the slug");
+  const before = await bareStanding(key);
+  assert.equal(before.declaration?.handle, LONG36, "the berth's own status reads the chosen handle");
+  // parked identity is not ownership: nothing is founded, no card, no house, until the human signs
+  assert.equal(await houseRow("final-handle-one"), null);
+  const { existsSync, readFileSync } = await import("node:fs");
+  assert.equal(existsSync(join(clone, "WHITE_PAGES", LONG36)), false, "no address before the click");
+  const page = await coSignPage("fh-short");
+  assert.match(page.html, /The agent at berth <strong>fh-short<\/strong>/, "the berth is named as where the agent stands");
+  assert.match(page.html, new RegExp(`<strong>${LONG36}</strong> as its first resident`), "the page names the CHOSEN resident");
+  assert.doesNotMatch(page.html, /<strong>fh-short<\/strong> as its first resident/);
+  const done = await approveWith(page);
+  const text = await done.text();
+  assert.equal(done.status, 200, text.slice(0, 500));
+  assert.match(text, new RegExp(`<strong>${LONG36}</strong> as its first resident`), "the success copy names the admitted resident");
+  assert.ok(existsSync(join(clone, "WHITE_PAGES", LONG36, "ADDRESS.md")), "the chosen resident's address is written");
+  assert.equal(existsSync(join(clone, "WHITE_PAGES", "fh-short")), false, "the berth's slug is not admitted as a resident");
+  assert.match(readFileSync(join(clone, "WHITE_PAGES", LONG36, "ADDRESS.md"), "utf8"), new RegExp(`handle: ${LONG36}`));
+  assert.ok(await houseRow("final-handle-one"), "the house stands");
+  // the same key, grown standing: it resolves to the household the human actually admitted, holding the chosen handle
+  const after = await bareStanding(key);
+  assert.ok(JSON.stringify(after).includes(LONG36), `the same key answers as the household holding ${LONG36}: ${JSON.stringify(after).slice(0, 400)}`);
+  assert.ok(!JSON.stringify(after.residents ?? []).includes("fh-short"), "not the berth slug");
+});
+
+test("POS-1237 · H2 a 40-character chosen handle is admitted too (the town's accepted ceiling)", async () => {
+  ghIdentity = { id: 1237102, login: "final-human-h2" };
+  const { begun, body } = await boardAndBegin("fh-forty", "203.0.113.82", { household: "Final Handle Forty", handle: LONG40 });
+  assert.equal(begun.status, 200, JSON.stringify(body));
+  const done = await approveWith(await coSignPage("fh-forty"));
+  assert.equal(done.status, 200, (await done.text()).slice(0, 400));
+  const { existsSync } = await import("node:fs");
+  assert.ok(existsSync(join(clone, "WHITE_PAGES", LONG40, "ADDRESS.md")));
+});
+
+test("POS-1237 · H3 a begin that omits the handle is the old road: the berth's own name is the resident, the page and the answer say so", async () => {
+  ghIdentity = { id: 1237103, login: "final-human-h3" };
+  const { begun, body } = await boardAndBegin("fh-legacy", "203.0.113.83", { household: "Final Handle Legacy" });
+  assert.equal(begun.status, 200, JSON.stringify(body));
+  assert.equal(body.result.handle, "fh-legacy");
+  assert.equal(JSON.parse(await parkedOf("fh-legacy")).handle, undefined, "nothing invented on the declaration");
+  const page = await coSignPage("fh-legacy");
+  assert.match(page.html, /<strong>fh-legacy<\/strong> as its first resident/);
+  const done = await approveWith(page);
+  assert.equal(done.status, 200, (await done.text()).slice(0, 300));
+  const { existsSync } = await import("node:fs");
+  assert.ok(existsSync(join(clone, "WHITE_PAGES", "fh-legacy", "ADDRESS.md")));
+});
+
+test("POS-1237 · H4 the normal refusals at begin, by name and writing nothing: grammar, length, reserved, prefix, taken", async () => {
+  const cases = [
+    ["Not_Well Formed", 422], ["a", 422], ["x".repeat(41), 422],
+    ["postmaster", 409], ["berth-someone", 409], ["human-of-someone", 409], ["wright", 409],
+  ];
+  let n = 0;
+  for (const [handle, code] of cases) {
+    const slug = `fh-ref-${n}`;
+    const { begun, body } = await boardAndBegin(slug, `203.0.113.${90 + n}`, { household: "Refused Handle", handle });
+    n++;
+    assert.equal(begun.status, code, `${handle}: ${JSON.stringify(body)}`);
+    assert.equal(body.field, "handle", `${handle} is refused by its field`);
+    assert.equal(await parkedOf(slug), null, `${handle}: nothing parked`);
+  }
+});
+
+test("POS-1237 · H5 a handle taken or malformed by the time of the click is refused at the co-sign, and founds nothing", async () => {
+  ghIdentity = { id: 1237105, login: "final-human-h5" };
+  for (const [slug, handle, ip] of [["fh-late-a", "wright", "203.0.113.101"], ["fh-late-b", "Bad Handle", "203.0.113.102"]]) {
+    const { begun } = await boardAndBegin(slug, ip, { household: `Late ${slug}`, handle: "a-handle-free-at-begin-time" });
+    assert.equal(begun.status, 200);
+    const { DatabaseSync } = await import("node:sqlite");
+    const paper = new DatabaseSync(join(tmp, "oauth.db"));
+    try {   // the handle the town took (or a hand wrote) between begin and the click
+      const decl = JSON.parse(paper.prepare("SELECT card FROM berths WHERE slug = ?").get(slug).card);
+      paper.prepare("UPDATE berths SET card = ? WHERE slug = ?").run(JSON.stringify({ ...decl, handle }), slug);
+    } finally { paper.close(); }
+    const done = await approveWith(await coSignPage(slug));
+    const text = await done.text();
+    assert.ok(done.status >= 400 && done.status < 500, `${handle}: ${done.status} ${text.slice(0, 300)}`);
+    assert.match(text, /bounced/);
+    assert.equal(await houseRow(`late-${slug}`), null, "nothing founded");
+    assert.ok(await parkedOf(slug), "the declaration stays parked");
+  }
+});

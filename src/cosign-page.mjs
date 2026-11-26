@@ -51,7 +51,7 @@ a{color:var(--pm-gold)}
   box-shadow:0 22px 70px rgba(0,0,0,.55),0 0 0 1px rgba(232,196,139,.24),0 0 80px rgba(232,196,139,.08);padding:1em 1.2em;margin:0 0 1.6em}
 .pm-paper p{margin:.45em 0}
 .pm-paper .quote{font-style:italic;color:var(--pm-ink-soft);overflow-wrap:anywhere}
-.pm-paper strong{color:var(--pm-ink)}
+.pm-paper strong{color:var(--pm-ink);overflow-wrap:anywhere}
 .sf{margin:0 0 1.7em;border:0;padding:0;min-width:0}
 .sf-t{display:block;padding:0;font-size:clamp(1.25rem,2.6vw,1.55rem);line-height:1.2;font-weight:700;color:var(--jf-gold);text-shadow:0 0 34px rgba(232,196,139,.28);margin:0 0 .3em}
 .sf-req{font-family:var(--pm-mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:rgba(232,196,139,.6);text-shadow:none;margin-left:.6em;vertical-align:3px;font-weight:400}

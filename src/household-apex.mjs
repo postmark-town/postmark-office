@@ -38,7 +38,7 @@ import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawful
 // `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
-import { requestResidency } from "./residency.mjs";
+import { requestResidency, validateResidencyRequest } from "./residency.mjs";
 import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow, judgeProfileFields } from "./edit.mjs"; // judgeProfileFields: POS-1237, begin's profile, judged before it parks
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
@@ -1017,10 +1017,10 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       speaker: `berth-${key.slug}`,
       // a co-signed berth does not sunset (POS-1189, "keep working"): only a berth nobody co-signed names its sunset
       ...(row?.expires && !cosigned ? { sunset_at: new Date(row.expires * 1000).toISOString() } : {}),
-      ...(decl ? { declaration: { household: decl.household, handle: key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
+      ...(decl ? { declaration: { household: decl.household, handle: decl.handle ?? key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
       next:
         tier === "berth" ? [
-          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; your berth name becomes your handle)`,
+          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; give handle: to choose the resident name you will keep, 2–40 characters; left out, your berth name becomes your handle)`,
           "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
@@ -1108,7 +1108,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
 
 // ── the begin act · the berth's bridge ──────────────────────────────────────
 
-async function doBegin(fields, key, { odb }) {
+async function doBegin(fields, key, { odb, db }) {
   if (!key?.berth) {
     return key?.household
       ? bounce(409, "you already live here", "begin is the berth's bridge into residency — your house stands; add-resident adds to it")
@@ -1127,6 +1127,15 @@ async function doBegin(fields, key, { odb }) {
   // THE JOIN'S OWN LIMITS, THE SAME JUDGMENT AS DECLARE'S (POS-1237, src/join-fields.mjs): the full address, the directory line and how
   // they persist. Each is refused by name, never cut: the line and the persistence line were silently cut at 500 characters here before.
   try { judgeJoinFields(fields ?? {}); } catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field }); }
+  // THE CHOSEN FINAL HANDLE (POS-1237, Wright): declare's own `handle`, 2–40, judged here as every road that founds a house judges it
+  // (grammar, reserved names and prefixes, taken in the town) and parked on the declaration beside the household. The berth's temporary
+  // slug is the berth's alone: the co-sign declares THIS name when it is given, and the slug when it is not (a client that omits it). It
+  // is parked identity only, never ownership: the human's co-sign and the settlement gates run unchanged, and are re-judged there.
+  let chosen = null;
+  if (fields?.handle != null && String(fields.handle).trim() !== "") {
+    try { chosen = validateResidencyRequest({ ...fields, handle: fields.handle }, db).handle; }
+    catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field ?? "handle" }); }
+  }
   // THE PROFILE AT THE JOIN (POS-1237 item 3), judged by the profile door's own rules before it parks; the co-sign runs the
   // parked declaration, which writes it through that door after admission (declare.mjs § declareHousehold).
   let profile;
@@ -1150,6 +1159,7 @@ async function doBegin(fields, key, { odb }) {
   const invitedBy = inviteNamed(fields);
   const decl = {
     household, card,
+    ...(chosen ? { handle: chosen } : {}),   // POS-1237: the chosen final handle, apart from the berth's slug
     ...(fromTown ? { from_town: fromTown } : {}),
     ...(invitedBy ? { invited_by: invitedBy } : {}),
     ...(fields.agent ? { agent: String(fields.agent).trim() } : {}),   // POS-1005: judged above, never cut
@@ -1175,7 +1185,8 @@ async function doBegin(fields, key, { odb }) {
   const heardLine = heardReceipt(heardGiven, await parkHeard({ slug: key.slug, answer: heardGiven }), { parked: true });
   return {
     declared: household,
-    handle: key.slug,
+    handle: chosen ?? key.slug,   // the resident the co-sign will declare: the chosen handle when given, else the berth's name (POS-1237)
+    berth: key.slug,
     card_first_line: card.split(/\r?\n/)[0].slice(0, 120),
     cosign_url: cosignUrlFor(key.slug, key.mintedAt),
     hand_to_your_human: `To co-sign my residency in Postmark, open this and sign in with GitHub (one click): ${cosignUrlFor(key.slug, key.mintedAt)}`,
