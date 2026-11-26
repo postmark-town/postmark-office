@@ -45,7 +45,8 @@
 //     spellings through the pin road and the deriver admits none of them to the target. A mover whose pin is
 //     NOT one of the source's accounts would take `solo:<handle>` and `solo:<pin login>` with them. No
 //     registry field can hold them for the source (`formerly` is house slugs, read as `hh:<entry>` by the
-//     office and the town), so that move refuses until a carrier is ruled.
+//     office and the town), so that move is the expected named refusal (SPELLINGS_MOVE), with no write. A
+//     former-key carrier would be a new shape, and only a Call adds one.
 //   · THE TOWN FILES, in one pen commit: the registry drain prints tools/households.json from the store; the
 //     resident's ADDRESS (and berth) `household:` line says the target's name where it said the source's name
 //     or key; and the signed, dated key line `registry: <handle> = hh:<target>` goes into the stamp ledger,
@@ -500,7 +501,7 @@ export function describe(plan, { dryRun, evidence = null, receipt = null }) {
   out.push(`  keys held by both: ${keys(sp.held_by_both)}`);
   out.push(sp.empty
     ? "  all three are empty: no spelling changes house (household-deriver.mjs § houseKeysOf, with the real pins)"
-    : `  NOT EMPTY: a real run refuses SPELLINGS_MOVE. No registry field can hold these for ${plan.from} (formerly is house slugs); a carrier is a ruling, not this tool's`);
+    : `  NOT EMPTY: a real run refuses SPELLINGS_MOVE, writing nothing. No registry field can hold these for ${plan.from} (formerly is house slugs), so this tool does not move this resident`);
   const h = evidence?.history;
   if (!h) out.push("  (history counts are taken by the dry run, not by a real run)");
   else if (h.unavailable != null) out.push(`  history counts: UNAVAILABLE — ${h.unavailable}`);

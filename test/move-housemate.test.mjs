@@ -873,8 +873,8 @@ test("H9b · THE UNLISTED-ACCOUNT PIN: the dry run names the spellings that woul
     assert.deepEqual(await draftsSeenBy(p, "hh:keepers"), { keys: KEEPERS_SET, seen: SOLO_ROWS });
     assert.deepEqual(await draftsSeenBy(p, "hh:harbor"), { keys: HARBOR_SET, seen: [] });
     // THE CHANGE THE REFUSAL STOPS, asked of the same policy: the sets the move would have declared hand scribe's
-    // rows from keepers to harbor. No registry field can keep them for keepers (`formerly` is house slugs), so this
-    // move waits for a ruled carrier.
+    // rows from keepers to harbor. No registry field can keep them for keepers (`formerly` is house slugs), so the
+    // named refusal is this shape's expected answer, not a move this tool supports.
     assert.deepEqual(await draftsSeenUnder(p, S.target.after), ["solo:scribe", "solo:scribe-gh"]);
     assert.deepEqual(await draftsSeenUnder(p, S.source.after), ["solo:keep-gh", "solo:mover"]);
   } finally { await p.end(); }
