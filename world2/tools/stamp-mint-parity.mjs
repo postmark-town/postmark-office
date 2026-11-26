@@ -25,7 +25,9 @@
 //                    deriveTransfers) run twice: once on the store's inputs, once
 //                    on the file's. Green is no problem on either side and the
 //                    same mints and settlements owed on both.
-//   the control      the town's own verifyStampLedger over the clone, untouched.
+//   the control      the town's own verifyStampLedger over the clone, untouched
+//                    (§ parityControl: the pinned key, and UAT's handoff only
+//                    when STAMP_UAT_TRUST names a file, POS-1214).
 //   the quests       (POS-341 part 4) the town's quest folds run twice, once on
 //                    the store's base and once on the file's: foldQuestProgress,
 //                    foldFriendships, foldLeaderboard, foldHouseholdBars and the
@@ -40,6 +42,7 @@ import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { importTownTool, pinnedToolsDir } from "../../src/town-tool.mjs"; // POS-994: the town modules are the office pinned copies, checked against the clone
+import { uatHandoff, withHandoff } from "../../src/stamp-trust.mjs"; // POS-1214: UAT's trust, the same policy as the other verifiers
 
 import { mintInputsVia, keyBaseOf, sealedDatesOf, deliveriesOf, takesKeyBase } from "../../src/mint-inputs.mjs";
 
@@ -155,6 +158,18 @@ export function parityOf(engine, clone, store, { quests = null, today = null } =
   return report;
 }
 
+/**
+ * THE CONTROL: the town's verifyStampLedger over the clone, answering to the PINNED public key (POS-994). On UAT
+ * only, with a non-empty STAMP_UAT_TRUST in `env`, it is also handed UAT's handoff from the office's one trust
+ * policy (src/stamp-trust.mjs, POS-1214; the rehearsal's gate runs this tool, so a UAT ledger's suffix must not
+ * read as a forgery here when it verifies everywhere else). An unusable trust throws. Unset or empty, the call is
+ * exactly what it was. `verifyStampLedger` is the pinned verifier's (main loads it).
+ */
+export function parityControl(clone, verifyStampLedger, { env = process.env } = {}) {
+  const pubkeyPem = readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8");
+  return verifyStampLedger(clone, withHandoff({ pubkeyPem }, uatHandoff({ env, clone, base: pubkeyPem })));
+}
+
 function arg(name, fallback = null) { const i = process.argv.indexOf(`--${name}`); return i === -1 ? fallback : process.argv[i + 1]; }
 
 async function main() {
@@ -171,8 +186,10 @@ async function main() {
   if (!store.rooms.size || !store.mailLines.length) { console.error("town_rooms or town_mail_lines is empty: run the town-index ingest after 067 first"); return 2; }
   const quests = existsSync(join(clone, "tools", "quest-progress.mjs")) ? await importTownTool(clone, "quest-progress.mjs") : null;
   const report = parityOf(engine, clone, store, { quests });
-  // POS-994: the verifier answers to the PINNED public key, the trust root
-  const control = verifyStampLedger(clone, { pubkeyPem: readFileSync(join(pinnedToolsDir(clone, ["stamp-verify.mjs"]), "stamp-pubkey.pem"), "utf8") });
+  // POS-994: the verifier answers to the PINNED public key, the trust root; POS-1214: and UAT's handoff, on UAT only
+  let control;
+  try { control = parityControl(clone, verifyStampLedger); }
+  catch (e) { if (e?.code !== "STAMP_UAT_TRUST_UNUSABLE") throw e; console.error(`the control could not run: ${e.message}`); return 2; }
   report.control = { ok: control.ok, problems: control.problems.slice(0, 5) };
   report.ok = report.ok && control.ok;
   if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));

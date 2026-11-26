@@ -64,6 +64,7 @@ import { execFileSync } from "node:child_process";
 import { pinnedToolsDir } from "./town-tool.mjs"; // POS-994: child scripts import the office's pinned copies, never the clone's
 import { join } from "node:path";
 import { DRAIN_KEY_PATH, signedRegistryLines } from "./ledger-pen.mjs";
+import { uatHandoff } from "./stamp-trust.mjs"; // POS-1214: UAT's trust, one policy for every verifier
 
 export const LEDGER_REL = "WHITE_PAGES/stamp-ledger.md";
 
@@ -162,15 +163,19 @@ export function ledgerTail(text) {
  * the named handles with activity on or after `date`, `fresh` the problems
  * the lines would add.
  */
-export function replayHolds(clone, { signed, handles, date }) {
+export function replayHolds(clone, { signed, handles, date, env = process.env }) {
   const engineDir = pinnedToolsDir(clone, ["stamp-mint.mjs", "stamp-verify.mjs"]); // POS-994
+  // UAT only (POS-1214): the handoff from the office's one trust policy, loaded here, in the
+  // office, and handed to the child with the lines. Null in production, and then the child's
+  // input and its verifier calls are exactly what they were.
+  const handoff = uatHandoff({ env, clone, base: () => readFileSync(join(engineDir, "stamp-pubkey.pem"), "utf8") });
   const script = [
     "const [clone, engineDir, date] = process.argv.slice(1);",
     "const fs = (await import('node:fs')).default;",
     "const { syncBuiltinESMExports } = await import('node:module');",
     "const { resolve } = await import('node:path');",
     "const { pathToFileURL } = await import('node:url');",
-    "const { signed, handles } = JSON.parse(fs.readFileSync(0, 'utf8'));",
+    "const { signed, handles, handoff = null } = JSON.parse(fs.readFileSync(0, 'utf8'));",
     "const ledgerAbs = resolve(clone, 'WHITE_PAGES', 'stamp-ledger.md');",
     "const before = fs.readFileSync(ledgerAbs, 'utf8');",
     "const engine = await import(pathToFileURL(engineDir + '/stamp-mint.mjs'));",
@@ -198,17 +203,18 @@ export function replayHolds(clone, { signed, handles, date }) {
     "const { verifyStampLedger } = await import(pathToFileURL(engineDir + '/stamp-verify.mjs'));",
     "const owed = (p) => /mints owed|settlement owed/.test(p);",
     "const pubkeyPem = fs.readFileSync(engineDir + '/stamp-pubkey.pem', 'utf8'); // POS-994: the PINNED key, the trust root",
-    "const withLines = (verifyStampLedger(clone, { pubkeyPem }).problems ?? []).filter((p) => !owed(p));",
+    "const opts = handoff ? { pubkeyPem, handoff } : { pubkeyPem }; // POS-1214: UAT's handoff, only when the office handed one",
+    "const withLines = (verifyStampLedger(clone, opts).problems ?? []).filter((p) => !owed(p));",
     "let fresh = [];",
     "if (withLines.length) {",
     "  overlay = false;",
-    "  const standing = new Set(verifyStampLedger(clone, { pubkeyPem }).problems ?? []);",
+    "  const standing = new Set(verifyStampLedger(clone, opts).problems ?? []);",
     "  fresh = withLines.filter((p) => !standing.has(p));",
     "}",
     "process.stdout.write(JSON.stringify({ holds: fresh.length === 0, checked: 'verified', active: [...active].sort(), fresh }));",
   ].join("\n");
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script, clone, engineDir, date],
-    { input: JSON.stringify({ signed, handles }), encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
+    { input: JSON.stringify(handoff ? { signed, handles, handoff } : { signed, handles }), encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
 }
 
 // ── THE REFUSALS ────────────────────────────────────────────────────────────

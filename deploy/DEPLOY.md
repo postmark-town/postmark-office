@@ -2149,6 +2149,42 @@ three tools run in the ferry again, as before. The socket can stay. To take it
 away, run `sudo systemctl disable --now postmark-town-tool.socket` and remove
 its two unit files.
 
+### UAT only: the stamp trust binding (POS-1214, paired with town POS-1213)
+
+**Never on prod.** Prod binds no trust file, and every stamp verifier behaves
+exactly as before (with `STAMP_UAT_TRUST` unset or empty). This section teaches
+the UAT install; it has not been applied anywhere, and nothing here is a
+successful UAT crossing.
+
+UAT signs its own mints with its own key, so its stamp ledger is a prod-signed
+prefix followed by UAT-signed lines. The town verifier takes a handoff (the base
+key through a trusted seal, UAT's public key only after it: town
+`tools/stamp-verify.mjs` § stampKeyPlan), and the office hands it over from one
+operator-owned file, read through `src/stamp-trust.mjs`:
+
+- **The file:** `/etc/postmark-uat/stamp-trust.json`, owned by root, read-only to
+  the office: `{ "pubkeyPem": "<UAT's PUBLIC key, SPKI PEM>", "afterSeal": "<the
+  trusted seal of the copied prefix's last line, 64 hex>" }`. Public material
+  only: a private key, a third field, a path inside the town clone, or UAT's key
+  equal to the base key is refused by name. The directory doesn't exist on the
+  box until this install makes it.
+- **The town-tool sandbox:** install
+  `deploy/postmark-town-tool@.service-dropin-uat-stamp-trust.conf` as
+  `/etc/systemd/system/postmark-town-tool@.service.d/uat-stamp-trust.conf`, then
+  `sudo systemctl daemon-reload`. It sets the one path the sandbox accepts and
+  binds the file and `src/stamp-trust.mjs` read-only. A missing file stops the
+  instance; an unusable one refuses the verify.
+- **The office's own consumers** read `STAMP_UAT_TRUST` from their own
+  environment, with the same path: `postmark-office.service` (the admission
+  replay and the store's stamp chain), `postmark-ferry.service` (the store mint
+  pass), `postmark-office-keep.service` (the keep tick's verify), and the dev
+  rehearsal's parity gate (`world2/tools/stamp-mint-parity.mjs`) when it runs
+  there. Each gets `Environment=STAMP_UAT_TRUST=/etc/postmark-uat/stamp-trust.json`
+  in a UAT-only drop-in of its own. **That is a later operator install piece:
+  documented here, not applied, and no drop-in for it ships in this tree.**
+- **Rollback:** remove the drop-ins and `daemon-reload`. With the variable gone,
+  every path is production's again.
+
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
 This is the prod order for `STAMP_LINES=store`. The dev rehearsal's steps 6–8
