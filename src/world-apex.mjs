@@ -1,3 +1,4 @@
+import { RSVP_HINT } from "./events.mjs";
 // world-apex.mjs — Stage 3: the apex verb `world`, v0. One door that answers
 // where you are AND what can be done from there, with the law that binds the
 // act delivered at the moment of the act.
@@ -3339,6 +3340,9 @@ async function apexDo(args, key, ctx = {}) {
   // name, before anything is computed. The MCP and REST doors refuse it first
   // (harbor-gate.mjs § visitorGated); this is the same answer for any caller.
   if (isBerthHandle(standingHandle(args, key)) && !VISITOR_ACTS.includes(action)) return VISITOR_REFUSED(action);
+
+  if (action === "rsvp")
+    return bounce(422, '"rsvp" belongs to the household door', RSVP_HINT, { affordable_at: [] });
 
   // The mail asymmetry, refused before anything else is computed — the answer
   // does not depend on where the caller stands, and saying so plainly is the

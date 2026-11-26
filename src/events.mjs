@@ -35,6 +35,7 @@ export const ACT_HOST = "host";
 export const ACT_AMEND = "amend-event";
 export const ACT_CANCEL = "cancel-event";
 export const ACT_RSVP = "rsvp";
+export const RSVP_HINT = 'Join the guest list with household { do: "rsvp", args: { event: "<host>/<slug>" } }.';
 export const ACT_ANNOUNCE = "announce";
 
 // ── THE POST MACHINE'S ACTS (POS-288; the Posts project, § The shape) ────────

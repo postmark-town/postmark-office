@@ -369,6 +369,30 @@ test("falsifier · a webhook that echoes lands as webhook; one that does not lan
   assert.equal(rsvps.get(`${event.id} wright`).harness, "mail");
 });
 
+test("wrong-door RSVP hints lead to a household guest-list entry", async (t) => {
+  const oldFlag = process.env.WORLD_APEX;
+  process.env.WORLD_APEX = "1";
+  t.after(() => {
+    if (oldFlag === undefined) delete process.env.WORLD_APEX;
+    else process.env.WORLD_APEX = oldFlag;
+  });
+  const { worldApex } = await import("../src/world-apex.mjs");
+  const { townApex, TOWN_TOOL } = await import("../src/town-apex.mjs");
+  const { householdApex } = await import("../src/household-apex.mjs");
+  const { validateArgs } = await import("../src/validate-args.mjs");
+  const { rsvps } = setup();
+  const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
+  const args = { do: "rsvp", args: { event: event.id } };
+  for (const reply of [await worldApex(args, ERRANT), await townApex(args, ERRANT), validateArgs(TOWN_TOOL, args)]) {
+    assert.equal(reply.error, "bounce");
+    assert.match(reply.hint, /household \{ do: "rsvp", args: \{ event: "<host>\/<slug>" \} \}/);
+  }
+  assert.equal(rsvps.get(`${event.id} errant`), undefined);
+  const joined = await householdApex(args, ERRANT, { canWrite: true });
+  assert.match(joined.result.receipt, /on the guest list/);
+  assert.ok(rsvps.get(`${event.id} errant`));
+});
+
 test("rsvp · no harness is the guest list; letta is refused by name (removed 2026-09-27); a budget past the dial and a private url are refused by name", async () => {
   const { pen } = setup();
   const { event } = await hostAtOffice(HOST(Date.now()), WRIGHT);
