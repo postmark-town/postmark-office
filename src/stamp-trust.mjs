@@ -34,7 +34,7 @@
 
 import { createPublicKey } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 
 /** The one environment name. Unset is production. */
 export const UAT_TRUST_ENV = "STAMP_UAT_TRUST";
@@ -92,9 +92,10 @@ export function uatHandoff({ env = process.env, clone = null, base = null } = {}
     let town;
     try { town = realpathSync(clone); } catch { town = clone; }
     const rel = relative(town, real);
-    // A path component, never a name prefix: `..resident-controlled/x` is a child of the clone, while `../x` (the
-    // first segment exactly `..`) and an absolute relative (another drive) are outside it.
-    const outside = isAbsolute(rel) || rel.split(/[\\/]/)[0] === "..";
+    // A path component, never a name prefix, and split on THIS host's separator only: `..resident-controlled/x` is a
+    // child of the clone, and so is `..\resident-controlled/x` on POSIX, where a backslash is an ordinary filename
+    // character. `../x` (the first component exactly `..`) and an absolute relative (another drive) are outside it.
+    const outside = isAbsolute(rel) || rel.split(sep)[0] === "..";
     if (!outside) throw new StampTrustUnusable(where, "it is inside the town clone, and trust never comes from the town it checks");
   }
   let text, doc;

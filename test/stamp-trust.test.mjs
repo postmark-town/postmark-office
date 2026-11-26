@@ -36,7 +36,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -195,6 +195,39 @@ test("the loader: a child of the clone is inside it, even one named with a leadi
     const got = uatHandoff({ env: { [UAT_TRUST_ENV]: trustFile(doc, { dir }) }, clone: town, base: BASE.pub });
     assert.deepEqual({ ...got }, doc, `${name}: accepted, exactly its two fields`);
   }
+});
+
+// LAW (the paired contract, POS-1213/1214): "do not obtain trust from the clone, ledger, resident requests or a production signing key."
+// On POSIX a backslash is an ordinary filename character, so `..\resident-controlled` is ONE child of the clone, not a
+// parent traversal. Windows cannot create that name as one segment (its `\` is a separator), so this case is skipped
+// there, by name; Linux CI runs it (the office suite's runners are Linux).
+const POSIX_BACKSLASH_SKIP = process.platform === "win32"
+  ? "POSIX-only: a directory literally named '..\\resident-controlled' cannot exist on Windows, where backslash is a path separator; Linux CI runs this case"
+  : false;
+test("the loader: on POSIX a directory named with a backslash ('..\\resident-controlled') is a child of the clone, so inside it", { skip: POSIX_BACKSLASH_SKIP }, () => {
+  const seal = "d".repeat(64);
+  const town = fresh("town-clone-posix");
+  const doc = { pubkeyPem: UAT.pub, afterSeal: seal };
+  const literal = "..\\resident-controlled";
+  const inside = {
+    "a child literally named '..\\resident-controlled'": join(town, literal),
+    "a nested child under it": join(town, literal, "deeper"),
+  };
+  const verdicts = {}, expected = {};
+  for (const [name, dir] of Object.entries(inside)) {
+    mkdirSync(dir, { recursive: true });
+    expected[name] = "refused: inside the town clone";
+    try { uatHandoff({ env: { [UAT_TRUST_ENV]: trustFile(doc, { dir }) }, clone: town, base: BASE.pub }); verdicts[name] = "accepted"; }
+    catch (e) { verdicts[name] = e?.code === "STAMP_UAT_TRUST_UNUSABLE" && /inside the town clone/.test(e.message) ? "refused: inside the town clone" : `threw ${e?.message}`; }
+  }
+  // The name really is ONE directory entry holding a backslash (the fixture is what it says it is)
+  assert.ok(readdirSync(town).includes(literal), "the clone holds a single entry whose name contains the backslash");
+  assert.deepEqual(verdicts, expected);
+  // The control: the same backslash name OUTSIDE the clone is an external operator file, accepted.
+  const outsideDir = join(`${town}-operator`, literal);
+  mkdirSync(outsideDir, { recursive: true });
+  assert.deepEqual({ ...uatHandoff({ env: { [UAT_TRUST_ENV]: trustFile(doc, { dir: outsideDir }) }, clone: town, base: BASE.pub }) }, doc,
+    "a backslash-named folder outside the clone is accepted, exactly its two fields");
 });
 
 test("the town's rule is loaded only when UAT's trust is asked for: production imports nothing more", async () => {
