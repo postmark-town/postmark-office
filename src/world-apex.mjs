@@ -4299,8 +4299,9 @@ async function explainClassOr(path, bounced) {
   // no store is an outage, not the reader's mistake: 503, never the grammar's 422
   if (!store.db) return bounce(503, `the class layer cannot be read: ${store.unavailable}`, "explain: on a path still answers; a class answers once the world store has loaded");
   const answer = explainClass(store.db, path);
-  // the three passage classes say who else makes them (WLD-21, G6's words)
-  if (answer) return (await import("./admin-role.mjs")).withAdminMakers(answer);
+  // the three passage classes say who else makes them (WLD-21, G6's words); door, and what extends it, says it is the
+  // town's for making and for amending (POS-1238, WLD-253), by the World's own isDoorClass over the office's class graph
+  if (answer) return (await import("./door-class.mjs")).withDoorMakers(await (await import("./admin-role.mjs")).withAdminMakers(answer));
   const near = nearestClasses(store.db, path);
   return { ...bounced,
     defect: `nothing here is called "${path}", and no class is either`,

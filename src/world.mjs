@@ -404,8 +404,9 @@ export function sightedWorld(w, { verbs, handle = null, stack = [], key = null, 
 //      inside with the lens or without it, which is no stranger's view (the review of 9726ffb1, finding A). A
 //      household that owns a closed place, or has a resident inside one, is told nothing though the lens moved
 //      nothing for it.
-// "Closed place", not "door": `entry` (how a mark is entered, a door's `into` included) is a property of every
-// mark (the-town/mark-entry) and hides nothing; only the dungeon class closes a place, and only an admin
+// "Closed place", not "door": `entry` (how a mark is received: its word and its terms) is a property of every
+// mark (the-town/mark-entry), and a door's `into`, `lands_at` and `requires` are door's own (the-town/door,
+// WLD-253); none of them hides anything. Only the dungeon class closes a place, and only an admin
 // household may make one (LOGOS/classes.md § Admin households may make the passage classes). So the line
 // points nowhere: an entry added to an open place does not make the lens matter.
 // The wording is one constant, so a ruling that changes it changes it here and in its test. It speaks of what
@@ -4772,6 +4773,13 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     const priorCanon = canon.byId.get(id) ?? null;
     const exists = Boolean(priorLive || priorCanon);
     const amending = exists && clean.amend === true;
+    // AN AMEND KEEPS A MARK'S ENTRY AND A DOOR'S FIELDS (POS-1238; door-class.mjs § keptDoorFields). An amend supersedes the
+    // whole declaration, and this door has no road to write either, so new words on a door used to file a record with no
+    // entry and no `into`: the next crossing deleted where it leads. What the amend does not send is the prior record's.
+    if (amending) {
+      const dc = await import("./door-class.mjs");
+      Object.assign(clean, dc.keptDoorFields(clean, priorLive ?? priorCanon, { law: await dc.doorLaw() }));
+    }
 
     // ── slug collision, as a lookup ──────────────────────────────────────────
     if (exists && !amending)
@@ -5556,6 +5564,29 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     kind = "sited";
   }
 
+  // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
+  // RESIDENT'S household, never the placer's (POS-233): it is their act, their
+  // live layer, their sketchbook and their cap, and their own amend must find it.
+  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  // ── A DOOR IS THE TOWN'S (POS-1238; WLD-253, CORE-129 layer 1) ────────────
+  // Asked of the World's own verdict (door-class.mjs § doorWriteRefusal) over the WHOLE record before and the record this
+  // write asks for, before any field is picked: the class's own fields and properties are carried below and everything
+  // else is dropped, so a door field judged after that would be hidden by the drop instead of refused by name. An amend's
+  // record as it stands is the live layer's, else canon's: the order the journal pass reads it in. The town is the
+  // operator acting as the town, and no one else.
+  let doorAmend = false;
+  {
+    let before = null;
+    if (payload.amend === true) {
+      const id = `${by}/${slug}`;
+      if (singleLogEnabled() && household) { try { before = (await guardedLiveMarks(null, { household, actor: by })).find((m) => m.id === id) ?? null; } catch { before = null; } }
+      before ??= canonForGuards()?.byId?.get(id) ?? null;
+    }
+    const door = await (await import("./door-class.mjs")).doorWriteRefusal({ payload, before, klass, kind, id: `${by}/${slug}`, by, town: operator?.asTown === true });
+    if (door.refusal) throw bounce(door.refusal.code, door.refusal.defect, door.refusal.hint);
+    doorAmend = door.doorAmend;
+  }
+
   // ── THE RING IS THE TRUTH OF THE SHAPE (POS-322, Keemin 2026-10-02) ───────
   //
   // "extent should just be derived from the ring." With `points:`, a sited
@@ -5700,7 +5731,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // three passage classes exactly (the world's admin-makers.mjs), asked only
     // after makers said no; the refusal's words for everyone else are unchanged (G6).
     // An operator repairing a town mark AS THE TOWN (POS-1025/b) is the town's pen, the one road a town-only class arrives by.
-    if (!droppedUnit && !makers.may && !operator?.asTown && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
+    // A DOOR'S OWN AMEND (POS-1238): door answers makers: false for its door fields, and the World's verdict above already
+    // said this amend leaves every one of them as it was (moving or withdrawing a door stays its maker's, WLD-253); a
+    // door that would change, or a new door, was refused there by name.
+    if (!droppedUnit && !makers.may && !operator?.asTown && !doorAmend && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
@@ -5838,10 +5872,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     throw bounce(422, "stamps must be a whole number, 0 or more",
       "stamps: 1 stakes your new mark in the same act — escrow is what publishes a commons mark; 0 or omitted keeps it a personal draft");
 
-  // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
-  // RESIDENT'S household, never the placer's (POS-233): it is their act, their
-  // live layer, their sketchbook and their cap, and their own amend must find it.
-  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  // THE ACT'S HOUSEHOLD, read above (before the door's question, POS-1238).
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
@@ -7804,14 +7835,14 @@ export const WORLD_TOOLS = [
       image: { type: "string", description: "optional: one image URL on the town's media host (https://media.postmark.town/…) — upload the file first with upload_media (or POST /media) and pass the url it returns; other hosts bounce" },
       stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a DRAFT — not the town's canon: it lives only in your own reading of the world, on no docket, and is not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays a draft. Whole stamps; they stay yours — world_unstake returns them." },
       preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule) and, for a sited mark, what it overlaps and contains (`overlaps`, `contains`: rows of `{ id, name, household }`), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
-      amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
+      amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name. An amend keeps the mark's entry and a door's into, lands_at and requires exactly as they stand: this door does not write them. A door's maker may change its words, move it or withdraw it; changing where a door leads is the town's (the-town/door, WLD-253)." },
       // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
       holder: { type: "boolean", description: "a thing only: whether it holds other things (sovereign on thing, default false) — a bag, a bowl, a crate" },
       capacity: { type: "number", description: "a holder only: how many it holds, a whole number within its class's bounds (thing: 1–120, default 30); out of bounds is refused, never clamped" },
       open: { type: "boolean", description: "a holder only: whether other households may give into and take from it (default true)" },
       portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
       // POS-1035 (WLD-173's office half): a class the World declares carries its own properties by name
-      properties: { type: "object", description: "a class's own properties, by name — each one the class declares as a property in the town's law (lists as lists). A name the class does not declare is refused. For a spark, parent: \"<by>/<slug>\" is your spark's own link to another spark (stored as parent_spark); it never places it." },
+      properties: { type: "object", description: "a class's own properties, by name — each one the class declares as a property in the town's law (lists as lists). A name the class does not declare is refused. For a spark, parent: \"<by>/<slug>\" is your spark's own link to another spark (stored as parent_spark); it never places it. A door's into, lands_at and requires are door's alone and the town's to write: on any other class, or on a door that is not the town's to change, they are refused by name, in any spelling and wherever they are sent (the-town/door, WLD-253)." },
     }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
     description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. Read it back with world { read: \"note-to-self\" }: it answers the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
