@@ -93,7 +93,11 @@ function devSectionMap(md) {
   const map = new Map();
   const seen = new Map();
   for (const s of sectionsOf(md)) {
-    if (!isDevStepsSection(s)) continue;
+    // A section counts when its heading or its "reaches dev" says so, OR when any line in it names dev
+    // (DEV_LINE): an edit anywhere in a section that carries dev steps holds the carry, even to a line that
+    // does not itself name dev (the w44 ship's edit to a prod step inside "Switch 2's guard", whose step 1 is
+    // "Dev first, under load"; Truey, #1248 finding 2).
+    if (!isDevStepsSection(s) && !DEV_LINE.test(s.body)) continue;
     const n = (seen.get(s.heading) ?? 0) + 1;
     seen.set(s.heading, n);
     map.set(n === 1 ? s.heading : `${s.heading} (#${n})`, `${s.heading}\n${s.body}`);
@@ -101,9 +105,35 @@ function devSectionMap(md) {
   return map;
 }
 
+// The second rule, wider than the sections (Truey's review of #1248, finding 2; a false hold is cheap and
+// a missed one fails dev's units): real "Dev first" steps sit in sections whose heading never names dev
+// (the settlement printout, switch 2's guard, the store mint at the crossing). So ANY line of the file, in a
+// code fence or out, that names dev as a word, or `postmark-office-dev`, or `/srv/postmark-office-dev`, or
+// says "dev first", counts, and a line of that kind added, removed or reworded between the two copies holds
+// the carry. (`--omit=dev` is the word dev too: a false hold, accepted.) `world2_dev` is not the word dev.
+const DEV_LINE = /\bdev\b|postmark-office-dev|\/srv\/postmark-office-dev|dev first/i;
+
+function devLineCounts(md) {
+  const counts = new Map();
+  let heading = "(before the first heading)";
+  let fence = null;
+  for (const raw of String(md ?? "").split(/\r?\n/)) {
+    const f = /^\s*(```+|~~~+)/.exec(raw);
+    if (f) { if (fence === null) fence = f[1][0]; else if (f[1][0] === fence) fence = null; }
+    const h = fence === null && !f ? /^#{1,6}\s+(.*\S)\s*$/.exec(raw) : null;
+    if (h) heading = h[1];
+    const line = collapse(raw);
+    if (!line || !DEV_LINE.test(line)) continue;
+    const key = `${line}\u0000${heading}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
 /**
  * Whether the dev box steps differ between two copies of deploy/DEPLOY.md (null for a copy that
- * does not exist). A dev section added, removed or reworded counts, in either copy.
+ * does not exist). Two rules, either holds: a dev SECTION (heading names dev, or the body says a release
+ * reaches dev) added, removed or reworded; or a LINE naming dev (DEV_LINE) added, removed or reworded.
  * @returns {{changed: boolean, sections: string[]}}
  */
 export function devBoxStepsChanged(beforeMd, afterMd) {
@@ -111,6 +141,14 @@ export function devBoxStepsChanged(beforeMd, afterMd) {
   const b = devSectionMap(afterMd);
   const sections = [];
   for (const k of new Set([...a.keys(), ...b.keys()])) if (a.get(k) !== b.get(k)) sections.push(k);
+  const la = devLineCounts(beforeMd);
+  const lb = devLineCounts(afterMd);
+  for (const k of new Set([...la.keys(), ...lb.keys()])) {
+    if ((la.get(k) ?? 0) === (lb.get(k) ?? 0)) continue;
+    const heading = k.slice(k.indexOf("\u0000") + 1);
+    const named = `${heading} (a line naming dev)`;
+    if (!sections.includes(heading) && !sections.includes(named)) sections.push(named);
+  }
   return { changed: sections.length > 0, sections };
 }
 
@@ -150,7 +188,7 @@ function holderLooksLive(holder, holderPr, repo) {
  *   event      { kind: "push", branch } or { kind: "pr", action, labelName, sender, pr: { number, state, headSha, headRepo, labels } }
  *   repo       "owner/name", the office repo
  *   trains     the train/* branch names on origin; trainHeads maps each to its head sha
- *   box        { readable, tag, sha, holder } read from dev's release.json
+ *   box        { readable, tag, sha, holder } from dev's release.json, and live: { tag, sha } | null from its live door (GET /release)
  *   holderPr   the PR box.holder names, as GitHub has it now ({ number, state, headRepo, labels, headSha }), or null
  *   labelerPermission  the sender's permission on the repo, for a `labeled` event
  *   stepsChanged(baselineSha, targetSha) -> { changed, sections, error? }
@@ -162,7 +200,14 @@ export function decide(ctx) {
   const holder = box.readable ? box.holder ?? null : null;
   const live = holderLooksLive(holder, holderPr, repo);
   const open = newestTrain(trains);
-  const baseline = holder ? holder.prior?.sha ?? null : box.readable ? box.sha ?? null : null;
+  // What dev SERVES is what its live door answers (/release is read once at boot, so only a process that
+  // started after the carry can name it). The stamp on disk is only the holder record and the baseline's
+  // name: the rsync lands it BEFORE apply restarts the service, so a carry that failed in between leaves the
+  // new stamp on disk with the old or no process serving (Truey, #1248 finding 1). The stamp agrees only when
+  // the door names the same tag and sha.
+  const served = box.readable && box.live ? { tag: box.live.tag, sha: box.live.sha } : null;
+  const stampAgrees = Boolean(served && served.tag === box.tag && sameSha(served.sha, box.sha));
+  const baseline = holder ? holder.prior?.sha ?? null : served?.sha ?? null;
   const res = (status, reason, extra = {}) => ({ status, reason, target: null, holder: null, notices: [], unlabel: [], ...extra });
 
   const steps = (target) => {
@@ -198,7 +243,7 @@ export function decide(ctx) {
       return res("wait", `dev is held by PR #${holder.pr} (labelled by ${holder.by}); the train's carry waits and dev catches up when the label is removed`);
     }
     const target = trainHeads[open];
-    if (!holder && sameSha(box.sha, target)) return res("noop", `dev already runs ${open} at ${short(target)}`);
+    if (!holder && stampAgrees && sameSha(box.sha, target)) return res("noop", `dev already runs ${open} at ${short(target)}`);
     const s = steps(target);
     if (s.changed) {
       const msg = waitsForAHand(s, target, target);
@@ -235,7 +280,7 @@ export function decide(ctx) {
   }
 
   const target = pr.headSha;
-  if (isHolder && sameSha(box.sha, target)) return res("noop", `dev already runs PR #${pr.number} at ${short(target)}`);
+  if (isHolder && stampAgrees && sameSha(box.sha, target)) return res("noop", `dev already runs PR #${pr.number} at ${short(target)}`);
 
   const s = steps(target);
   if (s.changed) {
@@ -250,7 +295,7 @@ export function decide(ctx) {
     by: action === "labeled" ? sender : holder?.by ?? sender,
     sha: target,
     since: isHolder && holder.since ? holder.since : now,
-    prior: holder?.prior ?? { tag: box.tag, sha: box.sha },
+    prior: holder?.prior ?? served ?? { tag: box.tag, sha: box.sha },
   };
   return res("carry", `dev carries PR #${pr.number} at ${short(target)} for ${next.by}`, {
     target: { tag: `pr/${pr.number}`, sha: target, ref: `pull/${pr.number}/head` },

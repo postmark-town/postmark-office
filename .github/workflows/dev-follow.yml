@@ -117,6 +117,12 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" \
             "if [ -f '$DEV_ROOT/release.json' ]; then cat '$DEV_ROOT/release.json'; else echo '{}'; fi" > box-release.json
           cat box-release.json
+          # And what dev's LIVE door answers: the stamp alone proves nothing, because the rsync lands it before apply
+          # restarts the service (a carry that failed in between leaves the new stamp under the old process). A door
+          # that does not answer is `{}`, which the decision reads as "dev serves nothing known".
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes "$USER@$HOST" \
+            "curl -fsS --max-time 10 http://127.0.0.1:$DEV_PORT/release || echo '{}'" > box-live.json
+          cat box-live.json
 
       - name: Decide
         id: plan
@@ -127,7 +133,7 @@ jobs:
           set -euo pipefail
           node .github/scripts/dev-follow.mjs plan \
             --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH" \
-            --repo "$GITHUB_REPOSITORY" --box box-release.json --out plan.json
+            --repo "$GITHUB_REPOSITORY" --box box-release.json --live box-live.json --out plan.json
 
       - name: Tell the PR what was decided
         if: steps.gate.outputs.go == 'true' && steps.plan.outputs.notices == 'true'

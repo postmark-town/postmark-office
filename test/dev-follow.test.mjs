@@ -81,9 +81,9 @@ test("a changed dev section reads as changed, in a heading-named and a phrase-na
   assert.deepEqual(r.sections, ["The dev office's own pins (POS-994)"]);
 });
 
-test("a change elsewhere in DEPLOY.md, or in whitespace and line endings only, changes nothing", () => {
+test("a change to a prod section, or to whitespace and line endings only, changes nothing; a line naming dev (--omit=dev) does hold", () => {
   assert.equal(devBoxStepsChanged(DOC, withLine(DOC, "world2_dev is prod's database.", "world2_dev is prod's database, renamed later.")).changed, false, "a prod section");
-  assert.equal(devBoxStepsChanged(DOC, withLine(DOC, "`npm ci --omit=dev` runs", "`npm ci --omit=dev` still runs")).changed, false, "a body that only mentions dev");
+  assert.equal(devBoxStepsChanged(DOC, withLine(DOC, "`npm ci --omit=dev` runs", "`npm ci --omit=dev` still runs")).changed, true, "--omit=dev is the word dev: a line naming it holds (a false hold, accepted: it is cheap)");
   assert.equal(devBoxStepsChanged(DOC, DOC.replaceAll("\n", "\r\n")).changed, false, "CRLF");
   assert.equal(devBoxStepsChanged(DOC, withLine(DOC, "Run the import BEFORE the train", "Run the import   BEFORE   the\ntrain")).changed, false, "rewrapped");
   assert.equal(devBoxStepsChanged(DOC, DOC).changed, false);
@@ -152,9 +152,9 @@ const TRAINS = ["train/2026-w48", "train/2026-w49"];
 const HEADS = { "train/2026-w48": SHA("1"), "train/2026-w49": SHA("2") };
 const clean = () => ({ changed: false, sections: [] });
 const dirty = () => ({ changed: true, sections: ["The dev office's own pins (POS-994)"] });
-const free = { readable: true, tag: "train/2026-w49", sha: SHA("3"), holder: null };
+const free = { readable: true, tag: "train/2026-w49", sha: SHA("3"), holder: null, live: { tag: "train/2026-w49", sha: SHA("3") } };
 const HOLDER = { pr: 5, by: "first-labeler", sha: SHA("5"), since: "2026-11-27T09:00:00.000Z", prior: { tag: "train/2026-w49", sha: SHA("3") } };
-const held = { readable: true, tag: "pr/5", sha: SHA("5"), holder: HOLDER };
+const held = { readable: true, tag: "pr/5", sha: SHA("5"), holder: HOLDER, live: { tag: "pr/5", sha: SHA("5") } };
 const holderOpen = { number: 5, state: "open", headRepo: REPO, headSha: SHA("5"), labels: [LABEL] };
 const pr = (over = {}) => ({ number: 7, state: "open", headSha: SHA("7"), headRepo: REPO, labels: [LABEL], ...over });
 const prEvent = (action, over = {}, sender = "second-labeler") => ({ kind: "pr", action, labelName: LABEL, sender, pr: pr(over) });
@@ -198,7 +198,7 @@ test("the box steps are read against what dev carries, so a push after a held on
 });
 
 test("a push when dev already runs that head carries nothing; an unreadable dev carries nothing and says why", () => {
-  assert.equal(run({ box: { ...free, sha: HEADS["train/2026-w49"].slice(0, 7) } }).status, "noop", "a 7-character carried sha is the same commit");
+  assert.equal(run({ box: { ...free, sha: HEADS["train/2026-w49"].slice(0, 7), live: { tag: free.tag, sha: HEADS["train/2026-w49"].slice(0, 7) } } }).status, "noop", "a 7-character carried sha is the same commit");
   const r = run({ box: { readable: false } });
   assert.equal(r.status, "wait");
   assert.match(r.reason, /no readable release\.json/);
@@ -323,6 +323,75 @@ test("an unreadable dev is refused for a label, and a dev with no prior commit w
   assert.equal(noPrior.status, "wait", "dev's last box-steps state is unknown");
 });
 
+// ── the door, not the stamp, says what dev runs (Truey, #1248 finding 1) ─────
+// The rsync lands release.json BEFORE apply restarts the service. A carry that failed in between leaves the
+// new stamp on disk under an old or dead process, and a re-run that trusted the stamp read "dev already runs it".
+test("a stamp that names the target over a door that does not is carried again: a failed carry's re-run applies it", () => {
+  const H = HEADS["train/2026-w49"];
+  const q = asked();
+  const r = run({ box: { ...free, sha: H, live: { tag: free.tag, sha: SHA("3") } }, stepsChanged: q.fn });
+  assert.equal(r.status, "carry", "the stamp says H, the live door still serves 3333333");
+  assert.deepEqual(r.target.sha, H);
+  assert.deepEqual(q.calls, [[SHA("3"), H]], "the box steps are read against what the door serves, not the stamp that may have landed alone");
+  const sameTagOtherSha = run({ box: { ...free, sha: H, live: { tag: "train/2026-w48", sha: H } } });
+  assert.equal(sameTagOtherSha.status, "carry", "a door naming another tag is not the same release");
+});
+
+test("the holder's own PR is carried again when dev's door does not serve its head, however the stamp reads", () => {
+  const r = run({ event: prEvent("synchronize", { number: 5, headSha: SHA("5") }), box: { ...held, live: { tag: "train/2026-w49", sha: SHA("3") } }, holderPr: holderOpen });
+  assert.equal(r.status, "carry", "stamp and door disagree: not carried");
+  assert.deepEqual(r.holder.prior, HOLDER.prior);
+  assert.equal(run({ event: prEvent("synchronize", { number: 5, headSha: SHA("5") }), box: held, holderPr: holderOpen }).status, "noop", "stamp and door agree: carried");
+});
+
+test("a door that answers nothing is not 'already carried', and with no commit to compare against, waits for a hand rather than guessing", () => {
+  const down = { ...free, live: null };
+  const push = run({ box: { ...down, sha: HEADS["train/2026-w49"] } });
+  assert.equal(push.status, "wait");
+  assert.match(push.reason, /dev has no carried commit/);
+  assert.equal(push.target, null);
+  const label = run({ event: prEvent("labeled"), box: down });
+  assert.equal(label.status, "refuse");
+});
+
+// ── the wider DEPLOY.md rule (Truey, #1248 finding 2) ───────────────────────
+const WIDE = [
+  "# Deploying", "",
+  "### The settlement printout (095)", "", "The paired cutover. Dev first, then the box.", "",
+  "### Switch 2's guard", "", "1. Dev first, under load. On the dev office (4381) set `TOWN_INDEX_READS=store`.", "",
+  "```sh", "sudo systemctl restart postmark-office-dev", "```", "",
+  "2. Prod: back up the env file, then restart the office.", "",
+  "### Prod only", "", "Prod text, world2_dev.", "",
+].join("\n");
+
+test("a line naming dev holds the carry wherever it sits: out of a dev-headed section, in a code fence, or newly added or removed", () => {
+  const changed = (from, to) => devBoxStepsChanged(WIDE, withLine(WIDE, from, to));
+  assert.equal(changed("Dev first, then the box.", "Dev first, then the box, twice.").changed, true, "'dev first' under a heading that never says dev");
+  const r = changed("On the dev office (4381) set", "On the dev office (4382) set");
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.sections, ["Switch 2's guard"]);
+  assert.equal(changed("sudo systemctl restart postmark-office-dev", "sudo systemctl restart postmark-office-dev --no-block").changed, true, "inside a code fence, by unit name");
+  assert.equal(changed("2. Prod: back up the env file, then", "2. Prod: back up the env file to /var/backups, then").changed, true, "a prod step inside a section whose step 1 is Dev first (the w44 ship's edit)");
+  assert.equal(devBoxStepsChanged(WIDE, `${WIDE}\nsudo cp /srv/postmark-office-dev/x /srv/y\n`).changed, true, "a new line naming dev's tree");
+  assert.equal(devBoxStepsChanged(WIDE, WIDE.replace("The paired cutover. Dev first, then the box.\n\n", "")).changed, true, "a removed line");
+});
+
+test("a line that does not name dev changes nothing, nor does one moved inside its section, nor world2_dev", () => {
+  assert.equal(devBoxStepsChanged(WIDE, withLine(WIDE, "Prod text, world2_dev.", "Prod text, world2_dev, again.")).changed, false);
+  const swapped = withLine(WIDE, "### Prod only", "### Prod only (renamed)");
+  assert.equal(devBoxStepsChanged(WIDE, swapped).changed, false, "a heading with no dev in it");
+  assert.equal(devBoxStepsChanged(WIDE, WIDE.replaceAll("\n", "\r\n")).changed, false);
+});
+
+test("reads the live deploy/DEPLOY.md: a real 'Dev first' step under a heading that does not name dev holds the carry", () => {
+  const live = readFileSync(join(ROOT, "deploy", "DEPLOY.md"), "utf8");
+  const anchor = "1. Dev first, under load. On the dev office (4381) set `TOWN_INDEX_READS=store`";
+  assert.ok(live.includes(anchor), "the live file still carries the Truey's example line");
+  const section = sectionsOf(live).find((s) => s.body.includes("Dev first, under load"));
+  assert.equal(isDevStepsSection(section), false, `its section (${section.heading}) is invisible to the heading rule`);
+  assert.equal(devBoxStepsChanged(live, live.replace(anchor, () => `${anchor} EDITED`)).changed, true);
+});
+
 // ── the CLI over a real git repo, with a stubbed gh ─────────────────────────
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...a], { encoding: "utf8", env: gitEnv }).trim();
@@ -389,9 +458,12 @@ function cli(w, sub, flags, { fixture = {}, event } = {}) {
   const calls = read("calls.jsonl").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   return { r, dir, outputs, calls, plan: read("plan.json") ? JSON.parse(read("plan.json")) : null, summary: read("summary.md") };
 }
-const planFlags = (event, boxJson) => (dir) => {
+// liveJson: what the live door answers. Default: it agrees with the stamp. `null`: no answer file at all (the door is down).
+const planFlags = (event, boxJson, liveJson) => (dir) => {
   if (boxJson !== undefined) writeFileSync(join(dir, "box.json"), JSON.stringify(boxJson));
-  return ["--event-name", event.name, "--event-path", join(dir, "event.json"), "--repo", REPO, "--box", join(dir, "box.json"), "--out", join(dir, "plan.json"), "--now", NOW, "--git-dir", "."];
+  const live = liveJson === undefined ? (boxJson ? { deployed: true, tag: boxJson.tag, sha: boxJson.sha } : null) : liveJson;
+  if (live !== null) writeFileSync(join(dir, "live.json"), JSON.stringify(live));
+  return ["--event-name", event.name, "--event-path", join(dir, "event.json"), "--repo", REPO, "--box", join(dir, "box.json"), "--live", join(dir, "live.json"), "--out", join(dir, "plan.json"), "--now", NOW, "--git-dir", "."];
 };
 const pushEvent = (branch) => ({ name: "push", body: { ref: `refs/heads/${branch}` } });
 const prBody = (action, number, headSha, labels, extra = {}) => ({ action, label: { name: LABEL }, sender: { login: "second-labeler" }, pull_request: { number, state: "open", head: { sha: headSha, repo: { full_name: REPO } }, labels: labels.map((name) => ({ name })) }, ...extra });
@@ -473,6 +545,24 @@ test("CLI, the label by someone without write access, or whose permission cannot
   const unreadable = cli(w, "plan", planFlags(ev, free), { event: ev.body });
   assert.equal(unreadable.outputs.status, "refuse", "the permission call failed: fail closed");
   assert.ok(unreadable.calls.some((x) => x.argv.includes(`repos/${REPO}/collaborators/second-labeler/permission`)), "the permission was asked of GitHub");
+});
+
+test("CLI, the live door decides: a stamp naming the open train's head over a door still on the old commit is carried, a door that agrees is not, a dead door waits", () => {
+  const w = world({ headChangesDevSteps: false });
+  const ev = pushEvent("train/2026-w49");
+  const stamp = { tag: "train/2026-w49", sha: w.head };
+  const failed = cli(w, "plan", planFlags(ev, stamp, { deployed: true, tag: "train/2026-w48", sha: w.c1 }), { event: ev.body });
+  assert.equal(failed.r.status, 0, failed.r.stderr);
+  assert.equal(failed.outputs.carry, "true", "the stamp landed, the process did not follow: the re-run carries");
+  assert.equal(failed.outputs.sha, w.head);
+  const agrees = cli(w, "plan", planFlags(ev, stamp), { event: ev.body });
+  assert.equal(agrees.outputs.carry, "false");
+  assert.equal(agrees.outputs.status, "noop");
+  const dead = cli(w, "plan", planFlags(ev, stamp, null), { event: ev.body });
+  assert.equal(dead.outputs.carry, "false");
+  assert.equal(dead.outputs.status, "wait");
+  const notDeployed = cli(w, "plan", planFlags(ev, stamp, {}), { event: ev.body });
+  assert.equal(notDeployed.outputs.status, "wait", "the door answering {} (the workflow's stand-in for a failed curl) is a dead door");
 });
 
 test("CLI, the holder's label comes off: dev goes back to the open train's head; and a plan whose gh lookup of the holder fails treats dev as free", () => {
@@ -593,6 +683,15 @@ test("pin: the box's deploy script is taken from main and its preflight is calle
   assert.match(sync, /rsync -az --exclude='\/\*\/'/, "root files without --delete");
   assert.match(sync, /rsync -az --delete/, "the repo-owned directories with it");
   assert.match(code, /grep -vx -e telemetry -e \.github -e \.omc/, "the three names the release train never syncs");
+});
+
+test("pin: what dev runs is read from its live door as well as its stamp, and the apply line carries the full sha", () => {
+  assert.match(code, /curl -fsS --max-time 10 http:\/\/127\.0\.0\.1:\$DEV_PORT\/release \|\| echo '\{\}'" > box-live\.json/);
+  assert.match(code, /--box box-release\.json --live box-live\.json --out plan\.json/);
+  const apply = code.slice(code.indexOf("- name: Restart and probe"), code.indexOf("- name: Sweep the box-side script"));
+  assert.match(apply, /SHA: \$\{\{ steps\.plan\.outputs\.sha \}\}/, "the sha is the plan's full 40-character one");
+  assert.match(apply, /"'\$REMOTE_SCRIPT' apply '\$DEV_ROOT' '\$DEV_SERVICE' '\$DEV_PORT' '\$TAG' '\$SHA'"/, "apply is called with root, service, port, tag and sha");
+  assert.doesNotMatch(apply, /\$\{SHA:/, "never a cut-down sha: the box's stamp check wants the one it was given");
 });
 
 test("pin: a PR event checks out the base branch's scripts, not the PR's, and archives with LF endings", () => {

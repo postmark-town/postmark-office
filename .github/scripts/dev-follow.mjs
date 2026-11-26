@@ -3,7 +3,7 @@
 // plan, the receipt, and the notices. It reads GitHub and git; it never reaches the box (the
 // workflow's ssh steps do, and say so by name).
 //
-//   node .github/scripts/dev-follow.mjs plan    --event-name <n> --event-path <f> --repo <o/r> --box <release.json> --out <plan.json>
+//   node .github/scripts/dev-follow.mjs plan    --event-name <n> --event-path <f> --repo <o/r> --box <release.json> --live <GET /release answer> --out <plan.json>
 //   node .github/scripts/dev-follow.mjs receipt --plan <plan.json> --run <url> --out <stage/release.json>
 //   node .github/scripts/dev-follow.mjs notify  --plan <plan.json> --repo <o/r> --when now|after-carry
 //
@@ -86,6 +86,18 @@ function plan(o) {
     } catch { /* unreadable stays unreadable */ }
   }
 
+  // What dev's live door answers (GET /release, read over ssh). An empty, absent or not-deployed answer is null:
+  // dev is not known to serve anything, so nothing is "already carried".
+  if (box.readable) {
+    box.live = null;
+    if (o.live && existsSync(o.live)) {
+      try {
+        const l = JSON.parse(readFileSync(o.live, "utf8"));
+        if (l && l.deployed === true && typeof l.tag === "string" && typeof l.sha === "string") box.live = { tag: l.tag, sha: l.sha };
+      } catch { /* null */ }
+    }
+  }
+
   let holderPr = null;
   if (box.readable && box.holder?.pr) {
     try {
@@ -131,7 +143,7 @@ function writeOutputs(p, o) {
   const summary = [`## Dev office: ${result.status}`, "", result.reason, ""];
   if (result.target) summary.push(`- target: \`${result.target.tag}\` at \`${result.target.sha}\``);
   if (result.holder) summary.push(`- holder: PR #${result.holder.pr}, labelled by ${result.holder.by}`);
-  summary.push(`- dev runs now: ${p.box.readable ? `\`${p.box.tag}\` at \`${short(p.box.sha)}\`${p.box.holder ? `, held by PR #${p.box.holder.pr}` : ""}` : "unreadable"}`);
+  summary.push(`- dev's stamp: ${p.box.readable ? `\`${p.box.tag}\` at \`${short(p.box.sha)}\`${p.box.holder ? `, held by PR #${p.box.holder.pr}` : ""}` : "unreadable"}; its live door: ${p.box.live ? `\`${p.box.live.tag}\` at \`${short(p.box.live.sha)}\`` : "not answering a release"}`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary.join("\n") + "\n");
   if (result.status === "wait") console.log(`::warning::${result.reason}`);
   console.log(`${result.status}: ${result.reason}`);
