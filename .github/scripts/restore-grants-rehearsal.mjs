@@ -28,6 +28,8 @@
 // The real restore must pass all four. The falsifier must pass 1 and fail 2, 3 and 4: the owner-only check alone would
 // have called it a good backup. Either way round otherwise, the step fails.
 //
+// THE CLIENTS are the service container's own, the server's major (§ THE CLIENTS OF THE SERVER'S OWN MAJOR below).
+//
 // THE BOUNDARY, said on the receipt: the roles and the database's CONNECT are cluster-wide and never in a dump, so this
 // job's roles (its "Roles" step) stand in for the rescue box's hand-made ones. The CI owner has no CREATEDB, so the
 // postgres superuser makes each empty scratch database, owned by world2_owner, where the box's rehearsal has the owner
@@ -56,7 +58,40 @@ const version = (bin) => {
   return r.stdout.trim();
 };
 if (!PW) cannot("W2_PW is unset: the job's pen roles have no password to sign in with");
-const tools = { pg_dump: version("pg_dump"), pg_restore: version("pg_restore"), psql: version("psql"), bash: version("bash").split("\n")[0] };
+const runnerTools = { pg_dump: version("pg_dump"), pg_restore: version("pg_restore"), psql: version("psql"), bash: version("bash").split("\n")[0] };
+
+// ── THE CLIENTS OF THE SERVER'S OWN MAJOR, AS PROD HAS THEM ─────────────────
+// Prod runs PostgreSQL 16 with its own 16 clients (deploy/uat/provision.sh: "PostgreSQL 16.15", postgresql-16). The
+// runner's clients are newer (18.x on run 45739466569), and a pg_restore of 17 or later sends
+// `SET transaction_timeout = 0`, which a 16 server refuses ("unrecognized configuration parameter"): measured, that run
+// stopped there. So the lanes' pg_dump and pg_restore run as the service container's OWN (the postgres:16 image's, the
+// server's major), through two wrappers first on PATH. The lanes' command lines are untouched: pg_dump's --file and
+// pg_restore's archive argument become the container's stdout and stdin. psql stays the runner's (its queries are
+// version-neutral). No docker, or not exactly one container publishing the service's port, is CANNOT RUN.
+const docker = spawnSync("docker", ["ps", "--filter", `publish=${PGPORT}`, "--format", "{{.ID}}"], { encoding: "utf8" });
+const containers = docker.status === 0 ? docker.stdout.split("\n").filter(Boolean) : [];
+if (containers.length !== 1) cannot(`the service's container could not be found (docker exit ${docker.status ?? docker.error?.code}, ${containers.length} containers publishing ${PGPORT}): its own pg_dump and pg_restore are the server's major`);
+const SERVICE = containers[0];
+const inService = (bin) => {
+  const r = spawnSync("docker", ["exec", SERVICE, bin, "--version"], { encoding: "utf8" });
+  if (r.status !== 0) cannot(`the service container has no ${bin}: ${r.stderr}`);
+  return r.stdout.trim();
+};
+const tools = { pg_dump: inService("pg_dump"), pg_restore: inService("pg_restore"), psql: runnerTools.psql };
+const BIN = mkdtempSync(join(tmpdir(), "pos1199-bin-"));
+writeFileSync(join(BIN, "pg_dump"), `#!/bin/bash
+# the service's own pg_dump: --file <path> becomes this side's file, written from the container's stdout
+out=""; args=()
+while [ $# -gt 0 ]; do case "$1" in --file) out="$2"; shift 2 ;; --file=*) out="\${1#--file=}"; shift ;; *) args+=("$1"); shift ;; esac; done
+[ -n "$out" ] || { echo "pg_dump wrapper: no --file" >&2; exit 2; }
+docker exec -e PGPASSWORD="$PGPASSWORD" ${SERVICE} pg_dump "\${args[@]}" > "$out"
+`, { mode: 0o755 });
+writeFileSync(join(BIN, "pg_restore"), `#!/bin/bash
+# the service's own pg_restore: the archive (the last argument, a file on this side) becomes the container's stdin
+file="\${!#}"; args=("\${@:1:$(($#-1))}")
+[ -f "$file" ] || { echo "pg_restore wrapper: no archive file as the last argument" >&2; exit 2; }
+docker exec -i -e PGPASSWORD="$PGPASSWORD" ${SERVICE} pg_restore "\${args[@]}" < "$file"
+`, { mode: 0o755 });
 let pg;
 try { pg = (await import("pg")).default; } catch (e) { cannot(`the pg module is missing (npm ci first): ${e.message}`); }
 
@@ -85,10 +120,11 @@ const PSQL_OWNER = line(REHEARSE, /^psql_owner\(\) .*$/m, "the rehearsal's psql_
 const SAY = line(REHEARSE, /^say\(\) .*$/m, "the rehearsal's say()");
 
 const scratch = mkdtempSync(join(tmpdir(), "pos1199-"));
-process.on("exit", () => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter in a throwaway runner */ } });
+process.on("exit", () => { for (const d of [scratch, BIN]) try { rmSync(d, { recursive: true, force: true }); } catch { /* litter in a throwaway runner */ } });
 const laneEnv = {
   ...process.env, WORLD2_ENV_FILE: join(scratch, "no-env-file"), WORLD2_LAB: join(scratch, "lab"), WORLD2_STATE_DIR: join(scratch, "state"),
   WORLD2_PGHOST: PGHOST, WORLD2_PGPORT: PGPORT, PG_WORLD2_OWNER_PASSWORD: PW, PG_OFFICE_API_PASSWORD: PW, WORLD2_OFFICE: ROOT,
+  PATH: `${BIN}:${process.env.PATH}`,   // the service's own pg_dump and pg_restore first (§ THE CLIENTS OF THE SERVER'S OWN MAJOR)
 };
 function bash(script, env, what) {
   const f = join(scratch, `${what.replace(/\W+/g, "-")}.sh`);
@@ -167,7 +203,9 @@ async function counts(db, tables) {
 let serverVersion;
 try { serverVersion = await withClient("postgres", "postgres", async (c) => (await c.query("SHOW server_version")).rows[0].server_version); }
 catch (e) { cannot(`the CI Postgres service could not be reached: ${e.message}`); }
-say(`== POS-1199 restore-grants rehearsal · server PostgreSQL ${serverVersion} · ${tools.pg_dump} · ${tools.pg_restore} · ${tools.psql}`);
+say(`== POS-1199 restore-grants rehearsal · server PostgreSQL ${serverVersion}`);
+say(`   the lanes' clients (the service container's own): ${tools.pg_dump} · ${tools.pg_restore} · psql the runner's, ${tools.psql}`);
+say(`   the runner's, not used for the dump or the restore: ${runnerTools.pg_dump} · ${runnerTools.pg_restore}`);
 
 const floor = spawnSync("bash", [".github/scripts/guard-falsifier-floor.sh", SRC, "--fresh"], { cwd: ROOT, encoding: "utf8", env: process.env });
 if (floor.status !== 0) cannot(`the source's floor failed: ${floor.stdout}${floor.stderr}`);
@@ -212,6 +250,6 @@ if (!fals.r.refused) failures.push("falsifier: the office answered from a store 
 if (!fals.diff.some((d) => d.startsWith("office_api select acts: allowed on the source, refused here"))) failures.push("falsifier: office_api could still read acts");
 if (!fals.diff.length) failures.push("falsifier: every pen operation matched the source with the grants dropped");
 
-say(`\n== boundary: roles and CONNECT are cluster-wide and never in a dump (this job's Roles step stands in for the box's hand-made ones); the scratch databases are made empty by the postgres superuser (the CI owner has no CREATEDB); S3, the base backup, WAL, roles.db and intake are their own tests'.`);
+say(`\n== boundary: roles and CONNECT are cluster-wide and never in a dump (this job's Roles step stands in for the box's hand-made ones); the scratch databases are made empty by the postgres superuser (the CI owner has no CREATEDB); the dump and restore ran on the server's own major's clients, as prod's do (${tools.pg_restore}), since the runner's newer ones cannot restore into a 16; S3, the base backup, WAL, roles.db and intake are their own tests'.`);
 if (failures.length) { for (const f of failures) console.log(`::error::${f}`); say(`== RED · ${failures.length} failure(s)`); process.exit(1); }
 say(`== GREEN · the restore keeps every grant, every pen does on it what it did on the source, the office answers; with --no-acl put back the owner's counts still match and all three of those go red`);

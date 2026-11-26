@@ -3061,7 +3061,9 @@ Postgres change), or on any machine that can read the bucket:
                                                      # it uploads last, so a night without one didn't finish
     aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
     cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
-    # the pen roles first: they are cluster-wide, never in a dump (§ Install); a missing one stops the restore by name
+    # the pen roles first: they are cluster-wide, never in a dump (§ Install); a missing one stops the restore by name.
+    # And a pg_restore of the SERVER's major (16 on prod): a 17 or later sends `SET transaction_timeout`, which a 16
+    # refuses, and the restore stops there (measured in CI, POS-1199)
     pg_restore --exit-on-error --no-owner -d <new-empty-db> world2-<stamp>.dump
 
 Then put back what rode beside the dump, as `LATEST.json` names it:
