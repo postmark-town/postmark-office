@@ -740,3 +740,56 @@ export async function moveResidentInStore(client, { handle, from, to, settleLike
     throw e;
   }
 }
+
+// ── A RESIDENT LEAVES A HOUSE THAT KEEPS OTHERS (POS-1162) ──────────────────
+//
+// The other shape of a move (tools/move-housemate.mjs). `moveResidentInStore` above retires a house whose
+// only resident leaves, and carries the source's accounts, its key and its home picture to the target. THIS
+// ONE CARRIES NONE OF THAT. Darko, POS-448/a: the five meeps move to the town's household, "their past acts
+// staying recorded as Starforge's", so the source row STAYS (no DELETE), nothing goes into the target's
+// `formerly` (rows spelled `hh:<source>` stay the source's through the source's own spelling set), and the
+// target gains no account of the source's. The ONLY two columns written are `residents` on the two rows.
+//
+// Both rows are re-read and locked `FOR UPDATE` (in slug order, so two moves can never wait on each other),
+// and the plan's preconditions are judged again against them: the handle is in the source, the source keeps
+// at least one other resident, the target stands and does not hold the handle. Each UPDATE matches the exact
+// prior array, so a row that changed between the read and the write moves nothing, and any failure rolls the
+// whole transaction back.
+
+/** The two `residents` arrays as they will stand: pure, so the plan and the transaction compute them alike. */
+export function movedHousemateRows({ handle, source, target }) {
+  return {
+    source: { residents: (source.residents ?? []).filter((h) => h !== handle) },
+    target: { residents: [...(target.residents ?? []), handle] },
+  };
+}
+
+export async function moveHousemateInStore(client, { handle, from, to }) {
+  const refuse = (r, detail = null) => Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, detail });
+  const { rows: [who] } = await client.query("SELECT current_user::text AS u");
+  if (who?.u !== "world2_owner") throw refuse(MOVE_ROW_REFUSALS.NOT_OWNER, `connected as ${who?.u ?? "nobody"}`);
+  await client.query("BEGIN");
+  try {
+    const { rows } = await client.query(
+      "SELECT slug, residents FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE", [[from, to]]);
+    const source = rows.find((r) => r.slug === from);
+    const target = rows.find((r) => r.slug === to);
+    const sourceRes = source?.residents ?? [];
+    const targetRes = target?.residents ?? [];
+    if (from === to || !source || !target || !sourceRes.includes(handle) || sourceRes.length < 2 || targetRes.includes(handle))
+      throw refuse(MOVE_ROW_REFUSALS.MOVED, `${from}: ${source ? `[${sourceRes.join(", ")}]` : "gone"} · ${to}: ${target ? `[${targetRes.join(", ")}]` : "gone"}`);
+    const after = movedHousemateRows({ handle, source, target });
+    const out = await client.query(
+      "UPDATE households SET residents = $2::text[] WHERE slug = $1 AND residents = $3::text[] RETURNING slug",
+      [from, after.source.residents, sourceRes]);
+    const inn = await client.query(
+      "UPDATE households SET residents = $2::text[] WHERE slug = $1 AND residents = $3::text[] RETURNING slug",
+      [to, after.target.residents, targetRes]);
+    if (out.rowCount !== 1 || inn.rowCount !== 1) throw refuse(MOVE_ROW_REFUSALS.MOVED, `updated ${out.rowCount} and ${inn.rowCount} of the two rows`);
+    await client.query("COMMIT");
+    return { from, to, source: after.source, target: after.target };
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  }
+}
