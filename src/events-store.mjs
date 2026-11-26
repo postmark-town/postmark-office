@@ -64,7 +64,8 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidenceInputs, composeEventEvidence, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
+import { eventEvidenceInputs, composeEventEvidence, presentParticipants, eventSparksOf, eventSparkIds, eventGalleryOf, sparkNoteOf, EVENT_SPARK_BACKING, EVENT_SPARKS_MAX, sparkTextRefusal } from "./event-sparks.mjs";
+import { speakerBook } from "./speaker-line.mjs"; // POS-1217: a human's public presentation, the book a conversation's lines are said over
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -1213,6 +1214,9 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
     }, env);
     const evidence = first.inputs ? composeEventEvidence(first.inputs) : null;
     if (evidence) {
+      // POS-1217: a human's own hand in `participants` gains its public presentation here, between the two leases (the registry read takes its own short one and is
+      // released): the book is asked only when a human's hand is among them, and an unreadable registry leaves the canonical handle, never a guess
+      if (evidence.participants.some((p) => p.human)) evidence.participants = presentParticipants(evidence.participants, await speakerBook());
       await read(async (client) => {
         // its own sparks, the public collection its completion recorded (one per room, in order): each accepted (standing) or
         // waiting on acceptance; [] before it ends, and for a free event, whose sparks are its host's private drafts
@@ -1222,7 +1226,7 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         const note = evidence.sparks ? sparkNoteOf(first.row, evidence, { now }) : undefined;
         if (note) evidence.spark_note = note;
         // and every accepted spark across its rooms (the gallery), every root of the event's left out; unanswered is unknown
-        try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(first.row) })); }
+        try { Object.assign(evidence, await eventGalleryOf(client, evidence, { roots: eventSparkIds(first.row), event: first.row.id })); }
         catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
       }, env);
       first.view.evidence = evidence;

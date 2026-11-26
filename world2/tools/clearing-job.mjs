@@ -70,7 +70,7 @@ import { candidateRowOf, prospectiveTiers } from "./prospective-standing.mjs"; /
 import { sealPrepare, provisionalHeader, saveDecision, NEXT_SETTLEMENT_SQL } from "./world-snapshot-seal.mjs";
 // THE SETTLEMENT'S LAST DECISIONS (POS-1025): the withdrawal, the commons unpublish, and what its words and limits take away,
 // before the seal. See step 7.5.
-import { settlementDecides, takeawaysBeforeSeal, WITHDRAW_CAUSE, UNPUBLISH_CAUSE } from "./settlement-decides.mjs";
+import { settlementDecides, takeawaysBeforeSeal, sealedFilingHeld, filingHeldWords, WITHDRAW_CAUSE, UNPUBLISH_CAUSE } from "./settlement-decides.mjs";
 // WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
 import { stancesAtSeal, lawCarriesRulingB, settlementTakesAway } from "../../src/world-settlement.mjs";
 import { townDate } from "../../src/town-return.mjs";
@@ -832,15 +832,14 @@ try {
   //     The printout writes none of it.
   const takenHeld = decided.taken_away ?? [];
   const takenSlugs = new Set(takenHeld.map((h) => h.slug));
-  const filingHeld = (decided.filing_held ?? []).filter((h) => !takenSlugs.has(h.slug)).map((h) => ({ slug: h.slug, held: "filing-collision", path: h.path,
-    held_by_filing_of: h.held_by_filing_of, ...(h.held_under ? { held_under: h.held_under } : {}) }));
+  const filingHeld = sealedFilingHeld(decided.filing_held, takenSlugs);
   const sealHeld = [...takenHeld, ...filingHeld];
   const decidedAt = new Date();
   const sealed = await saveDecision(q, { windowId, stances, settlement: Number(settlementNumber), held: sealHeld,
     day: townDate(decidedAt), townReturns: decided.town_returns ?? null, at: decidedAt, prepared });
   const header = sealed.header;
   for (const h of takenHeld) console.log(`  ⚑ held: ${h.slug} — taken away by the settlement (${h.held}${h.mark && h.mark !== h.slug ? `, with ${h.mark}` : ""}); not published, its store row kept`);
-  for (const h of filingHeld) console.log(`  ⚑ held: ${h.slug} — its filing ${h.path} is ${h.held_by_filing_of}'s on main (WLD-230); sealed not published, its store row kept`);
+  for (const h of filingHeld) console.log(filingHeldWords(h));
   for (const r of decided.town_returns ?? []) console.log(`  ⚑ town return: ${r.mark} (${r.leaving.length} mark(s)) is S${sealed.settlement}'s removal, saved for the settlement crossing to pay on ${sealed.day}`);
   if (decided.takeaway?.unread) console.log(`  ⚑ takeaway: ${decided.takeaway.unread}; held the clearings' over-limit forecasts instead (${(decided.takeaway.withheld_by_forecast ?? []).length})`);
   console.log(`  ⚑ decision: ${header.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${String(header.digest).slice(0, 12)}; settlement S${sealed.settlement}, saved for the settlement crossing to seal`);

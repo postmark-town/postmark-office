@@ -27,7 +27,7 @@ import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing, nextCrossingAt, nextC
 import { enqueueLetter, nextCrossing } from "../src/write.mjs";
 import { sendLetterAsRow, duplicateReceipt } from "../src/town-mail.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
-import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
+import { tempClone, fixtureKey, fixtureTown, seedLetterFields } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 delete process.env.TOWN_PUSH;
@@ -117,6 +117,7 @@ function mailClone() {
     writeFileSync(join(d, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n\n# ${h}\n`);
   }
   writeFileSync(join(d, "WHITE_PAGES", "mail-ledger.md"), "# the mail ledger\n\n");
+  seedLetterFields(d);
   const git = (...a) => execFileSync("git", ["-C", d, ...a], { encoding: "utf8" });
   git("init", "-q"); git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");

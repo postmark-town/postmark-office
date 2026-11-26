@@ -13,29 +13,38 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, rmdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, isAbsolute, resolve } from "node:path";
 
+import { createRequire } from "node:module";
 import { nextCrossingAt, nextCrossingForReceipt } from "./crossings.mjs";
 import { probeOf } from "./index-probe.mjs";
-
-const MAX_BODY = 100_000; // size courtesy (bytes of markdown body)
+import { pinnedToolsDir, isPinStop, pinStopHint } from "./town-tool.mjs";
 
 const slugify = (s) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "letter";
-
-// What `thread:` may hold: `new`, or a letter id. A letter id is the grammar the ferry's envelope
-// demands of every id (town-clone/tools/envelope.mjs `classify`: one safe filename segment), and
-// the door mints ids from lowercase words, so every id it has made wears it. The value is written
-// straight into the letter's frontmatter, one line, so a space, a quote or a line break in it is
-// no id: it would be a second frontmatter line, or a line the crossing's parsers read slowly (POS-921).
-// 255 is the longest a filename segment can be.
-const THREAD_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 
 // The bounce vocabulary, one factory for the whole spine: `{ code, defect, hint }`
 // on an Error, which is the shape both doors catch and turn into an answer.
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
-// WHAT A REFUSAL MAY SAY OF A VALUE THE RESIDENT SUPPLIED (POS-923): never the value whole, and never through a coercion the value controls. A string is shown short and printable;
-// anything else is named by its type (`typeof`), which no object can make throw or grow (a null-prototype object, one whose toString throws, a deep array). `String(thread)` here was a 500.
-const shown = (v) => (typeof v === "string" ? JSON.stringify(v.slice(0, 40).replace(/[^ -~]/g, "?")) : `(a ${typeof v})`);
+// THE LETTER-FIELD POLICY IS THE TOWN'S, ONE IMPLEMENTATION (POS-1165, POS-1036; Darko 2026-11-14 "Same check at merge"; Wright 2026-11-21: "One
+// shared letter-field check, used by both office validateLetter and the trusted town merge path, with each caller keeping its own identity and
+// ownership checks"). The thread's grammar, the body-size courtesy, the stake trio and the echo of a refused value (`shown`, POS-923) live in the
+// town's tools/letter-fields.mjs, which the town's witness applies to a letter sent as a PR. This door runs the office's PINNED copy of that same
+// file (tools/town-pins.mjs, reviewed as office code), never a regex of its own. What stays here is the office's own: required fields and their
+// types, key ownership, the held index probe, the unseen-thread note, and the title / slug / date / id of a letter being CREATED.
+//
+// validateLetter is SYNCHRONOUS and stays so, so the pinned module is read through require(esm) (Node 22.12 and later; the file imports nothing and
+// has no top-level await). The pinned copy is reached ONLY through the loader (pinnedToolsDir checks the clone's copy of the file against the pin,
+// as it does for every pinned town module: a differing copy, or none, stops by name: 503 town-pin-mismatch), so a clone that does not hold the
+// town's file never gets the policy skipped or swapped.
+const requireEsm = createRequire(import.meta.url);
+function letterFields(clone) {
+  try {
+    return requireEsm(join(pinnedToolsDir(clone, ["letter-fields.mjs"]), "letter-fields.mjs")); // checked against the clone, as every pinned module is
+  } catch (e) {
+    if (isPinStop(e)) throw bounce(503, "town-pin-mismatch", pinStopHint(e));
+    throw e;
+  }
+}
 
 // ONE CLOCK (postmark#2922). This used to walk its own `CROSSINGS_UTC = [0, 12]`
 // for the next 00:00Z/12:00Z instant while crossings.mjs counted the same
@@ -662,46 +671,6 @@ export function landPenBatch(batch, { acts, message }) {
   return { commits, landed, held };
 }
 
-// vote-by-mail's frontmatter block. The trio is all-or-none: none given → "" (the
-// letter is an ordinary letter, byte-identical to before); all three given → a
-// shape-validated three-line block to append after `thread:`. Shape only — an open
-// ballot, the exact candidate, and household headroom are the crossing's law, not
-// the door's; we just refuse a malformed intent (named-field bounce, door manners).
-// The stamp count is written as a bare integer; the ballot engine coerces it.
-/** vote-by-mail's candidate: the thread's own bound (THREAD_RE), the same short line. */
-export const STAKE_CANDIDATE_MAX = 255;
-
-function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
-  const present = (v) => v !== undefined && v !== null && v !== "";
-  const given = [stake_topic, stake_candidate, stake_stamps].filter(present).length;
-  if (given === 0) return "";
-  if (given < 3)
-    throw bounce(422, "incomplete stake",
-      "vote-by-mail is all-or-none: set stake_topic, stake_candidate, and stake_stamps together, or leave all three off");
-  // TYPES FIRST, before any coercion (POS-923): the topic and the candidate are text, the stamps a number or the digits of one. Anything else is named by its type and refused, so no value
-  // can make a coercion throw (a 500) or grow a diagnostic.
-  for (const [name, v] of [["stake_topic", stake_topic], ["stake_candidate", stake_candidate]])
-    if (typeof v !== "string") throw bounce(422, `${name} must be text, not ${shown(v)}`, name === "stake_topic" ? "lowercase-hyphenated, exactly as the ballot lists the topic" : "one line; the exact candidate spelling the ballot lists");
-  if (typeof stake_stamps !== "number" && typeof stake_stamps !== "string")
-    throw bounce(422, `stake_stamps must be a positive whole number, not ${shown(stake_stamps)}`, "stake a positive integer count of stamps");
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(stake_topic))
-    throw bounce(422, `stake_topic ${shown(stake_topic)} is not a ballot slug`, "lowercase-hyphenated, exactly as the ballot lists the topic");
-  // THE CANDIDATE IS ONE SHORT LINE (POS-923, F2): it is written into the letter's frontmatter as a single line the crossing's parsers read, so it is judged as `thread` is: the same
-  // 255-character cap, and no line terminator of any kind (LF, CR, U+2028, U+2029), judged BEFORE trimming so a terminator trimming would hide is still refused. Spaces and any
-  // Unicode spelling are fine: a candidate is a name, not an id. The refusals say how long it was, never what it was.
-  if (stake_candidate.length > STAKE_CANDIDATE_MAX)
-    throw bounce(422, `stake_candidate is too long: at most ${STAKE_CANDIDATE_MAX} characters (yours has ${stake_candidate.length})`, "the exact candidate spelling the ballot lists is a short name");
-  if (/[\n\r\u2028\u2029]/.test(stake_candidate))
-    throw bounce(422, "stake_candidate must be one line", "no line breaks of any kind: the exact candidate spelling the ballot lists, on one line");
-  const candidate = stake_candidate.trim();
-  if (!candidate)
-    throw bounce(422, "stake_candidate must be a name", "one line; the exact candidate spelling the ballot lists");
-  const n = Number(stake_stamps);
-  if (!Number.isInteger(n) || n <= 0)
-    throw bounce(422, `stake_stamps ${shown(stake_stamps)} is not a positive whole number`, "stake a positive integer count of stamps");
-  return `stake_topic: ${stake_topic}\nstake_candidate: ${candidate}\nstake_stamps: ${n}\n`;
-}
-
 // THE VALIDATION HALF, split out for a second caller (wave 3, POS-44).
 //
 // Flag-on, send_letter writes a town-log row instead of a file, and the row
@@ -720,7 +689,9 @@ function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
 // data: the plan travels to the town log and into the envelope pre-flight, and
 // a callable riding inside it would be a thing those callers could mistake for
 // part of the letter.
-export function validateLetter({ from, to, title, thread, body, stake_topic, stake_candidate, stake_stamps }, key, db, acceptedIdentity = null) {
+export function validateLetter({ from, to, title, thread, body, stake_topic, stake_candidate, stake_stamps }, key, db, acceptedIdentity = null, { clone = null } = {}) {
+  const lf = letterFields(clone);
+  const { shown } = lf; // the shared refusal-echo rule (never the value whole)
   // envelope checks — the ferry's rules, applied at the door
   if (!from || !to || !title || !body)
     throw bounce(422, "incomplete envelope", "required: from, to, title, body");
@@ -739,13 +710,10 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   const ix = probeOf(db);
   if (!ix.hasResident(to))
     throw bounce(422, `no resident ${shown(to)}`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
-  // THE THREAD IS AN ID OR `new`, NOTHING ELSE (POS-921). It is written into the letter's frontmatter
-  // as one line, and the crossing's parsers read that line, so it is judged here against the
-  // envelope's id grammar (THREAD_RE) before anything is looked up or written. The value is echoed
-  // back short and printable, never whole.
-  if (thread !== "new" && !(typeof thread === "string" && THREAD_RE.test(thread)))
-    throw bounce(422, `thread ${shown(thread)} is not a letter id`,
-      'set thread to "new", or to the exact id of the letter you are answering, as your inbox lists it: letters, digits and - . _ only, with no spaces, quotes or line breaks');
+  // THE FIELD POLICY, THE TOWN'S ONE (POS-921 thread grammar, the body-size courtesy, POS-923 / vote-by-mail's stake trio): judged by the shared check
+  // in the office's own order (thread, then size, then the stake trio) and refused through the door's bounce with its own code, defect and hint.
+  const fieldDefect = lf.checkLetterFields({ thread, body, stake_topic, stake_candidate, stake_stamps });
+  if (fieldDefect) throw bounce(fieldDefect.code, fieldDefect.defect, fieldDefect.hint);
   // A COPY THAT HAS NOT CAUGHT UP NEVER REFUSES A REAL REPLY (POS-332). The
   // index is a copy of the town record, refreshed between crossings, so a
   // letter that sailed after it is a real id it does not hold yet: Nyx's three
@@ -754,15 +722,8 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   // the ferry takes any `thread:` as written (the town's envelope.mjs defaults
   // it and looks nothing up), so the letter is accepted and the receipt says so.
   const threadUnseen = thread !== "new" && !ix.hasLetter(thread);
-  if (Buffer.byteLength(body, "utf8") > MAX_BODY)
-    throw bounce(413, "letter exceeds the size courtesy", `keep the body under ${MAX_BODY / 1000}KB; big artifacts belong in PROJECTS`);
-
-  // vote-by-mail: an optional stake trio the letter carries into its frontmatter,
-  // applied at the crossing by the ballot-pass (which owns the deep validation —
-  // open ballot? household headroom? — and mints the receipt). Here we only prove
-  // the intent is well-formed and all-or-none, so a chat/desk sender can stake by
-  // writing a letter. A letter without these fields is byte-for-byte unchanged.
-  const stakeFm = buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce);
+  // the stake trio's frontmatter block, formatted by the same shared module (none given: "", the letter is byte-for-byte unchanged)
+  const stakeFm = lf.stakeFrontmatter({ stake_topic, stake_candidate, stake_stamps }).fm;
 
   const slug = slugify(title);
   const derivedDate = letterDate();
@@ -840,7 +801,7 @@ export const letterDate = () =>
 // Validate + write + commit. Returns { letter_id, commit, expected_crossing }
 // or throws { code, defect, hint } in the bounce vocabulary.
 export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
-  const { id, from, to, date, thread, slug, stakeFm, body, threadUnseen } = validateLetter(args, key, db, acceptedIdentity);
+  const { id, from, to, date, thread, slug, stakeFm, body, threadUnseen } = validateLetter(args, key, db, acceptedIdentity, { clone });
   const relFile = acceptedIdentity?.file ?? outboxRelPath(from, date, to, slug);
 
   // freshen the clone, then write the letter file — at the path outboxRelPath

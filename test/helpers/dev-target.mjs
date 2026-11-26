@@ -24,6 +24,7 @@ import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
 import { standinClone } from "./clone-sparse.mjs";
+import { seedLetterFields } from "../fixture.mjs"; // POS-1165
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
@@ -38,6 +39,21 @@ export { freePort };
  * its office never writes (test/helpers/clone-sparse.mjs § standinPatterns); a full clone
  * here was ~25,000 files written on every sandbox setup or reset.
  */
+/**
+ * POS-1165: the door judges a letter's fields through the office's PINNED copy of the town's tools/letter-fields.mjs, and the clone is held to that
+ * pin, so the stand-in's scratch town must hold the reviewed file. A town that predates it (the suite's clone) gets it as ONE harness commit, made
+ * AFTER the seed tag, so the seed stays the source's own commit (the re-sign reads prod's key there). A town that ALREADY holds exactly that file (a
+ * newer source, or one seeded before) has nothing to commit, so nothing is committed: no empty commit, no abort, and the seed is the source's HEAD
+ * all the same. Answers true when it committed.
+ */
+export function carryLetterFields(town) {
+  seedLetterFields(town);
+  g(town, "add", "tools/letter-fields.mjs");
+  if (!g(town, "status", "--porcelain", "--", "tools/letter-fields.mjs")) return false;
+  g(town, "commit", "-qm", "harness: the reviewed letter-field policy the office's pins name (POS-1165)");
+  return true;
+}
+
 function scratchClone(which, source, dest) {
   standinClone(which, source, dest);
   g(dest, "checkout", "-q", "-B", "main"); // the box's clones sit on main, and the settlement pins it
@@ -114,6 +130,7 @@ export async function localDevTarget({
     // refs/tags/sandbox/seed". The stand-in tags its own scratch clone instead: its HEAD, the pinned
     // town, prod-signed as the box's seed is, before the re-sign, whatever tag the source carries.
     g(town, "tag", "-f", "sandbox/seed", "HEAD");
+    carryLetterFields(town); // POS-1165: AFTER the seed tag, so the seed stays the source's own commit
     const world = scratchClone("world", worldSource, join(dir, "world-clone"));
     // The world's own checker suite (test:candle) runs after a settlement publishes, as a
     // warning, never a hold; on this machine it costs ~25 minutes a settlement. The box's

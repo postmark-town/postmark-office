@@ -16,6 +16,8 @@ import assert from "node:assert/strict";
 import { existsSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempClone, fixtureKey, fixtureTown } from "./fixture.mjs";
+// POS-1165: a clone the field policy's pin check can hold to (it carries the reviewed letter-fields.mjs); a bounce writes nothing to it
+const BOUNCE_CLONE = tempClone();
 import { enqueueLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
@@ -37,7 +39,7 @@ const throwingToString = () => ({ toString() { throw new Error("hostile"); }, va
 const HOSTILE = { "a null-prototype object": nullProto, "one whose coercion throws": throwingToString, "an array nested 20,000 deep": () => deepArray(20_000) };
 
 const bounce = (payload) => {
-  try { enqueueLetter(payload, fixtureKey, db, "unused"); } catch (e) { return e; }
+  try { enqueueLetter(payload, fixtureKey, db, BOUNCE_CLONE); } catch (e) { return e; }
   assert.fail("expected a bounce");
 };
 

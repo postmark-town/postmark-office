@@ -157,6 +157,7 @@
             "sync",
             "rollback",
             "sparks",
+            "hearth_joins",
             "settlements",
             "carried",
             "chests",
@@ -221,6 +222,21 @@
         "stale_after_minutes": 50
       },
       "stale_means": "Cargo left at a foreign pier goes unseen, and the operator round reads a snapshot that describes the shores as they were rather than as they are — the sable-#537 shape, where carriage was owed and nobody could see it. The allowance is three ticks plus the jitter. The stamp is read from inside the file rather than from its mtime because a snapshot rewritten with unchanged content still has a fresh mtime."
+    },
+    {
+      "unit": "postmark-loop-lag-keep.timer",
+      "label": "the loop-lag keeper",
+      "stage": "live",
+      "activation_owner": "Jetto — on Wright's go 2026-11-23 16:03 EST (POS-1098: \"keep the loop-lag record longer, and snapshot it at every kill\"); installed by hand 2026-11-23 21:04Z, unit source deploy/postmark-loop-lag-keep.{service,timer}, tool deploy/loop-lag-keep.mjs",
+      "cadence": "every 5 minutes",
+      "cadence_source": "systemctl show postmark-loop-lag-keep.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/var/lib/postmark-loop-lag-keep/state.json",
+        "stamp_field": "last_minute",
+        "stale_after_minutes": 20
+      },
+      "stale_means": "The office's event-loop record (telemetry/loop-lag-4380.json) keeps only its last 60 minutes, so a stall stops being kept past the hour and an idle-in-transaction kill gets no snapshot of the minutes around it: the next 500 burst can't be tied to what stalled. The stamp is the newest minute kept, which follows the office's own record; the allowance is three ticks plus the office's one-minute row."
     },
     {
       "unit": "postmark-usdc-watch.timer",

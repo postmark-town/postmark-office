@@ -516,7 +516,7 @@ export async function officeHandles(q) {
 // by the readers that want it, residentList for one), never a card.
 let _roster = { asOf: undefined, entries: null };
 export async function roster(q) {
-  return rosterOf(await rosterRows(q));
+  return rosterEntries(q);
 }
 
 /** The SQL half of roster: the kept entries when the store's head has not moved, else the cards' rows (POS-1064: parsed after the connection is back). */
@@ -530,6 +530,37 @@ function rosterOf({ asOf, entries, rows }) {
   const built = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
   _roster = { asOf, entries: built };
   return built;
+}
+
+/**
+ * ONE COLD LOAD PER HEAD, SHARED (POS-1098). When the head moves, the first read of the roster reads every card (26-48 MB) and parses them (about
+ * 0.23 s of main-thread CPU, measured on a 389-card store); until it finishes the memo is cold, so every read that arrived meanwhile read and
+ * parsed them again. A caller that holds its connection for the whole roster (`roster`, hence residentList and the bare list; the doorstep's
+ * split read, which parses after its connection is back, keeps its own `rosterRows`) now waits for a load already running for the SAME head
+ * and takes its entries; if that load fails it does its own, so a failure is never shared. (The waiter holds its connection for at most that
+ * one load: the alternative was its own read and parse.) `knownAsOf` is the head the caller has already read.
+ */
+let _rosterLoad = null;                                     // { asOf, promise → entries }
+const _resident = { page_hits: 0, page_misses: 0, roster_loads: 0, roster_shared: 0 };
+/** The counters behind the bare list's reuse (POS-1098): page hits and misses, cold roster loads, and loads a concurrent read shared. For measurement and the tests. */
+export const residentCacheStats = () => ({ ..._resident });
+async function rosterEntries(q, knownAsOf = null) {
+  const asOf = knownAsOf ?? await townIndexAsOf(q);
+  if (_roster.entries && _roster.asOf === asOf) return _roster.entries;
+  if (_rosterLoad && _rosterLoad.asOf === asOf) {
+    const shared = await _rosterLoad.promise.catch(() => null);
+    if (shared) { _resident.roster_shared += 1; return shared; }
+  }
+  const load = { asOf, promise: null };
+  load.promise = (async () => {
+    const rows = (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows;
+    _resident.roster_loads += 1;
+    return rosterOf({ asOf, rows });
+  })();
+  _rosterLoad = load;
+  const done = () => { if (_rosterLoad === load) _rosterLoad = null; };
+  load.promise.then(done, done);
+  return load.promise;
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
@@ -634,7 +665,10 @@ export async function probeWithMailState(handle, { env = process.env, standing =
 }
 
 /** Test seam: forget the roster memo (a suite that rewrites rows under one head). */
-export function __resetRosterForTest() { _roster = { asOf: undefined, entries: null }; }
+export function __resetRosterForTest() {
+  _roster = { asOf: undefined, entries: null }; _rosterLoad = null; _pages = { asOf: undefined, byOpts: new Map() };
+  for (const k of Object.keys(_resident)) _resident[k] = 0;
+}
 /** Test seam: forget the held probe (a suite whose stores share one head, the fixture's). */
 export function __resetProbeForTest() { _probeRows = null; holdStoreProbe(null); }
 
@@ -643,9 +677,28 @@ export async function residentList(q) {
   return (await roster(q)).filter((e) => isResidentHandle(e.handle)).map((e) => ({ ...e }));
 }
 
+// THE BARE LIST, COMPOSED ONCE PER HEAD (POS-1098). A page is the roll with the admission grammar applied, copied, filtered and cut: pure of
+// the roster's entries and the ask. Both are fixed while the store's head (town_meta as_of, the roster memo's own key) is, so the composed page is
+// kept under (head, ask) and each read gets its OWN COPY: a hit never re-filters the roll, and what a caller does to its copy (the last_active
+// stamp the door writes onto every row, from the acts it reads per request) never reaches the kept one. The head's identity alone therefore
+// freezes nothing that moves faster than it: last_active is read again for every answer. No expiry and no age is invented: a new head is a new
+// key and the old pages go with it; at most PAGE_KEEP different asks are kept (the ask is the caller's, so the count must not be).
+const PAGE_KEEP = 16;
+let _pages = { asOf: undefined, byOpts: new Map() };
+const pageAsk = (o = {}) => JSON.stringify([o.limit ?? null, o.offset ?? null, o.since ?? null, o.office ?? null]);
+
 /** The roster page over residentList (the page shape is queries.mjs § residentPageOf). */
 export async function residentPage(q, opts = {}) {
-  return residentPageOf(await residentList(q), opts);
+  const asOf = await townIndexAsOf(q);
+  const ask = pageAsk(opts);
+  if (_pages.asOf === asOf && _pages.byOpts.has(ask)) { _resident.page_hits += 1; return structuredClone(_pages.byOpts.get(ask)); }
+  _resident.page_misses += 1;
+  const entries = await rosterEntries(q, asOf);
+  const page = residentPageOf(entries.filter((e) => isResidentHandle(e.handle)).map((e) => ({ ...e })), opts);
+  if (_pages.asOf !== asOf) _pages = { asOf, byOpts: new Map() };
+  if (!_pages.byOpts.has(ask) && _pages.byOpts.size >= PAGE_KEEP) _pages.byOpts.delete(_pages.byOpts.keys().next().value);
+  _pages.byOpts.set(ask, structuredClone(page));
+  return page;
 }
 
 /** The index meta the town card reads, from the store's own town_meta. */
