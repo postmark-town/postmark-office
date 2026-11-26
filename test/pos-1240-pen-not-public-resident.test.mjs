@@ -123,6 +123,30 @@ test("MCP list_residents and read_town agree: the same page without the Pen, and
   assert.deepEqual(town.offices, MEEPS.slice().sort(), "and its offices are the real meeps");
 });
 
+test("SEARCH (REST /search, MCP search_town): the resident bucket and its matching count leave the Pen out, before the count and the cap; the letters it authored are still found", async (t) => {
+  if (skip) return t.skip(skip);
+  const { callTool } = await import("../src/mcp.mjs");
+  const unwrap = (r) => (typeof r === "string" ? JSON.parse(r) : r?.content?.[0]?.text ? JSON.parse(r.content[0].text) : r);
+  // a term every card carries ("Resident <handle>"): the bucket is the public roll, 7 not 8
+  const all = (await rest("/search?q=Resident")).body;
+  assert.deepEqual(all.residents.slice().sort(), ALL_PUBLIC, "every public resident, never the Pen");
+  assert.equal(all.matches.residents, ALL_PUBLIC.length, "the matching count is the public one");
+  assert.equal(all.capped.residents, false);
+  // the term IS the Pen's handle: the Pen is not a resident hit (not even leading the bucket), its authored letter is a letter hit
+  const pen = (await rest(`/search?q=${PEN_HANDLE}`)).body;
+  assert.deepEqual(pen.residents, [], "no resident answers to the Pen's handle");
+  assert.equal(pen.matches.residents, 0);
+  assert.ok(JSON.stringify(pen.letters).includes(PEN_LETTER), "but the letter the Pen wrote is found, by its author");
+  assert.ok(pen.matches.letters >= 1);
+  // the cap is applied AFTER the exclusion: one fewer shown and counted, never a short bucket padded by the Pen
+  const mcp = unwrap(await callTool("search_town", { q: "Resident" }, {}));
+  assert.deepEqual([mcp.matches.residents, mcp.shown.residents], [ALL_PUBLIC.length, ALL_PUBLIC.length]);
+  assert.ok(!JSON.stringify(mcp.residents).includes(PEN_HANDLE));
+  const mcpPen = unwrap(await callTool("search_town", { q: PEN_HANDLE }, {}));
+  assert.deepEqual([mcpPen.residents, mcpPen.matches.residents], [[], 0]);
+  assert.ok(JSON.stringify(mcpPen.letters).includes(PEN_LETTER));
+});
+
 test("REPEATED SAME-HEAD READS: the kept page is the filtered one, each reader has its own copy, and the operational roll is not changed by the kept page", async (t) => {
   if (skip) return t.skip(skip);
   store.__resetRosterForTest();
@@ -156,6 +180,7 @@ test("OPERATIONAL MEMBERSHIP AND HISTORY ARE UNCHANGED: the operational roll and
   const door = (await store.storeAnswer((c) => store.doorstep(c, "amber", "ignored", { nowMs: Date.parse("2026-12-01T12:00:00Z"), fresh: {} }))).out;
   const arrivals = JSON.stringify(door.town.latestArrivals);
   assert.ok(arrivals.includes("illuminator"), `the doorstep names its arrivals: ${arrivals.slice(0, 200)}`);
+  assert.equal(door.town.residents, ALL_PUBLIC.length, "and its resident count is the public roll's, not the table's");
   assert.ok(!arrivals.includes(PEN_HANDLE), "and the Pen is not one");
   // history it authored is not rewritten: the letter it wrote still lists under its authorship
   const letters = (await store.storeAnswer((c) => store.letterList(c, { resident: PEN_HANDLE, limit: 50 }))).out;

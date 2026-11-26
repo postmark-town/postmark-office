@@ -1080,7 +1080,8 @@ export async function doorstepRows(q, handle, opts = {}) {
       sent: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND from_h = $1", [handle]),
     },
     town: {
-      residents: await one("SELECT COUNT(*) AS n FROM town_residents"),
+      // POS-1240: the town's resident count on a doorstep is the PUBLIC roll's: the Pen is not one (its row, record and history are untouched)
+      residents: await one("SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $1", [PEN_HANDLE]),
       deliveries: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
       lastDelivery: (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE kind = 'delivery'`)).rows[0]?.d ?? null,
     },
@@ -1442,15 +1443,17 @@ export async function search(q, term, { limit, offset } = {}) {
   const n = Math.min(Math.max(wholeNumber(limit) || SEARCH_LETTERS, 1), 200);
   const start = Math.max(wholeNumber(offset) || 0, 0);
   const lettersTotal = await count(q, `SELECT COUNT(*) AS n FROM town_letters WHERE ${like("id", "$1")} OR ${like("json", "$1")}`, [pattern]);
-  const residentsTotal = await count(q, `SELECT COUNT(*) AS n FROM town_residents WHERE ${like("handle", "$1")} OR ${like("json", "$1")}`, [pattern]);
+  // POS-1240: the resident bucket is the PUBLIC roll's (searchPage points it back at list_residents): the Pen is left out BEFORE the count and the cap. Letters it authored
+  // are letters, and stay in the letters bucket; its record is reached by its handle, not through this bucket.
+  const residentsTotal = await count(q, `SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $2 AND (${like("handle", "$1")} OR ${like("json", "$1")})`, [pattern, PEN_HANDLE]);
   const residents = (await q.query(`SELECT handle FROM town_residents
-      WHERE ${like("handle", "$1")} OR ${like("json", "$1")}
+      WHERE handle <> $5 AND (${like("handle", "$1")} OR ${like("json", "$1")})
       ORDER BY CASE
         WHEN handle = $2        THEN 0
         WHEN ${like("handle", "$3")} THEN 1
         WHEN ${like("handle", "$1")} THEN 2
         ELSE 3 END, handle COLLATE "C"
-      LIMIT $4`, [pattern, term, `${term}%`, SEARCH_RESIDENTS])).rows.map((r) => r.handle);
+      LIMIT $4`, [pattern, term, `${term}%`, SEARCH_RESIDENTS, PEN_HANDLE])).rows.map((r) => r.handle);
   const letters = (await q.query(`SELECT ${LETTER_COLS} FROM town_letters WHERE ${like("id", "$1")} OR ${like("json", "$1")} ORDER BY ${NEWEST} LIMIT $2 OFFSET $3`,
     [pattern, n, start])).rows.map(excerpt);
   return searchPage({ q: term, n, start, lettersTotal, residentsTotal, residents, letters });
