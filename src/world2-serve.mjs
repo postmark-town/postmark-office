@@ -1158,7 +1158,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
         }
       }
       // a fixed room found by an ALIAS is looked up in the thread by its own id (the answer carries the room's own header, as a room read always does)
-      body = talk.conversationFound([...read.rooms.values()], fixed && find.circle == null ? { ...find, room: fixed.id } : find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap });
+      body = talk.conversationFound([...read.rooms.values()], fixed && find.circle == null ? { ...find, room: fixed.id } : find, { now: at.ms, earshotM: read.dials.earshot_m.value, boundaries: edges, voiceCap, voicesBefore });
     } else {
       // THE CEILINGS (§ above): a page's closed rooms and a read's open rooms are bounded, so no read fetches the whole record
       const askedClosed = n("closed", 40);
