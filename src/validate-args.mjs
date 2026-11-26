@@ -1,3 +1,4 @@
+import { RSVP_HINT } from "./events.mjs";
 // validate-args.mjs — THE ONE "DOES THIS DOOR TAKE THAT FIELD" TEST.
 //
 // Lifted out of `mcp.mjs` on 2026-09-11, unchanged in its logic, for the same
@@ -69,7 +70,8 @@ export function validateArgs(tool, args, { noun = "tool" } = {}) { // exported 0
         hint: props[k].description ?? `see the ${tool.name} input schema` };
     if (props[k].enum && !props[k].enum.includes(args[k]))
       return { error: "bounce", defect: `argument "${k}" must be one of: ${props[k].enum.join(", ")}`,
-        hint: props[k].description ?? `see the ${tool.name} input schema` };
+        hint: tool.name === "town" && k === "do" && args[k] === "rsvp"
+          ? RSVP_HINT : props[k].description ?? `see the ${tool.name} input schema` };
   }
   for (const k of tool.inputSchema.required ?? []) {
     if (args[k] === undefined || args[k] === null || args[k] === "")

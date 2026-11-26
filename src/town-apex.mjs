@@ -1,3 +1,4 @@
+import { RSVP_HINT } from "./events.mjs";
 // town-apex.mjs — the third apex. `world` answers where you stand and what can
 // be done there; `household` answers who you are and what your house holds;
 // `town` answers WHAT THE TOWN IS, and touches only its register.
@@ -537,6 +538,7 @@ async function townApexAnswer(args, key, ctx) {
     // there are apexes and misjudged which one owns what. So the refusal
     // teaches the map rather than listing valid strings.
     const named = NAMED_NOT_BUILT[act];
+    if (act === "rsvp") return bounce(422, '"rsvp" is not a town act', RSVP_HINT);
     return bounce(422, `"${act}" is not a town act`,
       named
         ? `${named}. ${REGISTER_LAW}`
