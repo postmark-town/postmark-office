@@ -107,7 +107,7 @@ function dumpNight(dir, { noAcl = false } = {}) {
   } else if (/--no-acl/.test(stage.replace(/^#.*$/gm, ""))) cannot("world2-backup.sh § 1 still dumps --no-acl");
   const r = bash(`set -uo pipefail\n. deploy/world2-lib.sh\nDUMPS=${JSON.stringify(dir)}\nSTAMP=20261126T081000Z\nDB="$(w2_db)"\nmkdir -p "$DUMPS"\n${FAIL_FN}${stage}\necho "DUMP=$DUMP TOC=$TOC_ENTRIES BYTES=$DUMP_BYTES"\n`,
     { ...laneEnv, WORLD2_DB: SRC }, noAcl ? "dump-noacl" : "dump");
-  const m = /DUMP=(\S+) TOC=(\d+) BYTES=(\d+)/.exec(r.out);
+  const m = /DUMP=(.+?) TOC=(\d+) BYTES=(\d+)$/m.exec(r.out);
   if (r.code !== 0 || !m) cannot(`the backup's dump stage failed (exit ${r.code}): ${r.out.slice(-800)}`);
   return { file: m[1], toc: Number(m[2]), bytes: Number(m[3]) };
 }
@@ -180,7 +180,7 @@ say(`   ${tables.length} tables; what each pen may do on the source (allowed of 
 
 const failures = [];
 async function night(label, db, { noAcl }) {
-  const dump = dumpNight(join(scratch, label), { noAcl });
+  const dump = dumpNight(join(scratch, db), { noAcl });   // a folder named by its database: no spaces in the path
   for (const d of [db]) await withClient("postgres", "postgres", async (c) => {
     await c.query(`DROP DATABASE IF EXISTS ${d}`);
     await c.query(`CREATE DATABASE ${d} OWNER world2_owner`);
