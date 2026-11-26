@@ -24,6 +24,10 @@
 //   D4  the town (the operator acting as the town) may change a door; a resident whose handle spells the town is a resident
 //   D5  EVERY AMEND KEEPS AN ENTRY: a mark's welcome word survives an amend that sends none, on the journal road and the git road
 //   D6  explain names door, and what extends it, as the town's
+//   D7  (the FIX at b4b43884) the makers exemption is a door amended into its own door class only: a gate re-classed as a town-only
+//       vault meets the makers gate
+//   D8  an unread answer never erases a class it cannot place (a gate amended to a bare sited mark); a known non-door still passes
+//   D9  a live layer that cannot be read is the record unreachable (503), never "no draft" judged against canon
 //
 //   node --import ./test/helpers/sparse-guard.mjs --import ./test/helpers/town-pins-env.mjs --test --test-concurrency=1 test/door-class.test.mjs
 
@@ -52,6 +56,10 @@ const TOWN_DOOR = { id: "the-town/the-quay-gate", by: "the-town", slug: "the-qua
   into: "the-town/the-quay", body: "The quay gate." };
 const GATE = { id: "dw/a-garden-gate", by: "dw", slug: "a-garden-gate", kind: "sited", at: { x: 600, y: 300 }, extent: { w: 2, h: 2 },
   entry: { word: "welcomed", terms: "close it behind you" }, body: "A low garden gate." };
+// THE FIX AT b4b43884: a resident's mark of an invented town subclass of door (`gate`, extends door, makers true) with no door
+// fields, and a thing, for the class-leaving amends (the classes are published only in the legs that need them)
+const WICKET = { id: "dw/a-wicket", by: "dw", slug: "a-wicket", kind: "gate", at: { x: 800, y: 300 }, extent: { w: 2, h: 2 }, body: "A wicket in the hedge." };
+const STOOL = { id: "dw/a-stool", by: "dw", slug: "a-stool", kind: "thing", at: { x: 850, y: 300 }, extent: { w: 1, h: 1 }, body: "A three-legged stool." };
 const ROOT = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 320000, h: 320000 } };
 
 const repo = tempDir("pos1238-door-class-");
@@ -63,12 +71,12 @@ if (!SKIP) {
   for (const f of readdirSync(join(WORLD, "tools")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs")))
     copyFileSync(join(WORLD, "tools", f), join(repo, "tools", f));
   for (const p of Object.keys(MANIFEST.files)) { mkdirSync(dirname(join(repo, p)), { recursive: true }); copyFileSync(join(SEED, p), join(repo, p)); }
-  for (const m of [DOOR, TOWN_DOOR, GATE]) {
+  for (const m of [DOOR, TOWN_DOOR, GATE, WICKET, STOOL]) {
     const { id: _id, body, ...rec } = m;
     mkdirSync(join(repo, "WORLD", "marks", m.by, m.slug), { recursive: true });
     writeFileSync(join(repo, "WORLD", "marks", m.by, m.slug, "mark.md"), markRecord(rec, body));
   }
-  writeFileSync(join(repo, "WORLD", "world-state.json"), JSON.stringify({ tick: 0, dials: {}, marks: [ROOT, DOOR, TOWN_DOOR, GATE] }));
+  writeFileSync(join(repo, "WORLD", "world-state.json"), JSON.stringify({ tick: 0, dials: {}, marks: [ROOT, DOOR, TOWN_DOOR, GATE, WICKET, STOOL] }));
   copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   execFileSync("git", ["-C", repo, "add", "-A", "WORLD", "tools"]);
@@ -301,4 +309,76 @@ test("D6 · explain names door as the town's, for making and for amending; thing
   assert.match(door.makers.who, /^false: the town's, for making and for amending\. A door's into, lands_at and requires are door's alone/);
   const thingAnswer = { explains: "thing", makers: { value: true, from: "thing" } };
   assert.deepEqual(await dc.withDoorMakers(thingAnswer), thingAnswer);
+});
+
+// ── D7–D9 · THE FIX AT b4b43884 (Rivet's combined FIX; Truey's independent FIX) ───────────────────────────────────────────
+
+// two invented town classes over the landed chain: `gate` extends door and loosens makers (the override rule), `vault` is town-only
+const townClass = (key, ext) => ({ number: 400, tag_sha: SHA, newest: 400, kind: "class", key, data: { class: key, extends: ext, id: `the-town/${key}`, by: "the-town", kind: "class" } });
+const townMakers = (key, v) => ({ number: 400, tag_sha: SHA, newest: 400, kind: "property", key: `${key}/makers`,
+  data: { class: key, parent: null, name: "makers", tier: "constitution", default: v, id: `the-town/${key}-makers` } });
+const GATE_AND_VAULT = [townClass("gate", "door"), townMakers("gate", true), townClass("vault", "sited"), townMakers("vault", false)];
+const amendWicket = (over = {}) => ({ slug: WICKET.slug, kind: "gate", at: WICKET.at, extent: WICKET.extent, body: "A wicket in the hedge, mended.", by: "dw", amend: true, ...over });
+
+test("D7 · THE MAKERS EXEMPTION IS A DOOR AMENDED INTO ITS OWN DOOR CLASS, nothing wider: a gate re-classed as a town-only vault meets the makers gate", { skip: SKIP }, async () => {
+  await publishLaw([...LAW, ...GATE_AND_VAULT]);
+  try {
+    // the World says no-door-change for leaving the door class when the writer may make both; that is no permission for vault
+    const g = await dc.officeDoorGraph();
+    const law = await dc.doorLaw();
+    const ask = (klass) => dc.doorWriteRefusal({ payload: { kind: klass }, before: WICKET, klass, kind: "sited", id: WICKET.id, by: "dw", law, graph: g });
+    const [same, toThing, toVault] = [await ask("gate"), await ask("thing"), await ask("vault")];
+    assert.deepEqual([same.verdict.why, toThing.verdict.why, toVault.verdict.why], ["no-door-change", "no-door-change", "no-door-change"], "the World's own answers, as the review measured them");
+    assert.deepEqual([same.doorAmend, toThing.doorAmend, toVault.doorAmend], [true, false, false], "only gate → gate is the door's own amend");
+    // THE ROAD: the vault is the town's to make, and the makers gate says so
+    const r = await outcome(amendWicket({ kind: "vault" }), DW);
+    assert.equal(r.code, 422, `a resident's gate amended into a vault is a vault made by a resident: ${r.defect}`);
+    assert.match(r.defect, /^class "vault" is town-only$/);
+    assert.deepEqual((await actsFor(WICKET.id)), [], "nothing written");
+    // and the gate amended as a gate still lands, and into a thing (makers: true) as before
+    assert.ok((await outcome(amendWicket(), DW)).landed);
+    assert.ok((await outcome(amendWicket({ kind: "thing", body: "A wicket in the hedge, now just wood." }), DW)).landed);
+  } finally { await publishLaw(LAW); }
+});
+
+test("D8 · AN UNREAD ANSWER DOES NOT ERASE A CLASS IT CANNOT PLACE: a gate amended to a bare sited mark while the graph cannot say what a gate is refuses (503)", { skip: SKIP }, async () => {
+  // the gate class is unknown to this law (as every door class is before the blessing that carries World #444)
+  await publishLaw(LAW.filter((r) => !(r.kind === "class" && r.key === "door") && r.data?.class !== "door"));
+  try {
+    const r = await outcome(amendWicket({ kind: "sited", body: "A gap in the hedge." }), DW);
+    assert.equal(r.code, 503, `the target names no class, so no target gate can judge it: ${r.defect}`);
+    assert.match(r.hint, /dw\/a-wicket is a gate, which may be a door's subclass/);
+    assert.match(r.hint, /amend it keeping the class it has\.$/);
+    // a KNOWN non-door leaving its class is not this rule's: the graph proves a thing is no door, whatever door's own state
+    const stool = await outcome({ slug: STOOL.slug, kind: "sited", at: STOOL.at, extent: STOOL.extent, body: "A stool, or just a block now.", by: "dw", amend: true }, DW);
+    assert.ok(stool.landed, `a thing's chain reaches the root with no door on it: ${stool.defect}`);
+  } finally { await publishLaw(LAW); }
+  // THE PIN on the named-target side (the independent review's note): a write that NAMES a door's subclass while the graph
+  // lacks door is refused by the makers gate's own lineage check (gate's lineage dangles at door), never passed as no door
+  await publishLaw([...LAW.filter((r) => !(r.kind === "class" && r.key === "door") && r.data?.class !== "door"), ...GATE_AND_VAULT]);
+  try {
+    const named = await outcome({ slug: "another-wicket", kind: "gate", at: { x: 820, y: 300 }, extent: { w: 2, h: 2 }, body: "Another wicket.", by: "dw" }, DW);
+    assert.equal(named.code, 503);
+    assert.match(named.defect, /^who may make a "gate" could not be read$/);
+  } finally { await publishLaw(LAW); }
+  // with the World's law unreadable too, the same transition is unread, and a known non-door still passes
+  const g = await dc.officeDoorGraph();
+  const unreadable = await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: WICKET, klass: undefined, kind: "sited", id: WICKET.id, by: "dw", law: null, graph: g });
+  assert.equal(unreadable.refusal?.code, 503, "gate is not in this graph, so it is not proved no door");
+  assert.equal((await dc.doorWriteRefusal({ payload: { kind: "sited" }, before: STOOL, klass: undefined, kind: "sited", id: STOOL.id, by: "dw", law: null, graph: g })).refusal, null);
+  // a parcel amended as a parcel keeps its class: the leave door keeps `parcel` as a standing kind, and both sides are read alike
+  const parcel = { id: "dw/a-plot", by: "dw", slug: "a-plot", kind: "parcel", at: { x: 900, y: 900 } };
+  assert.equal((await dc.doorWriteRefusal({ payload: { kind: "parcel" }, before: parcel, klass: undefined, kind: "parcel", id: parcel.id, by: "dw", law: null, graph: null })).refusal, null);
+});
+
+test("D9 · A LIVE LAYER THAT CANNOT BE READ IS THE RECORD UNREACHABLE (503), never a mark with no draft judged against canon", { skip: SKIP }, async () => {
+  const { useGuardReader } = await import("../src/world2-guards.mjs");
+  const undo = useGuardReader(async () => { throw new Error("the store is down (fixture)"); });
+  try {
+    // judged against canon, this would be the door law's 422 (into of the door); the read failed, so nothing is judged
+    const r = await outcome(amendDoor({ properties: { into: "wright/the-wine-cellar" } }), WRIGHT);
+    assert.equal(r.code, 503, `${r.defect}`);
+    assert.match(r.defect, /^the office's record cannot be reached/);
+  } finally { undo(); }
+  assert.equal((await outcome(amendDoor({ properties: { into: "wright/the-wine-cellar" } }), WRIGHT)).code, 422, "control: with the record readable, the door law answers");
 });

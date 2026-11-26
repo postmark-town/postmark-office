@@ -52,7 +52,9 @@ const actsCount = async () => {
   try { return Number((await c.query("SELECT count(*)::int AS n FROM acts")).rows[0].n); }
   finally { await c.end(); }
 };
-const residentMark = (canon) => canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && String(m.id).startsWith(`${m.by}/`)
+// a mark of no class (POS-1238): the amends below send kind: "sited" alone, and an amend that drops a class the rig's unread
+// class layer cannot place is refused by the door's own rule, which is not what these segments measure
+const residentMark = (canon) => canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.class == null && m.at && String(m.id).startsWith(`${m.by}/`)
   && m.parent_id == null && m.at.x > -300 && m.at.x < 300 && m.at.y > -300 && m.at.y < 300);
 
 test("1 · the journal path: a preview names its steps and answers byte for byte as with no request; a real leave names the witness and the write", { skip: SKIP }, async () => {

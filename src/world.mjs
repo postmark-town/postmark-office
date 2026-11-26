@@ -5572,14 +5572,23 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // Asked of the World's own verdict (door-class.mjs § doorWriteRefusal) over the WHOLE record before and the record this
   // write asks for, before any field is picked: the class's own fields and properties are carried below and everything
   // else is dropped, so a door field judged after that would be hidden by the drop instead of refused by name. An amend's
-  // record as it stands is the live layer's, else canon's: the order the journal pass reads it in. The town is the
-  // operator acting as the town, and no one else.
+  // record as it stands is the live layer's, else canon's: the order the journal pass reads it in. A live layer that
+  // cannot be read is the record unreachable (503), never a mark with no draft: canon answers only after a lookup that
+  // read the live layer and found nothing there. The town is the operator acting as the town, and no one else.
   let doorAmend = false;
   {
     let before = null;
     if (payload.amend === true) {
       const id = `${by}/${slug}`;
-      if (singleLogEnabled() && household) { try { before = (await guardedLiveMarks(null, { household, actor: by })).find((m) => m.id === id) ?? null; } catch { before = null; } }
+      if (singleLogEnabled() && household) {
+        let live;
+        try { live = await guardedLiveMarks(null, { household, actor: by }); } catch (e) {
+          if (e?.code) throw e; // GuardsUnreachableError: the record's own 503, its words
+          throw bounce(503, "the office could not read your household's drafts, so it cannot tell what this amend supersedes",
+            `nothing was written; try again shortly (${plainReason(e, "record", "the live layer, for an amend's record as it stands")})`);
+        }
+        before = live.find((m) => m.id === id) ?? null;
+      }
       before ??= canonForGuards()?.byId?.get(id) ?? null;
     }
     const door = await (await import("./door-class.mjs")).doorWriteRefusal({ payload, before, klass, kind, id: `${by}/${slug}`, by, town: operator?.asTown === true });

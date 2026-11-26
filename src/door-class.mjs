@@ -34,6 +34,7 @@
 // answer is the same with or without one. Passing none adds no authority.
 
 import { TOWN } from "./town-stance.mjs";
+import { markClassOf } from "./world-grants.mjs"; // the office's one reader of a record's class, in either form (LOGOS v2, O1)
 
 /** The World's door-law module, at the freshest main; null when the world does not carry it yet. */
 export async function doorLaw() {
@@ -109,35 +110,78 @@ const touchesDoorUnread = (payload, before) => {
 const DOOR_HINT = "a door is the town's to make and to change: where it leads (into), where it sets you down (lands_at) and what it asks to hold first (requires) are door's alone, and no other class carries them. Moving or withdrawing your own door stays yours. world { explain: \"door\" } says so. Nothing was written.";
 
 /**
- * Why this leave or amend may not be written, or null; and whether the World said this is an amend of a door that leaves
- * every door field as it was (`doorAmend`), which the makers gate then does not refuse.
+ * IS THIS CLASS PROVABLY NO DOOR, by the graph alone? Its chain is walked up `extends` to the root, and it is no door only
+ * when every class on the way is declared and none is door (`law.isDoorClass` decides when the law is read; with no law,
+ * the name the law gives its class). A class the graph does not declare, or a chain that dangles, is not proved: it may
+ * be a door's subclass. This decides only what an UNREAD answer may let pass; it grants nothing.
+ */
+function provedNoDoor(klass, graph, law) {
+  if (klass == null) return true;
+  if (!graph?.byName) return false;
+  const seen = new Set();
+  for (let c = graph.byName.get(String(klass)); ; c = graph.byName.get(String(c.extends))) {
+    if (!c || seen.has(c.class)) return false;                       // undeclared, or a cycle: not proved
+    seen.add(c.class);
+    const door = typeof law?.isDoorClass === "function" ? law.isDoorClass(c.class) : String(c.class) === "door";
+    if (door) return false;
+    if (c.extends == null) return true;                              // the root, reached with no door on the way
+  }
+}
+
+/**
+ * Why this leave or amend may not be written, or null; and whether this is an amend of a door INTO THE SAME door class with
+ * every door field as it was (`doorAmend`), the one write the makers gate then does not refuse.
  *   `payload` what the caller sent · `before` the whole record as it stands (null for a new mark) · `klass`/`kind` as the door
  *   resolved them · `id`/`by` the mark's · `town` true only for the operator acting as the town.
  * Returns `{ refusal: { code, defect, hint } | null, doorAmend: boolean, verdict }`.
+ *
+ * TWO THINGS THE WORLD'S `no-door-change` IS NOT. It is also the World's answer for a door that leaves the door class when
+ * both classes may be made by this writer, so it is no permission for the target class: the makers gate still judges
+ * that one. And an UNREAD answer about a record that HAD a class is not a question the target's own gates can answer:
+ * they read the class the write names, and an amend that names none, or another, would drop the old class without
+ * anyone asking whether it was a door's. So an unread answer refuses that transition unless the graph proves the old
+ * class is no door; a known non-door write, and a write that keeps its class, are left exactly as before.
  */
 export async function doorWriteRefusal({ payload, before = null, klass, kind, id, by, town = false, law: given, graph: givenGraph } = {}) {
   const law = given === undefined ? await doorLaw() : given;
-  const unread = (why) => ({
+  const unread = (why, instead = "leave the mark without into, lands_at or requires") => ({
     refusal: { code: 503, defect: "the town's door law could not be read, so this door cannot tell whether the write changes a door",
-      hint: `${why}. A door is the town's to make and to change, and an unread law is never a yes. Nothing was written; try again shortly, or leave the mark without into, lands_at or requires.` },
+      hint: `${why}. A door is the town's to make and to change, and an unread law is never a yes. Nothing was written; try again shortly, or ${instead}.` },
     doorAmend: false, verdict: null });
-  if (typeof law?.doorWriteVerdict !== "function" || typeof law?.doorFieldWrites !== "function")
-    return touchesDoorUnread(payload, before) ? unread("the World's door law (tools/door-law.mjs) is not readable here") : { refusal: null, doorAmend: false, verdict: null };
+  const KEEP_CLASS = "amend it keeping the class it has";
+  // the record's class leaves: an amend of a classed record naming no class, or another one. Both sides are read by the one
+  // resolver, so a parcel amended as a parcel (a standing kind the leave door keeps as `kind`) keeps its class
+  const beforeClass = before == null ? null : markClassOf(before);
+  const afterClass = klass !== undefined ? String(klass) : markClassOf({ kind });
+  const leaves = beforeClass != null && afterClass !== beforeClass;
+  const graphFor = async () => (givenGraph === undefined ? officeDoorGraph() : givenGraph);
+  if (typeof law?.doorWriteVerdict !== "function" || typeof law?.doorFieldWrites !== "function") {
+    if (touchesDoorUnread(payload, before)) return unread("the World's door law (tools/door-law.mjs) is not readable here");
+    if (leaves && !provedNoDoor(beforeClass, await graphFor(), null))
+      return unread(`${id} is a ${beforeClass}, and the World's door law (tools/door-law.mjs) is not readable here to say whether that class is a door's`, KEEP_CLASS);
+    return { refusal: null, doorAmend: false, verdict: null };
+  }
   const after = askedRecord({ payload, before, klass, kind, id, by, law });
-  const graph = givenGraph === undefined ? await officeDoorGraph() : givenGraph;
+  const graph = await graphFor();
   // the town is the operator acting as the town and no one else: a handle that spells it is a resident's
   const actor = town === true ? TOWN : by === TOWN ? `${TOWN} (a resident, not acting as the town)` : by;
   const verdict = law.doorWriteVerdict({ by: actor, before, after, marks: graph });
-  if (verdict?.allowed === true) return { refusal: null, doorAmend: verdict.why === "no-door-change" && before != null, verdict };
+  if (verdict?.allowed === true) {
+    // the exemption is a door amended into its own door class with its door fields as they were, and nothing wider
+    const sameDoor = before != null && !leaves && law.isDoorMark(before, graph) && law.isDoorMark(after, graph);
+    return { refusal: null, doorAmend: verdict.why === "no-door-change" && sameDoor, verdict };
+  }
   if (verdict?.allowed === false)
     return { refusal: { code: 422, defect: verdict.words, hint: DOOR_HINT }, doorAmend: false, verdict };
-  // null: unread. It stops only a write that touches a door.
+  // null: unread. It stops a write that touches a door, and an amend that drops a class the graph cannot prove is no door's.
+  const why = verdict?.why === "classes-unread"
+    ? `the class layer does not declare ${(verdict.classes ?? []).join(" or ")} yet (the door class arrives with the blessing that carries World #444)`
+    : "the writer could not be read as a resident";
   const touches = law.doorFieldWrites(after).length > 0 || (before != null && law.doorFieldWrites(before).length > 0)
     || [after, before].some((r) => r != null && String(r.class ?? r.kind ?? "") === law.DOOR_CLASS);
-  if (!touches) return { refusal: null, doorAmend: false, verdict };
-  return unread(verdict?.why === "classes-unread"
-    ? `the class layer does not declare ${(verdict.classes ?? []).join(" or ")} yet (the door class arrives with the blessing that carries World #444)`
-    : "the writer could not be read as a resident");
+  if (touches) return unread(why);
+  if (leaves && !provedNoDoor(beforeClass, graph, law)) return unread(`${id} is a ${beforeClass}, which may be a door's subclass, and ${why}`, KEEP_CLASS);
+  return { refusal: null, doorAmend: false, verdict };
 }
 
 /**
