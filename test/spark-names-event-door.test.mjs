@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { PLAIN_REASONS } from "../src/fault-words.mjs";
+import { draftArtifactsOf } from "./helpers/draft-leak.mjs";
 
 const store = await startStore({ db: "pos1204_door" });
 const skip = store.skip ?? false;
@@ -21,16 +22,24 @@ const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 // (1) pulled the newer settlement tags into a clone the suite pins, so the blessed engine moved ahead of the checkout other tests read, and
 // (2) contended for `.git/worktrees/wt-0/index.lock` with whatever else held that slot. So the door runs on a PRIVATE clone of it, with no
 // origin to fetch from, made before anything imports the clone's path (world-store.mjs reads WORLD_CLONE once, at import).
+//
+// THE LEAK ORACLE IS ATTRIBUTABLE, NOT A SNAPSHOT. The suite runs other files at once against the same shared clone, and some of them drive this
+// same executor there, so "the shared clone is exactly as I found it" blamed this test for a neighbour's writes (run 45654574072). The door
+// acts for a household only this file uses (HOUSEHOLD), so its draft branch / worktree in the SHARED clone could only be this test's leak
+// (test/helpers/draft-leak.mjs), and the same artifacts MUST be in the private clone, or the real executor never ran. POS1234_DOOR_LEAK=1 is
+// the falsifier's switch (test/draft-leak-oracle.test.mjs): it points the door at the clone this file calls shared, and test 3 must then go red.
+const HOUSEHOLD = "pos1234-door";
+const LEAK = process.env.POS1234_DOOR_LEAK === "1";
 const SHARED = saved.WORLD_CLONE || join(ROOT, "world-clone");
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" }).trim();
-const sharedState = () => `${git(SHARED, "for-each-ref", "--format=%(refname) %(objectname)")}\n${git(SHARED, "worktree", "list", "--porcelain")}`;
-const SHARED_BEFORE = sharedState();
 const PRIVATE_DIR = mkdtempSync(join(tmpdir(), "pos1234-world-"));
-const PRIVATE = join(PRIVATE_DIR, "world-clone");
-execFileSync("git", ["clone", "-q", "--local", "--no-checkout", SHARED, PRIVATE]);
-// the shared clone's `main` is its REMOTE-tracking ref (the pin); the private one holds it as its own local main, then drops the remote
-git(PRIVATE, "fetch", "-q", "--no-tags", "origin", "+refs/remotes/origin/main:refs/heads/main");
-git(PRIVATE, "remote", "remove", "origin");
+const PRIVATE = LEAK ? SHARED : join(PRIVATE_DIR, "world-clone");
+if (!LEAK) {
+  execFileSync("git", ["clone", "-q", "--local", "--no-checkout", SHARED, PRIVATE]);
+  // the shared clone's `main` is its REMOTE-tracking ref (the pin); the private one holds it as its own local main, then drops the remote
+  git(PRIVATE, "fetch", "-q", "--no-tags", "origin", "+refs/remotes/origin/main:refs/heads/main");
+  git(PRIVATE, "remote", "remove", "origin");
+}
 process.env.WORLD_CLONE = PRIVATE;
 const { __setPoolForTest } = await import("../src/world2-pen.mjs");
 
@@ -46,7 +55,7 @@ const cls = (key, data = {}) => ({ number: 300, tag_sha: SHA, newest: 300, kind:
 const prop = (klass, name, dflt, tier, parent = null) => ({ number: 300, tag_sha: SHA, newest: 300, kind: "property", key: `${klass}/${name}`, data: { class: klass, parent, name, tier, default: dflt, id: `the-town/${klass}-${name}` } });
 const LAW = [prop("spark", "makers", true, "constitution"), cls("postmark-node"), cls("mark", { extends: "postmark-node" }), cls("sited", { extends: "mark" }), cls("spark", { extends: "sited" }),
   ...["recounting", "experienced_at", "event", "rooms", "circle", "circle_path"].map((n) => prop("spark", n, null, "sovereign"))];
-const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
+const KEY = { household: HOUSEHOLD, handles: new Set([HOUSEHOLD]) };
 const spark = (event, over = {}) => ({ slug: "pic", kind: "sited", class: "spark", at: { x: 5, y: 5 }, extent: { w: 120, h: 120 }, body: "a picture", preview: true,
   properties: { recounting: "r", experienced_at: "2026-11-14T20:00:00.000Z", ...(event === undefined ? {} : { event }) }, ...over });
 
@@ -92,7 +101,8 @@ test("a lookup that FAILS is a 503 'could not be checked', never 'names no event
   } finally { await owner.query("ALTER TABLE posts_away RENAME TO posts"); }
 });
 
-test("POS-1234: the door ran on its PRIVATE clone — the suite's shared pinned world clone has no new ref, tag or draft slot", { skip }, () => {
+test("POS-1234: the door's draft work is in its PRIVATE clone and none of it is in the suite's shared one", { skip }, () => {
+  assert.deepEqual(draftArtifactsOf(SHARED, HOUSEHOLD), [], `the door's draft for ${HOUSEHOLD} leaked into the shared world clone ${SHARED}`);
   assert.notEqual(process.env.WORLD_CLONE, SHARED, "the door was pointed at the private clone");
-  assert.equal(sharedState(), SHARED_BEFORE, "the shared clone's refs and worktrees are exactly as the door found them");
+  assert.ok(draftArtifactsOf(PRIVATE, HOUSEHOLD).length > 0, "the real leave executor ran in the private clone: its draft branch for the household is there");
 });
