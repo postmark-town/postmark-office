@@ -41,7 +41,7 @@ import {
   mailListOf, letterListNoRegion, letterListPage, letterPageCap, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
-import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
+import { isResidentHandle, isPublicResident, PEN_HANDLE } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
@@ -687,14 +687,22 @@ const PAGE_KEEP = 16;
 let _pages = { asOf: undefined, byOpts: new Map() };
 const pageAsk = (o = {}) => JSON.stringify([o.limit ?? null, o.offset ?? null, o.since ?? null, o.office ?? null]);
 
-/** The roster page over residentList (the page shape is queries.mjs § residentPageOf). */
+/**
+ * THE PUBLIC ROLL (POS-1240): residentList without the Pen. `residentList` stays the OPERATIONAL roll (the position doors' handles, refreshStoreRoll, the Pen's own paths); this is
+ * what a reader is shown as the town's residents. Each caller its own copies; the roster's kept entries are never mutated.
+ */
+export async function publicResidentList(q) {
+  return (await roster(q)).filter((e) => isPublicResident(e.handle)).map((e) => ({ ...e }));
+}
+
+/** The roster page over the PUBLIC roll (the page shape is queries.mjs § residentPageOf): the Pen is left out BEFORE the filters, the paging and the counts. */
 export async function residentPage(q, opts = {}) {
   const asOf = await townIndexAsOf(q);
   const ask = pageAsk(opts);
   if (_pages.asOf === asOf && _pages.byOpts.has(ask)) { _resident.page_hits += 1; return structuredClone(_pages.byOpts.get(ask)); }
   _resident.page_misses += 1;
   const entries = await rosterEntries(q, asOf);
-  const page = residentPageOf(entries.filter((e) => isResidentHandle(e.handle)).map((e) => ({ ...e })), opts);
+  const page = residentPageOf(entries.filter((e) => isPublicResident(e.handle)).map((e) => ({ ...e })), opts);
   if (_pages.asOf !== asOf) _pages = { asOf, byOpts: new Map() };
   if (!_pages.byOpts.has(ask) && _pages.byOpts.size >= PAGE_KEEP) _pages.byOpts.delete(_pages.byOpts.keys().next().value);
   _pages.byOpts.set(ask, structuredClone(page));
@@ -708,8 +716,9 @@ async function storeMeta(q) {
 
 /** The town card (queries.mjs § townSummaryOf): the store's own meta, never a caller's. */
 export async function townSummary(q) {
-  const all = (await roster(q)).filter((e) => e.is_office).map((e) => e.handle).sort();
-  return townSummaryOf(await storeMeta(q), all, (await residentList(q)).length);
+  // the town card's population is the PUBLIC one (POS-1240): its resident count and its offices both leave the Pen out
+  const all = (await roster(q)).filter((e) => e.is_office && isPublicResident(e.handle)).map((e) => e.handle).sort();
+  return townSummaryOf(await storeMeta(q), all, (await publicResidentList(q)).length);
 }
 
 /** A resident's stored card, parsed, or null. */
@@ -1242,7 +1251,8 @@ export function doorstepFromRows(rows, handle, opts = {}) {
   const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
   const { asOf } = rows;
   const parts = {
-    arrivals: rosterOf(rows.arrivals).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
+    // POS-1240: "the latest arrivals" a doorstep shows are the PUBLIC residents (the Pen is not one; only the Pen: the twin's arrivals are every card, as they were)
+    arrivals: rosterOf(rows.arrivals).filter((e) => e.handle !== PEN_HANDLE).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
     awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset, standing: opts.standing ?? null }),
     mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
     stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
