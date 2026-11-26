@@ -29,13 +29,17 @@ const CLONE = join(process.cwd(), "world-clone");
 const TOWN = join(process.cwd(), "town-clone");
 const SKIP = (!existsSync(CLONE) || !existsSync(TOWN)) && "no pinned world and town clones in this tree";
 const store = await startStore({ db: "pos_1221_segments" });
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 after(async () => {
   for (const k of FLAGS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; }
   await store.stop();
 });
-Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE });
+// THE JOURNAL ROAD, prod's flags (mark-footprint-caps.test.mjs's discipline). With WORLD_SINGLE_LOG unset, test 2's leave took the git
+// door, whose draft checkout FETCHES origin into the SHARED world clone (world-branches.mjs § ensureDraftCheckout): in CI that moved
+// origin/main from the pin to today's World main, and a file running beside this one (read-workers § 6, POS-1238's CI case) heard
+// its voices against a settlement edge that had moved mid-test. Test 2 accepts either road; it now takes the journal.
+Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE, WORLD_SINGLE_LOG: "1" });
 
 const within = async (fn) => { const tm = newTiming(); const out = await runTiming(tm, fn); return { out, seg: timingLine(tm, { door: "mcp-act", status: 200 })?.act?.seg ?? {} }; };
 // both runs of one act on one wall clock, so the dates an answer carries match (TEST-DESIGN § Clocks); the segments' clock is performance.now, untouched

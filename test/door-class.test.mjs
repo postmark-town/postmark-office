@@ -309,6 +309,17 @@ test("D6 · explain names door as the town's, for making and for amending; thing
   assert.match(door.makers.who, /^false: the town's, for making and for amending\. A door's into, lands_at and requires are door's alone/);
   const thingAnswer = { explains: "thing", makers: { value: true, from: "thing" } };
   assert.deepEqual(await dc.withDoorMakers(thingAnswer), thingAnswer);
+  // A TOWN SUBCLASS THAT LOOSENS MAKERS keeps its own true answer (the lead's FIX at 6261511d): the writer honours D7's gate,
+  // and explain teaches the same law, not a stricter one
+  await publishLaw([...LAW, ...GATE_AND_VAULT]);
+  try {
+    const g = await dc.officeDoorGraph();
+    assert.equal((await dc.doorLaw()).isDoorClass("gate", g), true, "control: gate is a door's subclass in this graph");
+    const gate = { explains: "gate", makers: { value: true, from: "gate" } };
+    assert.deepEqual(await dc.withDoorMakers(gate), gate, "makers: true stays true, with no town-only words");
+    const lockedGate = { explains: "gate", makers: { value: false, from: "door", inherited: true } };
+    assert.match((await dc.withDoorMakers(lockedGate)).makers.who, /^false: the town's/, "a subclass that inherits door's false is the town's");
+  } finally { await publishLaw(LAW); }
 });
 
 // ── D7–D9 · THE FIX AT b4b43884 (Rivet's combined FIX; Truey's independent FIX) ───────────────────────────────────────────
@@ -323,7 +334,8 @@ const amendWicket = (over = {}) => ({ slug: WICKET.slug, kind: "gate", at: WICKE
 test("D7 · THE MAKERS EXEMPTION IS A DOOR AMENDED INTO ITS OWN DOOR CLASS, nothing wider: a gate re-classed as a town-only vault meets the makers gate", { skip: SKIP }, async () => {
   await publishLaw([...LAW, ...GATE_AND_VAULT]);
   try {
-    // the World says no-door-change for leaving the door class when the writer may make both; that is no permission for vault
+    // the World says no-door-change for leaving the door class when the writer may make the OLD class (its exit branch asks
+    // gate's makers only); the target class, vault, is the office's makers gate to judge
     const g = await dc.officeDoorGraph();
     const law = await dc.doorLaw();
     const ask = (klass) => dc.doorWriteRefusal({ payload: { kind: klass }, before: WICKET, klass, kind: "sited", id: WICKET.id, by: "dw", law, graph: g });

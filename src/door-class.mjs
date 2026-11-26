@@ -135,9 +135,9 @@ function provedNoDoor(klass, graph, law) {
  *   resolved them · `id`/`by` the mark's · `town` true only for the operator acting as the town.
  * Returns `{ refusal: { code, defect, hint } | null, doorAmend: boolean, verdict }`.
  *
- * TWO THINGS THE WORLD'S `no-door-change` IS NOT. It is also the World's answer for a door that leaves the door class when
- * both classes may be made by this writer, so it is no permission for the target class: the makers gate still judges
- * that one. And an UNREAD answer about a record that HAD a class is not a question the target's own gates can answer:
+ * TWO THINGS THE WORLD'S `no-door-change` IS NOT. It is also the World's answer for a door that leaves the door class, and
+ * its exit branch asks only whether this writer may make the OLD door class: it says nothing of the target class, which is
+ * the makers gate's to judge (D7's gate → vault is that case). And an UNREAD answer about a record that HAD a class is not a question the target's own gates can answer:
  * they read the class the write names, and an amend that names none, or another, would drop the old class without
  * anyone asking whether it was a door's. So an unread answer refuses that transition unless the graph proves the old
  * class is no door; a known non-door write, and a write that keeps its class, are left exactly as before.
@@ -201,9 +201,13 @@ export function keptDoorFields(sent, prior, { law = null } = {}) {
   return out;
 }
 
-/** explain's `makers` for door and every class that extends it: the town's, for making and for amending (WLD-253). */
+/**
+ * explain's `makers` for door and every class that extends it whose effective makers is false: the town's, for making and
+ * for amending (WLD-253). A town subclass of door that loosens makers to true (the override rule: the nearest declaration
+ * wins, and only the town's subclass may loosen) keeps its own true answer: the words teach the law, never a stricter one.
+ */
 export async function withDoorMakers(answer, { law: given, graph: givenGraph } = {}) {
-  if (!answer?.explains || !answer?.makers) return answer;
+  if (!answer?.explains || answer?.makers?.value !== false) return answer;
   const law = given === undefined ? await doorLaw() : given;
   if (typeof law?.isDoorClass !== "function") return answer;
   const graph = givenGraph === undefined ? await officeDoorGraph() : givenGraph;
