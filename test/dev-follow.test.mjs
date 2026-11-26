@@ -462,6 +462,19 @@ test("CLI, the label while a PR holds dev: refused, and the holder's PR is looke
   assert.equal(stale.outputs.status, "carry", "the same file with the holder PR closed on GitHub: dev is free");
 });
 
+test("CLI, the label by someone without write access, or whose permission cannot be read, is refused and unlabelled", () => {
+  const w = world({ headChangesDevSteps: false });
+  const ev = { name: "pull_request", body: prBody("labeled", 7, w.feature, [LABEL]) };
+  const free = { tag: "train/2026-w49", sha: w.c2 };
+  const read = cli(w, "plan", planFlags(ev, free), { event: ev.body, fixture: { [`GET repos/${REPO}/collaborators/second-labeler/permission`]: { permission: "read" } } });
+  assert.equal(read.r.status, 0, read.r.stderr);
+  assert.equal(read.outputs.status, "refuse");
+  assert.deepEqual(read.plan.unlabel, [7]);
+  const unreadable = cli(w, "plan", planFlags(ev, free), { event: ev.body });
+  assert.equal(unreadable.outputs.status, "refuse", "the permission call failed: fail closed");
+  assert.ok(unreadable.calls.some((x) => x.argv.includes(`repos/${REPO}/collaborators/second-labeler/permission`)), "the permission was asked of GitHub");
+});
+
 test("CLI, the holder's label comes off: dev goes back to the open train's head; and a plan whose gh lookup of the holder fails treats dev as free", () => {
   const w = world({ headChangesDevSteps: false });
   const holder = { pr: 5, by: "first-labeler", sha: w.feature, since: NOW, prior: { tag: "train/2026-w49", sha: w.c2 } };
