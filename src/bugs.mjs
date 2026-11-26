@@ -242,11 +242,16 @@ export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
 // account id and the login GitHub gives it, `<slug>[bot]` (GET /apps/{slug} and /users/{slug}%5Bbot%5D, read
 // 2026-11-06; a test re-reads them on request). An author is one of these only by that id AND that login: a
 // login alone is a label. Truey reviews and never builds, so it isn't here.
+// FACET'S APP (POS-1233; Darko's go, 2026-11-25 08:53 EST, queued by Wright 13:55:53Z: "add facet-starforge
+// (app_id 5749264, bot_id 356377803) to HOUSE_APPS, credit wright only, under the same rule as the other four").
+// It came after the widening and was never added, so town#4752's fixed could not bind site#454 by
+// facet-starforge[bot]. Its ids read 2026-11-24 (GET /apps/facet-starforge, /users/facet-starforge%5Bbot%5D).
 export const HOUSE_APPS = Object.freeze([
   Object.freeze({ slug: "rivet-starforge", app_id: 5263298, bot_id: 340608403 }),
   Object.freeze({ slug: "bevel-starforge", app_id: 5279270, bot_id: 341174930 }),
   Object.freeze({ slug: "jetto-starforge", app_id: 5325007, bot_id: 342797059 }),
   Object.freeze({ slug: "arti-starforge", app_id: 5573296, bot_id: 351277522 }),
+  Object.freeze({ slug: "facet-starforge", app_id: 5749264, bot_id: 356377803 }),
 ]);
 
 // A repo name never starts with a dot, so `.` and `..` can never steer the API path (review-649 § 6).
