@@ -48,6 +48,14 @@ export function isResidentHandle(name) {
   const h = String(name ?? "");
   return HANDLE_RE.test(h) && h.length >= 2 && h.length <= 40;
 }
+/**
+ * THE PEN IS NOT A RESIDENT OF THE PUBLIC ROLL (POS-1240; CORE-187; Darko: "postmark-pen shouldn't appear under residents (as it isn't one)"). `postmark-pen` is the town's
+ * own writing hand (letters, acts, posts and ballots are authored by it), so its identity, its stored row and its history stay exactly as they are, and it stays in the
+ * office's OPERATIONAL roll (`town-index-store.mjs § residentList`). Only the PUBLIC population (the residents roll a reader sees, and the town card's counts) leaves it out.
+ * Deliberately this one handle and not a role: real office meeps remain residents, and the admission grammar above (`isResidentHandle`) is untouched, so the Pen's records still resolve.
+ */
+export const PEN_HANDLE = "postmark-pen";
+export const isPublicResident = (name) => isResidentHandle(name) && String(name) !== PEN_HANDLE;
 // `the-town` (POS-142, 2026-09-24): the town's own marks keep `solo:the-town` by
 // name (`world2/tools/materialize.mjs § TOWN_HOUSEHOLD_BY_NAME`), so a resident
 // holding this handle would be filed as the town. Reserved so no one can.

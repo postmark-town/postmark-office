@@ -538,9 +538,47 @@ export const closedRoomRefusal = (id) => ({
 /** `?circle=<say id>[&after=<id>]` or `?room=<thread id>` on a conversations read — a named conversation; null for a page read. */
 export function findOf(searchParams) {
   const get = (k) => { const v = searchParams?.get(k); return v == null || v === "" ? null : v; };
-  if (get("circle") != null) return { circle: get("circle"), after: get("after") };
-  if (get("room") != null) return { room: get("room") };
+  if (get("circle") != null) return { circle: get("circle"), after: get("after"), ...(roomVoicesAsked(searchParams) ? { room_voices: true } : {}) };
+  // POS-1232: `?room_voices=1` is the OPT-IN to the room's public voice lines (below); without it the read is the one it always was
+  if (get("room") != null) return { room: get("room"), ...(roomVoicesAsked(searchParams) ? { room_voices: true } : {}) };
   return null;
+}
+
+/** Did the request opt in to a room's public voice lines? Only `room_voices=1` (or `true`) does; any other value, or none, is the read it always was. */
+export const roomVoicesAsked = (searchParams) => ["1", "true"].includes(String(searchParams?.get("room_voices") ?? ""));
+
+/** The most voice lines one opt-in page serves, whatever `voices=` asks: a room's page is bounded, never the whole archive in one answer (POS-1232). */
+export const ROOM_VOICES_MAX = 400;
+
+/**
+ * POS-1232: THE ROOM'S PUBLIC VOICES, as one page. `paged` is the same `pagedThread` the conversations LIST serves (its `voices` are the public say lines: full
+ * `said`, `id` and `reply_to` where recorded, the producer's `circle` resolved over the WHOLE room, and nothing invented for an old line without ids), and its tie-safe
+ * `voices_earlier`. This states what the page IS: the room's total, how many lines this page serves, whether earlier lines wait behind it (and the cursor that opens
+ * them), and whether later lines were left out by the caller's own cursor. A partial page never reads as the whole room. `voices_page.complete` is about THESE LINES
+ * (is this page the whole room's lines?); it is not `find.history`, which is about the room's circles view (complete / folded / unavailable), and neither says whether
+ * any say was left out of the room because it could not be placed: the body-level `unplaced_says` still counts those. PURE.
+ */
+export function roomVoicesPage(paged, { cap, source, cluster, before = null }) {
+  const total = Number(paged.voice_count ?? 0);
+  // THE LINES' CLASSIFICATION IS THE WHOLE ROOM'S, NOT THE SLICE'S. `pagedThread` builds its lines from the served slice alone, so a reply whose parent sits on an earlier
+  // page would read as broken, and a pre-circles root answered on a later page would read as unanswered (and so as no circle). The page is therefore the same
+  // tie-safe slice (the last `served` voices before the cursor, exactly as `pagedThread` cut it), turned into public lines with the circle index of the WHOLE room.
+  const pool = Number.isFinite(before) ? cluster.voices.filter((v) => v.at < before) : cluster.voices;
+  const slice = pool.slice(pool.length - paged.voices.length);
+  const lines = sayLines(slice, circleIndex(cluster.voices));
+  const served = lines.length;
+  const earlier = paged.voices_earlier?.remaining ?? 0;
+  const later = Math.max(0, total - earlier - served);
+  return {
+    voices: lines,
+    voices_page: {
+      source, order: "oldest first", total, served, cap,
+      complete: earlier === 0 && later === 0,
+      ...(earlier > 0 ? { earlier: { remaining: earlier, before_ms: paged.voices_earlier.before_ms, before: paged.voices_earlier.before,
+        next: `repeat this read with voices_before=${paged.voices_earlier.before_ms} for the lines before these` } } : {}),
+      ...(later > 0 ? { later_not_served: later, note: "voices_before cut this page off from the room's newer lines; they are not on it" } : {}),
+    },
+  };
 }
 
 /**
@@ -550,7 +588,7 @@ export function findOf(searchParams) {
  * (`after`), never the room's transcript beside it; a room answers its thread. `history` is said plainly: `complete` (all of it),
  * `folded` (a page of it; the rest is named), or `unavailable` (this read does not hold it — `source` says which read that was).
  */
-export function findConversation(clusters, { circle = null, room = null, after = null } = {}, { thread, budget = CIRCLE_BUDGET_BYTES, source, measure = mcpBytes } = {}) {
+export function findConversation(clusters, { circle = null, room = null, after = null, room_voices = false } = {}, { thread, roomLines = null, budget = CIRCLE_BUDGET_BYTES, source, measure = mcpBytes } = {}) {
   const id = sayIdOf(circle);
   if (circle != null && id == null) return { refused: { defect: `"${circle}" is not a say id`, hint: "?circle=<the id on a say line> — or ?room=<a thread's id>" } };
   // a room's id is the page's: its recorded root (CORE-97, memory: the room keeps its name when its front leaves memory or it
@@ -577,7 +615,9 @@ export function findConversation(clusters, { circle = null, room = null, after =
     // parents named, and every circle opened by ?circle=<id> (paged by &after=). The browser never rebuilds a tree from a flat feed.
     const circles = circleView(hit.voices, { caller: null, budget, measure: (v) => measure({ ...asked, source, room: header, circles: v }) });
     const folded = Boolean(circles.more_circles?.length || circles.timeline_folded);
-    return { ...asked, history: circles.broken ? "unavailable" : folded ? "folded" : "complete", source, room: header, circles,
+    // POS-1232: the OPT-IN public voice page of this one room, beside (never instead of) the circles; omitted, the answer is byte-for-byte what it was
+    const lines = room_voices && typeof roomLines === "function" ? (({ paged, cap, before }) => roomVoicesPage(paged, { cap, source, cluster: hit, before }))(roomLines(hit)) : null;
+    return { ...asked, history: circles.broken ? "unavailable" : folded ? "folded" : "complete", source, room: header, circles, ...(lines ?? {}),
       ...(circles.broken ? { note: "some replies here answer says this read does not hold (named in circles.broken); everything else is served" } : {}),
       ...(folded && !circles.broken ? { note: "more circles than fit: each id in circles.more_circles opens with ?circle=<id>" } : {}) };
   }
