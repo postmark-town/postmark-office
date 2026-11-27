@@ -1,3 +1,4 @@
+import { heldFiling, lockedReceiptFacts } from "./locked-receipt-facts.mjs";
 // mark-receipt.mjs — THE CANON RECEIPT: what happened to your mark, and where.
 //
 // THE PROMISE THIS KEEPS, verbatim, from the town's own bulletin entry
@@ -474,6 +475,12 @@ export function receiptFrom(records = {}) {
     // can read it passes it, and without it the sentence stays as it was.
     const closed = settled_window != null && Number.isFinite(Number(settled_window))
       && row.window_id != null && Number(row.window_id) <= Number(settled_window);
+    const held = heldFiling(records, id, row.window_id);
+    if (held) {
+      return { ...base, status: "locked", cause: "held-path-collision",
+        cause_row: "crossing_receipts.receipt.store.held_path_collision",
+        says: `locked at candle ${row.window_id} and kept for a later settlement: the filing already belongs to ${held.held_by_filing_of}` };
+    }
     if (closed) {
       return {
         ...base, status: "locked",
@@ -677,7 +684,7 @@ export function settlementThatCarried(repo, path, { tags = null, ref = "HEAD" } 
  * @param canon the mark's canon row when the caller already has it — the focus
  *              does, it just folded the world — else null and this reads it.
  */
-export async function readMarkReceipt(id, { repo, key = null, canon = null, publishedSha = null, terrain = false } = {}) {
+export async function readMarkReceipt(id, { repo, key = null, canon = null, publishedSha = null, terrain = false, settled_window = null } = {}) {
   const markId = String(id ?? "").trim();
   if (!markId) return null;
 
@@ -727,12 +734,16 @@ export async function readMarkReceipt(id, { repo, key = null, canon = null, publ
   }
 
   // ── the docket ───────────────────────────────────────────────────────────
-  let claims = null;
+  let claims = null, facts = {};
   try {
     const { world2Enabled } = await import("./world2-acts.mjs");
     if (world2Enabled()) {
       const { claimRowsForSlug } = await import("./world2-claims.mjs");
       claims = await claimRowsForSlug(markId, { key });
+      if (!canonRow && claims?.find((c) => c?.slug === markId)?.status === "locked") {
+        facts = await lockedReceiptFacts(null, undefined, sha);
+        if (settled_window != null) facts.settled_window = settled_window;
+      }
     }
   } catch { claims = null; }
 
@@ -765,7 +776,7 @@ export async function readMarkReceipt(id, { repo, key = null, canon = null, publ
 
   return receiptFrom({
     id: markId, canon: canonRow, published_at: carried, claims,
-    sketchbook, withdrawn, settlement, last_amended, amends_unread,
+    sketchbook, withdrawn, settlement, last_amended, amends_unread, ...facts,
     // ⚑ NOTHING RECORDS THE SITE PIN, and this is the honest null rather than a
     // guess. `site_pin` is the `postmark-world` version `postmark-town/postmark-site`
     // is built against; the office holds no clone of the site and no record of

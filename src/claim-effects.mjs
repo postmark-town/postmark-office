@@ -84,6 +84,7 @@
 // lines up). Naming one and printing the other is the R4 finding.
 
 import { currentCrossing } from "./crossings.mjs";
+import { lockedReceiptFacts } from "./locked-receipt-facts.mjs";
 import { causeOf, refusalCheckOf, opposedLawOf, receiptFrom } from "./mark-receipt.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { settlementOfWindow } from "./alerts.mjs"; // POS-731: the settlement a retirement window names (review-220-577 4a)
@@ -487,12 +488,7 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
 //   · the two-crossing window is this function's, for both callers: a locked
 //     claim no settlement has carried, older than the window, is on no shelf (on
 //     the twin it is also off `published`, while a settlement is stalled).
-//   · a locked claim whose mark was withdrawn or swept after the candle reads as
-//     waiting until the two crossings pass. On 1.0 the focused read says the same:
-//     `readMarkReceipt` never passes `settled_window`, so `receiptFrom`'s
-//     closed-candle branch ("it left after it was ruled") never fires there. The
-//     twin's own receipt does pass it, so on the twin the bare read and the
-//     focused read differ for those crossings. Left alone: POS-865's carried-or-not window rule does not decide it.
+//   · locked rows use the same closed window and write-down as the focused receipt.
 //   · a mark that is also on `docket` (an amend put forward over a locked
 //     claim) or in `backed` (it carries stamps) is listed on both shelves; each
 //     shelf is true of a different claim, and none of the existing lists
@@ -501,12 +497,11 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
 /**
  * What a locked claim's row says: the focused read's own sentence, TAKEN FROM
  * `receiptFrom` (its `locked` branch) and not copied beside it, so a change to
- * that sentence changes this one and the two reads cannot tell it two ways. A
- * locked claim with no canon and no settled window is exactly the case the
- * shelf lists. A window the event does not carry reads "?"; `receiptFrom`
+ * that sentence changes this one and the two reads cannot tell it two ways.
+ * A window the event does not carry reads "?"; `receiptFrom`
  * would print "null".
  */
-const lockedSays = (mark, window) => receiptFrom({ id: mark, claims: [{ slug: mark, status: "locked", window_id: window ?? "?" }] }).says;
+const lockedSays = (mark, window, facts) => receiptFrom({ ...facts, id: mark, claims: [{ slug: mark, status: "locked", window_id: window ?? "?" }] }).says;
 
 /**
  * The household's own `claim-locked` events that no settlement has carried, as
@@ -528,7 +523,7 @@ const lockedSays = (mark, window) => receiptFrom({ id: mark, claims: [{ slug: ma
  * (that is the cost of deriving it as `refused` is derived). `locked_at`, not
  * `at`: on a mark row `at` is the mark's place on the grid.
  */
-export function lockedRowsFrom(events = [], canonIds = new Set()) {
+export function lockedRowsFrom(events = [], canonIds = new Set(), facts = {}) {
   const carried = canonIds instanceof Set ? canonIds : new Set(canonIds);
   const newest = new Map();
   for (const e of events) {
@@ -543,7 +538,7 @@ export function lockedRowsFrom(events = [], canonIds = new Set()) {
       by: String(e.mark).split("/")[0],
       window: e.window ?? null,
       locked_at: e.at ?? null,
-      says: lockedSays(e.mark, e.window),
+      says: lockedSays(e.mark, e.window, facts),
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -558,11 +553,13 @@ export function lockedRowsFrom(events = [], canonIds = new Set()) {
  * blocks speak of the same two crossings. Both my-marks doors call this one
  * function, handed their own roster and their own canon.
  */
-export async function myMarksLocked(handles = [], { key = null, nowMs = Date.now(), canonIds = new Set() } = {}) {
+export async function myMarksLocked(handles = [], { key = null, nowMs = Date.now(), canonIds = new Set(), facts = null } = {}) {
   const through = currentCrossing(nowMs);
   const from = Math.max(0, through - RULINGS_SINCE_CROSSINGS);
   const effects = await readClaimEffects({ key, handles: [...handles], sinceCrossing: from, nowCrossing: through });
-  const rows = lockedRowsFrom(effects.events ?? [], canonIds);
+  const events = effects.events ?? [];
+  if (!facts && events.some((e) => e.kind === "claim-locked" && e.yours)) facts = await lockedReceiptFacts();
+  const rows = lockedRowsFrom(events, canonIds, facts);
   return {
     since_crossing: from, through_crossing: through, count: rows.length, rows,
     ...(effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read — that is not the same as nothing waiting to be carried" } : {}),

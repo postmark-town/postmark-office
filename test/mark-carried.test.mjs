@@ -235,3 +235,79 @@ test("a mark carried and since gone: the receipt names the settlement that carri
     assert.match(waiting.says, /it reaches the world at the settlement that carries that candle/);
   } finally { await p.end(); }
 });
+
+test("#4896: both doors and the locked shelf identify the held signature at a closed candle", { skip }, async () => {
+  const held = "lyra-of-the-east-tower/signed-la-linterna";
+  const holder = "seth/signed-la-linterna";
+  settle(181, { add: [holder] });
+  settle(185, { amend: ["wright/the-lamp"] });
+  await owner(async (c) => {
+    await settleRows(c);
+    await c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (325, '2026-11-22T06:00Z', '2026-11-22T18:00Z', 'closed')");
+    await c.query("INSERT INTO claims (window_id, slug, class, claimant, status, decided_at) VALUES (325, $1, 'mark', 'lyra-of-the-east-tower', 'locked', now())", [held]);
+    await c.query("UPDATE settlements SET window_id = 325 WHERE number = 185");
+  });
+  await asApi((c) => recordCarried(c, world, { apply: true }));
+  const { default: pg } = await import("pg");
+  const { __setPoolForTest: claimsPool } = await import("../src/world2-claims.mjs");
+  const { __setPoolForTest: actsPool } = await import("../src/world2-acts.mjs");
+  const { lockedReceiptFacts } = await import("../src/locked-receipt-facts.mjs");
+  const { lockedRowsFrom } = await import("../src/claim-effects.mjs");
+  const { recordReceipt } = await import("../src/crossing-receipts.mjs");
+  const saved = { WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
+  const p = new pg.Pool({ connectionString: store.url("office_api") });
+  const focus = (id) => readMarkReceipt(id, { repo: world });
+  const event = { kind: "claim-locked", yours: true, mark: held, window: 325 };
+  try {
+    Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
+    claimsPool(p);
+    actsPool(p);
+    const collision = { id: held, locked_window: 325, held_by_filing_of: holder, crossing_output: "path-held-by-another-id" };
+    async function record(n, row) {
+      await recordReceipt(JSON.stringify({ status: "published", world_to: git("rev-parse", `settlement/S${n}^{commit}`).trim(),
+        store: { ran: true, rehearsal: false, held_path_collision: [row] } }));
+    }
+    // A store outage must preserve the entire prior receipt, including its source disclosure.
+    process.env.WORLD2_PG = "0";
+    const disabled = await focus(held);
+    process.env.WORLD2_PG = "1";
+    const offline = { query: async () => { throw new Error("offline"); } };
+    claimsPool(offline);
+    actsPool(offline);
+    assert.deepEqual(await focus(held), disabled);
+    claimsPool(p);
+    actsPool(p);
+    await record(181, collision);
+    await record(185, { ...collision, locked_window: 299 });
+    const closed = await focus(held);
+    assert.equal(closed.cause, null);
+    assert.match(closed.says, /has closed that candle/);
+    assert.equal(closed.says, (await twinReceipt(p, held)).says);
+
+    await record(185, collision);
+    const one = await focus(held);
+    assert.equal(one.status, "locked");
+    assert.equal(one.crossing, null);
+    assert.equal(one.settlement_sha, null);
+    assert.equal(one.cause, "held-path-collision");
+    assert.match(one.cause_row, /held_path_collision/);
+    assert.match(one.says, /kept.*seth\/signed-la-linterna/);
+    assert.equal((await twinReceipt(p, held, { standing: true })).says, one.says);
+    assert.equal(lockedRowsFrom([event], new Set(), await lockedReceiptFacts(p))[0].says, one.says);
+    const original = await focus(holder);
+    assert.equal(original.status, "published");
+    assert.equal(original.crossing.s, 181);
+    assert.equal((await twinReceipt(p, holder, { standing: true })).says, original.says);
+
+    await owner((c) => c.query("UPDATE settlements SET window_id = 300 WHERE number = 185"));
+    const future = await focus(held);
+    assert.equal(future.cause, null);
+    assert.match(future.says, /it reaches the world/);
+    assert.equal(future.says, (await twinReceipt(p, held, { standing: true })).says);
+  } finally {
+    claimsPool(null);
+    actsPool(null);
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    await p.end();
+  }
+});

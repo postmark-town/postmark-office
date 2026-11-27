@@ -106,6 +106,7 @@ import { HEARING_WINDOW } from "./voices.mjs";
 import { backedRow } from "./world-stake.mjs";
 // 1.0's own settlements rules — which tags count, the order, the cap — imported
 // rather than restated; see § THE SETTLEMENTS TWIN below.
+import { storeSettlements, lockedReceiptFacts, heldFiling } from "./locked-receipt-facts.mjs";
 import { settlementsFrom } from "./settlements.mjs";
 import { askedCrossing, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
 import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs";
@@ -298,6 +299,10 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   const windowKnown = Boolean(settled) && Number.isFinite(settled.settledWindow);
   const notYetCarried = (row) => windowKnown && row.locked_window != null && Number.isFinite(Number(row.locked_window)) && Number(row.locked_window) > settled.settledWindow;
   const uncarriedIds = new Set(markRows.filter(notYetCarried).map((r) => r.slug));
+  const facts = await lockedReceiptFacts(p, settled);
+  for (const row of markRows) {
+    if (heldFiling(facts, row.slug, row.locked_window)) uncarriedIds.add(row.slug);
+  }
   const carriedRows = canonRows.filter((m) => !uncarriedIds.has(m.id));
 
   // A standing mark no settlement has carried is not ON THE WORLD (POS-865): it is on the locked shelf below, once.
@@ -323,7 +328,8 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // newest window a settlement closed (`storeSettlements().settledWindow`, beside
   // `marks.locked_window`) has not been carried, so it is not `published`; it
   // is kept out of the shelf's canon, and the shelf lists it from its claim event.
-  // A mark at or before the settled window is carried and stays on its ordinary shelf.
+  // At or before that window it stays on its ordinary shelf unless the write-down
+  // explicitly names this lock among the filings it held.
   //
   // UNKNOWN IS NOT ESTABLISHED. When no settled window can be read (the table
   // cannot be read, or names no window) carriage cannot be told, and the answer
@@ -334,7 +340,7 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // the two crossings is retired in `marks`, so it leaves `canonRows` and its
   // `claim-locked` event puts it back on this shelf, while this file's receipt
   // (`carriedGone`) says it left after it was ruled.
-  const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(carriedRows.map((m) => m.id)) });
+  const lockedBlock = await lockedReader([...handles], { key, facts, canonIds: new Set(carriedRows.map((m) => m.id)) });
 
   const body = portfolio.portfolioAnswerFrom({
     household, residents, live: liveMarks, locked: lockedBlock.rows, published, backed, offset, pager: markPage,
@@ -597,18 +603,6 @@ export function docketRow(row = {}, { byMark = null } = {}) {
 // beyond the newest window a settlement closed has not been carried yet, and
 // its receipt says `locked`, as 1.0's does.
 
-const isoZ = (t) => (t == null ? null : new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z"));
-
-/** The store's settlements, in 1.0's own shape, plus the newest window one closed. */
-async function storeSettlements(p) {
-  const { rows } = await p.query(
-    `SELECT number, tag_sha, published_at, window_id, blessed_at
-       FROM settlements ORDER BY number DESC`);
-  const lines = rows.map((r) => ({ tag: `settlement/S${r.number}`, sha: r.tag_sha, date: isoZ(r.published_at) }));
-  const settledWindow = rows.reduce((w, r) => (r.window_id == null ? w : Math.max(w, Number(r.window_id))), -Infinity);
-  return { rows, ...settlementsFrom(lines), settledWindow };
-}
-
 export const RECEIPT_NOT_IN_STORE = "this published mark has no row in `mark_carried` (049), the store's record of which settlement first carried each mark. A row is written only from 1.0's own git derivation (mark-receipt.mjs § settlementThatCarried: the oldest add of the mark's file and the lowest settlement tag containing it), checked against 1.0's receipt as it is written; a mark git cannot answer for, or one the backfill has not reached, has none, and the table may not be readable. So `crossing`, `settlement_sha`, and the `says` sentence built from them, are not answered for this mark. The only row-side stand-in, marks.locked_window, measured 3 agree / 5 differ / 14 underivable over 22 marks on dev (2026-10-01), and is not used.";
 export const RECEIPT_GIT_SPELLING = "git's spelling of the newest settlement: `sha` is `%(objectname:short)`, whose length git chooses per repository, and `date` is `iso-strict` in the committer's own zone. The store holds the full commit and the instant, so `crossing.n` is compared and these two spellings are not.";
 export const RECEIPT_DISCLOSURE = "1.0's disclosure is about its OWN class layer: it fires when the office's world.db was hydrated at a different world than the fold the answer was read from (world.mjs § markReceipt). This door reads no world.db, so it has nothing of that kind to disclose. When 1.0 does disclose, its `says` carries the qualification and the two sentences differ, and that difference is a finding.";
@@ -633,7 +627,9 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
   const windowKnown = Boolean(settled) && Number.isFinite(settled.settledWindow);
   const notYetCarried = lockedNewest && windowKnown && Number(newest.window_id) > settled.settledWindow;
   const carriedUndecidable = standing && lockedNewest && !windowKnown;
-  const published = standing && !notYetCarried && !carriedUndecidable;
+  const facts = lockedNewest ? await lockedReceiptFacts(p, settled) : {};
+  const held = heldFiling(facts, id, newest?.window_id);
+  const published = standing && !held && !notYetCarried && !carriedUndecidable;
   // RULED AND CARRIED, AND NO LONGER STANDING (Wright, on office #539): the
   // newest claim is locked at a candle a settlement has closed, and the mark is
   // not in the rows. Its `mark_carried` row outlives it, so the receipt can name
@@ -664,7 +660,7 @@ export async function twinReceipt(p, id, { terrain = false, standing = false } =
     id, canon: published ? { id } : null, published_at: carried,
     claims, settlement: settled?.current ?? null, site_pin: null,
     last_amended, amends_unread,
-    settled_window: windowKnown ? settled.settledWindow : null,
+    ...facts,
   });
   if (carriedUndecidable) {
     const reason = settled ? "the settlements table names no candle a settlement closed" : "the settlements table could not be read";
