@@ -82,6 +82,9 @@
 //      PR earns fixed, its issue comment diagnosed or briefed, and nothing else. A
 //      login or an id alone, a resident, keemin and Truey never do, and no App is a
 //      founder account (POS-931/b's rows came out; its § 18 test is re-pinned).
+//      (POS-1233; Darko's go 2026-11-25, Wright 13:55 EST) Facet's App is the fifth,
+//      under the same rule: its id AND login pass, its forgeries and a pairing
+//      crossed with another App's do not, and it credits wright only.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -139,10 +142,18 @@ const GH_ACCOUNT = Object.freeze({
   bevelApp: { id: 341174930, login: "bevel-starforge[bot]" },
   jettoApp: { id: 342797059, login: "jetto-starforge[bot]" },
   artiApp: { id: 351277522, login: "arti-starforge[bot]" },
+  facetApp: { id: 356377803, login: "facet-starforge[bot]" },
   trueyApp: { id: 350924601, login: "truey-starforge[bot]" },
   appLoginOnly: { id: 1004, login: "rivet-starforge[bot]" },
   appIdOnly: { id: 340608403, login: "not-rivet" },
   appIdNotBotId: { id: 5263298, login: "rivet-starforge[bot]" },
+  // Facet's App's forgeries (POS-1233): the login alone, the id alone, its App ID as an account id, the
+  // login without [bot], and its login on another App's bot user (a pairing crossed between two rows)
+  facetLoginOnly: { id: 1005, login: "facet-starforge[bot]" },
+  facetIdOnly: { id: 356377803, login: "not-facet" },
+  facetAppIdNotBotId: { id: 5749264, login: "facet-starforge[bot]" },
+  facetLookalike: { id: 356377803, login: "facet-starforge" },
+  facetCrossed: { id: 351277522, login: "facet-starforge[bot]" },
 });
 // whose account a resident's own work on GitHub comes from
 const ACCOUNT_OF = { errant: "harbor", ada: "harbor", finn: "finn", kinofire: "doors", "wayward-archivist": "doors", wright: "wright", keemin: "keemin" };
@@ -2585,9 +2596,12 @@ test("19 · (a text pin, labelled: it reads the doc, not behaviour) the contract
 const { judgeEarnedCredit } = await import("../src/bug-credit.mjs");
 const { HOUSE_APPS, FOUNDER_ACCOUNTS } = await import("../src/bugs.mjs");
 const APP_REFUSES_CREDIT = (link, who, id) => `422 ${link} was written by one of Starforge's own Apps, GitHub account ${who} (id ${id}), and an App's work credits only wright`;
+// the accounts that must not pass for one of the Apps (Facet's five since POS-1233)
+const FORGED_APPS = ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp",
+  "facetLoginOnly", "facetIdOnly", "facetAppIdNotBotId", "facetLookalike", "facetCrossed"];
 
 test("20 · (the falsifier) a merged PR by each lead's App earns wright fixed, paid as a founder's own fix; the act is the ordinary one, and shipped proves its merge", async () => {
-  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp", "facetApp"]) {
     const { pen, posts } = setup();
     await toBriefed();
     const link = pull(app);
@@ -2613,25 +2627,25 @@ test("20 · (the control) a resident's PR is unchanged: it credits its own house
 });
 
 test("20 · an App's work earns only wright: at fixed, keemin and any resident refuse, even a resident whose handle is pinned to the App's bot user", async () => {
-  const link = pull("rivetApp");
-  const who = ["rivet-starforge[bot]", 340608403];
-  assert.deepEqual({
-    keemin: await fixedVerdict(link, { credit: "keemin" }),
-    ada: await fixedVerdict(link, { credit: "ada" }),
-    finn: await fixedVerdict(link, { credit: "finn" }),
-  }, {
-    keemin: APP_REFUSES_CREDIT(link, ...who),
-    ada: APP_REFUSES_CREDIT(link, ...who),
-    finn: APP_REFUSES_CREDIT(link, ...who),
-  });
-  // the binding never reaches the judge's household road: pinned or not, an App credits no resident
-  const pinned = { registry: {}, pins: { ada: { id: 340608403 } } };
-  assert.throws(() => judgeEarnedCredit({ to: "fixed", credit: "ada", link: "L" }, { gh: { id: 340608403, login: "rivet-starforge[bot]", pull: true } }, pinned),
-    (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account rivet-starforge[bot] (id 340608403), and an App's work credits only wright");
+  // Facet's App too (POS-1233: "credit wright only"), and a credit named for Facet is no exception
+  for (const app of ["rivetApp", "facetApp"]) {
+    const link = pull(app);
+    const { login, id } = GH_ACCOUNT[app];
+    const credits = ["keemin", "ada", "finn"];
+    const verdicts = {};
+    for (const credit of credits) verdicts[credit] = await fixedVerdict(link, { credit });
+    assert.deepEqual(verdicts, Object.fromEntries(credits.map((c) => [c, APP_REFUSES_CREDIT(link, login, id)])), app);
+    // the binding never reaches the judge's household road: pinned or not, an App credits no resident
+    const pinned = { registry: {}, pins: { ada: { id } } };
+    // and a credit in the App's own name (judged pure: the fixture town has no such resident) refuses on the same rule
+    for (const credit of ["ada", app === "facetApp" ? "facet" : "rivet"])
+      assert.throws(() => judgeEarnedCredit({ to: "fixed", credit, link: "L" }, { gh: { id, login, pull: true } }, pinned),
+        (e) => e.code === 422 && e.defect === `L was written by one of Starforge's own Apps, GitHub account ${login} (id ${id}), and an App's work credits only wright`, `${app} ${credit}`);
+  }
 });
 
 test("20 · (the widened falsifier, POS-867 17:16Z) each App's issue comment earns wright diagnosed, and then briefed: the ordinary act, the comment its link", async () => {
-  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp", "facetApp"]) {
     const t = await kinoBug();
     const cause = comment(app);
     const d = await adv({ to: "diagnosed", credit: "wright", link: cause });
@@ -2681,7 +2695,7 @@ test("20 · identity at diagnosed and briefed is the bot user's id AND its login
   for (const to of ["diagnosed", "briefed"]) {
     const t = await kinoBug(to === "briefed" ? "diagnosed" : "reproduced");
     const at = to === "briefed" ? { grade: "light" } : {};
-    for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+    for (const who of FORGED_APPS) {
       const { id, login } = GH_ACCOUNT[who];
       const by = `GitHub account ${esc(login).replace(/[[\]]/g, "\\$&")} \\(id ${id}\\)`;
       const link = comment(who);
@@ -2706,22 +2720,24 @@ test("20 · no App is a founder account: the founders are the two people, so an 
 
 test("20 · identity is the bot user's id AND its login: a matching login, a matching id, an App ID standing as an account id, and Truey's App each refuse as anyone else's work", async () => {
   const forged = {};
-  for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+  for (const who of FORGED_APPS) {
     const link = pull(who);
     const { id, login } = GH_ACCOUNT[who];
     forged[who] = (await fixedVerdict(link, { credit: "wright" })).replace(link, "<link>");
     assert.equal(forged[who], `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and <link> was written by GitHub account ${login} (id ${id})`);
   }
-  assert.equal(Object.keys(forged).length, 4);
+  assert.equal(Object.keys(forged).length, FORGED_APPS.length);
   assert.equal(await fixedVerdict(pull("rivetApp"), { credit: "wright" }), "ok wright", "the control: the real App, the same door");
+  assert.equal(await fixedVerdict(pull("facetApp"), { credit: "wright" }), "ok wright", "the control: Facet's real App, the same door (POS-1233)");
 });
 
-test("20 · the table is the four leads' Apps: no fifth, no Truey, each App ID beside its own bot user, and neither number standing for the other", () => {
+test("20 · the table is the leads' five Apps (Facet's since POS-1233): no sixth, no Truey, each App ID beside its own bot user, and neither number standing for the other", () => {
   assert.deepEqual(HOUSE_APPS.map((a) => [a.slug, a.app_id, a.bot_id]), [
     ["rivet-starforge", 5263298, 340608403],
     ["bevel-starforge", 5279270, 341174930],
     ["jetto-starforge", 5325007, 342797059],
     ["arti-starforge", 5573296, 351277522],
+    ["facet-starforge", 5749264, 356377803],
   ]);
   for (const a of HOUSE_APPS) assert.notEqual(a.app_id, a.bot_id);
 });

@@ -16,6 +16,11 @@
 // swapped is a pin stop before this runs; and were the swapped key ever let
 // through, a ledger signed with it fails here, since the key here is the pin's.
 //
+// UAT only (POS-1214): with STAMP_UAT_TRUST set, the verifier is also handed
+// UAT's handoff from src/stamp-trust.mjs (the base key through a trusted seal,
+// UAT's key after it); a trust that can't be used is exit 2, NOT verified.
+// Unset or empty (no file bound), as in production, the call is exactly what it was.
+//
 // Run only through townToolArgv(clone, "stamp-verify.mjs"), never by hand.
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -45,12 +50,30 @@ async function main(argv) {
     return 2;
   }
   const pubkeyPem = readFileSync(keyPath, "utf8");
+  // UAT's trust (POS-1214): asked for only by STAMP_UAT_TRUST in this process's
+  // environment, and then loaded through the office's one policy
+  // (src/stamp-trust.mjs). Unset or empty, nothing is imported or read here and the
+  // verifier is called exactly as before. The import is lazy because prod's
+  // town-tool sandbox binds only this file, src/town-tool.mjs and the pins; the
+  // UAT drop-in binds src/stamp-trust.mjs beside them.
+  let handoff = null;
+  if (process.env.STAMP_UAT_TRUST) { // unset or empty: no file bound, production's path
+    try {
+      const { uatHandoff } = await import("./stamp-trust.mjs");
+      handoff = uatHandoff({ env: process.env, clone: repo, base: pubkeyPem });
+    } catch (e) {
+      console.error(`✗ stamp-ledger NOT verified: ${e?.message ?? e}`);
+      return 2;
+    }
+  }
   const { verifyStampLedger } = await import(pathToFileURL(join(dir, "stamp-verify.mjs")).href);
   // --registry is read by the pinned registry-source (in stamp-verify's closure), only when named
   const registrySource = town.includes("--registry")
     ? await (await import(pathToFileURL(join(dir, "registry-source.mjs")).href)).registryFromArgv(["node", "stamp-verify.mjs", ...town], { tool: "stamp-verify" })
     : null;
-  const r = verifyStampLedger(repo, { pubkeyPem, registry: registrySource?.registry ?? null });
+  const opts = { pubkeyPem, registry: registrySource?.registry ?? null };
+  // the town's handoff (POS-1213): the base key through the trusted seal, UAT's key only after it
+  const r = verifyStampLedger(repo, handoff ? { ...opts, handoff } : opts);
   // the town CLI's own words (tools/stamp-verify.mjs § main), so every reader of them reads the same
   if (r.ok) {
     console.log(`✓ stamp-ledger verifies — ${r.lines} line(s), ${r.minted} minted, chain + signatures + replay + conservation + lawful all green`);

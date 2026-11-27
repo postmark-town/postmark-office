@@ -2233,6 +2233,42 @@ three tools run in the ferry again, as before. The socket can stay. To take it
 away, run `sudo systemctl disable --now postmark-town-tool.socket` and remove
 its two unit files.
 
+### UAT only: the stamp trust binding (POS-1214, paired with town POS-1213)
+
+**Never on prod.** Prod binds no trust file, and every stamp verifier behaves
+exactly as before (with `STAMP_UAT_TRUST` unset or empty). This section teaches
+the UAT install; it has not been applied anywhere, and nothing here is a
+successful UAT crossing.
+
+UAT signs its own mints with its own key, so its stamp ledger is a prod-signed
+prefix followed by UAT-signed lines. The town verifier takes a handoff (the base
+key through a trusted seal, UAT's public key only after it: town
+`tools/stamp-verify.mjs` § stampKeyPlan), and the office hands it over from one
+operator-owned file, read through `src/stamp-trust.mjs`:
+
+- **The file:** `/etc/postmark-uat/stamp-trust.json`, owned by root, read-only to
+  the office: `{ "pubkeyPem": "<UAT's PUBLIC key, SPKI PEM>", "afterSeal": "<the
+  trusted seal of the copied prefix's last line, 64 hex>" }`. Public material
+  only: a private key, a third field, a path inside the town clone, or UAT's key
+  equal to the base key is refused by name. The directory doesn't exist on the
+  box until this install makes it.
+- **The town-tool sandbox:** install
+  `deploy/postmark-town-tool@.service-dropin-uat-stamp-trust.conf` as
+  `/etc/systemd/system/postmark-town-tool@.service.d/uat-stamp-trust.conf`, then
+  `sudo systemctl daemon-reload`. It sets the one path the sandbox accepts and
+  binds the file and `src/stamp-trust.mjs` read-only. A missing file stops the
+  instance; an unusable one refuses the verify.
+- **The office's own consumers** read `STAMP_UAT_TRUST` from their own
+  environment, with the same path: `postmark-office.service` (the admission
+  replay and the store's stamp chain), `postmark-ferry.service` (the store mint
+  pass), `postmark-office-keep.service` (the keep tick's verify), and the dev
+  rehearsal's parity gate (`world2/tools/stamp-mint-parity.mjs`) when it runs
+  there. Each gets `Environment=STAMP_UAT_TRUST=/etc/postmark-uat/stamp-trust.json`
+  in a UAT-only drop-in of its own. **That is a later operator install piece:
+  documented here, not applied, and no drop-in for it ships in this tree.**
+- **Rollback:** remove the drop-ins and `daemon-reload`. With the variable gone,
+  every path is production's again.
+
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
 This is the prod order for `STAMP_LINES=store`. The dev rehearsal's steps 6–8
@@ -3145,7 +3181,10 @@ Postgres change), or on any machine that can read the bucket:
                                                      # it uploads last, so a night without one didn't finish
     aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
     cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
-    pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> world2-<stamp>.dump
+    # the pen roles first: they are cluster-wide, never in a dump (§ Install); a missing one stops the restore by name.
+    # And a pg_restore of the SERVER's major (16 on prod): a 17 or later sends `SET transaction_timeout`, which a 16
+    # refuses, and the restore stops there (measured in CI, POS-1199)
+    pg_restore --exit-on-error --no-owner -d <new-empty-db> world2-<stamp>.dump
 
 Then put back what rode beside the dump, as `LATEST.json` names it:
 - **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
@@ -3155,10 +3194,27 @@ Then put back what rode beside the dump, as `LATEST.json` names it:
   because its roles are in the dump.
 
 What comes back is up to 24 hours old (the dump's RPO), since the WAL and the
-base backups don't leave the box. **The grants are a named gap.** The dump is
-taken `--no-owner --no-acl`, so it carries the schema and the rows but not the
-pens' grants. They live in the schema files (`world2/schema/*.sql`), and
-re-applying them to a restored store has not been rehearsed.
+base backups don't leave the box. **The grants ride the dump (POS-1199).** It
+is taken `--no-owner` with its ACLs, so every grant and revoke the migrations
+made, and the default privileges, come back with the restore: the office's
+pools, the clearing's pen and the read workers answer on the restored store, as
+the restore rehearsal checks (its grants check compares every privilege with
+live; its office check reads the restored store as `office_api`). What a dump
+never holds is cluster-wide: **make the pen roles before the restore**
+(`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
+`snapshot_reader`, `stance_reader` and any later grantee, as § Install made
+them). The database's `CONNECT` is Postgres's default, which nothing here
+revokes. **The boundary is the hand carry, not a date.** The box runs the
+hand-carried `/srv/world2-lab/ops/world2-backup.sh`, which a tag deploy does not
+update, so merging or shipping POS-1199 is not that carry. A dump made by the old
+`--no-acl` box script carries no grants, and its restore still comes back
+owner-only, until the corrected script is carried into `/srv/world2-lab/ops/`
+(an operator step still to do, not done by this change). Check any dump before
+trusting it: `pg_restore --list <dump> | grep -c ' ACL '`; zero means no ACL
+entries in that dump. For such a backup, re-applying the grants from
+`world2/schema/*.sql` by hand is the old gap, and is not rehearsed. The
+rehearsal compares grants with live at the time it runs, so a migration made
+since the dump can show as a difference; that difference is not waived.
 
 **`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
 into a scratch database and compares that with a live store, so it needs one
