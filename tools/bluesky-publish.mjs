@@ -3,6 +3,7 @@
 //
 //   node tools/bluesky-publish.mjs crossing   --town <town clone>  --state <dir> [--crossing <n>]   [--service <url>]
 //   node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [--settlement <n>] [--service <url>]
+//   node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> --settlement <n> --rearm-failed "<reason>"   (the operator's re-send, below)
 //
 // One publisher (src/bluesky-publisher.mjs § publishEvent), two events:
 //
@@ -10,13 +11,13 @@
 //                clone's committed history of TOWN_BULLETIN/ferrys-daily.md
 //                (never the working tree), its newest version for that crossing
 //                that has a lead headline. "Crossing <n> · Ferry's Daily:
-//                <headline>" and https://postmark.town/daily/, rkey crossing-<n>.
+//                <headline>" and https://postmark.town/daily/, rkey: a TID from the crossing's sailing instant.
 //                A crossing with no curated Daily has no post.
 //   settlement   a BLESSED settlement, a `settlement/S<n>` tag in the world clone
 //                (the keeper's pen; a mechanical publish is not a blessing). Its
 //                changes are counted from the World's own record at S<n> against
 //                the previous blessed tag; the link is
-//                https://postmark.town/replay/#S<n>. rkey settlement-<n>.
+//                https://postmark.town/replay/#S<n>. rkey: a TID from the tag's commit time.
 //
 // AFTER EACH, WITH NO AGE AND NO GAP (the lead's review at 054812e7; Rivet's
 // technical settlement 2026-11-19 05:33Z). Each run, for its one kind:
@@ -68,7 +69,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEFAULT_SERVICE, crossingEvent, publishEvent, recordedEvents, rkeyFor, settlementChanges, settlementEvent } from "../src/bluesky-publisher.mjs";
+import { DEFAULT_SERVICE, crossingEvent, eventKeyFor, publishEvent, readState, recordedEvents, settlementChanges, settlementEvent } from "../src/bluesky-publisher.mjs";
+import { crossingSailsAt } from "../src/crossings.mjs";
 import { parseSettlementTags, readSettlementTags } from "../src/settlements.mjs";
 import { dailyFingerprint } from "./site-sentinel.mjs";
 
@@ -78,6 +80,20 @@ const show = (repo, ref, path) => {
   try { return execFileSync("git", ["-C", repo, "show", `${ref}:${path}`], { encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "ignore"] }); }
   catch { return null; }
 };
+/**
+ * THE EVENT'S OWN INSTANT, which the record key is derived from (src/bluesky-publisher.mjs § tidFor); null when the source cannot give it.
+ *   crossing    the boat's sailing instant, the town's own 12h count (crossings.mjs § crossingSailsAt)
+ *   settlement  the committer time of the commit settlement/S<n> peels to, in the world clone
+ * Never the moment of publication, and never a guess.
+ */
+export function instantOf(kind, n, world = null) {
+  if (kind === "crossing") return Number.isInteger(n) && n >= 0 ? crossingSailsAt(n) : null;
+  if (!world) return null;
+  try {
+    const t = execFileSync("git", ["-C", world, "show", "-s", "--format=%cI", `refs/tags/settlement/S${n}^{commit}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return Number.isFinite(Date.parse(t)) ? new Date(t).toISOString() : null;
+  } catch { return null; }
+}
 const json = (text) => { try { return text == null ? null : JSON.parse(text); } catch { return null; } };
 
 /**
@@ -102,7 +118,7 @@ export function crossingsFromTown(town, { from, to = Infinity }) {
     const n = found.event?.n ?? found.n;
     if (n == null) continue;
     if (n < from) break;
-    if (found.event && n <= to && !byN.has(n)) byN.set(n, found.event);
+    if (found.event && n <= to && !byN.has(n)) byN.set(n, { ...found.event, at: instantOf("crossing", n) });
   }
   return { events: [...byN.values()].sort((a, b) => a.n - b.n).map((event) => ({ event })) };
 }
@@ -121,11 +137,14 @@ export function settlementsFromWorld(world, { from, to = Infinity }) {
   return tags.filter((t) => t.n >= from && t.n <= to).reverse().map((at) => {
     const prev = tags.find((t) => t.n < at.n);
     if (!prev) return { n: at.n, skip: `S${at.n} has no earlier blessed settlement to count its changes against` };
-    return settlementEvent({ n: at.n, changes: settlementChanges({ before: record(prev), after: record(at) }) });
+    const built = settlementEvent({ n: at.n, changes: settlementChanges({ before: record(prev), after: record(at) }) });
+    if (!built.event) return built;
+    const instant = instantOf("settlement", at.n, world);
+    return instant ? { event: { ...built.event, at: instant } } : { n: at.n, held: `settlement S${at.n}'s tag does not give a commit time: no record key can be derived, nothing is guessed` };
   });
 }
 
-const URGENCY = { failed: 1, waiting: 3, held: 3, unconfigured: 3, unstarted: 3 };
+const URGENCY = { failed: 1, "not-rearmed": 1, waiting: 3, held: 3, unconfigured: 3, unstarted: 3 };
 const exitFor = (lines) => (lines.some((l) => URGENCY[l.outcome] === 1) ? 1 : lines.some((l) => URGENCY[l.outcome] === 3) ? 3 : 0);
 
 export async function main(argv, { env = process.env, fetch = globalThis.fetch, now = Date.now, out = (l) => console.log(l) } = {}) {
@@ -143,15 +162,30 @@ export async function main(argv, { env = process.env, fetch = globalThis.fetch, 
   const stateDir = resolve(arg("state"));
   const lines = [];
   const say = (line) => { lines.push(line); out(JSON.stringify(line)); };
-  const publish = (event) => publishEvent(event, { stateDir, env, fetch, service: arg("service") ?? DEFAULT_SERVICE, now: () => new Date(now()) });
-  const recorded = (n) => existsSync(join(stateDir, `${rkeyFor(kind, n)}.json`));
+  const publish = (event, over = {}) => publishEvent(event, { stateDir, env, fetch, service: arg("service") ?? DEFAULT_SERVICE, now: () => new Date(now()), ...over });
+  const recorded = (n) => existsSync(join(stateDir, `${eventKeyFor(kind, n)}.json`));
+  const rearmReason = arg("rearm-failed");
+
+  // THE OPERATOR'S RE-SEND of ONE named failed event, with a receipt (never a scheduled run's act: the hook passes no flag).
+  // It re-arms only a state that says failed, keeps its history, sends the words first composed under the event's TID, and
+  // asks getRecord first, so a record already standing is reconciled, never posted twice. Nothing else is carried or discovered.
+  if (rearmReason !== null) {
+    if (named == null || !rearmReason.trim()) { console.error(`--rearm-failed "<reason>" names its event: --${kind} <n>, and says why`); return 2; }
+    const state = readState(stateDir, eventKeyFor(kind, named));
+    const at = state?.event?.at ?? instantOf(kind, named, kind === "settlement" ? resolve(source) : null);
+    say(state && at
+      ? await publish({ kind, n: named, text: state.payload?.text, link: state.payload?.link, at }, { rearm: { reason: rearmReason.trim() } })
+      : { event: `${kind} ${named}`, outcome: state ? "held" : "not-rearmed", detail: state ? `no instant for ${kind} ${named}: no record key can be derived, nothing sent` : `${eventKeyFor(kind, named)} has no state: nothing to re-arm` });
+    return exitFor(lines);
+  }
 
   // 1. CARRY every owed event from its own state, before any source is read
   const history = recordedEvents(stateDir, kind);
   const carried = new Set();
   for (const { n, state } of history) {
     if (state?.status === "posted" || state?.status === "failed") continue;
-    const r = await publish({ kind, n, text: state?.payload?.text, link: state?.payload?.link });
+    const at = state?.event?.at ?? instantOf(kind, n, kind === "settlement" ? resolve(source) : null);   // the instant bound on first sight, else the source's: never invented
+    const r = await publish({ kind, n, text: state?.payload?.text, link: state?.payload?.link, at });
     carried.add(n);
     say(r);
     if (r.outcome === "unconfigured") return exitFor(lines);
@@ -184,7 +218,7 @@ export async function main(argv, { env = process.env, fetch = globalThis.fetch, 
   for (const e of events) {
     const n = nOf(e);
     if (recorded(n)) continue;
-    if (e.held) { say({ event: `${kind} ${n}`, rkey: rkeyFor(kind, n), outcome: "held", detail: e.held }); break; }
+    if (e.held) { say({ event: `${kind} ${n}`, outcome: "held", detail: e.held }); break; }
     if (e.skip) { say({ event: `${kind} ${n}`, outcome: "skipped", detail: e.skip }); continue; }
     say(await publish(e.event));
     if (!recorded(n)) break;                   // busy or unconfigured: nothing past an event this run could not record

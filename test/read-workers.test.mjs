@@ -407,7 +407,8 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
     assert.equal(first.headers.get("x-pm-reader"), null, "the listen was handed to a worker");
     const room = await body(first);
     const heard = room.heard ?? room;
-    assert.equal(heard.voices.length, 20, "the default reply is the newest twenty");
+    // the failure carries the window the office actually read (its edge, source and disclosure), so a CI-only red names where the ear's window opened
+    assert.equal(heard.voices.length, 20, `the default reply is the newest twenty (the test's settlement ${new Date(settledAt).toISOString()}; the office answered ${JSON.stringify({ ...heard, voices: `${heard.voices.length} voices`, circles: undefined }).slice(0, 600)})`);
     assert.equal(heard.hearable_since, new Date(settledAt).toISOString(), "the window opens at the clone's newest publish");
     assert.ok(Number.isFinite(heard.older), "the cursor back rides");
 

@@ -231,10 +231,11 @@ export const TOWN_OFFICES_CAP = 25;
 // `TEMPLATE` was the first, and the fix then was to add a name to the list —
 // which is why this one does not add `_archived` to anything.
 //
-// So the count is DERIVED, from the store's `residentList` — the same reader the roster
-// door's own `town_total` comes from. There is now one roster (the admitted
-// table), one predicate over it (`isResidentHandle`, the door's admission
-// grammar), and three doors reading it. A count that cannot be derived from the
+// So the count is DERIVED, from the store's PUBLIC roll (`publicResidentList`: the admitted table, `isResidentHandle`, the door's admission
+// grammar, without `postmark-pen`, POS-1240) — the same reader the roster door's own `town_total` comes from. There is one public population (the roster, the
+// town card's count and offices, the doorstep's town count, search's resident bucket, and the mail pulse's `totals.residents`), and the PEN is not in it: it is the town's
+// writing hand, not a resident, so it leaves those counts and lists (its identity, its row, its history and the office's OPERATIONAL roll, `residentList`, are
+// untouched). (Earlier text below counted "three doors"; they are these now.) A count that cannot be derived from the
 // rows it claims to count is a claim nobody can check.
 //
 // ⚑ WHY NOT FIX THE STAMP INSTEAD, which is the other half of the choice. A

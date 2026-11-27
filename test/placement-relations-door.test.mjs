@@ -402,3 +402,157 @@ const withGuardsFlipped = async (store, fn) => {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 };
+
+// ── POS-1260 (WLD-258's office half): open / holder / portable are written as CANON'S WORDS, on make and amend ──────────────────────────
+//
+// The same hand-built store and real engine, with `thing`'s holder properties loaded as the class law for THESE tests only. The Worldkeeper
+// found stored Booleans where the world's parser keeps the words (acts 62506, 62508, 62543). What the pen files is read back off the docket
+// act it signed (`store.acts[..].payload`, the declaration the mark becomes), rendered with the office's own markRecord and parsed with the
+// World's own parseRecord: every field the pen stored must EQUAL what the parsed file says, in type as well as value.
+// (imported INSIDE the tests: a top-level await here would yield to the runner, which would run the tests above and the file's `after` sweep first)
+const libs1260 = async () => ({ ...(await import("../src/mark-record.mjs")), ...(await import("../src/world-stacks.mjs")) });
+const SHA1260 = "a".repeat(40);
+const cls1260 = (key, data = {}) => ({ number: 300, tag_sha: SHA1260, newest: 300, kind: "class", key, data: { class: key, ...data } });
+const prop1260 = (klass, name, dflt, tier, parent = null) => ({ number: 300, tag_sha: SHA1260, newest: 300, kind: "property",
+  key: `${klass}/${name}`, data: { class: klass, parent, name, tier, default: dflt, id: `the-town/${klass}-${name}` } });
+const LAW1260 = [
+  cls1260("postmark-node"), cls1260("mark", { extends: "postmark-node" }), cls1260("sited", { extends: "mark" }), cls1260("thing", { extends: "sited" }),
+  cls1260("chest", { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" } }),
+  prop1260("postmark-node", "makers", false, "constitution"), prop1260("sited", "makers", true, "constitution"), prop1260("thing", "makers", true, "constitution"),
+  prop1260("thing", "holder", false, "sovereign"), prop1260("thing", "capacity", 30, "sovereign", "holder"),
+  prop1260("thing", "min", 1, "constitution", "capacity"), prop1260("thing", "max", 120, "constitution", "capacity"),
+  prop1260("thing", "open", true, "sovereign", "holder"), prop1260("thing", "portable", true, "sovereign"),
+];
+const withLaw = async (fn) => {
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : LAW1260 }) });
+  try { return await fn(); } finally { resetLawSnapshot(); }
+};
+const THING = (slug, over = {}) => ({ slug, kind: "sited", class: "thing", at: { x: 400, y: 400 }, extent: { w: 1, h: 1 }, body: "a thing of alpha's", ...over });
+/** The stored declaration's three words and capacity, beside what the World's parser says of the file that declaration renders as. */
+const storedAndParsed = async (data) => {
+  const { pathToFileURL } = await import("node:url");
+  const { parseRecord } = await import(pathToFileURL(join(repo, "tools", "marks-fold.mjs")));
+  const { markRecord: renderMark } = await libs1260();
+  const file = renderMark({ kind: "thing", by: "alpha", date: "2026-11-27T00:00:00.000Z", at: { x: 400, y: 400 }, extent: { w: 1, h: 1 },
+    ...Object.fromEntries(["capacity", "holder", "open", "portable"].filter((k) => data[k] !== undefined).map((k) => [k, data[k]])) }, "a thing");
+  const parsed = parseRecord(file, "x");
+  return { stored: Object.fromEntries(["capacity", "holder", "open", "portable"].filter((k) => data[k] !== undefined).map((k) => [k, data[k]])),
+    parsed: Object.fromEntries(["capacity", "holder", "open", "portable"].filter((k) => parsed[k] !== undefined).map((k) => [k, parsed[k]])) };
+};
+/** The declaration a write filed: the signed act's payload, which is what the store keeps (an unstaked draft files no docket row). */
+const declared1260 = (store) => JSON.parse(store.acts.at(-1).payload);
+const filed1260 = async (payload) => ({ data: declared1260((await place(payload)).store) });
+
+test("POS-1260 MAKE: true and false are stored as canon's words, equal in type to the parsed file; a capacity stays a number", { skip }, async () => {
+  await withLaw(async () => {
+    for (const [slug, over, want] of [
+      ["all-true", { holder: true, capacity: 12, open: true, portable: true }, { holder: "true", capacity: 12, open: "true", portable: "true" }],
+      ["all-false", { holder: true, capacity: 12, open: false, portable: false }, { holder: "true", capacity: 12, open: "false", portable: "false" }],
+      ["not-portable", { portable: false }, { portable: "false" }],
+    ]) {
+      const { stored, parsed } = await storedAndParsed((await filed1260(THING(slug, over))).data);
+      assert.deepEqual(stored, want, `${slug}: what the pen stored`);
+      assert.deepEqual(stored, parsed, `${slug}: the stored data equals what the parsed file says, in type and value`);
+    }
+  });
+});
+
+test("POS-1260 MAKE: the words the door already accepts are stored as those words", { skip }, async () => {
+  await withLaw(async () => {
+    const { stored, parsed } = await storedAndParsed((await filed1260(THING("words-in", { holder: "true", capacity: 7, open: "false", portable: "false" }))).data);
+    assert.deepEqual(stored, { holder: "true", capacity: 7, open: "false", portable: "false" });
+    assert.deepEqual(stored, parsed);
+  });
+});
+
+test("POS-1260 AMEND: an amended record says the words too; its capacity and unrelated fields are exactly as before", { skip }, async () => {
+  await withLaw(async () => {
+    const { leaveMarkViaOffice } = await import("../src/world.mjs");
+    // alpha's live draft, as an OLD writer left it: the three fields typed Booleans (the Leo-shelf shape the Worldkeeper found)
+    const made = { by: "alpha", kind: "thing", date: "2026-11-26", at: { x: 110, y: 105 }, extent: { w: 2, h: 2 }, holder: true, capacity: 12, open: true, portable: true, _journal_seq: 1 };
+    const store = guardStore({ claims: [draftClaim("my-shelf", { class: "thing", body: "a shelf of alpha's", data: made })] });
+    // the amendment: the same shelf, now closed and fixed (open false, holder true)
+    const again = await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, THING("my-shelf", { amend: true, at: { x: 110, y: 105 }, extent: { w: 2, h: 2 }, body: "a shelf of alpha's", holder: true, capacity: 12, open: false, portable: false }), houseA));
+    assert.ok(again, "amended");
+    const amended = declared1260(store);
+    assert.equal(store.acts.length, 1, "the amendment is one act");
+    const { stored, parsed } = await storedAndParsed(amended);
+    assert.deepEqual(stored, { holder: "true", capacity: 12, open: "false", portable: "false" }, "the amendment's words");
+    assert.deepEqual(stored, parsed, "and equal to the parsed file");
+    assert.equal(amended.capacity, made.capacity, "capacity unchanged");
+    assert.equal(amended.by, made.by);
+    assert.deepEqual(amended.at, made.at, "unrelated fields unchanged");
+  });
+});
+
+test("POS-1260 the input contract is unchanged: a chest still takes only a Boolean portable, and stores the word", { skip }, async () => {
+  const { portableOf } = await libs1260();
+  const chestsOpen = process.env.WORLD_CHESTS_CANDY; process.env.WORLD_CHESTS_CANDY = "1"; // WLD-27's doors ship dark; this is their own test
+  try { await withLaw(async () => {
+    const CHEST = (slug, over = {}) => ({ slug, kind: "sited", class: "chest", at: { x: 400, y: 400 }, extent: { w: 1, h: 1 }, body: "a chest", ...over });
+    const bowl = await filed1260(CHEST("a-bowl", { portable: false, capacity: 30 }));
+    assert.equal(bowl.data.portable, "false", "a fixed chest is stored as the word");
+    assert.equal(bowl.data.capacity, 30, "its capacity is still the number");
+    assert.equal(portableOf({ portable: bowl.data.portable }), false, "and still NOT portable once stored as the word");
+    assert.equal((await filed1260(CHEST("a-chest", { portable: true }))).data.portable, "true");
+    // the strict Boolean input check is untouched: the WORD is refused on a chest, as before
+    await assert.rejects(place(CHEST("a-word-chest", { portable: "false" })), (e) => /portable is true or false/.test(e.defect));
+    // and a thing's non-Boolean is still refused by the holder door's own sentence
+    await assert.rejects(place(THING("maybe-thing", { holder: "maybe" })), (e) => /holder is true or false/.test(e.defect));
+  }); } finally { if (chestsOpen === undefined) delete process.env.WORLD_CHESTS_CANDY; else process.env.WORLD_CHESTS_CANDY = chestsOpen; }
+});
+
+test("POS-1260 CARRIED AMEND: a newly made live chest's stored word is carried back through setDownAmend as the input grammar and files its amend; the public word input still refuses", { skip }, async () => {
+  const chestsOpen = process.env.WORLD_CHESTS_CANDY; process.env.WORLD_CHESTS_CANDY = "1";
+  try { await withLaw(async () => {
+    const { setDownAmend } = await import("../src/world-hold.mjs");
+    const { leaveMarkViaOffice } = await import("../src/world.mjs");
+    const CHEST = (slug, over = {}) => ({ slug, kind: "sited", class: "chest", at: { x: 400, y: 400 }, extent: { w: 1, h: 1 }, body: "a chest", ...over });
+    const stood = { x: 410, y: 405 };
+    // 1. a chest made NOW (the new writer): its live declaration says the WORD; that is the record the drop's amend carries back
+    const made = (await filed1260(CHEST("my-bowl", { portable: false, capacity: 30 }))).data;
+    assert.equal(made.portable, "false", "the live record says canon's word");
+    const { slug: _s, ...asRecord } = made;                                  // a record has no slug line; the rest is what the carrier reads
+    const built = setDownAmend({ thing: "alpha/my-bowl", mark: asRecord, stood, actor: "alpha" });
+    assert.equal(built.refused, undefined, "the carrier builds the amend");
+    assert.strictEqual(built.payload.portable, false, "the carried payload speaks the INPUT's grammar: the Boolean the word spells");
+    assert.equal(built.payload.capacity, 30, "capacity and the other carried lines are as recorded");
+    // 2. through the REAL door, over a store that holds that live chest: the amend is FILED, past the old typed mismatch, and rewrites the canonical word
+    const store = guardStore({ claims: [draftClaim("my-bowl", { class: "chest", body: "a chest", data: made })] });
+    const out = await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, built.payload, houseA));
+    assert.ok(out && !out.error, "the drop's amend was filed");
+    assert.equal(store.acts.length, 1, "one amend act");
+    const again = declared1260(store);
+    assert.equal(again.portable, "false", "and the declaration is written again as the canonical WORD");
+    assert.equal(again.capacity, 30, "capacity unchanged");
+    assert.deepEqual(again.at, stood, "the amend moved it to where it was set down");
+    // 3. a valid canon record that says the word "true" carries as the Boolean true; a Boolean already there stays
+    assert.strictEqual(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: "true" }, stood, actor: "alpha" }).payload.portable, true);
+    assert.strictEqual(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: true }, stood, actor: "alpha" }).payload.portable, true);
+    // 4. nothing is guessed: another value is carried as it is, and the door refuses it as before; a THING's words are left for its own door
+    assert.equal(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: "maybe" }, stood, actor: "alpha" }).payload.portable, "maybe");
+    await assert.rejects(place({ ...built.payload, portable: "maybe" }), (e) => /portable is true or false/.test(e.defect));
+    assert.equal(setDownAmend({ thing: "alpha/t", mark: { class: "thing", portable: "false", holder: "true" }, stood, actor: "alpha" }).payload.portable, "false", "a thing keeps its word");
+    // 5. the PUBLIC chest input is unchanged: the word is still refused
+    await assert.rejects(place(CHEST("a-word-bowl", { portable: "false" })), (e) => /portable is true or false/.test(e.defect));
+  }); } finally { if (chestsOpen === undefined) delete process.env.WORLD_CHESTS_CANDY; else process.env.WORLD_CHESTS_CANDY = chestsOpen; }
+});
+
+test("POS-1260 portableOf: an instance's stored word counts as the Boolean it spells; the dial's default is untouched", async () => {
+  const { portableOf } = await libs1260();
+  assert.equal(portableOf({ portable: "false" }), false, "the word false is not-portable");
+  assert.equal(portableOf({ portable: "true" }), true);
+  assert.equal(portableOf({ portable: false }), false, "the Boolean as before");
+  assert.equal(portableOf({ portable: true }), true);
+  assert.equal(portableOf({}), true, "no word, no Boolean: the dial's own default, as before");
+  assert.equal(portableOf({ portable: "nonsense" }), true, "anything else falls back to the dial, never guessed");
+  assert.equal(portableOf({}, { portable: false }), false, "and the dial still decides when the instance says nothing");
+  // the sibling reader (kind-holding § portableMark), for a chest-era mark with no class property behind it: the word reads as the Boolean did
+  const { portableMark } = await import("../src/kind-holding.mjs");
+  const noProperty = () => null;
+  assert.equal(portableMark({ id: "a/b", class: "chest", portable: "false" }, noProperty), false);
+  assert.equal(portableMark({ id: "a/b", class: "chest", portable: false }, noProperty), false);
+  assert.equal(portableMark({ id: "a/b", class: "chest", portable: "true" }, noProperty), true);
+  assert.equal(portableMark({ id: "a/b", class: "chest" }, noProperty), true, "unsaid: the ruled default, as before");
+});

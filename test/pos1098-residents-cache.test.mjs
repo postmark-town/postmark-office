@@ -50,6 +50,24 @@ const page = async (opts = {}) => (await store.storeAnswer((c) => store.resident
 /** The same page composed with nothing kept: the roll's lines straight through the page's own shaper. */
 const uncached = async (opts = {}) => (await store.storeAnswer(async (c) => residentPageOf(await store.residentList(c), opts))).out;
 
+const INJECTED = "the first load failed (a test)";
+/**
+ * POS-1236: what the failed-load case must see of two overlapping readers, owning the failure by NAME and not by position. `settled` is
+ * Promise.allSettled's answer for `names` (in the order they were called), `owner` the name the injected failure was thrown to. Exactly that one
+ * reader rejected, with the injected error as it was thrown (not lost, not another error, not shared with the other); the other one fulfilled.
+ * Returns the other reader's answer (the fulfilled value).
+ */
+function onlyTheOwnerFailed(settled, names, owner) {
+  assert.ok(names.includes(owner), "the injected failure was thrown to one of the readers");
+  const rejected = settled.map((r, i) => [names[i], r]).filter(([, r]) => r.status === "rejected");
+  assert.equal(rejected.length, 1, "exactly one reader rejected: the failed load is not shared, and not lost");
+  assert.equal(rejected[0][0], owner, "and it is the reader the failure was thrown to");
+  assert.equal(rejected[0][1].reason?.message, INJECTED, "with its own, original error");
+  const ok = settled.filter((r) => r.status === "fulfilled");
+  assert.equal(ok.length, 1, "the other reader was not touched by it");
+  return ok[0].value;
+}
+
 test("UNCHANGED REPEATED BARE READS REUSE THE WORK: one cold roster load, one composition, then hits; every answer is the uncached one", async (t) => {
   if (skip) return t.skip(skip);
   fresh();
@@ -152,11 +170,29 @@ test("READS THAT OVERLAP A COLD LOAD SHARE IT: four at once make one read of the
   assert.equal(st.roster_loads + st.roster_shared, 4, "the other three took its entries");
   // a load that fails reaches its own reader only: an overlapping read does its own load
   fresh();
-  let n = 0;
-  const flaky = (c) => new Proxy(c, { get(tg, k) { if (k !== "query") { const v = tg[k]; return typeof v === "function" ? v.bind(tg) : v; }
-    return async (sql, ...a) => { if (/FROM town_residents/.test(sql) && n++ === 0) { await new Promise((ok) => setTimeout(ok, 30)); throw new Error("the first load failed (a test)"); } return tg.query(sql, ...a); }; } });
-  const [first, second] = await Promise.allSettled([store.storeAnswer((c) => store.residentPage(flaky(c), {})), store.storeAnswer((c) => store.residentPage(flaky(c), {}))]);
-  assert.equal(first.status, "rejected", "the load's own reader sees its error");
-  assert.equal(second.status, "fulfilled", "the read that waited on it did its own load");
-  assert.deepEqual(second.value.out, await uncached({}));
+  // POS-1236: WHICH reader's cards read goes first is the scheduler's (each awaits the store's metadata before it can ask), so neither the order the
+  // readers were called in nor their index in Promise.allSettled says who owns the load. The failure is pinned to the reader it was actually thrown
+  // to: the one whose cards read drew the first count records its own name, and THAT reader must be the one that rejected.
+  let n = 0, owner = null;
+  const flaky = (name) => (c) => new Proxy(c, { get(tg, k) { if (k !== "query") { const v = tg[k]; return typeof v === "function" ? v.bind(tg) : v; }
+    return async (sql, ...a) => { if (/FROM town_residents/.test(sql) && n++ === 0) { owner = name; await new Promise((ok) => setTimeout(ok, 30)); throw new Error(INJECTED); } return tg.query(sql, ...a); }; } });
+  const readers = ["reader-a", "reader-b"];
+  const settled = await Promise.allSettled(readers.map((name) => store.storeAnswer((c) => store.residentPage(flaky(name)(c), {}))));
+  const answered = onlyTheOwnerFailed(settled, readers, owner);
+  assert.deepEqual(answered.out, await uncached({}), "the read that waited on the failed load did its own load, and answers the uncached page");
+});
+
+test("POS-1236 FALSIFIER: the failed-load check passes whichever reader owns the failure, and a lost, shared, wrong or misattributed failure cannot pass it", () => {
+  const names = ["reader-a", "reader-b"];
+  const fail = (message = INJECTED) => ({ status: "rejected", reason: new Error(message) });
+  const ok = { status: "fulfilled", value: { out: "page" } };
+  // the pass: the owner rejected, in EITHER position, and the other answered
+  assert.equal(onlyTheOwnerFailed([fail(), ok], names, "reader-a"), ok.value);
+  assert.equal(onlyTheOwnerFailed([ok, fail()], names, "reader-b"), ok.value);
+  // the falsifiers: each is a way the cache could be wrong, and each must fail the check
+  assert.throws(() => onlyTheOwnerFailed([ok, ok], names, "reader-a"), /exactly one reader rejected/, "a lost failure");
+  assert.throws(() => onlyTheOwnerFailed([fail(), fail()], names, "reader-a"), /exactly one reader rejected/, "a failure shared with the overlapping reader");
+  assert.throws(() => onlyTheOwnerFailed([fail("some other error"), ok], names, "reader-a"), /original error/, "a different error than the injected one");
+  assert.throws(() => onlyTheOwnerFailed([ok, fail()], names, "reader-a"), /the reader the failure was thrown to/, "the failure landing on the wrong reader");
+  assert.throws(() => onlyTheOwnerFailed([fail(), ok], names, null), /thrown to one of the readers/, "no failure thrown at all");
 });

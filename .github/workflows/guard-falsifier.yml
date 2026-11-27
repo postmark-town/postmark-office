@@ -155,6 +155,13 @@ jobs:
           bash .github/scripts/guard-falsifier-floor.sh world2_dev
           bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane
 
+      # POS-1199: a restored nightly backup keeps its grants. The backup's own dump stage and the restore rehearsal's own
+      # restore, grants and office checks, on three databases of its own on this service (w2_backup_src, _restored and
+      # _restored_noacl, the falsifier), with this job's roles and the runner's own client tools. It leaves world2_dev and
+      # world2_guards_lane alone, and it never skips: a missing client exits 2 and fails the step.
+      - name: The restore keeps its grants (POS-1199)
+        run: node .github/scripts/restore-grants-rehearsal.mjs
+
       # G5's port side. The genesis pen, at the checkout's own sha, with the
       # legacy acts (`--with-acts` is what writes `legacy:attachment`). ~3 s.
       - name: Seed world2_dev from the world checkout
