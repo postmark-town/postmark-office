@@ -1,0 +1,6 @@
+# Installed by Jetto 2026-11-26 on Darko's yes (STAR-253/d).
+[Unit]
+Description=Postmark planned restart: Postgres and the office pick up replaced libraries in a quiet window (needrestart defers them)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/postmark-planned-restart.sh

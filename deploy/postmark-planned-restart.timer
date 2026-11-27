@@ -1,0 +1,9 @@
+# Installed by Jetto 2026-11-26 on Darko's yes (STAR-253/d).
+[Unit]
+Description=Daily planned restart check, in a quiet window (10:15 UTC: after the morning settlement and its index, before the noon crossing)
+[Timer]
+OnCalendar=*-*-* 10:15:00 UTC
+RandomizedDelaySec=5min
+Persistent=false
+[Install]
+WantedBy=timers.target
