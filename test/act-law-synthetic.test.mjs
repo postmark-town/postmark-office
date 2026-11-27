@@ -495,11 +495,12 @@ const OPEN_STORE = lift(APEX, (l) => l === "export function openStore() {", "}",
 async function explainVia(answer) {
   const events = [];
   let src = EXPLAIN;
-  for (const spec of ["./act-law.mjs", "./class-read.mjs", "./admin-role.mjs"]) src = replaceOnce(src, `import("${spec}")`, `__load("${spec}")`, `explainClassOr's import of ${spec}`);
+  for (const spec of ["./act-law.mjs", "./class-read.mjs", "./admin-role.mjs", "./door-class.mjs"]) src = replaceOnce(src, `import("${spec}")`, `__load("${spec}")`, `explainClassOr's import of ${spec}`);
   const modules = {
     "./act-law.mjs": { lawForAnAnswer: async () => { events.push("ask"); await answer(); events.push("asked"); } },
     "./class-read.mjs": { explainClass: (db, path) => { events.push(`explain:${db.build}:S${law.lawSnapshot()?.pin?.settlement}`); return { class: path }; }, nearestClasses: () => [] },
     "./admin-role.mjs": { withAdminMakers: (a) => a },
+    "./door-class.mjs": { withDoorMakers: async (a) => a }, // POS-1238: door's own makers words, tested in door-class.test.mjs § D6
   };
   const ctx = vm.createContext({
     __load: async (spec) => modules[spec],
