@@ -740,3 +740,67 @@ export async function moveResidentInStore(client, { handle, from, to, settleLike
     throw e;
   }
 }
+
+// ── A RESIDENT LEAVES A HOUSE THAT KEEPS OTHERS (POS-1162) ──────────────────
+//
+// The other shape of a move (tools/move-housemate.mjs). `moveResidentInStore` above retires a house whose
+// only resident leaves, and carries the source's accounts, its key and its home picture to the target. THIS
+// ONE CARRIES NONE OF THAT. Darko, POS-448/a: the five meeps move to the town's household, "their past acts
+// staying recorded as Starforge's", so the source row STAYS (no DELETE), nothing goes into the target's
+// `formerly` (rows spelled `hh:<source>` stay the source's through the source's own spelling set), and the
+// target gains no account of the source's. The ONLY columns written are `residents` and `home_images` on the
+// two rows. The resident's own home picture GOES WITH THEM (Wright, POS-1162, 2026-11-26: "carry it with the
+// resident, so the public record and the site keep showing it under their new house"): the public printout
+// lists a house's pictures only for its current residents (registry-public.mjs § publicHomeImages), so a
+// picture left on the source's row would stop showing. It leaves the source's map and joins the target's, as
+// `movedTargetRow` carries it for the sole resident; every other resident's picture stays where it is.
+//
+// Both rows are re-read and locked `FOR UPDATE` (in slug order, so two moves can never wait on each other),
+// and the plan's preconditions are judged again against them: the handle is in the source, the source keeps
+// at least one other resident, the target stands and does not hold the handle. Each UPDATE matches the exact
+// prior array and picture map, so a row that changed between the read and the write moves nothing, and any
+// failure rolls the whole transaction back.
+
+/** The two rows' `residents` and `home_images` as they will stand: pure, so the plan and the transaction compute them alike. */
+export function movedHousemateRows({ handle, source, target }) {
+  const picture = (source.home_images ?? {})[handle];
+  const sourcePictures = { ...(source.home_images ?? {}) };
+  delete sourcePictures[handle];
+  const targetPictures = picture == null ? { ...(target.home_images ?? {}) } : { ...(target.home_images ?? {}), [handle]: picture };
+  return {
+    source: { residents: (source.residents ?? []).filter((h) => h !== handle), home_images: picture == null ? { ...(source.home_images ?? {}) } : sourcePictures },
+    target: { residents: [...(target.residents ?? []), handle], home_images: targetPictures },
+  };
+}
+
+export async function moveHousemateInStore(client, { handle, from, to }) {
+  const refuse = (r, detail = null) => Object.assign(new Error(r.defect), { code: r.code, defect: r.defect, detail });
+  const { rows: [who] } = await client.query("SELECT current_user::text AS u");
+  if (who?.u !== "world2_owner") throw refuse(MOVE_ROW_REFUSALS.NOT_OWNER, `connected as ${who?.u ?? "nobody"}`);
+  await client.query("BEGIN");
+  try {
+    const { rows } = await client.query(
+      "SELECT slug, residents, home_images FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE", [[from, to]]);
+    const source = rows.find((r) => r.slug === from);
+    const target = rows.find((r) => r.slug === to);
+    const sourceRes = source?.residents ?? [];
+    const targetRes = target?.residents ?? [];
+    if (from === to || !source || !target || !sourceRes.includes(handle) || sourceRes.length < 2 || targetRes.includes(handle))
+      throw refuse(MOVE_ROW_REFUSALS.MOVED, `${from}: ${source ? `[${sourceRes.join(", ")}]` : "gone"} · ${to}: ${target ? `[${targetRes.join(", ")}]` : "gone"}`);
+    const sourcePics = asJson(source.home_images) ?? {};
+    const targetPics = asJson(target.home_images) ?? {};
+    const after = movedHousemateRows({ handle, source: { ...source, home_images: sourcePics }, target: { ...target, home_images: targetPics } });
+    const UPDATE = "UPDATE households SET residents = $2::text[], home_images = $3::jsonb"
+      + " WHERE slug = $1 AND residents = $4::text[] AND home_images = $5::jsonb RETURNING slug";
+    const out = await client.query(UPDATE,
+      [from, after.source.residents, JSON.stringify(after.source.home_images), sourceRes, JSON.stringify(sourcePics)]);
+    const inn = await client.query(UPDATE,
+      [to, after.target.residents, JSON.stringify(after.target.home_images), targetRes, JSON.stringify(targetPics)]);
+    if (out.rowCount !== 1 || inn.rowCount !== 1) throw refuse(MOVE_ROW_REFUSALS.MOVED, `updated ${out.rowCount} and ${inn.rowCount} of the two rows`);
+    await client.query("COMMIT");
+    return { from, to, source: after.source, target: after.target };
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  }
+}

@@ -372,6 +372,19 @@ export function resolveHouse(x, registry, pins = {}, opts = {}) {
 //   every `accounts[].login` the house lists;
 //   the `login` each of those handles' pins wears.
 //
+// SAVE ONE: a resident whose PIN id is an account ANOTHER house lists adds
+// nothing here — neither `solo:<handle>` nor `solo:<pin login>`. That house
+// holds both through the pin road above, so admitting them here too would put
+// one spelling in two sets. Measured, no resident on the fixture stands that way
+// (the census below would red if one did); the shape exists after a resident
+// moves out of the house its credential belongs to (`tools/move-housemate.mjs`),
+// and POS-1162's settlement (Wright, 2026-11-26) decides it: "A move never
+// changes which house a historical spelling belongs to … they never join the
+// target's set." The house the credential belongs to keeps its past. A handle
+// that house ALSO lists as a resident is on two rolls, which is a fault and not
+// a move, so it is not settled here: it stays in both sets for the census and
+// adoption's two-houses stop to name.
+//
 // MEASURED on the fixture: 190 distinct handles and 121 distinct logins are
 // held this way (7 strings are both, for one house), giving 304 `solo:` keys,
 // and NOT ONE of them is held by two houses — so every `solo:` key in the town
@@ -461,8 +474,16 @@ const assertNoComma = (k) => {
  * `accountMatches` exists to close, re-opened one door over.
  *
  * A login is taken VERBATIM. See § IT DOES NOT LOWERCASE A LOGIN above.
+ *
+ * `foreignIds` maps every account id SOME OTHER house lists to the residents of
+ * the house(s) listing it. A resident pinned to one of those is that house's
+ * spelling and not this one's (§ SAVE ONE above) — unless this house lists the
+ * same id itself, or that house ALSO lists the handle as a resident. The last is
+ * a handle on two rolls, a registry fault the census and adoption's two-houses
+ * stop exist to catch, so it is left to show in both sets rather than settled
+ * here by the credential.
  */
-function soloHeldBy(rec, pins) {
+function soloHeldBy(rec, pins, foreignIds = new Map()) {
   const out = [];
   const seen = new Set();
   const put = (s) => {
@@ -472,9 +493,18 @@ function soloHeldBy(rec, pins) {
 
   const ids = new Set((rec?.accounts ?? [])
     .map((a) => a?.id).filter((x) => x != null).map(Number));
+  const elsewhere = (h) => {
+    const id = pins?.[h]?.id;
+    if (id == null || ids.has(Number(id))) return false;
+    const theirs = foreignIds.get(Number(id));
+    return theirs !== undefined && !theirs.has(h);
+  };
 
   const handles = [];
-  for (const h of rec?.residents ?? []) { const v = String(h ?? "").trim(); if (v) handles.push(v); }
+  for (const h of rec?.residents ?? []) {
+    const v = String(h ?? "").trim();
+    if (v && !elsewhere(v)) handles.push(v);
+  }
   for (const [handle, pin] of Object.entries(pins ?? {}))
     if (pin?.id != null && ids.has(Number(pin.id))) handles.push(String(handle).trim());
 
@@ -520,7 +550,16 @@ export function houseKeysOf(x, registry, pins = {}, opts = {}) {
   }
   for (const a of rec.accounts ?? [])                       // then every account
     if (a?.id != null) add(`gh:${a.id}`);
-  for (const held of soloHeldBy(rec, pins))                 // then its own `solo:` past
+  const foreignIds = new Map();                             // accounts other houses list → their rolls
+  for (const [s, r] of Object.entries(housesOf(registry)))
+    if (s !== slug)
+      for (const a of r?.accounts ?? []) {
+        if (a?.id == null) continue;
+        const roll = foreignIds.get(Number(a.id)) ?? new Set();
+        for (const h of r?.residents ?? []) roll.add(String(h ?? "").trim());
+        foreignIds.set(Number(a.id), roll);
+      }
+  for (const held of soloHeldBy(rec, pins, foreignIds))     // then its own `solo:` past
     add(`solo:${held}`);
 
   return out;

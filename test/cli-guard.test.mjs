@@ -254,6 +254,7 @@ const ROSTER = {
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
   "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
+  "tools/move-housemate.mjs": { args: [], code: 2, needle: "--handle <handle> --from <household> --to <household> are required" },
   "tools/repair-dreaming-household.mjs": { args: ["--bogus"], code: 2, needle: "no arguments but --dry-run" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
