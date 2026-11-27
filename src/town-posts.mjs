@@ -177,15 +177,28 @@ export function nearestName(name, known) {
 }
 
 /**
+ * The paging words other APIs use, mapped to the ones this read takes (#4758).
+ * Plain edit distance put `page` two edits from `stage` and `start` one from
+ * `state`, so a caller asking to page was pointed at a filter. A word named here
+ * is answered from this table first; everything else still goes by distance.
+ */
+export const PAGING_NEAR_MISSES = Object.freeze({
+  page: "offset", start: "offset", skip: "offset", from: "offset", cursor: "offset",
+  per_page: "limit", perpage: "limit", page_size: "limit", pagesize: "limit", size: "limit", count: "limit", max: "limit", take: "limit",
+});
+
+/**
  * Unknown query parameters answer 400, naming the parameter and the nearest
  * known one (POS-778): the same courtesy the MCP doors give an unknown arg.
+ * A paging word is pointed at offset or limit (PAGING_NEAR_MISSES), never at a filter.
  * `stage` is known (state's alias), so it is never refused here.
  * @param {Iterable<string>} names the query's parameter names
  */
 export function unknownPostsParam(names, known = POSTS_PARAMS) {
   for (const name of names) {
     if (known.includes(name)) continue;
-    const near = nearestName(name, known);
+    const curated = PAGING_NEAR_MISSES[String(name).toLowerCase()];
+    const near = curated && known.includes(curated) ? curated : nearestName(name, known);
     return refuse(400, `no parameter \`${name}\`${near ? `; did you mean \`${near}\`?` : ""}`,
       `this read takes: ${known.join(", ")} (stage is an alias of state)`, { field: name });
   }

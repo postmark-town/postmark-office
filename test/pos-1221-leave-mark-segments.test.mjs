@@ -35,10 +35,10 @@ after(async () => {
   for (const k of FLAGS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; }
   await store.stop();
 });
-// THE JOURNAL ROAD, prod's flags (mark-footprint-caps.test.mjs's discipline). With WORLD_SINGLE_LOG unset, test 2's leave took the git
-// door, whose draft checkout FETCHES origin into the SHARED world clone (world-branches.mjs § ensureDraftCheckout): in CI that moved
-// origin/main from the pin to today's World main, and a file running beside this one (read-workers § 6, POS-1238's CI case) heard
-// its voices against a settlement edge that had moved mid-test. Test 2 accepts either road; it now takes the journal.
+// THE JOURNAL ROAD, prod's flags (mark-footprint-caps.test.mjs's discipline). With WORLD_SINGLE_LOG unset, test 2's leave took the git door, whose draft
+// checkout FETCHES origin into the SHARED world clone (world-branches.mjs § ensureDraftCheckout): in CI that moved origin/main from the pin to
+// today's World main, and a file running beside this one (read-workers § 6, POS-1098's CI case) heard its voices against a settlement edge that had
+// moved mid-test. Test 2 accepts either road; it now takes the journal (the fix POS-1238's #1251 found for the same collision).
 Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE, WORLD_SINGLE_LOG: "1" });
 
 const within = async (fn) => { const tm = newTiming(); const out = await runTiming(tm, fn); return { out, seg: timingLine(tm, { door: "mcp-act", status: 200 })?.act?.seg ?? {} }; };

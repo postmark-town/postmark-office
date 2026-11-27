@@ -12,9 +12,14 @@
 //     are read here, sent to createSession, and never logged, written to a state
 //     file or a receipt. Nor is the session's token or any Authorization header.
 //   · com.atproto.server.createSession, then com.atproto.repo.createRecord of an
-//     ordinary app.bsky.feed.post at a DETERMINISTIC rkey: crossing-<n> for a
-//     crossing's Daily, settlement-<n> for a blessed settlement. The PDS refuses a
-//     second record at a key that exists, so a key is an event, never a guess.
+//     ordinary app.bsky.feed.post at a DETERMINISTIC rkey. The post's key type is
+//     `tid`, and the PDS runs the lexicon's key schema before anything else (the
+//     first real send, S187 at 2026-11-22 20:06Z, was refused twice for the
+//     `settlement-<n>` key this file first used), so the key is a TID derived from
+//     the event's own immutable instant (§ tidFor). The PDS refuses a second
+//     record at a key that exists, so a key is an event, never a guess. The
+//     event's NAME, crossing-<n> / settlement-<n> (§ eventKeyFor), still names its
+//     state file and lock: the state directory keeps every event it ever recorded.
 //   · A send whose answer is ambiguous (a timeout, a dropped connection, a 5xx, or
 //     any refusal after the request went out) is reconciled with
 //     com.atproto.repo.getRecord at that same key: a record there means delivered.
@@ -31,7 +36,7 @@
 //
 // ── DURABLE, AND ONE AT A TIME ──────────────────────────────────────────────
 //
-// One JSON file per event (<state>/<rkey>.json), written whole to a temporary
+// One JSON file per event (<state>/<event name>.json, § eventKeyFor), written whole to a temporary
 // name and renamed, so a reader never sees half of it. It carries the event, the
 // payload as first composed (a retry sends the same words), every attempt with
 // its outcome, and the posted record's uri. One lock per event (lockEvent): a
@@ -50,11 +55,52 @@ export const MAX_SENDS = 2;                 // the first, and the one retry
 export const REQUEST_TIMEOUT_MS = 20_000;
 export const POST_MAX_GRAPHEMES = 300;      // app.bsky.feed.post's own limit
 
-/** The deterministic record key: crossing-<n> or settlement-<n>. */
-export function rkeyFor(kind, n) {
+/** The event's name, which names its state file and lock: crossing-<n> or settlement-<n>. NOT the record's key (§ tidFor). */
+export function eventKeyFor(kind, n) {
   if (kind !== "crossing" && kind !== "settlement") throw new Error(`no such event kind: ${kind}`);
   if (!Number.isInteger(n) || n < 0) throw new Error(`a ${kind} number is a whole number, not ${n}`);
   return `${kind}-${n}`;
+}
+
+// ── THE RECORD KEY: A TID DERIVED FROM THE EVENT'S OWN INSTANT ───────────────
+//
+// A TID (atproto's key type for app.bsky.feed.post) is 13 characters of
+// base32-sortable, `234567abcdefghijklmnopqrstuvwxyz`, over 64 bits: one zero
+// bit, 53 bits of microseconds since the Unix epoch, 10 bits of clock id. A
+// client normally takes the wall clock and a random clock id: a fresh key every
+// run. Here both belong to the event: the TIME is the event's own immutable
+// instant, never the moment of publication or the run's clock (its milliseconds,
+// then the event's number mod 1000 in the microseconds, so two events of a kind
+// that share a second still have two keys, in their own order), and the CLOCK ID
+// is fixed per kind. One event therefore has one key, however many times and at
+// whatever hour it is run. Two kinds never alias (their clock ids differ); two
+// events of one kind alias only if they share an instant to the millisecond AND
+// their numbers differ by a multiple of 1000, and publishEvent holds such an
+// event rather than guess.
+//   crossing    the crossing's own sailing instant, 00:00Z or 12:00Z (crossings.mjs § crossingSailsAt)
+//   settlement  the COMMITTER time of the commit the blessed tag settlement/S<n> peels to
+//               (a tag never moves, and a commit's time never changes)
+// An event whose source cannot give its instant has none: the caller holds it.
+export const TID_ALPHABET = "234567abcdefghijklmnopqrstuvwxyz";
+export const TID_CLOCK = Object.freeze({ crossing: 1n, settlement: 2n });
+export const TID_PATTERN = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;   // the lexicon's own `tid` shape
+
+/** The event's instant as epoch milliseconds, from an ISO string or a number; throws when it is not a real instant. PURE. */
+export function instantMs(at) {
+  const ms = typeof at === "number" ? at : Date.parse(String(at ?? ""));
+  if (!Number.isSafeInteger(ms) || ms < 0) throw new Error(`an event instant is a real time, not ${JSON.stringify(at)}`);
+  return ms;
+}
+
+/** The deterministic record key for event `n` of `kind`, whose own instant is `at`. PURE. */
+export function tidFor(kind, n, at) {
+  const clock = TID_CLOCK[kind];
+  if (clock === undefined) throw new Error(`no such event kind: ${kind}`);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`a ${kind} number is a whole number, not ${n}`);
+  const v = ((BigInt(instantMs(at)) * 1000n + BigInt(n % 1000)) << 10n) | clock;
+  let out = "";
+  for (let shift = 60n; shift >= 0n; shift -= 5n) out += TID_ALPHABET[Number((v >> shift) & 31n)];
+  return out;
 }
 
 /** The two env names, or null when either is missing. Nothing else in `env` is read. */
@@ -253,9 +299,10 @@ export function recordedEvents(dir, kind) {
 }
 function writeState(dir, state) {
   mkdirSync(dir, { recursive: true });
-  const tmp = `${statePath(dir, state.rkey)}.${process.pid}.tmp`;
+  const file = statePath(dir, eventKeyFor(state.event.kind, state.event.n));   // the event's name, never its record key
+  const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(state, null, 1) + "\n");
-  renameSync(tmp, statePath(dir, state.rkey));
+  renameSync(tmp, file);
 }
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 
@@ -331,50 +378,79 @@ export function lockEvent(dir, rkey, { pid = process.pid, pause = () => {} } = {
 // ── the publisher ────────────────────────────────────────────────────────────
 
 /**
- * Publish one event, at most once, at most MAX_SENDS sends over its life.
- * `event` is `{ kind, n, text, link }`. Returns the receipt: `{ event, rkey,
- * outcome, sends, uri?, detail? }`, where outcome is one of
+ * Publish one event, at most once, at most MAX_SENDS sends over each arming of its life.
+ * `event` is `{ kind, n, text, link, at }`: `at` is the event's own immutable instant (§ tidFor),
+ * bound into the state the first time the event is seen. Returns the receipt: `{ event, rkey,
+ * outcome, sends, uri?, detail?, rearmed? }`, where `rkey` is the record's TID and outcome is one of
  *   posted      this run's createRecord succeeded
  *   reconciled  a send's answer was lost or refused, and getRecord found the record
  *   already     the state already says posted (no network)
  *   busy        another invocation holds this event's lock
  *   waiting     no session, or getRecord could not tell whether an earlier send landed: nothing sent, no send spent
- *   failed      both sends are spent and the key is empty: logged, never sent again
+ *   failed      both sends are spent and the key is empty: logged, never sent again (until an operator re-arms it)
  * (A first send refused outright, its key confirmed empty, is retried once in the same run.)
  *   unconfigured  no BSKY_IDENTIFIER / BSKY_APP_PASSWORD: nothing read, nothing sent
- *   held        the event's state file is there but cannot be read: nothing sent, so a lost
- *               history never becomes a fresh event with two new sends
- * Nothing in the receipt or the state names the credential or the token.
+ *   held        nothing sent: the event's state file is there but cannot be read (a lost history never
+ *               becomes a fresh event with two new sends), the event has no instant, or another event
+ *               of its kind already holds its key
+ *   not-rearmed an operator's re-arm was asked and there was nothing failed to re-arm
+ * RE-ARMING (`rearm: { reason }`, the operator's explicit act on ONE named failed event, never a scheduled run's):
+ * a failed event gets a fresh budget of MAX_SENDS under its current key, its history kept (the attempts, and
+ * a `rearms` entry with the reason, when, the spent sends and the key it failed under), and the first thing
+ * the next send does is ask getRecord: a record already standing there is reconciled, never posted twice.
+ * The failed file is never deleted. Nothing in the receipt or the state names the credential or the token.
  */
-export async function publishEvent(event, { stateDir, env = process.env, fetch = globalThis.fetch, service = DEFAULT_SERVICE, now = () => new Date(), timeoutMs = REQUEST_TIMEOUT_MS, pause } = {}) {
-  const rkey = rkeyFor(event.kind, event.n);
-  const receipt = (outcome, state, detail) => ({ event: `${event.kind} ${event.n}`, rkey, outcome, sends: state?.sends ?? 0,
-    ...(state?.uri ? { uri: state.uri } : {}), ...(detail ? { detail } : {}) });
-  const unreadable = () => receipt("held", null, `${rkey}.json is there but cannot be read: nothing sent until it is mended`);
+export async function publishEvent(event, { stateDir, env = process.env, fetch = globalThis.fetch, service = DEFAULT_SERVICE, now = () => new Date(), timeoutMs = REQUEST_TIMEOUT_MS, pause, rearm = null } = {}) {
+  const key = eventKeyFor(event.kind, event.n);
+  const held = readState(stateDir, key);
+  // the event's instant is bound the first time it is seen (the state's own wins over a later reading)
+  let rkey = null, noInstant = null, rearmed = null;
+  try { rkey = tidFor(event.kind, event.n, held?.event?.at ?? event.at); } catch { noInstant = `the ${event.kind} has no real instant of its own`; }
+  const receipt = (outcome, state, detail, extra = {}) => ({ event: `${event.kind} ${event.n}`, rkey: rkey ?? state?.rkey ?? null, outcome, sends: state?.sends ?? 0,
+    ...(state?.uri ? { uri: state.uri } : {}), ...(detail ? { detail } : {}), ...(rearmed ? { rearmed } : {}), ...extra });
+  const unreadable = () => receipt("held", null, `${key}.json is there but cannot be read: nothing sent until it is mended`);
 
-  const held = readState(stateDir, rkey);
-  if (!held && existsSync(statePath(stateDir, rkey))) return unreadable();
+  if (!held && existsSync(statePath(stateDir, key))) return unreadable();
   if (held?.status === "posted") return receipt("already", held);
-  if (held?.status === "failed") return receipt("failed", held, "both sends were spent earlier; never sent again");
+  if (rearm && held?.status !== "failed") return receipt("not-rearmed", held, held ? `${key} is ${held.status}, not failed: nothing to re-arm` : `${key} has no state: nothing to re-arm`);
+  if (!rearm && held?.status === "failed") return receipt("failed", held, "both sends were spent earlier; never sent again until an operator re-arms it");
+  if (noInstant) return receipt("held", held, `${noInstant}: no key can be derived, nothing sent`);
   const creds = credentialsFrom(env);
   if (!creds) return receipt("unconfigured", held, `${BSKY_ENV.join(" and ")} are not both set: nothing was read or sent`);
 
-  const lock = lockEvent(stateDir, rkey, { pause });
+  const lock = lockEvent(stateDir, key, { pause });
   if (!lock) return receipt("busy", held, "another invocation holds this event");
   try {
     const at = () => now().toISOString();
     // read again under the lock: the history is whatever the last holder left
-    const kept = readState(stateDir, rkey);
-    if (!kept && existsSync(statePath(stateDir, rkey))) return unreadable();
+    const kept = readState(stateDir, key);
+    if (!kept && existsSync(statePath(stateDir, key))) return unreadable();
+    // no two events of a kind may share a key: the one that is not already recorded is the one held
+    const twin = recordedEvents(stateDir, event.kind).find((e) => e.n !== event.n && e.state?.rkey === rkey);
+    if (twin) return receipt("held", kept, `${event.kind} ${twin.n} already holds this key (the two events share an instant to the millisecond and their numbers differ by a multiple of 1000): nothing sent, no key is guessed`);
     // the payload is bound the first time the event is seen: a retry sends the same words
     const state = kept ?? {
-      v: 1, event: { kind: event.kind, n: event.n }, rkey, status: "pending", sends: 0, attempts: [],
+      v: 1, event: { kind: event.kind, n: event.n, at: new Date(instantMs(event.at)).toISOString() }, rkey, status: "pending", sends: 0, attempts: [],
       payload: { text: event.text, link: event.link, created_at: at() },
     };
+    const note = (step, outcome, detail = null) => { state.attempts.push({ at: at(), step, outcome, ...(detail ? { detail } : {}) }); writeState(stateDir, state); };
+    // a state written before the key was a TID (its key was the event's name, which no PDS accepts) takes the TID now
+    state.event.at ??= new Date(instantMs(event.at)).toISOString();
+    if (state.rkey !== rkey) {
+      state.legacy_rkey = state.rkey;
+      state.rkey = rkey;
+      if (kept) note("rekey", "tid", `the record key is now the TID derived from the event's instant (it was ${state.legacy_rkey})`);
+    }
+    if (rearm) {
+      if (state.status !== "failed") return receipt("not-rearmed", state, `${key} is ${state.status}, not failed: nothing to re-arm`);
+      rearmed = { at: at(), reason: String(rearm.reason ?? ""), prior_sends: state.sends, prior_key: state.legacy_rkey ?? state.rkey, key: rkey };
+      (state.rearms ??= []).push(rearmed);
+      Object.assign(state, { status: "pending", sends: 0, ask_first: true });
+      note("rearm", "armed", rearmed.reason || null);
+    }
     state.payload.digest ??= createHash("sha256").update(`${state.payload.text}\n${state.payload.link}`).digest("hex");
     if (state.status === "posted") return receipt("already", state);
-    if (state.status === "failed") return receipt("failed", state, "both sends were spent earlier; never sent again");
-    const note = (step, outcome, detail = null) => { state.attempts.push({ at: at(), step, outcome, ...(detail ? { detail } : {}) }); writeState(stateDir, state); };
+    if (state.status === "failed") return receipt("failed", state, "both sends were spent earlier; never sent again until an operator re-arms it");
     // every secret this run holds, so no refusal's name can carry one (the token joins once it exists)
     const wire = { fetch, service, timeoutMs, secrets: [creds.identifier, creds.password] };
 
@@ -397,8 +473,9 @@ export async function publishEvent(event, { stateDir, env = process.env, fetch =
       else note("getRecord", "unknown", r.why);
       return r.found;
     };
-    if (state.sends > 0 || state.status === "sending") {
+    if (state.sends > 0 || state.status === "sending" || state.ask_first) {
       const found = await reconcile();
+      if (found !== null) delete state.ask_first;
       if (found === true) return receipt("reconciled", state);
       if (found === null) return receipt("waiting", state, "an earlier send's fate cannot be told yet; nothing sent");
       if (state.sends >= MAX_SENDS) { state.status = "failed"; note("give-up", "failed", `${MAX_SENDS} sends, no record at ${rkey}`); return receipt("failed", state); }

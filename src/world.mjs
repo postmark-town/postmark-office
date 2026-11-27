@@ -5801,7 +5801,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     if (payload.capacity !== undefined) chestFields.capacity = capacityOf(payload.capacity, dials); // throws the 422 naming the range
     if (payload.portable !== undefined) {
       if (typeof payload.portable !== "boolean") throw bounce(422, "portable is true or false", "a fixed chest — a bowl — is portable: false; leave it off to be carried");
-      chestFields.portable = payload.portable;
+      chestFields.portable = payload.portable ? "true" : "false"; // POS-1260: the input stays strictly Boolean; the record says canon's word
     }
     if (payload.welcome !== undefined) {
       if (!WELCOMES.includes(String(payload.welcome))) throw bounce(422, `welcome is ${WELCOMES.join(" or ")}`, "open (the default) lets anyone take from it; closed keeps it to your household");
