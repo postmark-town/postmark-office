@@ -1133,6 +1133,12 @@ async function doBegin(fields, key, { odb, db }) {
   // is parked identity only, never ownership: the human's co-sign and the settlement gates run unchanged, and are re-judged there.
   let chosen = null;
   if (fields?.handle != null && String(fields.handle).trim() !== "") {
+    // THE TOWN'S OWN PREFIX, AS THE BERTH DESK SAYS IT (server.mjs § POST /berth): while the berth's slug was the resident's handle, the desk's
+    // the-* refusal covered it; the chosen handle that now stands in its place keeps that rule, in the desk's words (Wright, POS-1237's w49 read:
+    // "refuses a the- or berth- start with a message that names the rule"). berth-* is the town's reserved-prefix rule, judged just below.
+    const asked = String(fields.handle).trim().toLowerCase();
+    if (asked.startsWith("the-"))
+      return bounce(422, `"${asked}" wears the town's own prefix`, "the-* is the town's namespace and berth-* is added for you — pick a plain name", { field: "handle" });
     try { chosen = validateResidencyRequest({ ...fields, handle: fields.handle }, db).handle; }
     catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field ?? "handle" }); }
   }

@@ -289,9 +289,11 @@ test("POS-1237 · C5 the served co-sign wears the join's look around the same fo
   ghIdentity = { id: 1237005, login: "cosign-human-c5" };
   const page = await openCoSign("cosign-linden", "Linden Cosign", { forwardedFor: "203.0.113.75" });
   const html = page.html;
-  // the look: the Registrar, the quill tile, the night sky, the ghost text and the live counts at the writer's caps
-  assert.match(html, /<img class="reg-face" src="data:image\/webp;base64,[^"]+" width="64" height="64" alt="The Registrar">/);
-  assert.match(html, /<span class="reg-name">The Registrar<\/span>This step is yours, the human&#39;s\.|<span class="reg-name">The Registrar<\/span>This step is yours, the human's\./);
+  // the look: Regina as the join draws her (CORE-188: her picture, her name), the quill tile, the night sky, the ghost text and
+  // the live counts at the writer's caps
+  const { REGISTRAR_PICTURE } = await import("../src/cosign-art.mjs");
+  assert.ok(html.includes(`<span class="reg-face"><img src="${REGISTRAR_PICTURE}" width="64" height="64" alt="" decoding="async"></span>`), "her picture, the join's own asset");
+  assert.match(html, /<span class="reg-name">Regina the Registrar<\/span>This step is yours, the human&#39;s\.|<span class="reg-name">Regina the Registrar<\/span>This step is yours, the human's\./);
   assert.match(html, /<div class="jf-art"><svg class="pm-pixart"/);
   assert.match(html, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f/);
   const { HUMAN_PROFILE_CAPS } = await import("../src/human-profile.mjs");
@@ -316,12 +318,34 @@ test("POS-1237 · C5 the served co-sign wears the join's look around the same fo
   assert.match(deniedText, /<h1 class="jf-q">Not co-signed<\/h1>/);
   assert.match(deniedText, /class="reg-face"|class="jf-art"/);
   assert.equal(await houseRow("linden-cosign"), null, "nothing founded");
-  // every other office page keeps the plain look
+  // the road's own refusals wear it too (the w49 finish: a tester's link to a sunset berth stays in the join's look), same words and code
   const lost = await fetch(`${BASE}/oauth/berth-cosign?slug=no-such-berth-c5`);
   const lostText = await lost.text();
   assert.equal(lost.status, 404);
-  assert.match(lostText, /<h1>Postmark — the town office<\/h1>/);
-  assert.doesNotMatch(lostText, /reg-face|jf-art|radial-gradient/);
+  assert.match(lostText, /<h1 class="jf-q">No such berth<\/h1>/);
+  assert.match(lostText, /That berth isn't at the harbor — it may have sunset\./);
+  assert.match(lostText, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f/);
+  // every page off the berth co-sign's road keeps the plain look (here the claim co-sign's)
+  const other = await fetch(`${BASE}/oauth/claim-cosign?ask=no-such-ask-c5`);
+  const otherText = await other.text();
+  assert.equal(other.status, 404);
+  assert.match(otherText, /<h1>Postmark — the town office<\/h1>/);
+  assert.doesNotMatch(otherText, /reg-face|jf-art|radial-gradient/);
+});
+
+test("POS-1237 · C6 a declaration the door refuses at the approval answers in the join's look, its words escaped, and founds nothing", async () => {
+  ghIdentity = { id: 1237006, login: "cosign-human-c6" };
+  // a house name that makes no key of 2–40 characters: begin parks it, the declaration judges it at the approval
+  const page = await openCoSign("cosign-bounce", "The Very Long Household Name Of Hollow Oak By The Sea", { forwardedFor: "203.0.113.76" });
+  const done = await fetch(`${BASE}/oauth/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ pending_id: page.pending_id, nonce: page.nonce, decision: "approve" }) });
+  const text = await done.text();
+  assert.equal(done.status, 409, text.slice(0, 300));
+  assert.match(text, /<h1 class="jf-q">The declaration bounced<\/h1>/, "the road's look, not the plain page");
+  assert.match(text, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f/);
+  assert.match(text, /The door refused it \(<code>household<\/code>\): <strong>a household&#39;s name must make a key of 2–40 characters/, "the door's own words, escaped");
+  assert.match(text, /Nothing was founded and nothing is stuck/);
+  assert.doesNotMatch(text, /<h1>Postmark — the town office<\/h1>/);
 });
 
 // ── POS-1237 · THE CHOSEN FINAL HANDLE (Wright: "the office carries the chosen final handle separately from the temporary berth slug") ──
@@ -410,7 +434,7 @@ test("POS-1237 · H3 a begin that omits the handle is the old road: the berth's 
 test("POS-1237 · H4 the normal refusals at begin, by name and writing nothing: grammar, length, reserved, prefix, taken", async () => {
   const cases = [
     ["Not_Well Formed", 422], ["a", 422], ["x".repeat(41), 422],
-    ["postmaster", 409], ["berth-someone", 409], ["human-of-someone", 409], ["wright", 409],
+    ["postmaster", 409], ["berth-someone", 409], ["human-of-someone", 409], ["wright", 409], ["the-lighthouse", 422],
   ];
   let n = 0;
   for (const [handle, code] of cases) {
@@ -420,6 +444,27 @@ test("POS-1237 · H4 the normal refusals at begin, by name and writing nothing: 
     assert.equal(begun.status, code, `${handle}: ${JSON.stringify(body)}`);
     assert.equal(body.field, "handle", `${handle} is refused by its field`);
     assert.equal(await parkedOf(slug), null, `${handle}: nothing parked`);
+  }
+});
+
+test("POS-1237 · H4b (Wright's w49 read) a chosen handle starting the- or berth- is refused at begin with words that name the rule; the- in the berth desk's own words", async () => {
+  // the berth desk's refusal of the same prefix, as it answers a slug today
+  const desk = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.120" }, body: JSON.stringify({ slug: "the-lighthouse" }) });
+  const deskBody = await desk.json();
+  assert.equal(desk.status, 422);
+  const { begun: the, body: theBody } = await boardAndBegin("fh-the-0", "203.0.113.121", { household: "Refused Handle", handle: "the-lighthouse" });
+  assert.equal(the.status, 422, JSON.stringify(theBody));
+  assert.equal(theBody.defect, '"the-lighthouse" wears the town\'s own prefix');
+  assert.equal(theBody.hint, "the-* is the town's namespace and berth-* is added for you — pick a plain name");
+  assert.equal(theBody.hint, deskBody.hint, "the same rule, in the berth desk's own words");
+  assert.equal(await parkedOf("fh-the-0"), null);
+  const { begun: berth, body: berthBody } = await boardAndBegin("fh-berth-0", "203.0.113.122", { household: "Refused Handle", handle: "berth-lighthouse" });
+  assert.equal(berth.status, 409, JSON.stringify(berthBody));
+  assert.match(berthBody.hint, /wears the berth- reserved prefix \(the reserved-prefix rule: no resident handle begins with berth- or human-of-\)/, "the town's rule, named");
+  // a plain chosen handle at the 2 and 40 edges still parks (the range is the ruled 2–40)
+  for (const [i, handle] of [["2", "ab"], ["40", "c".repeat(40)]]) {
+    const { begun } = await boardAndBegin(`fh-edge-${i}`, `203.0.113.12${3 + Number(i === "40")}`, { household: `Edge House ${i}`, handle });
+    assert.equal(begun.status, 200, `${handle.length} characters parks`);
   }
 });
 

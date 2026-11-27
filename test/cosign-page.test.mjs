@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { cosignPage, cosignOutcome, countedLength, countWords, registrarSays } from "../src/cosign-page.mjs";
-import { REGISTRAR_FACE, QUILL_SVG } from "../src/cosign-art.mjs";
+import { REGISTRAR_PICTURE, REGISTRAR_NAME, QUILL_SVG } from "../src/cosign-art.mjs";
 import { humanProfileRows } from "../src/human-profile-pages.mjs";
 import { likenessChoice } from "../src/likeness-pages.mjs";
 import { HUMAN_PROFILE_CAPS, judgeHumanProfile } from "../src/human-profile.mjs";
@@ -91,17 +91,26 @@ test("S3 · the styled likeness choice: the ruled words whole, two answers as th
   assert.doesNotMatch(likenessChoice(), /lk-opt|sf-t/);
 });
 
-test("S4 · the co-sign page wears the join's look: the Registrar's portrait and bubble, the quill tile, the night sky", () => {
+test("S4 · the co-sign page wears the join's look: Regina's picture and bubble as the join draws her, the quill tile, the night sky", () => {
   const html = cosignOutcome("Co-signed", registrarSays("Hello."));
-  assert.ok(REGISTRAR_FACE.startsWith("data:image/webp;base64,UklGR"), "her portrait, inline (the office serves no asset route)");
-  assert.ok(html.includes(`<img class="reg-face" src="${REGISTRAR_FACE}" width="64" height="64" alt="The Registrar">`));
-  assert.match(html, /<div class="reg-bubble"><span class="reg-name">The Registrar<\/span>Hello\.<\/div>/);
+  // CORE-188 (site #503, join-draft.mjs § REGISTRAR_PICTURE and REGISTRAR_NAME): her own picture by its full asset constant, and her name
+  assert.equal(REGISTRAR_PICTURE, "https://media.postmark.town/media/the-town/40b8c76c3c6d381d4950eb83793ecc7a93c2c5c3dd0c5c7a4f21ce0aad9e5169.jpg");
+  assert.equal(REGISTRAR_NAME, "Regina the Registrar");
+  assert.ok(html.includes(`<span class="reg-face"><img src="${REGISTRAR_PICTURE}" width="64" height="64" alt="" decoding="async"></span>`));
+  assert.match(html, /<div class="reg-bubble"><span class="reg-name">Regina the Registrar<\/span>Hello\.<\/div>/);
+  assert.match(html, /\.reg-face\{[^}]*background:#f4e8cf;border:2px solid rgba\(232,196,139,\.45\)/, "her round mask on cream, JoinRegistrar's");
+  assert.match(html, /@media \(max-width:560px\)\{\.reg\{gap:\.6em\}\.reg-face\{width:40px;height:40px\}/, "and her smaller face on a phone");
   assert.ok(html.includes(`<div class="jf-art">${QUILL_SVG}</div>`), "the join's pixel-art quill");
   assert.match(QUILL_SVG, /shape-rendering="crispEdges"/);
   assert.match(html, /radial-gradient\(120% 90% at 50% -10%,#1c2c4f 0%,#0d1426 48%,#070b15 100%\)/, "the join's night sky");
   assert.match(html, /--pm-gold:#e8c48b;--pm-paper:#f7efdc/, "and its paper and gold");
-  assert.match(html, /\.sf input::placeholder\{color:rgba\(239,230,210,\.6\)/, "ghost text, the join's cream dimmed only as far as it still reads (4.5:1 and more on the night sky)");
-  assert.match(html, /\.reg-name\{[^}]*color:#87501f/, "the Registrar's label, her accent deepened to read on her paper");
+  // the human's boxes as the join's move-in form draws them (move-in.astro § .jd-sf), each treatment measured: the label 10.4:1, the
+  // hint 6.1:1, the typed words 15.5:1 and the ghost 4.8:1 at the sky's lightest; her name 4.8:1 on her paper
+  assert.match(html, /\.sf input\[type=text\]\{width:100%;padding:\.7em \.85em;color:#fff8e8;background:rgba\(17,29,52,\.9\);border:1px solid rgba\(232,196,139,\.32\);border-radius:9px;/, "the boxed field");
+  assert.match(html, /label\.sf-t\{font-family:var\(--pm-mono\);font-size:\.78rem;[^}]*color:var\(--jf-gold\)/, "the small gold label (the likeness question, a legend, keeps its heading)");
+  assert.match(html, /\.sf-hint\{[^}]*font-size:\.86rem;[^}]*color:rgba\(205,194,171,\.85\)/);
+  assert.match(html, /\.sf input::placeholder\{color:rgba\(205,194,171,\.66\)/, "ghost text, the join's measured ink");
+  assert.match(html, /\.reg-name\{[^}]*color:#975b27/, "her name in the join's deeper accent");
   assert.match(html, /<h1 class="jf-q">Co-signed<\/h1>/);
   assert.match(html, /<meta name="viewport" content="width=device-width,initial-scale=1">/);
 });

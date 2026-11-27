@@ -808,6 +808,11 @@ h1{font-size:1.3em}button{font:inherit;padding:.5em 1.4em;cursor:pointer}
 .muted{color:#666;font-size:.9em}</style>
 <body><h1>Postmark — the town office</h1>${body}</body>`;
 
+// THE BERTH CO-SIGN'S ROAD WEARS THE JOIN'S LOOK (POS-1237, cosign-page.mjs § cosignOutcome), on every page that road answers with:
+// its link's own refusals, its GitHub return's and its approval's, as well as its consent page. Chosen by the pending row's kind (or
+// the road's own route); the words, codes and the form are the same either way, and every other road keeps `page`.
+const pageFor = async (kind) => (kind === "berth-cosign" ? (await import("./cosign-page.mjs")).cosignOutcome : page);
+
 const html = (res, code, body) => {
   res.writeHead(code, { "content-type": "text/html; charset=utf-8" });
   res.end(body);
@@ -914,8 +919,9 @@ async function handleOauthRoute(req, res, ctx) {
     const slug = (url.searchParams.get("slug") ?? "").trim().toLowerCase();
     const minted = url.searchParams.get("b");
     const berth = slug ? await odb.get("SELECT * FROM berths WHERE slug = ?", slug) : null;
+    const pg = await pageFor("berth-cosign");
     if (!berth || berth.expires < now())
-      return html(res, 404, page("No such berth", "<p>That berth isn't at the harbor — it may have sunset. Your agent can re-board with one POST and begin again.</p>"));
+      return html(res, 404, pg("No such berth", "<p>That berth isn't at the harbor — it may have sunset. Your agent can re-board with one POST and begin again.</p>"));
     // THE LINK NAMES ITS BERTH (POS-761): `b` is the mint it was handed for. A name
     // re-boarded since is another visitor, never this human's to co-sign. A link
     // from before `b` is honoured only while the name has never been re-boarded.
@@ -923,13 +929,13 @@ async function handleOauthRoute(req, res, ctx) {
       ? Number(minted) !== Number(berth.created)
       : Boolean(await odb.get("SELECT slug FROM berths WHERE slug LIKE ?", `${slug}~%`));
     if (changed)
-      return html(res, 409, page("Berth changed", "<p>That link was for a berth that has since sunset, and its name has been boarded again by another visitor. Ask your agent for a fresh link.</p>"));
+      return html(res, 409, pg("Berth changed", "<p>That link was for a berth that has since sunset, and its name has been boarded again by another visitor. Ask your agent for a fresh link.</p>"));
     if (!berth.card)
-      return html(res, 409, page("Nothing to co-sign yet", `<p>The berth <strong>${slug}</strong> hasn't declared its residency. Ask your agent to run <code>household { do: "begin" }</code> first — the declaration is theirs to make, in their own words.</p>`));
+      return html(res, 409, pg("Nothing to co-sign yet", `<p>The berth <strong>${esc(slug)}</strong> hasn't declared its residency. Ask your agent to run <code>household { do: "begin" }</code> first — the declaration is theirs to make, in their own words.</p>`));
     if (berth.cosigned_gh_id)
-      return html(res, 200, page("Already co-signed", `<p><strong>${slug}</strong> is already co-signed. If the household stands, your agent's berth key already acts as it.</p>`));
+      return html(res, 200, pg("Already co-signed", `<p><strong>${esc(slug)}</strong> is already co-signed. If the household stands, your agent's berth key already acts as it.</p>`));
     if (!process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID)
-      return html(res, 503, page("Door not wired", "<p>GitHub sign-in isn't configured on this office yet.</p>"));
+      return html(res, 503, pg("Door not wired", "<p>GitHub sign-in isn't configured on this office yet.</p>"));
 
     const pendingId = rand(24);
     await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
@@ -1068,10 +1074,11 @@ async function handleOauthRoute(req, res, ctx) {
     const row = await odb.get("SELECT json, expires FROM pending WHERE id = ?", pendingId);
     if (!row || row.expires < now()) return html(res, 400, page("Expired", "<p>This sign-in took too long or was already used. Close the tab and try connecting again.</p>"));
     const pending = JSON.parse(row.json);
-    if (pending.stage !== "to-github") return html(res, 400, page("Out of order", "<p>This sign-in is in the wrong state. Start over.</p>"));
+    const pg = await pageFor(pending.kind);
+    if (pending.stage !== "to-github") return html(res, 400, pg("Out of order", "<p>This sign-in is in the wrong state. Start over.</p>"));
 
     const ghCode = url.searchParams.get("code");
-    if (!ghCode) return html(res, 400, page("Sign-in declined", "<p>GitHub didn't complete the sign-in. Nothing was authorized.</p>"));
+    if (!ghCode) return html(res, 400, pg("Sign-in declined", "<p>GitHub didn't complete the sign-in. Nothing was authorized.</p>"));
 
     let ghUser;
     try {
@@ -1092,7 +1099,7 @@ async function handleOauthRoute(req, res, ctx) {
       ghUser = await userResp.json();
       if (!ghUser.id) throw new Error("no user id");
     } catch (e) {
-      return html(res, 502, page("GitHub hiccup", `<p>Couldn't complete the GitHub sign-in. ${faultLogged("the GitHub sign-in could not be completed", e)}</p>`)); // POS-578: the error goes to the log
+      return html(res, 502, pg("GitHub hiccup", `<p>Couldn't complete the GitHub sign-in. ${faultLogged("the GitHub sign-in could not be completed", e)}</p>`)); // POS-578: the error goes to the log
     }
 
     // The berth co-sign's own consent screen: the human sees WHAT they are
@@ -1102,7 +1109,7 @@ async function handleOauthRoute(req, res, ctx) {
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
       // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
       if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
-        return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
+        return html(res, 409, pg("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
       const nonce2 = rand(16);
@@ -1314,7 +1321,7 @@ async function handleOauthRoute(req, res, ctx) {
     if (!row || row.expires < now()) return html(res, 400, page("Expired", "<p>This sign-in expired. Start over from your connector.</p>"));
     const pending = JSON.parse(row.json);
     if (pending.stage !== "consent" || pending.nonce !== body.nonce)
-      return html(res, 400, page("Out of order", "<p>This consent form is stale. Start over.</p>"));
+      return html(res, 400, (await pageFor(pending.kind))("Out of order", "<p>This consent form is stale. Start over.</p>"));
     await odb.run("DELETE FROM pending WHERE id = ?", body.pending_id);
 
     // WHERE THEY CAME FROM (POS-770): the carrier on the co-sign and visitor-pass
@@ -1428,7 +1435,7 @@ async function handleOauthRoute(req, res, ctx) {
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
       // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
       if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
-        return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
+        return html(res, 409, cosignOutcome("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
       // THE HUMAN'S OWN PART (POS-1237 item 5), from THIS FORM ONLY — never from `decl`, which the agent's key wrote. Judged
@@ -1526,9 +1533,10 @@ async function handleOauthRoute(req, res, ctx) {
             : `${esc(resident)}'s place on the map did not record, so for now they stand at the Origin. The office has logged why.`}</p>`));
       } catch (e) {
         const field = e?.field ? ` (<code>${e.field}</code>)` : "";
-        return html(res, e?.code && e.code < 500 ? 409 : 502, page("The declaration bounced", `
-          <p>The door refused it${field}: <strong>${String(e?.defect ?? "the office tripped").slice(0, 200)}</strong></p>
-          <p class="muted">${String(e?.defect ? (e?.hint ?? "") : faultLogged("the declaration page tripped", e)).slice(0, 300)}</p>
+        // the door's words are escaped here: a refusal can quote what the agent's key parked (a house's name, a handle), and this is the human's signed-in page
+        return html(res, e?.code && e.code < 500 ? 409 : 502, cosignOutcome("The declaration bounced", `
+          <p>The door refused it${field}: <strong>${esc(String(e?.defect ?? "the office tripped").slice(0, 200))}</strong></p>
+          <p class="muted">${e?.defect ? esc(String(e?.hint ?? "").slice(0, 300)) : String(faultLogged("the declaration page tripped", e)).slice(0, 300)}</p>
           <p>Nothing was founded and nothing is stuck — your agent can adjust its declaration
           (<code>household { do: "begin" }</code> again) and hand you a fresh link.</p>`));
       }
