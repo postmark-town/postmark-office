@@ -50,6 +50,10 @@
 //     `hh:<slug>` in the town's own fold, since this tool keys no one. The town reads every account of a house as
 //     that house (stamp-mint.mjs § houseCanonOf: `gh:<id>` → `hh:<slug>`), so the ledger must carry no `gh:<id>`
 //     key for the new id, or minted history would regroup.
+//   · THE SPELLINGS (household-deriver.mjs § houseKeysOf, folded over the row as it will stand): the account adds
+//     `gh:<id>` and `solo:<login>` to the set the house's sessions read rows by (024's draft policies). A spelling it
+//     adds that another house's set already holds (a resident's handle, an old pinned login, under another id) would
+//     open that house's old-spelled rows to this one, so it refuses; the plan prints what the set gains.
 //
 // RESUMABLE AND REPEATABLE. The store binds before the commit, so a push that cannot land leaves the store bound and
 // the clone as it was; the same command then finds the account already in the house, writes nothing to the store,
@@ -68,6 +72,7 @@ import { currentKeysOf, LEDGER_REL } from "../src/house-key.mjs";
 import { penCommit, penTransaction, landOrRefuse } from "../src/write.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { githubGet, householdsOfAccount } from "../src/bug-credit.mjs";
+import { houseKeysOf } from "../src/household-deriver.mjs";
 import { easternDate } from "./rekey-household.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -79,6 +84,7 @@ export const BIND_REFUSALS = Object.freeze({
   OTHER_HOUSE: { code: 409, defect: "--account-id is already bound to another household — nothing was written" },
   OFF_KEY: { code: 409, defect: "a resident of --household is not on the house's own key: this tool appends an account and keys no one — nothing was written" },
   KEY_ALIAS: { code: 409, defect: "the stamp ledger already carries a key for --account-id, which the house would take over — a person reads it; nothing was written" },
+  SHARED_SPELLING: { code: 409, defect: "the account would give --household a spelling another household already holds, and with it that house's rows — a person reads it; nothing was written" },
   COLLATERAL: { code: 409, defect: "printing the registry would change more than --household — the town's files are behind the store elsewhere; run the registry drain first" },
   PROOF_MISSING: { code: 422, defect: "--apply needs the request and both public answers, --request, --account-proof and --keeper-proof — nothing was written" },
   PROOF_UNREAD: { code: 503, defect: "a proof could not be read from GitHub just now — nothing was written; try again" },
@@ -245,6 +251,25 @@ export function planBind({ slug, account, rows, clone, proofs, date, keysOf = cu
   const accountsAfter = already ? target.accounts : [...(target.accounts ?? []), { login, id: Number(account.id) }];
   const after = already ? rows : { ...rows, households: rows.households.map((r) => (r.slug === slug ? { ...r, accounts: accountsAfter } : r)) };
 
+  // THE SPELLINGS (the lead's FIX on #1252): the house's effective spelling set is what a resident's session reads its
+  // rows by (household-deriver.mjs § houseKeysOf → sessionKeysVia → 024's draft policies), and an account brings
+  // `gh:<id>` and `solo:<login>` with it. A `solo:` spelling another house already holds (its resident's handle, an
+  // old pinned login) under a different id would let this house read that house's old-spelled drafts. So the set is
+  // folded over the row as it will stand, by the real deriver, and a spelling it ADDS that another house's set already
+  // holds refuses. Overlaps the town already carries are not this tool's to judge or repair: only the delta is.
+  const pinsNow = pinsFromRows(rows);
+  const spellBefore = houseKeysOf(`hh:${slug}`, registryFromRows(rows), pinsNow);
+  const registryAfter = registryFromRows(after);
+  const spellAfter = houseKeysOf(`hh:${slug}`, registryAfter, pinsNow);
+  const added = spellAfter.filter((k) => !spellBefore.includes(k));
+  const shared = [];
+  for (const other of Object.keys(registryAfter.households ?? {})) {
+    if (other === slug) continue;
+    const theirs = new Set(houseKeysOf(`hh:${other}`, registryAfter, pinsNow));
+    for (const k of added) if (theirs.has(k)) shared.push(`${k} is already hh:${other}'s`);
+  }
+  if (shared.length) throw refuse(BIND_REFUSALS.SHARED_SPELLING, shared.join(", "));
+
   // COLLATERAL (move-resident's rule): what the drain would print may differ from the town's files only in this house
   const files = filesHouses(clone);
   const printed = renderPublicRegistry(after);
@@ -267,6 +292,7 @@ export function planBind({ slug, account, rows, clone, proofs, date, keysOf = cu
     registry: { before: files[slug] ?? null, after: printedHouses[slug] ?? null, published: publishedNow },
     residents: target.residents ?? [],
     keys: { residents: (target.residents ?? []).map((h) => [h, keys.get(h) ?? null]) },
+    spellings: { before: spellBefore, after: spellAfter, added },
   };
 }
 
@@ -350,6 +376,10 @@ export function describe(plan, { applied = false, done = false, commit = null } 
     out.push("  every other column of the row unchanged; household_pins unchanged (no pin carries the id)");
   } else out.push(`store: no change (${plan.slug} already lists ${plan.account.id})`);
   out.push(`keys: ${plan.keys.residents.map(([h, k]) => `${h} ${k ?? "(not in the fold)"}`).join(", ")} — unchanged, no ledger line; the town reads gh:${plan.account.id} as hh:${plan.slug} from now, and the ledger holds no gh:${plan.account.id} key to regroup`);
+  const sp = plan.spellings;
+  out.push(sp.added.length
+    ? `spellings (what the house's sessions read rows by): ${JSON.stringify(sp.before)} + ${JSON.stringify(sp.added)} — no other household holds ${sp.added.length === 1 ? "it" : "any of them"}`
+    : `spellings (what the house's sessions read rows by): unchanged, ${JSON.stringify(sp.after)}`);
   out.push("town files (one pen commit):");
   // the drain writes the registers; these lines only say what it will print
   const registryText = plan.registry.published ? `  ${REGISTRY_PATH}: ${plan.slug} already printed with the account`

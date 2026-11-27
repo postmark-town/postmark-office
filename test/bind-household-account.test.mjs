@@ -199,6 +199,8 @@ test("B1 · the dry run names the row, the printout and both proofs' verdicts, a
   assert.deepEqual(plan.registry.after.accounts, [{ login: "keeper-gh", id: 601 }, { login: "keeper-second", id: 602 }]);
   assert.equal(plan.registry.published, false);
   assert.deepEqual(plan.keys.residents, [["ana", "hh:the-workroom"], ["bo", "hh:the-workroom"]]);
+  assert.deepEqual(plan.spellings.added, ["gh:602", "solo:keeper-second"], "the set gains the account's id and its login, and nothing else");
+  assert.deepEqual(plan.spellings.before, ["hh:the-workroom", "gh:601", "solo:ana", "solo:bo", "solo:keeper-gh"]);
 
   assert.deepEqual(await storeRows(), before, "the store is as it was");
   assert.equal(head(t.dir), h0);
@@ -472,6 +474,32 @@ test("B9 · a town file behind the store in another house refuses (COLLATERAL), 
   await assert.rejects(withPins(t, () => bindHouseholdAccount({ ...args(t), apply: true, ...NO_WRITERS })),
     (e) => e.defect === BIND_REFUSALS.COLLATERAL.defect && /next-door/.test(e.detail));
   assert.deepEqual(await storeRows(), before);
+});
+
+// ── B11 a shared spelling ───────────────────────────────────────────────────
+
+test("B11 · a login another house already holds as a spelling (a resident's handle, an old pinned login) under a different id refuses, writing nothing", { skip: SKIP }, async () => {
+  // Next Door's resident handle IS keeper-second (pinned to Next Door's own account, 701), so `solo:keeper-second` is in
+  // Next Door's set; 602 itself is no house's and no pin's, so every id check passes
+  const asResident = {
+    houses: { ...HOUSES(), "next-door": { ...HOUSES()["next-door"], residents: ["cy", "keeper-second"] } },
+    pins: { ...PINS(), "keeper-second": { login: "neighbour-gh", id: 701, pinned: "2026-09-01" } },
+  };
+  // Next Door's cy was pinned under the login keeper-second once (the pin's login is the old spelling; its id is 701)
+  const asOldPin = { pins: { ...PINS(), cy: { login: "keeper-second", id: 701, pinned: "2026-09-01" } } };
+  for (const [what, shape] of [["a resident's handle", asResident], ["an old pinned login", asOldPin]]) {
+    const t = await town(shape);   // each town seeds the one store afresh
+    const before = await storeRows();
+    const h0 = head(t.dir);
+    const A = await go(t);
+    for (const run of [{ ...args(t), ...NO_WRITERS }, { ...A, ...NO_WRITERS }])
+      await assert.rejects(withPins(t, () => bindHouseholdAccount(run)),
+        (e) => { assert.equal(e.defect, BIND_REFUSALS.SHARED_SPELLING.defect, `${what}: ${e.defect} (${e.detail})`); assert.equal(e.detail, "solo:keeper-second is already hh:next-door's"); return true; },
+        `${what}: ${run.apply ? "--apply" : "the dry run"} refuses`);
+    assert.deepEqual(await storeRows(), before, `${what}: neither house, nor any pin, changed`);
+    assert.equal(head(t.dir), h0, `${what}: nothing published`);
+    assert.ok(clean(t.dir));
+  }
 });
 
 // ── B10 the command ─────────────────────────────────────────────────────────
