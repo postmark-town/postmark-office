@@ -202,6 +202,26 @@ async function sparkByWorld(m, marks) {
   try { return w.mk.isSparkIn(m, typeof w.mk.kindIndexOf === "function" ? w.mk.kindIndexOf(marks ?? []) : null) === true; } catch { return false; }
 }
 
+/**
+ * IS THIS CLASS A SPARK, AS THREE ANSWERS (POS-1216): `true` (the World's selector says spark), `false` (CONFIRMED not a spark: the class's own
+ * node is in the canonical class index the chain is read from, or it is one of the World's standing words), or `null` (NOT READ: the engine
+ * or its selector could not be loaded, or the roster's class has no node in the class data in hand, so its chain cannot answer and the
+ * selector's fallback would call it non-spark by its place alone). `sparkByWorld` above keeps its two answers for every other asker, which
+ * is the only place unread has always meant "no"; a guard that must never admit a spark asks THIS. The World stays the authority: nothing
+ * here lists a class or classifies one itself. `world` is injectable for the tests only.
+ */
+export async function sparkClassAnswer(klass, marks, { world = sparkWorld } = {}) {
+  let w;
+  try { w = await world(); } catch { return null; }
+  if (!w?.mk || typeof w.mk.isSparkIn !== "function") return null;
+  try {
+    const idx = typeof w.mk.kindIndexOf === "function" ? w.mk.kindIndexOf(marks ?? []) : null;
+    if (w.mk.isSparkIn({ kind: String(klass) }, idx) === true) return true;
+    if (w.mk.STANDING_WORDS instanceof Set && w.mk.STANDING_WORDS.has(String(klass))) return false;
+    return idx?.byName instanceof Map && idx.byName.has(String(klass)) ? false : null;
+  } catch { return null; }
+}
+
 async function mods() {
   if (_mods) return _mods;
   const verbs = await engineImport("world-verbs.mjs");
@@ -5601,10 +5621,33 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // A SPARK, as the World answers it (sparkByWorld above: its mark-kind.mjs § isSparkIn over the canon's class index) — asked once
   // Asked only of a class this door does not pick by hand, and never able to change another mark's answer: an unreadable canon or
   // engine is "not a spark" here, and every refusal it would have caused is left to the door's own later checks, in their order.
-  let isSpark = false;
+  let isSpark = false, sparkUnread = false;
   if (klass !== undefined && !HAND_PICKED_CLASSES.includes(String(klass))) {
-    try { isSpark = await sparkByWorld({ kind: String(klass) }, canonForGuards()?.marks ?? []); } catch { isSpark = false; }
+    // three answers (POS-1216): a class answer that could not be READ is not "not a spark" for a leave that names a parent (below)
+    // a canon that cannot be read is an unread class answer too (as it always swallowed to "not a spark" before, for every other asker)
+    let canonMarks = null;
+    try { canonMarks = canonForGuards()?.marks ?? []; } catch { canonMarks = null; }
+    const answer = canonMarks === null ? null : await sparkClassAnswer(String(klass), canonMarks);
+    isSpark = answer === true;
+    sparkUnread = answer === null;
   }
+  // A SPARK NAMES NO STRUCTURAL PARENT, AND THE DOOR SAYS SO (POS-1216; Darko 2026-11-24 07:59 EST on POS-1212; Wright 2026-11-27 05:26Z). The World's law
+  // (LOGOS/classes.md, Spark): "Its place is the moment's: neither sited nor anchored" and "It is not `parent:`, which is the predicate's edge: a spark is
+  // never anchored." A caller-supplied `parent_id` on a spark used to ride on to the store and the write-down, where it nested, held, or (on main, #1214) was
+  // filed at the spark's own id: an illegal input accepted and then worked around. It is refused here, by name and with the reason, BEFORE any claim, journal
+  // row, stake or write-down, in a preview and a real leave alike, whether or not the parent would resolve. Only a spark is asked: every other mark's
+  // parent_id (a predicated or naming mark's, an amend's own declared parent) is judged where it always was, and the spark's own lawful link to another
+  // spark is `properties.parent` (stored as parent_spark, never a place).
+  const namesParent = parent_id != null && parent_id !== "";
+  // …and an UNREAD class answer is not a confirmed non-spark: a class-bearing leave that names a parent while the World's classification of its class
+  // cannot be read (the engine, or the class's node in the canonical class data) is held, by name, before any mutation (a 503 for an unavailable read,
+  // never a claim that the class is a spark): nothing later checks a parent against the spark law before the append, and the crossing's lint is after the store.
+  if (namesParent && sparkUnread)
+    throw bounce(503, `whether class "${String(klass).slice(0, 60)}" may carry a parent_id could not be checked just now`,
+      "a spark never carries one, and the World's answer for this class could not be read, so the door will not guess; nothing was written — ask again shortly, or leave parent_id off");
+  if (isSpark && namesParent)
+    throw bounce(422, `a spark carries no parent_id (got ${JSON.stringify(String(parent_id)).slice(0, 120)}): a spark is never anchored under a mark`,
+      "its place is the moment's, neither sited nor anchored (the World's spark class, LOGOS/classes.md). Leave parent_id off. To link it to another spark, send properties: { parent: \"<by>/<slug>\" } (stored as parent_spark; it never places the spark). Nothing was written.");
   if (kind === "sited" || kind === "parcel") {
     if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) throw bounce(422, "sited/parcel marks need at {x,y}", "grid meters east/south of the Origin");
     // A SPARK'S FRAME MAY BE A POINT OR A LINE (POS-1035 frozen frame; Bevel 16:25:14Z): a real single-point room keeps its explicit
