@@ -107,3 +107,59 @@ test("THE CONTROLS · a lawful parentless spark passes; its own properties.paren
   assert.ok(outcome.ok || !/a spark carries no parent_id/.test(outcome.e?.defect ?? ""), `a predicated mark's parent_id is not the spark's refusal: ${outcome.e?.defect}`);
   assert.deepEqual(await written(), before, "the previews wrote nothing");
 });
+
+// ── THE UNREAD CLASS ANSWER (POS-1216, lead FIX at 361613cc) ─────────────────────────────────────────────────────────────────────────────
+// `sparkByWorld` collapses an unread engine or class index into "not a spark", so the guard above skipped a class it could not read, `clean`
+// kept the parent_id and nothing later stopped the append (the crossing's lint is after the store). The parent-admission question has THREE
+// answers now (world.mjs § sparkClassAnswer): spark, CONFIRMED not a spark, NOT READ; a class-bearing leave that names a parent while the
+// answer is NOT READ is a 503 before any mutation, never a guess. The World stays the authority: the engine's own selector, over the class
+// index of the canon in hand.
+//
+// FLIP: make sparkClassAnswer answer `false` where it answers `null` (the old collapse), and the unread-class test and the unit's null rows go red.
+
+const chainMarks = (...names) => names.map((n, i) => ({ id: `the-town/${n}`, kind: "class", class: n, by: "the-town", ...(i > 0 ? { extends: names[i - 1] } : {}) }));
+
+test("sparkClassAnswer: spark / confirmed not-spark / not read, from the World's own selector over the class data in hand (unit)", async () => {
+  const { sparkClassAnswer } = await import("../src/world.mjs");
+  const tree = chainMarks("postmark-node", "mark", "sited", "spark", "spark-album");
+  assert.equal(await sparkClassAnswer("spark-album", tree), true, "a subclass of spark, its chain in hand");
+  assert.equal(await sparkClassAnswer("spark", []), true, "spark answers for itself with no class data in hand");
+  assert.equal(await sparkClassAnswer("spark-album", []), null, "EMPTY class data: the subclass's chain cannot answer, and its place alone would call it non-spark: not read");
+  assert.equal(await sparkClassAnswer("spark-album", chainMarks("postmark-node", "mark", "sited")), null, "class data without this class's node: not read");
+  assert.equal(await sparkClassAnswer("tile", chainMarks("postmark-node", "mark", "sited", "tile")), false, "a class whose node and chain are in hand and reach no spark: confirmed not a spark");
+  assert.equal(await sparkClassAnswer("parcel", []), false, "one of the World's own standing words is confirmed with no class data");
+  // an unread ENGINE: the loader answers nothing, throws, lacks the selector, or the selector throws
+  assert.equal(await sparkClassAnswer("spark-album", tree, { world: async () => null }), null, "no engine");
+  assert.equal(await sparkClassAnswer("spark-album", tree, { world: async () => { throw new Error("engine away"); } }), null, "the loader throws");
+  assert.equal(await sparkClassAnswer("spark-album", tree, { world: async () => ({ mk: {} }) }), null, "an engine with no selector");
+  assert.equal(await sparkClassAnswer("spark-album", tree, { world: async () => ({ mk: { isSparkIn() { throw new Error("bad index"); } } }) }), null, "the selector throws");
+});
+
+test("at the door: a parent-bearing leave of a class the roster knows but the canonical class data does not hold is a 503 before any mutation; once the answer is confirmed, a spark is the 422 and a non-spark is untouched", { skip }, async () => {
+  const { reloadLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const { leaveMarkViaOffice, canonForGuards } = await import("../src/world.mjs");
+  const canon = canonForGuards();
+  const real = canon?.marks?.find((m) => m.kind === "sited" && m.id && m.at && m.parent_id == null)?.id;
+  // a class the law's ROSTER declares (a spark's subclass) that the pinned canon has no node for, and one canon DOES hold that reaches no spark
+  const heldNonSpark = canon.marks.find((m) => m.kind === "class" && m.class && !["spark", "postmark-node", "mark", "sited", "parcel", "bounty", "chest", "candy", "thing"].includes(m.class))?.class;
+  assert.ok(heldNonSpark, "the pinned canon holds a non-spark class node");
+  const law = [...LAW, cls("spark-album", { extends: "spark" }), cls(heldNonSpark, { extends: "sited" })];
+  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : law }) });
+  const before = await written();
+  const unread = (e) => e.code === 503 && /may carry a parent_id could not be checked/.test(e.defect) && /nothing was written/.test(e.hint) && !/is a spark|never anchored under/.test(e.defect);
+  for (const parent_id of [real, "nobody/never-made-this"]) for (const preview of [true, false])
+    await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, spark({ class: "spark-album", parent_id, preview }), KEY), unread, `parent_id ${parent_id}, preview=${preview}`);
+  await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, spark({ class: "spark-album", parent_id: real, amend: true, preview: false }), KEY), unread, "an amend");
+  assert.deepEqual(await written(), before, "the unavailable answer wrote nothing: no act, claim or mark row");
+  // the unread answer is about a parent: parentless, empty and null parents are not held by it
+  for (const parent_id of [undefined, "", null]) {
+    let e; try { await leaveMarkViaOffice(process.env.WORLD_CLONE, spark({ class: "spark-album", parent_id }), KEY); } catch (x) { e = x; }
+    assert.ok(!e || !/may carry a parent_id could not be checked/.test(e.defect), `parent_id ${JSON.stringify(parent_id)} is no parent: ${e?.defect}`);
+  }
+  // CONFIRMED not a spark: a class whose node the canon holds is judged where it always was, never by this guard
+  let other; try { await leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "plain", kind: "sited", class: heldNonSpark, at: { x: 5, y: 5 }, extent: { w: 4, h: 4 }, body: "a thing", parent_id: real, preview: true }, KEY); } catch (x) { other = x; }
+  assert.ok(!other || (!/may carry a parent_id could not be checked/.test(other.defect) && !/a spark carries no parent_id/.test(other.defect)), `a confirmed non-spark class is not held or refused as a spark: ${other?.defect}`);
+  // RECOVERY: the class's own answer is known (spark answers for itself), and the same parent is the 422 at the act, before the journal
+  await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, spark({ parent_id: real }), KEY), refusedAsParent, "confirmed spark: the named 422");
+  assert.deepEqual(await written(), before, "still nothing written");
+});
