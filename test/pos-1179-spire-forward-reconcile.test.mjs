@@ -4,8 +4,8 @@
 // THE CASE (WLD-260): WLD-135 (5aacbe95) deleted the Spire's 22 `rooms` from its file; WLD-253's re-kind built the Spire's door claim from the
 // store's older body, which still held them; the 18:00Z sweep of 2026-11-27 wrote them back. world2/tools/spire-forward-reconcile.mjs is the
 // minimal correction (its header says why this and not an amend): `clearing_job`, the one pen `claims_update_guard` admits, removes `rooms`
-// from the named claim's data and from the row's data in ONE transaction, and moves the row's `locked_window` to the open window so the
-// crossing that closes it (fold-delta: marks locked at the newest closed window) writes the file.
+// from the named claim's data and from the row's data in ONE transaction. Nothing else is written (not the row's `locked_window`): the
+// settlement prints from the SEAL (settlement-printout.mjs), and the corrected row's sealed version differs, so the printout carries it.
 //
 //   THE PEN        a resident door / the owner role cannot edit that claim (the guard refuses them), and the tool refuses to run as them
 //   THE DRY RUN    BEGIN READ ONLY: nothing is written, the digest is stable, the file diff is the one `rooms:` line
@@ -13,14 +13,16 @@
 //                  supersedes, the origin claim (history), the claim chain and every other row unchanged; the marker names what was removed
 //   THE FILE       the write-down's renderer prints the row before and after: the ONLY difference is the `rooms:` line (no date restamp,
 //                  no claimed_at, no footprints, the ring kept)
-//   THE CROSSING   after the window closes the real foldDelta selects the Spire (and did not before); the next seal writes the corrected
-//                  row as a NEW version while the old sealed version and snapshot stay exactly as they were
+//   THE CROSSING   the settlement's own path: the next seal writes the corrected row as a NEW sealed version beside the old one (every earlier
+//                  version, header and list exactly as they were); the printout's list delta (`deltaOf`) names the Spire as the one changed
+//                  mark; its entry, rendered from the sealed version as `entriesOf` renders it and planned by `planStoreWriteDown`, differs
+//                  from today's file by exactly the `rooms:` line
 //   THE REFUSALS   drift (any other rooms, a later claim, an unstamped claim, row ≠ claim, another kind, no ring, a wrong digest, a moved
 //                  store, no/clearing window) refuses and writes nothing; a failed second write rolls the first back
 //   IDEMPOTENT     a second run writes nothing; a half-finished run finishes
 //
 // FLIPS (each run, then restored): drop the claims UPDATE → the planner's two-writes test, THE DRY RUN, THE APPLY, IDEMPOTENT and THE CROSSING go
-// red; drop the `locked_window` move → THE APPLY and THE CROSSING go red; skip the head-of-chain check → the planner's drift test goes red.
+// red; drop the marks UPDATE → the same six go red; skip the head-of-chain check → the planner's drift test goes red.
 // (The file-diff guard is defensive: the renderer prints rooms as one line today, so it is asserted on the plan, and lineDiff has its own unit.)
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
@@ -59,7 +61,7 @@ const refused = (p, re) => assert.ok(p.refusals.some((r) => re.test(r)) && p.ste
 test("the planner · the Spire as the re-kind left it plans exactly two writes and a one-line file diff", () => {
   const p = planReconcile(inputs());
   assert.deepEqual(p.refusals, []);
-  assert.deepEqual(p.steps.map((s) => [s.table, s.remove, s.locked_window ?? null]), [["claims", "rooms", null], ["marks", "rooms", 340]]);
+  assert.deepEqual(p.steps.map((s) => [s.table, s.remove]), [["claims", "rooms"], ["marks", "rooms"]], "two removals and no lock window");
   assert.equal(p.diff.gone.length, 1);
   assert.ok(p.diff.gone[0].startsWith("rooms: "));
   assert.deepEqual(p.diff.added, []);
@@ -192,7 +194,8 @@ test("THE DRY RUN · reads inside BEGIN READ ONLY, writes nothing, and prints th
   assert.equal(a.plan.diff.gone.length, 1);
   assert.deepEqual(a.plan.diff.added, []);
   assert.match(a.receipt, /will write: claims .* remove rooms/);
-  assert.match(a.receipt, /will write: marks .* locked_window 340/);
+  assert.match(a.receipt, /will write: marks .* remove rooms/);
+  assert.doesNotMatch(a.receipt, /locked_window \d/, "no lock window is written");
   assert.equal(await dump(), before, "a dry run wrote nothing");
 });
 
@@ -277,7 +280,8 @@ test("THE APPLY · both inputs lose rooms, the marker says what was removed, and
   assert.equal(row.kind, "door", "the later door class is kept");
   assert.equal(row.data.into, "wright/spire-gilded-vestibule");
   assert.equal(row.data.lands_at, "wright/spire-gilded-doors-inside");
-  assert.equal(row.locked_window, 340, "re-locked at the open window, so the crossing that closes it carries the file");
+  assert.equal(row.locked_window, beforeRow.locked_window, "the row's recorded lock window is untouched");
+  assert.equal(row.locked_window, 337);
   for (const k of ["window_id", "supersedes", "status", "class", "claimant", "geometry", "body", "decided_at"]) assert.deepEqual(claim[k], beforeClaim[k], `the claim's ${k} is untouched`);
   assert.deepEqual(await claimOf(ORIGIN), beforeOrigin, "the origin claim is a version that was true when it was made: untouched");
   assert.equal((await owner.query("SELECT count(*)::int n FROM claims")).rows[0].n, nClaims, "no claim was added or removed");
@@ -308,31 +312,48 @@ test("IDEMPOTENT · a second run writes nothing; a half-finished run finishes", 
   assert.equal(Object.hasOwn((await rowOf()).data, "rooms"), false);
 });
 
-test("THE CROSSING · after the window closes, the real foldDelta selects the Spire, which it did not while the row sat at window 337; the next seal adds a new version and leaves the old", { skip }, async () => {
-  const { foldDelta } = await import("../world2/tools/fold-delta.mjs");
-  const delta = async (w) => { const d = await foldDelta(pen, { window: w, worldSha: "a".repeat(40), townSha: "b".repeat(40) }); return (d.marks ?? []).map((m) => m.id ?? m.slug ?? m.fileRec?.slug); };
-  // the fold's stakes are as-of a town sha: one projected stake row stands in for the town's ingest
-  await owner.query("INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, 'wright/spire-servants-door', 'wright', 'hh:starforge', 'hh:starforge', 1, 0)", ["b".repeat(40)]);
-  // WHILE THE ROW SAT AT 337: the newest closed window was 339 then, and the Spire was not its docket (control, asked before the apply moved it)
-  // close the open window as the clearing would, then ask what the crossing carries
+test("THE CROSSING · the settlement prints from the seal: the Spire is the lists' one changed mark and its printed file differs from today's by exactly the rooms line; every earlier sealed version stays", { skip }, async () => {
+  const { deltaOf } = await import("../world2/tools/settlement-printout.mjs");
+  const { snapshotHeader, snapshotRows } = await import("../src/world-snapshot.mjs");
+  const { renderedMark } = await import("../world2/tools/mark-render.mjs");
+  const { planStoreWriteDown, normalizeMark } = await import("../src/store-writedown.mjs");
+  const q = (t, a) => pen.query(t, a);
+  // the open window closes and the clearing seals it (the real sealSnapshot, in its own transaction)
   await owner.query("UPDATE windows SET status = 'closed', cleared_at = now() WHERE id = 340");
-  const got = await delta(340);
-  assert.ok(got, "foldDelta answered");
-  assert.ok(got.includes(SLUG), `the Spire is in window 340's delta: ${JSON.stringify(got)}`);
-  assert.ok(!got.includes("wright/spire-servants-door"), "only what the docket locked: the neighbour (locked at 337) is not");
-  // the entry the write-down is handed carries the file without the line
-  const entry = (await foldDelta(pen, { window: 340, worldSha: "a".repeat(40), townSha: "b".repeat(40) })).marks.find((m) => m.slug === SLUG);
-  assert.ok(entry && !/\nrooms:/.test(entry.bytes) && entry.bytes.includes("kind: door") && entry.bytes.includes("points: [[3725,-5590.5]"), "the crossing's input prints the Spire without rooms");
-  // SEALED HISTORY: the next seal writes the corrected row as a NEW version beside the old one, and every earlier seal is exactly as it was
   const s340 = await seal(340);
-  assert.ok(s340.new_versions >= 1);
+  assert.ok(s340.new_versions >= 1, "the corrected row is a new sealed version");
+
+  // THE PRINTOUT'S OWN MEASURE (settlement-printout.mjs § printSettlement): P is the last sealed list, S this window's; the delta is by sealed version
+  const P = await snapshotHeader({ query: q }, { window: 339 });
+  const S = await snapshotHeader({ query: q }, { window: 340 });
+  const [pRows, sRows] = await Promise.all([snapshotRows({ query: q }, P.marks_digest), snapshotRows({ query: q }, S.marks_digest)]);
+  assert.deepEqual(deltaOf(pRows, sRows), { changed: [SLUG], removed: [] }, "the Spire is the one mark whose sealed version differs; the neighbour is not");
+  // … and what is printed: each changed version rendered from the SEAL as entriesOf renders it (no live table, no claim chain), then planned by the write-down's planner
+  const entryOf = (rows) => {
+    const r = JSON.parse(rows.find((x) => x.slug === SLUG).row);
+    return { slug: SLUG, kind: r.kind, by: r.owner, household: "hh:starforge", locked_window: null, founder_commit: r.data?.founder_commit ?? null,
+      ...renderedMark({ ...r, first_claimed: null, first_claim_submitted_at: null }) };
+  };
+  const today = entryOf(pRows), next = entryOf(sRows);
+  assert.match(today.bytes, /\nrooms: \[/, "the sealed version main holds today carries the rooms");
+  const PATH = "WORLD/marks/wright/the-starforge-spire/mark.md";
+  const plan = planStoreWriteDown([normalizeMark(next)], { publishedPathOf: () => PATH, canonBytesAt: (p) => (p === PATH ? today.bytes : null) });
+  const upserts = plan.households.flatMap((h) => h.upserts);
+  assert.equal(upserts.length, 1, "the planner prints the Spire");
+  assert.equal(upserts[0].path, PATH, "at its filed path");
+  const d = lineDiff(today.bytes, upserts[0].bytes);
+  assert.equal(d.gone.length, 1, JSON.stringify(d));
+  assert.ok(d.gone[0].startsWith("rooms: "));
+  assert.deepEqual(d.added, [], "nothing else changes: no date restamp, claimed_at, footprints; the ring and every field stay");
+  assert.ok(upserts[0].bytes.includes("kind: door") && upserts[0].bytes.includes("points: [[3725,-5590.5]") && upserts[0].bytes.includes("lands_at: wright/spire-gilded-doors-inside"));
+
+  // SEALED HISTORY: every earlier seal is exactly as it was, and the old version is still there beside the new one
   const state = JSON.parse(await sealedState());
   const before = JSON.parse(sealedBefore);
   assert.deepEqual(state.snapshots, before.snapshots, "the earlier snapshot header is exactly as it was");
   const sealedLists = new Set(before.lists.map((l) => l.marks_digest));
   assert.deepEqual(state.lists.filter((l) => sealedLists.has(l.marks_digest)), before.lists, "every earlier list is exactly as it was");
-  const olds = JSON.parse(sealedBefore).versions;
-  for (const v of olds) assert.deepEqual(state.versions.find((x) => x.digest === v.digest), v, "an older sealed version is untouched");
+  for (const v of before.versions) assert.deepEqual(state.versions.find((x) => x.digest === v.digest), v, "an older sealed version is untouched");
   const newSpire = (await owner.query("SELECT w.digest FROM world_snapshot_marks w JOIN world_snapshots s ON s.marks_digest = w.marks_digest WHERE s.window_id = 340 AND w.slug = $1", [SLUG])).rows[0].digest;
   assert.notEqual(newSpire, oldSpireDigest, "the corrected row is a new version");
   const newRow = (await owner.query("SELECT row FROM mark_versions WHERE digest = $1", [newSpire])).rows[0].row;

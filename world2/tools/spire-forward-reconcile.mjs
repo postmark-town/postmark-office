@@ -27,18 +27,23 @@
 //     TOOL AND NOT A DOOR: env WORLD2_CLEARING_URL, one transaction, the open window FOR UPDATE). So the writer boundary is that
 //     pen, and no grant, role or trigger changes. A resident door or `world2_owner` cannot do this: the guard refuses them (the
 //     test proves it).
-//   · THE CROSSING WRITES ONLY THE MARKS THE DOCKET LOCKED (fold-delta.mjs: `marks WHERE locked_window = <the newest closed
-//     window>`). A row corrected in place at its old window would sit in the store and never reach Git, so the row's
-//     `locked_window` moves to the OPEN window, exactly as review-rule.mjs dates its materialization to the open window and for the
-//     same reason ("putting-forward dating accepted"). That is the one column besides `data` this writes.
+//   · THE CROSSING PRINTS FROM THE SEAL, SO THE CORRECTED ROW REACHES GIT WITHOUT RE-DATING ITS LOCK. The settlement that writes
+//     `WORLD/marks/` is deploy/settlement-auto.sh → settlement-printout.mjs print: it takes the two sealed lists (the last printed
+//     snapshot's and this window's), prints every mark whose SEALED VERSION differs (`deltaOf`, `printedDelta`), and renders it from
+//     that version row through `entriesOf` → store-writedown.mjs § planStoreWriteDown. The seal (world-snapshot-seal.mjs §
+//     STANDING_ROWS_SQL) copies EVERY standing row as `slug, kind, owner, body, geometry, parent, data`: no `locked_window`. So
+//     removing `rooms` (and adding the marker) changes the Spire's version digest at the next seal, and the printout carries it
+//     whatever the row's `locked_window`. (fold-delta.mjs selects by `locked_window`, but nothing in deploy/ or the workflows runs
+//     it.) The claim's `data` is never sealed or printed. This tool therefore writes no lock window: the open window is read only
+//     to be named in the marker.
 //
 // ── WHAT IT WRITES, EXACTLY ─────────────────────────────────────────────────────────────────────────────────────────────────
 //
 //   claims   the named re-kind claim's `data`: `rooms` removed, and `_forward_reconciled` (what was removed, its digest, when)
-//   marks    the Spire's row `data`: `rooms` removed and the same marker; `locked_window` = the open window
+//   marks    the Spire's row `data`: `rooms` removed and the same marker (its `locked_window` is not touched)
 //
 // Everything else is untouched: `geometry` (so the ring's 22 `points` stay on the row, which is what the write-down prints),
-// `kind` (the later door class), `into`, `lands_at`, `image`, `body`, `date`, `tier`, the claim chain, the origin claim (a version
+// `locked_window` (the row's recorded lock stays the window that ruled on it), `kind` (the later door class), `into`, `lands_at`, `image`, `body`, `date`, `tier`, the claim chain, the origin claim (a version
 // that was true when it was made), `claims.window_id` and every sealed snapshot (`mark_versions`, `world_snapshot_*` are digests of
 // rows the clearing sealed; the next seal writes the corrected row as a NEW version beside the old one). `_`-prefixed keys never reach
 // a file (mark-record.mjs), so the marker costs the file nothing.
@@ -55,7 +60,7 @@
 //   THE RING   the row carries its `points` (a ring of 3 or more), because the file prints them from the row
 //   THE FILE   the write-down's own renderer (mark-render.mjs § renderRecord) prints the row before and after: the ONLY difference
 //              is the one `rooms:` line gone. A `date` restamp, `claimed_at`, `footprints` or a lost `points` line refuses
-//   THE WINDOW exactly one window is open and none is clearing (a clearing in flight would miss the row)
+//   THE WINDOW exactly one window is open (named in the marker) and none is clearing (a seal in flight reads the rows this writes)
 //   THE PLAN   `--apply` takes `--expect <digest>`, the digest of the inputs the dry run printed, re-read under row locks inside
 //              the transaction: a store that moved since the dry run refuses
 //   THE PEN    the connection is `clearing_job`
@@ -72,9 +77,13 @@
 //   2  --apply --expect <digest> the one transaction. It prints the receipt (claim id, rooms removed, window, digest).
 //   3  read-back:                SELECT m.data ? 'rooms', m.locked_window, jsonb_array_length(m.geometry->'points'),
 //                                       (SELECT data ? 'rooms' FROM claims WHERE id = '<claim>') FROM marks m
-//                                 WHERE slug = 'wright/the-starforge-spire';   -- false, <the open window>, 22, false
-//   4  the crossing (nothing to do): the clearing closes the window; fold-delta selects the Spire (locked_window = that window);
-//      the write-down prints the file without the `rooms:` line and with every other line unchanged.
+//                                 WHERE slug = 'wright/the-starforge-spire';   -- false, 337 (unchanged), 22, false
+//   4  the crossing (nothing to do): the window closes and the clearing's seal records the corrected row as a NEW version beside
+//      the old; the settlement's printout (settlement-printout.mjs) measures the two sealed lists, names the Spire as changed, and
+//      its planner prints the file without the `rooms:` line and with every other line unchanged. Read-back after the seal:
+//        SELECT s.window_id, l.digest FROM world_snapshots s JOIN world_snapshot_marks l ON l.marks_digest = s.marks_digest
+//         WHERE l.slug = 'wright/the-starforge-spire' ORDER BY s.window_id DESC LIMIT 2;   -- two different digests
+//      and, after the printout, `git show main:WORLD/marks/wright/the-starforge-spire/mark.md` has no `rooms:` line.
 //   5  then, and only then, the World's assertion (POS-1263) after the actual crossing witness.
 
 import { createHash } from "node:crypto";
@@ -194,7 +203,7 @@ export function planReconcile({ mark, claims = [], windows = [], claimId = null 
 
   const open = windows.filter((w) => w.status === "open"), clearing = windows.filter((w) => w.status === "clearing");
   if (!noop) {
-    if (clearing.length) refuse(`window ${clearing.map((w) => w.id).join(", ")} is clearing: a crossing in flight would miss the row`);
+    if (clearing.length) refuse(`window ${clearing.map((w) => w.id).join(", ")} is clearing: a seal in flight reads the rows this writes`);
     if (open.length !== 1) refuse(`${open.length} windows are open, not one: a version is ruled at the one open window`);
   }
 
@@ -202,7 +211,7 @@ export function planReconcile({ mark, claims = [], windows = [], claimId = null 
   const steps = [];
   if (!refusals.length && !noop) {
     if (claimHas) steps.push({ table: "claims", id: String(claim.id), remove: "rooms" });
-    if (rowHas) steps.push({ table: "marks", id: String(mark.id), remove: "rooms", locked_window: open[0].id });
+    if (rowHas) steps.push({ table: "marks", id: String(mark.id), remove: "rooms" });
   }
   return { refusals, steps, digest, diff, noop, rowHas, claimHas, window: open[0]?.id ?? null, claimId: claim?.id ?? null, rooms: rowHas ? data.rooms : cdata.rooms };
 }
@@ -254,8 +263,8 @@ export async function reconcileSpire(client, { claimId, apply = false, expect = 
       const r = s.table === "claims"
         ? await q(`UPDATE claims SET data = (data - 'rooms') || jsonb_build_object('${MARKER}', $3::jsonb)
                     WHERE id = $1 AND status = 'locked' AND slug = $4 AND data->'rooms' = $2::jsonb`, [s.id, old, JSON.stringify(marker), SLUG])
-        : await q(`UPDATE marks SET data = (data - 'rooms') || jsonb_build_object('${MARKER}', $3::jsonb), locked_window = $5
-                    WHERE id = $1 AND status = 'standing' AND slug = $4 AND data->'rooms' = $2::jsonb`, [s.id, old, JSON.stringify(marker), SLUG, s.locked_window]);
+        : await q(`UPDATE marks SET data = (data - 'rooms') || jsonb_build_object('${MARKER}', $3::jsonb)
+                    WHERE id = $1 AND status = 'standing' AND slug = $4 AND data->'rooms' = $2::jsonb`, [s.id, old, JSON.stringify(marker), SLUG]);
       if (r.rowCount !== 1) throw new Error(`${s.table} ${s.id}: the guarded UPDATE changed ${r.rowCount} rows, not 1 (the inputs moved under the lock)`);
     }
     // the file, re-read after the write, inside the transaction: the one rooms line gone, nothing else
@@ -279,8 +288,8 @@ function render(plan, { apply }) {
   L.push(`  row carries rooms:   ${plan.rowHas ? `yes (${plan.rooms?.length ?? "?"}, the authorised list)` : "no"}`);
   L.push(`  claim carries rooms: ${plan.claimHas ? "yes (the authorised list)" : "no"}`);
   if (plan.diff) L.push(`  the file, before → after: gone ${JSON.stringify(plan.diff.gone.map((l) => l.slice(0, 44) + (l.length > 44 ? "…" : "")))} · new ${JSON.stringify(plan.diff.added)}`);
-  if (plan.window != null) L.push(`  the open window: ${plan.window} (the row's locked_window moves there, so the crossing that closes it writes the file)`);
-  for (const s of plan.steps ?? []) L.push(`  will write: ${s.table} ${s.id} — remove ${s.remove}${s.locked_window != null ? `, locked_window ${s.locked_window}` : ""}`);
+  if (plan.window != null) L.push(`  the open window: ${plan.window} (named in the marker only; no lock window is written)`);
+  for (const s of plan.steps ?? []) L.push(`  will write: ${s.table} ${s.id} — remove ${s.remove}`);
   if (plan.digest) L.push(`  digest: ${plan.digest}`);
   if (plan.noop) L.push("  nothing to do: neither input carries rooms");
   for (const r of plan.refusals ?? []) L.push(`  REFUSED: ${r}`);
