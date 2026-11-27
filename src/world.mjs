@@ -5605,6 +5605,16 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   if (klass !== undefined && !HAND_PICKED_CLASSES.includes(String(klass))) {
     try { isSpark = await sparkByWorld({ kind: String(klass) }, canonForGuards()?.marks ?? []); } catch { isSpark = false; }
   }
+  // A SPARK NAMES NO STRUCTURAL PARENT, AND THE DOOR SAYS SO (POS-1216; Darko 2026-11-24 07:59 EST on POS-1212; Wright 2026-11-27 05:26Z). The World's law
+  // (LOGOS/classes.md, Spark): "Its place is the moment's: neither sited nor anchored" and "It is not `parent:`, which is the predicate's edge: a spark is
+  // never anchored." A caller-supplied `parent_id` on a spark used to ride on to the store and the write-down, where it nested, held, or (on main, #1214) was
+  // filed at the spark's own id: an illegal input accepted and then worked around. It is refused here, by name and with the reason, BEFORE any claim, journal
+  // row, stake or write-down, in a preview and a real leave alike, whether or not the parent would resolve. Only a spark is asked: every other mark's
+  // parent_id (a predicated or naming mark's, an amend's own declared parent) is judged where it always was, and the spark's own lawful link to another
+  // spark is `properties.parent` (stored as parent_spark, never a place).
+  if (isSpark && parent_id != null && parent_id !== "")
+    throw bounce(422, `a spark carries no parent_id (got ${JSON.stringify(String(parent_id)).slice(0, 120)}): a spark is never anchored under a mark`,
+      "its place is the moment's, neither sited nor anchored (the World's spark class, LOGOS/classes.md). Leave parent_id off. To link it to another spark, send properties: { parent: \"<by>/<slug>\" } (stored as parent_spark; it never places the spark). Nothing was written.");
   if (kind === "sited" || kind === "parcel") {
     if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) throw bounce(422, "sited/parcel marks need at {x,y}", "grid meters east/south of the Origin");
     // A SPARK'S FRAME MAY BE A POINT OR A LINE (POS-1035 frozen frame; Bevel 16:25:14Z): a real single-point room keeps its explicit
