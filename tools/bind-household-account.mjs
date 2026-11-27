@@ -9,7 +9,8 @@
 // confirmations are there, from the right GitHub authors." This is household authority, not a credit alias.
 //
 //   node tools/bind-household-account.mjs --household <slug> --account-id <id> --account-login <login>
-//     --issue <owner>/<repo>#<n> [--account-proof <comment url>] [--keeper-proof <comment url>] (--dry-run | --apply)
+//     --issue <owner>/<repo>#<n> --request <comment url> --account-proof <comment url> --keeper-proof <comment url>
+//     (--dry-run | --apply --accept <digest>)
 //
 // Run it as move-resident runs (tools/move-resident.mjs): on the box under the town lock, with the office's env (the
 // store as the office reads it, TOWN_CLONE, TOWN_PUSH, the box's read-only GitHub token). The store write is the
@@ -17,17 +18,22 @@
 //
 // THE PROOF, read from GitHub at every run, never taken from the operator's word:
 //
-//   · --account-proof: a comment on --issue whose author's numeric GitHub id IS --account-id (and whose login is
-//     --account-login), saying the account is the keeper's;
-//   · --keeper-proof: a comment on --issue whose author's numeric id is one of the accounts the household ALREADY
-//     lists (never the account being bound), authorizing the account by name or id.
+//   · --request: the town's ask on --issue (Wright's, on town #4758), naming the account and the house, written by
+//     neither answering account. It gives the answers their meaning; both must be posted after it.
+//   · --account-proof: the answer whose author's numeric GitHub id IS --account-id (and whose login is
+//     --account-login): the account is the keeper's;
+//   · --keeper-proof: the answer whose author's numeric id is one of the accounts the household ALREADY lists (never
+//     the account being bound): the house authorizes it.
 //
-// The comment's issue is GitHub's own `issue_url`, not the link's spelling. A login can be renamed and an id cannot,
-// so the id decides. The words are read with every quoted line (`> …`) and code block taken out, so a reply that
-// quotes the request confirms nothing; a body that names nothing the ruling asks for, or that carries a negation
-// (not, never, don't, wait, revoke …), is not a proof. That reading is a floor, not the judgment: the plan prints
-// both bodies (to 1200 characters, a longer one marked cut) for the operator to read. A dry run reports each proof's
-// verdict and refuses nothing for it; an --apply without both proofs standing writes nothing.
+// Each comment's issue is GitHub's own `issue_url`, not the link's spelling. A login can be renamed and an id cannot,
+// so the id decides. The answers are read with every quoted line (`> …`) and code block taken out: one with no words
+// of its own, or with a negation (not, never, don't, wait, revoke …), is not a proof. THE WORDS ARE THE OPERATOR'S
+// TO JUDGE, against the request: the ruling's confirmations are ordinary replies in context ("this is my account as
+// well as the harpy landfall one"; "confirming same account from Harpylandfall"), which no phrase list reads fairly.
+// So the dry run prints the three bodies (to 1200 characters, a longer one marked cut) and a digest of exactly those
+// comments, and --apply runs only with `--accept <digest>`: the words a person read and accepted are the words the
+// write runs on, and an answer edited, swapped or added since changes the digest and refuses. A dry run reports each
+// verdict and refuses nothing for it; an --apply without all three standing, or without the digest, writes nothing.
 //
 // WHAT CHANGES, AND WHAT DELIBERATELY DOES NOT:
 //
@@ -54,6 +60,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { loadRegistryRows, appendHouseholdAccount } from "../src/registry-store.mjs";
 import { registryFromRows, pinsFromRows, renderPublicRegistry } from "../src/registry-rows.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
@@ -73,9 +80,10 @@ export const BIND_REFUSALS = Object.freeze({
   OFF_KEY: { code: 409, defect: "a resident of --household is not on the house's own key: this tool appends an account and keys no one — nothing was written" },
   KEY_ALIAS: { code: 409, defect: "the stamp ledger already carries a key for --account-id, which the house would take over — a person reads it; nothing was written" },
   COLLATERAL: { code: 409, defect: "printing the registry would change more than --household — the town's files are behind the store elsewhere; run the registry drain first" },
-  PROOF_MISSING: { code: 422, defect: "--apply needs both public proofs, --account-proof and --keeper-proof — nothing was written" },
+  PROOF_MISSING: { code: 422, defect: "--apply needs the request and both public answers, --request, --account-proof and --keeper-proof — nothing was written" },
   PROOF_UNREAD: { code: 503, defect: "a proof could not be read from GitHub just now — nothing was written; try again" },
   PROOF_REFUSED: { code: 422, defect: "a proof does not stand — nothing was written" },
+  PROOF_UNACCEPTED: { code: 409, defect: "--apply needs --accept <digest> from a dry run over these same comments: the operator's reading of exactly these words — nothing was written" },
   CHANGED: { code: 409, defect: "the house's accounts, another house or a pin changed between the plan and the write — nothing was written; run it again" },
   DRAIN_REFUSED: { code: 409, defect: "the registry drain refused to print" },
 });
@@ -115,19 +123,19 @@ export function ownWords(body) {
 }
 
 const NEGATION_RE = /\b(not|no|never|nope|cannot|refuse[sd]?|deny|denie[sd]|decline[sd]?|revoke[sd]?|withdraw[sn]?|wait|stop|cancel(?:led|s)?|undo)\b|n't\b/;
-const AFFIRM_RE = /\b(yes|confirm(?:s|ed)?|mine|my|i am|i'm|it is|it's|this is|belongs)\b/;
-const AUTHORIZE_RE = /\b(authori[sz](?:e|es|ed|ing)|approve[sd]?|confirm(?:s|ed)?|yes|agree[sd]?|consent(?:s|ed)?|go ahead|please add)\b/;
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const names = (text, word) => new RegExp(`(^|[^a-z0-9-])${escapeRe(String(word).toLowerCase())}([^a-z0-9-]|$)`).test(text);
+const FLAG = { request: "--request", account: "--account-proof", keeper: "--keeper-proof" };
 
 /**
- * Judge one proof against what the ruling asks of it. PURE over GitHub's answer for the comment (`got`: githubGet's
- * `{ status, body }`, or null when it could not be read). `role` is "account" or "keeper". Returns
- * `{ ok, role, ref, url, why?, unread?, author?, created_at?, updated_at?, body? }`.
+ * Judge one comment against what its role asks of it. PURE over GitHub's answer for the comment (`got`: githubGet's
+ * `{ status, body }`, or null when it could not be read). `role` is "request" (the town's ask on the issue, which
+ * gives the answers their meaning), "account" or "keeper"; `after` is the request's `created_at`, which both answers
+ * must follow. Returns `{ ok, role, ref, url, why?, unread?, author?, created_at?, updated_at?, body? }`.
  */
-export function judgeProof({ role, ref, got, issue, account, house }) {
+export function judgeProof({ role, ref, got, issue, account, house, after = null }) {
   const out = { role, ref: ref ?? null, url: ref?.url ?? null, ok: false };
-  if (!ref) return { ...out, why: `no --${role}-proof was given` };
+  if (!ref) return { ...out, why: `no ${FLAG[role]} was given` };
   const wanted = `${issue.owner}/${issue.repo}#${issue.number}`;
   if (`${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase() !== wanted.toLowerCase())
     return { ...out, why: `${ref.url} is not a comment on ${wanted}` };
@@ -143,40 +151,60 @@ export function judgeProof({ role, ref, got, issue, account, house }) {
   if (!Number.isSafeInteger(id)) return { ...seen, why: `${ref.url} carries no numeric author id` };
   if (c.user?.type !== "User") return { ...seen, why: `${ref.url} was written by ${login} (${c.user?.type ?? "no type"}), not a person's account` };
   const words = ownWords(c.body);
+  const houseAccount = (house.accounts ?? []).some((a) => sameId(a, id));
+  if (role === "request") {
+    // THE ASK: the town's, never the house's or the new account's own, and about this account and this house
+    if (String(id) === String(account.id) || houseAccount)
+      return { ...seen, why: `${ref.url} was written by ${login} (id ${id}), one of the two accounts answering; the request is the town's ask` };
+    if (!(names(words, account.login) || names(words, String(account.id))) || ![house.slug, house.name].filter(Boolean).some((w) => names(words, w)))
+      return { ...seen, why: `${ref.url} does not ask about ${account.login} (${account.id}) and ${house.name ?? house.slug} by name` };
+    return { ...seen, ok: true };
+  }
+  if (!words.trim()) return { ...seen, why: `${ref.url} has no words of its own (only quoted lines or code), so it confirms nothing` };
   if (NEGATION_RE.test(words)) return { ...seen, why: `${ref.url}'s own words carry a negation (${NEGATION_RE.exec(words)[0]}), so they are read by a person, never as a yes` };
+  if (after && !(Date.parse(c.created_at) > Date.parse(after)))
+    return { ...seen, why: `${ref.url} was posted at ${c.created_at}, before the request it answers (${after})` };
   if (role === "account") {
     if (String(id) !== String(account.id))
       return { ...seen, why: `${ref.url} was written by ${login} (id ${id}), not the account being bound (id ${account.id})` };
     if (login.toLowerCase() !== String(account.login).toLowerCase())
       return { ...seen, why: `${ref.url}'s author is id ${id}, now spelled ${login}, not --account-login ${account.login}` };
-    const saysWhose = ["keeper", house.slug, house.name].filter(Boolean).some((w) => names(words, w));
-    if (!saysWhose || !AFFIRM_RE.test(words))
-      return { ...seen, why: `${ref.url}'s own words do not say the account is the keeper's (they name neither the keeper nor ${house.name ?? house.slug}, or affirm nothing)` };
     return { ...seen, ok: true };
   }
   if (String(id) === String(account.id))
     return { ...seen, why: `${ref.url} was written by the account being bound; the authorization is the house's own, from an account it already lists` };
-  if (!(house.accounts ?? []).some((a) => sameId(a, id)))
+  if (!houseAccount)
     return { ...seen, why: `${ref.url} was written by ${login} (id ${id}), which ${house.slug} does not list (it lists ${(house.accounts ?? []).map((a) => `${a.login} ${a.id}`).join(", ") || "none"})` };
-  const namesAccount = names(words, account.login) || names(words, String(account.id));
-  if (!namesAccount || !AUTHORIZE_RE.test(words))
-    return { ...seen, why: `${ref.url}'s own words do not authorize ${account.login} (they name neither ${account.login} nor ${account.id}, or authorize nothing)` };
   return { ...seen, ok: true };
 }
 
-/** Both proofs, read from GitHub (`gh`: githubGet's shape), judged. Reads only. */
-export async function readProofs({ issue, accountProof, keeperProof, account, house, env, gh = githubGet }) {
-  const one = async (role, raw) => {
+/**
+ * THE OPERATOR'S READING, PINNED: a digest of exactly the three comments judged (each one's id, author id and words).
+ * The dry run prints it and --apply must be handed it back, so the words a person read and accepted are the words the
+ * write runs on: an answer edited, swapped or added after the reading changes the digest and refuses.
+ */
+export function proofDigest(proofs) {
+  const pin = ["request", "account", "keeper"].map((r) => [proofs[r].ref?.comment ?? null, proofs[r].author?.id ?? null, proofs[r].body ?? null]);
+  return createHash("sha256").update(JSON.stringify(pin)).digest("hex").slice(0, 16);
+}
+
+/** The request and both answers, read from GitHub (`gh`: githubGet's shape), judged. Reads only. */
+export async function readProofs({ issue, request, accountProof, keeperProof, account, house, env, gh = githubGet }) {
+  const one = async (role, raw, after = null) => {
     const ref = raw == null ? null : parseCommentUrl(raw);
     if (raw != null && !ref) return { role, ref: null, url: String(raw), ok: false, why: `${raw} is not a GitHub issue comment's link (https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>)` };
     const got = ref && `${ref.owner}/${ref.repo}#${ref.number}`.toLowerCase() === `${issue.owner}/${issue.repo}#${issue.number}`.toLowerCase()
       ? await gh(`/repos/${ref.owner}/${ref.repo}/issues/comments/${ref.comment}`, { env }) : undefined;
-    return judgeProof({ role, ref, got, issue, account, house });
+    return judgeProof({ role, ref, got, issue, account, house, after });
   };
-  const proofs = { account: await one("account", accountProof), keeper: await one("keeper", keeperProof) };
-  if (proofs.account.ref && proofs.keeper.ref && proofs.account.ref.comment === proofs.keeper.ref.comment)
-    proofs.keeper = { ...proofs.keeper, ok: false, why: "the two proofs are the same comment; each is its own account's" };
-  return { ...proofs, ok: proofs.account.ok && proofs.keeper.ok };
+  const asked = await one("request", request);
+  const proofs = { request: asked, account: await one("account", accountProof, asked.created_at ?? null), keeper: await one("keeper", keeperProof, asked.created_at ?? null) };
+  // three comments, three authors' own: none of them may stand in for another
+  const ids = ["request", "account", "keeper"].map((r) => proofs[r].ref?.comment).filter(Boolean);
+  if (new Set(ids).size !== ids.length)
+    for (const r of ["account", "keeper"]) if (ids.filter((x) => x === proofs[r].ref?.comment).length > 1) proofs[r] = { ...proofs[r], ok: false, why: "the same comment is given twice; the request and each answer are their own comments" };
+  const ok = proofs.request.ok && proofs.account.ok && proofs.keeper.ok;
+  return { ...proofs, ok, digest: ok ? proofDigest(proofs) : null };
 }
 
 // ── the plan ────────────────────────────────────────────────────────────────
@@ -244,31 +272,34 @@ export function planBind({ slug, account, rows, clone, proofs, date, keysOf = cu
 
 // ── the act ─────────────────────────────────────────────────────────────────
 
-/** The commit's words: the receipt a person finds in the town's history, naming both proofs. */
+/** The commit's words: the receipt a person finds in the town's history, naming the request and both answers. */
 export const commitMessage = (plan) =>
-  `registry: ${plan.account.login} (${plan.account.id}) added to ${plan.slug}'s accounts — proofs ${plan.proofs.account.url} and ${plan.proofs.keeper.url} (via postmark-office, bind-household-account, POS-1259)`;
+  `registry: ${plan.account.login} (${plan.account.id}) added to ${plan.slug}'s accounts — proofs ${plan.proofs.account.url} and ${plan.proofs.keeper.url}, answering ${plan.proofs.request.url} (via postmark-office, bind-household-account, POS-1259)`;
 
 /**
  * Plan, and with `apply`, do it: the store's one statement, then the printed registry in one pen commit. Without
  * `apply` it returns the plan and calls no writer. `gh`, `keysOf`, `bind`, `drainWith` and `commit` are injected in
  * test. Answers `{ applied, plan, done?, commit? }`.
  */
-export async function bindHouseholdAccount({ slug, account, issue, accountProof = null, keeperProof = null, clone,
+export async function bindHouseholdAccount({ slug, account, issue, request = null, accountProof = null, keeperProof = null, accept = null, clone,
   env = process.env, date = easternDate(), apply = false, gh = githubGet, keysOf = currentKeysOf,
   bind = appendHouseholdAccount, drainWith = collectingDrain, commit = penCommit } = {}) {
   const rows = await loadRegistryRows(env);
   if (rows === null) throw refuse(BIND_REFUSALS.NO_RECORD);
   const house = rows.households.find((r) => r.slug === slug);
   if (!house) return planBind({ slug, account, rows, clone, proofs: null, date, keysOf }); // throws NO_HOUSE
-  const proofs = await readProofs({ issue, accountProof, keeperProof, account, house, env, gh });
+  const proofs = await readProofs({ issue, request, accountProof, keeperProof, account, house, env, gh });
   const plan = planBind({ slug, account, rows, clone, proofs, date, keysOf });
   if (!apply) return { applied: false, plan };
 
   // NO PROOF, NO WRITE: both must stand at this run, the resumed and the repeated run included
-  if (!proofs.account.url || !proofs.keeper.url) throw refuse(BIND_REFUSALS.PROOF_MISSING, [proofs.account, proofs.keeper].filter((p) => !p.url).map((p) => p.why).join("; "));
-  const bad = [proofs.account, proofs.keeper].filter((p) => !p.ok);
+  const three = [proofs.request, proofs.account, proofs.keeper];
+  if (three.some((p) => !p.url)) throw refuse(BIND_REFUSALS.PROOF_MISSING, three.filter((p) => !p.url).map((p) => p.why).join("; "));
+  const bad = three.filter((p) => !p.ok);
   if (bad.some((p) => p.unread)) throw refuse(BIND_REFUSALS.PROOF_UNREAD, bad.filter((p) => p.unread).map((p) => p.why).join("; "));
   if (bad.length) throw refuse(BIND_REFUSALS.PROOF_REFUSED, bad.map((p) => `${p.role}: ${p.why}`).join("; "));
+  if (String(accept ?? "") !== proofs.digest)
+    throw refuse(BIND_REFUSALS.PROOF_UNACCEPTED, accept ? `--accept ${accept} is not the digest of the comments as they stand: mistyped, or changed since they were read; run the dry run and read them again` : "no --accept was given");
 
   if (!plan.store && plan.registry.published) return { applied: true, plan, done: true, commit: null };
 
@@ -303,12 +334,14 @@ export function describe(plan, { applied = false, done = false, commit = null } 
   out.push(!applied ? "DRY RUN — nothing written." : done && !commit ? "ALREADY BOUND AND PUBLISHED — nothing to do." : "BOUND.");
   out.push(`household: ${plan.slug}${plan.name ? ` (${plan.name})` : ""}  ·  account: ${plan.account.login} (id ${plan.account.id})  ·  date: ${plan.date}`);
   if (!applied) out.push(`town clone: ${plan.clone_head ?? "(no HEAD)"} — read as it stands, not pulled; --apply pulls first when TOWN_PUSH=1`);
-  out.push(`proofs (read from GitHub at this run; ${plan.proofs.ok ? "both stand" : "--apply refuses until both stand"}):`);
-  for (const p of [plan.proofs.account, plan.proofs.keeper]) {
-    const head = p.role === "account" ? "the account is the keeper's" : `${plan.slug} authorizes it`;
+  out.push(`proofs (read from GitHub at this run; ${plan.proofs.ok ? "the request and both answers stand" : "--apply refuses until the request and both answers stand"}):`);
+  for (const p of [plan.proofs.request, plan.proofs.account, plan.proofs.keeper]) {
+    const head = p.role === "request" ? "the town's ask, which both answers follow" : p.role === "account" ? "the account is the keeper's" : `${plan.slug} authorizes it`;
     out.push(`  ${p.role} (${head}): ${p.url ?? "(none given)"} — ${p.ok ? "STANDS" : `DOES NOT STAND: ${p.why}`}`);
     if (p.author) out.push(`    by ${p.author.login} (id ${p.author.id}), ${p.created_at}${p.updated_at && p.updated_at !== p.created_at ? `, edited ${p.updated_at}` : ""}; its words, for the operator to read:\n${quote(p.body)}`);
   }
+  // the words are the operator's to judge against the request; the digest pins the judgment to exactly these bytes
+  if (plan.proofs.ok && !applied) out.push(`accept: ${plan.proofs.digest} — if these answers, read against the request, are the confirmations the ruling asks for, apply with the same line, --apply in place of --dry-run, and --accept ${plan.proofs.digest}`);
   if (plan.store) {
     out.push("store (one statement, as office_api; written only while the row holds the accounts read here, no house lists the id and no pin carries it):");
     out.push(`  UPDATE households ${plan.slug}:`);
@@ -330,7 +363,7 @@ export function describe(plan, { applied = false, done = false, commit = null } 
 }
 
 export async function main(argv = process.argv.slice(2), { env = process.env, log = console.log, err = console.error, act = bindHouseholdAccount } = {}) {
-  const usage = "bind-household-account: --household <slug> --account-id <id> --account-login <login> --issue <owner>/<repo>#<n> [--account-proof <comment url>] [--keeper-proof <comment url>] (--dry-run | --apply)";
+  const usage = "bind-household-account: --household <slug> --account-id <id> --account-login <login> --issue <owner>/<repo>#<n> [--request <comment url>] [--account-proof <comment url>] [--keeper-proof <comment url>] (--dry-run | --apply --accept <digest>)";
   const dry = argv.includes("--dry-run"), apply = argv.includes("--apply");
   if (dry === apply) { err(`bind-household-account: pass exactly one of --dry-run or --apply\n${usage}`); return 2; }
   const slug = arg("--household", argv), id = arg("--account-id", argv), login = arg("--account-login", argv), issue = parseIssue(arg("--issue", argv));
@@ -340,7 +373,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     const out = await penTransaction(clone, async () => {
       if (apply && env.TOWN_PUSH === "1") execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
       try {
-        return await act({ slug, account: { id: Number(id), login }, issue, accountProof: arg("--account-proof", argv), keeperProof: arg("--keeper-proof", argv), clone, env, apply });
+        return await act({ slug, account: { id: Number(id), login }, issue, request: arg("--request", argv), accountProof: arg("--account-proof", argv),
+          keeperProof: arg("--keeper-proof", argv), accept: arg("--accept", argv), clone, env, apply });
       } catch (e) {
         if (typeof e?.code !== "number") throw e;
         return { error: { code: e.code, defect: e.defect ?? String(e.message), detail: e.detail ?? null } };
