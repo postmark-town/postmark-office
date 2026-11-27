@@ -5624,7 +5624,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   let isSpark = false, sparkUnread = false;
   if (klass !== undefined && !HAND_PICKED_CLASSES.includes(String(klass))) {
     // three answers (POS-1216): a class answer that could not be READ is not "not a spark" for a leave that names a parent (below)
-    const answer = await sparkClassAnswer(String(klass), canonForGuards()?.marks ?? []);
+    // a canon that cannot be read is an unread class answer too (as it always swallowed to "not a spark" before, for every other asker)
+    let canonMarks = null;
+    try { canonMarks = canonForGuards()?.marks ?? []; } catch { canonMarks = null; }
+    const answer = canonMarks === null ? null : await sparkClassAnswer(String(klass), canonMarks);
     isSpark = answer === true;
     sparkUnread = answer === null;
   }
