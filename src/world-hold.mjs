@@ -1223,6 +1223,10 @@ export function setDownAmend({ thing, mark, stood, actor, actId = null, writtenA
   const setDown = { act_id: actId == null ? null : String(actId), by: String(actor), at, written_at: writtenAt ?? null };
   const payload = { by: madeBy, slug, amend: true, at };
   for (const k of AMEND_CARRIES) if (mark[k] !== undefined && mark[k] !== null) payload[k] = mark[k];
+  // POS-1260: a record stores portable as canon's WORD, but a chest's door takes it only as a Boolean (world.mjs § the chest grammar: the public
+  // input stays strict). This payload is the door's INPUT, so it speaks the input's grammar: the two words become the Booleans they spell, for a
+  // chest only (a thing's door takes the words). Any other value is carried as it stands and refused as before, never guessed into a Boolean.
+  if (String(mark.class ?? mark.kind) === "chest" && (payload.portable === "true" || payload.portable === "false")) payload.portable = payload.portable === "true";
   return { payload, setDown };
 }
 

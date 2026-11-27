@@ -579,6 +579,38 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
 }
 
 /**
+ * One GitHub account appended to an existing house's `accounts` (POS-1259, the
+ * operator's tools/bind-household-account.mjs, its one caller). ONE statement,
+ * so it lands whole or not at all, and it writes `accounts` and no other column:
+ * residents, pins, credentials, likeness, hearth and every other field of the
+ * row keep their bytes.
+ *
+ * THE PLAN'S READ IS CHECKED IN THE SAME STATEMENT THAT WRITES: the row must
+ * still hold exactly the accounts the plan read (`before`), no house may list
+ * the id (019 has no uniqueness constraint on it; the joins hold it in code,
+ * residency.mjs § planRegistryJoin), and no pin may carry it (a pinned handle
+ * would be housed by the id, 055 § the identities view). Any of those changed
+ * since the plan writes nothing.
+ *
+ * Returns `{ slug, accounts }` of the row written, `null` when the office is
+ * not pointed at the record, or `{ slug: null }` when nothing was written.
+ */
+export async function appendHouseholdAccount({ slug, before, account }, env = process.env) {
+  const r = await actsQuery(
+    `UPDATE households h
+        SET accounts = h.accounts || jsonb_build_array(jsonb_build_object('login', $3::text, 'id', $4::bigint))
+      WHERE h.slug = $1
+        AND h.accounts = $2::jsonb
+        AND NOT EXISTS (SELECT 1 FROM households o CROSS JOIN LATERAL jsonb_array_elements(o.accounts) a
+                         WHERE a->>'id' = $5::text)
+        AND NOT EXISTS (SELECT 1 FROM household_pins p WHERE p.gh_id = $4::bigint)
+  RETURNING h.slug, h.accounts`,
+    [slug, JSON.stringify(before ?? []), String(account.login), String(account.id), String(account.id)], env);
+  if (r === null) return null;
+  return r.length ? { slug: r[0].slug, accounts: r[0].accounts } : { slug: null };
+}
+
+/**
  * The household's human's town name, short line and pronouns (POS-721,
  * migration 101), changed on its row.
  *

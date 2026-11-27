@@ -157,7 +157,7 @@ test("F2 · COUNTED UNITS IN A MADE HOLDER, set down at the real door and publis
   assert.equal(r1.code, 0, r1.out);
   assert.match(r1.out, /"locked":2/, r1.out);
   const standing = await q("SELECT slug, geometry, data FROM marks WHERE status = 'standing' AND slug = ANY($1) ORDER BY slug", [[full.bag, mixed.bag]]);
-  assert.deepEqual(standing.map((m) => [m.slug, m.data.holder, m.geometry?.extent]), [[full.bag, true, { w: 1, h: 1 }], [mixed.bag, true, { w: 1, h: 1 }]],
+  assert.deepEqual(standing.map((m) => [m.slug, m.data.holder, m.geometry?.extent]), [[full.bag, "true", { w: 1, h: 1 }], [mixed.bag, "true", { w: 1, h: 1 }]], // POS-1260: canon's word, as the file would parse
     "each holder stands where it was set down, under its own id");
   const actsBefore = (await q("SELECT count(*)::int AS n FROM acts"))[0].n;
 
