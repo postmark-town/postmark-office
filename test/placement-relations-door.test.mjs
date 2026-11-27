@@ -503,6 +503,42 @@ test("POS-1260 the input contract is unchanged: a chest still takes only a Boole
   }); } finally { if (chestsOpen === undefined) delete process.env.WORLD_CHESTS_CANDY; else process.env.WORLD_CHESTS_CANDY = chestsOpen; }
 });
 
+test("POS-1260 CARRIED AMEND: a newly made live chest's stored word is carried back through setDownAmend as the input grammar and files its amend; the public word input still refuses", { skip }, async () => {
+  const chestsOpen = process.env.WORLD_CHESTS_CANDY; process.env.WORLD_CHESTS_CANDY = "1";
+  try { await withLaw(async () => {
+    const { setDownAmend } = await import("../src/world-hold.mjs");
+    const { leaveMarkViaOffice } = await import("../src/world.mjs");
+    const CHEST = (slug, over = {}) => ({ slug, kind: "sited", class: "chest", at: { x: 400, y: 400 }, extent: { w: 1, h: 1 }, body: "a chest", ...over });
+    const stood = { x: 410, y: 405 };
+    // 1. a chest made NOW (the new writer): its live declaration says the WORD; that is the record the drop's amend carries back
+    const made = (await filed1260(CHEST("my-bowl", { portable: false, capacity: 30 }))).data;
+    assert.equal(made.portable, "false", "the live record says canon's word");
+    const { slug: _s, ...asRecord } = made;                                  // a record has no slug line; the rest is what the carrier reads
+    const built = setDownAmend({ thing: "alpha/my-bowl", mark: asRecord, stood, actor: "alpha" });
+    assert.equal(built.refused, undefined, "the carrier builds the amend");
+    assert.strictEqual(built.payload.portable, false, "the carried payload speaks the INPUT's grammar: the Boolean the word spells");
+    assert.equal(built.payload.capacity, 30, "capacity and the other carried lines are as recorded");
+    // 2. through the REAL door, over a store that holds that live chest: the amend is FILED, past the old typed mismatch, and rewrites the canonical word
+    const store = guardStore({ claims: [draftClaim("my-bowl", { class: "chest", body: "a chest", data: made })] });
+    const out = await withGuardsFlipped(store, () => leaveMarkViaOffice(repo, built.payload, houseA));
+    assert.ok(out && !out.error, "the drop's amend was filed");
+    assert.equal(store.acts.length, 1, "one amend act");
+    const again = declared1260(store);
+    assert.equal(again.portable, "false", "and the declaration is written again as the canonical WORD");
+    assert.equal(again.capacity, 30, "capacity unchanged");
+    assert.deepEqual(again.at, stood, "the amend moved it to where it was set down");
+    // 3. a valid canon record that says the word "true" carries as the Boolean true; a Boolean already there stays
+    assert.strictEqual(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: "true" }, stood, actor: "alpha" }).payload.portable, true);
+    assert.strictEqual(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: true }, stood, actor: "alpha" }).payload.portable, true);
+    // 4. nothing is guessed: another value is carried as it is, and the door refuses it as before; a THING's words are left for its own door
+    assert.equal(setDownAmend({ thing: "alpha/c", mark: { class: "chest", portable: "maybe" }, stood, actor: "alpha" }).payload.portable, "maybe");
+    await assert.rejects(place({ ...built.payload, portable: "maybe" }), (e) => /portable is true or false/.test(e.defect));
+    assert.equal(setDownAmend({ thing: "alpha/t", mark: { class: "thing", portable: "false", holder: "true" }, stood, actor: "alpha" }).payload.portable, "false", "a thing keeps its word");
+    // 5. the PUBLIC chest input is unchanged: the word is still refused
+    await assert.rejects(place(CHEST("a-word-bowl", { portable: "false" })), (e) => /portable is true or false/.test(e.defect));
+  }); } finally { if (chestsOpen === undefined) delete process.env.WORLD_CHESTS_CANDY; else process.env.WORLD_CHESTS_CANDY = chestsOpen; }
+});
+
 test("POS-1260 portableOf: an instance's stored word counts as the Boolean it spells; the dial's default is untouched", async () => {
   const { portableOf } = await libs1260();
   assert.equal(portableOf({ portable: "false" }), false, "the word false is not-portable");
