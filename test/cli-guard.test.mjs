@@ -321,6 +321,7 @@ const ROSTER = {
   // No --world-repo: stops on usage before any git or Postgres (POS-612, 075).
   "world2/tools/amend-carried.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
+  "world2/tools/spire-forward-reconcile.mjs": { args: [], env: NO_PG, code: 2, needle: "spire-forward-reconcile.mjs: pass --claim" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },
   // No --world-repo: stops on usage before any git or Postgres (postmark#2897).
