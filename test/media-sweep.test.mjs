@@ -22,7 +22,8 @@ process.env.MEDIA_QUOTA_BYTES = String(10 * 1024 * 1024);
 const media = await import("../src/media.mjs");
 const sweep = await import("../src/media-sweep.mjs");
 const { MEDIA_BASE, ensureMediaTable, mediaHeldRefusal, mediaQuota, mediaLedgerRows, uploadMedia, mediaUrlFor, useMediaLedger } = media;
-const { keysIn, planSweep, gitKeys, referenceSet, runSweep, takedown, rowKey, DAY_MS, GRACE_MS, MEDIA_URL_ERE } = sweep;
+const { keysIn, planSweep, gitKeys, referenceSet, runSweep, takedown, rowKey, DAY_MS, GRACE_MS, MEDIA_URL_ERE,
+  deleteOwnUpload, sweepClonesFrom, HOUSEHOLD_DELETE_REASON } = sweep;
 
 const NOW = Date.UTC(2026, 10, 30);
 const sha = (c) => c.repeat(64);
@@ -56,18 +57,41 @@ function repo(files, { branches = {} } = {}) {
   return dir;
 }
 
-// The town: four files. HUNG_MARK hangs on a published mark, HUNG_DRAFT only on
-// a draft branch, HUNG_FACE on a profile, OLD only in the world's history.
+// The town: HUNG_MARK hangs on a published mark, HUNG_DRAFT only on a draft
+// branch, HUNG_FACE on a profile. OLD is named only in the world's log
+// (STATE/log), REPLAYED (by a small copy's URL) and ESCAPED (a JSON-escaped
+// URL) only in a public replay: all three are HISTORY. LOOSE and GONE are named
+// nowhere at all.
+//
+// Until 2026-11-25 (POS-737/b, Darko 08:34 EST, "1 as rec": history counts as in
+// use) this fixture's OLD was the file the sweep FREED, because the world's log
+// was the accepted replay gap. It is now a file nothing may free, and GONE is the
+// second file that is named nowhere.
 const HUNG_MARK = url("alta", sha("a")), HUNG_DRAFT = url("bree", sha("b")), HUNG_FACE = url("cole", sha("c"));
-const OLD = url("dane", sha("d")), LOOSE = url("eve", sha("e"), "jpg");
+const OLD = url("dane", sha("d")), LOOSE = url("eve", sha("e"), "jpg"), GONE = url("fay", sha("f"));
+const REPLAYED = url("gil", sha("1")), ESCAPED = url("ida", sha("2"));
 const world = () => repo({
   "WORLD/marks/alta/mooring/mark.md": `---\nimage: ${HUNG_MARK}\n---\nA mooring.`,
   "STATE/log/0001.meta.json": JSON.stringify({ image: OLD }),
 }, { branches: { "draft/bree": { "WORLD/marks/bree/shed/mark.md": `---\nimage: ${HUNG_DRAFT}\n---\n` } } });
 const town = () => repo({ "WHITE_PAGES/cole/PROFILE.md": `---\navatar_url: ${url("cole", sha("c"), "png", 96)}\n---\n` });
-const FIVE = () => ledger([
+/** The site's served world-engine/replay directory: `<crossing>.json`, and a file that is no replay. */
+const replays = (files = {
+  "157.json": JSON.stringify({ crossing: 157, say: `look: ${url("gil", sha("1"), "png", 256)}` }),
+  "158.json": JSON.stringify({ crossing: 158, say: `look: ${ESCAPED}` }).replaceAll("/", "\\/"),
+  "README.txt": `not a replay, so not read: ${GONE}`,
+}) => {
+  const dir = tempDir("media-sweep-replays-");
+  dirs.push(dir);
+  for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+  return dir;
+};
+/** Every source the sweep reads but the store's, over this file's fixture town. */
+const sources = (over = {}) => ({ worldClone: world(), townClone: town(), replayDir: replays(), storeSources: [], ...over });
+const LEDGER = () => ledger([
   { household: "alta", sha: sha("a") }, { household: "bree", sha: sha("b") }, { household: "cole", sha: sha("c") },
   { household: "dane", sha: sha("d") }, { household: "eve", sha: sha("e"), ext: "jpg", bytes: 5000 },
+  { household: "fay", sha: sha("f"), bytes: 2000 }, { household: "gil", sha: sha("1") }, { household: "ida", sha: sha("2") },
 ]);
 const stubDel = () => { const keys = []; return { keys, del: async (k) => { keys.push(k); } }; };
 
@@ -94,68 +118,172 @@ test("planSweep: hung clears, first sight stamps, the grace decides due from wai
   assert.deepEqual([p.live, p.hung], [4, 1]);
 });
 
-test("the world source reads the blessing and main but never STATE/log; drafts are their own source; the town reads its whole tree", async () => {
+test("the world source reads the blessing and main but not STATE/log, which is its own source (POS-737/b); drafts are their own source; the town reads its whole tree", async () => {
   const w = world(), t = town();
-  assert.deepEqual([...gitKeys(w, ["refs/heads/main"], { exclude: sweep.WORLD_HISTORY })], [rowKey({ household: "alta", sha: sha("a"), ext: "png" })]);
-  assert.equal(gitKeys(w, ["refs/heads/main"]).has(`dane/${sha("d")}.png`), true, "precondition: the history does name OLD");
-  const r = await referenceSet({ worldClone: w, townClone: t, pool: null, storeSources: [], officeFiles: [] });
+  assert.deepEqual([...await gitKeys(w, ["refs/heads/main"], { exclude: sweep.WORLD_HISTORY })], [rowKey({ household: "alta", sha: sha("a"), ext: "png" })]);
+  assert.equal((await gitKeys(w, ["refs/heads/main"])).has(`dane/${sha("d")}.png`), true, "precondition: the history does name OLD");
+  assert.deepEqual([...await sweep.historyKeys(w, ["refs/heads/main"])], [`dane/${sha("d")}.png`], "the history source reads only STATE/log");
+  // git's "no match" (exit 1) is an empty answer; a read error (a ref that is not there) is a refusal: the async reader keeps both
+  assert.deepEqual([...await gitKeys(w, ["refs/heads/main"], { only: ["WORLD/marks/nowhere"] })], [], "no match is no keys");
+  await assert.rejects(gitKeys(w, ["refs/heads/no-such-ref"]), /git grep in .* failed/, "a read error is never read as no match");
+  const r = await referenceSet({ ...sources({ worldClone: w, townClone: t }), pool: null, officeFiles: [] });
   assert.equal(r.ok, true, JSON.stringify(r.sources));
-  assert.deepEqual([...r.keys].sort(), [`alta/${sha("a")}.png`, `bree/${sha("b")}.png`, `cole/${sha("c")}.png`]);
+  // LAW (Darko, 2026-11-25 08:34 EST, POS-737/b): "history counts as in use ... the World's logs (STATE/log/*) and the public replays"
+  assert.deepEqual([...r.keys].sort(), [
+    `alta/${sha("a")}.png`, `bree/${sha("b")}.png`, `cole/${sha("c")}.png`, `dane/${sha("d")}.png`, `gil/${sha("1")}.png`, `ida/${sha("2")}.png`,
+  ], "HISTORY counts as in use: the world's log, a replay's small copy and a replay's escaped URL");
   // a draft branch carries main's marks beside its own: alta's and bree's
-  assert.deepEqual(r.sources.map((s) => [s.name, s.found]), [["world", 1], ["drafts", 2], ["town", 1]]);
+  assert.deepEqual(r.sources.map((s) => [s.name, s.found]), [["world", 1], ["world-history", 1], ["drafts", 2], ["town", 1], ["replays", 2]]);
+  assert.equal(r.sources.find((s) => s.name === "replays").files, 2, "two replay files are read; a README is not one");
 });
 
 test("an extra clone the operator names keeps every file any of its branches names, and an unreadable one refuses", async () => {
   const extra = repo({ "README.md": "nothing yet" }, { branches: { "work/one": { "a.md": `picture: ${LOOSE}` } } });
-  const r = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], extraClones: [extra] });
+  const r = await referenceSet({ ...sources({ extraClones: [extra] }), pool: null });
   assert.equal(r.ok, true, JSON.stringify(r.sources));
   assert.ok(r.keys.has(`eve/${sha("e")}.jpg`), "a picture named only on an unpublished branch is kept");
-  const db = FIVE();
-  await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], extraClones: [extra], now: NOW });
+  const db = LEDGER();
+  await runSweep({ odb: db, ...sources({ extraClones: [extra] }), now: NOW });
   assert.equal(row(db, "eve", sha("e")).unreferenced_since, null, "so its clock never starts");
-  const bad = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], extraClones: [join(tmpdir(), "no-such-extra-xyz")] });
+  const bad = await referenceSet({ ...sources({ extraClones: [join(tmpdir(), "no-such-extra-xyz")] }), pool: null });
   assert.equal(bad.ok, false);
 });
 
 test("FAIL CLOSED: a source that cannot be read, a store with no pool, and a world with no pictures at all each make the set untrustworthy", async () => {
   const t = town();
-  const missing = await referenceSet({ worldClone: join(tmpdir(), "no-such-world-xyz"), townClone: t, pool: null, storeSources: [] });
+  const missing = await referenceSet({ ...sources({ worldClone: join(tmpdir(), "no-such-world-xyz"), townClone: t }), pool: null });
   assert.equal(missing.ok, false);
   assert.match(missing.sources.find((s) => s.name === "world").error, /./);
-  const noPool = await referenceSet({ worldClone: world(), townClone: t, pool: null });
+  const noPool = await referenceSet({ worldClone: world(), townClone: t, replayDir: replays(), pool: null });
   assert.equal(noPool.ok, false, "the store's tables are sources; with no store they cannot be read");
   assert.match(noPool.sources.find((s) => s.name === "store:posts").error, /not configured/);
-  const empty = await referenceSet({ worldClone: repo({ "WORLD/marks/x/mark.md": "no picture" }), townClone: t, pool: null, storeSources: [] });
+  const empty = await referenceSet({ ...sources({ worldClone: repo({ "WORLD/marks/x/mark.md": "no picture" }), townClone: t }), pool: null });
   assert.equal(empty.ok, false);
   assert.match(empty.sources.find((s) => s.name === "world").error, /found no picture at all/);
+});
+
+// ── history counts as in use (POS-737/b) ────────────────────────────────────
+//
+// LAW (Darko, 2026-11-25 08:34 EST, POS-737/b, "1 as rec"): "history counts as in use. Before freeing
+// anything, the sweep must also read the World's logs (STATE/log/*) and the public replays
+// (/world-engine/replay/*.json)." Each history source is asserted on its own: a file named ONLY in a
+// log, and one named ONLY in a replay, stay in use after 30 days, for the sweep and for the household's
+// own delete, and the writer is shown live beside them (LOOSE and GONE are freed in the same run).
+
+const HISTORY = [["dane", OLD, "world-history", "d"], ["gil", REPLAYED, "replays", "1"], ["ida", ESCAPED, "replays", "2"]];
+
+test("POS-737/b: a file named ONLY in a World log, or ONLY in a public replay, is never freed by the sweep, not after 30 days; the unnamed files are (the writer is live)", async () => {
+  const db = LEDGER(), { keys, del } = stubDel(), src = sources();
+  const first = await runSweep({ odb: db, ...src, now: NOW, del });
+  assert.deepEqual(first.clock, { cleared: 0, stamped: 2, waiting: 0 }, "eve and fay only: first sight");
+  for (const [h, , s, c] of HISTORY) assert.equal(row(db, h, sha(c)).unreferenced_since, null, `${h}: held by ${s}, so no clock starts`);
+  const r = await runSweep({ odb: db, ...src, now: NOW + 40 * DAY_MS, apply: true, del });
+  assert.equal(r.refused, undefined, JSON.stringify(r.refused));
+  assert.deepEqual(r.freed.rows.map((x) => x.url).sort(), [GONE, LOOSE].sort(), "the nowhere-named files are freed: the writer is live");
+  for (const [h, , s, c] of HISTORY) {
+    const x = row(db, h, sha(c));
+    assert.deepEqual([x.deleted_at, x.purged_at, x.unreferenced_since], [null, null, null], `${h}: still in use (${s}) after 40 days`);
+    assert.equal((await mediaQuota(db, h)).used, 1000, `${h}: its wall is untouched`);
+  }
+  assert.equal(keys.length, 6, "storage saw only eve's and fay's three objects each");
+  assert.ok(keys.every((k) => /^media\/(eve|fay)\//.test(k)));
+});
+
+test("POS-737/b: the household's own delete refuses a file named ONLY in a World log or ONLY in a public replay, names where, and frees nothing", async () => {
+  for (const [h, file, where] of HISTORY) {
+    const db = LEDGER(), { keys, del } = stubDel();
+    const r = await deleteOwnUpload({ odb: db, household: h, by: h, url: file, ...sources(), now: NOW, log: () => {}, del });
+    assert.deepEqual([r.refused?.code, r.refused?.defect], [409, "that file is still in use"], `${h}: ${JSON.stringify(r)}`);
+    assert.deepEqual(r.refused.in_use, [where], `${h}: it names the history source that holds it`);
+    assert.match(r.refused.hint, /record of a past crossing .* a picture it shows stays and cannot be deleted/, `${h}: and says that history stays`);
+    assert.doesNotMatch(r.refused.hint, /take it down/, `${h}: and never advises taking a past record down`);
+    assert.deepEqual(keys, [], `${h}: storage untouched`);
+    const x = db.prepare("SELECT deleted_at, purged_at, unreferenced_since FROM media WHERE household = ?").get(h);
+    assert.deepEqual([x.deleted_at, x.purged_at, x.unreferenced_since], [null, null, null], `${h}: not claimed, and no clock left running`);
+    assert.equal((await mediaQuota(db, h)).used, 1000, `${h}: no quota released`);
+  }
+  // the control: the same door frees a file the history does not name
+  const db = LEDGER(), { keys, del } = stubDel();
+  const ok = await deleteOwnUpload({ odb: db, household: "fay", by: "fay", url: GONE, ...sources(), now: NOW, log: () => {}, del });
+  assert.deepEqual([ok.deleted, ok.purged, ok.freed_bytes], [true, true, 2000], JSON.stringify(ok));
+  assert.equal(keys.length, 3);
+  assert.equal((await mediaQuota(db, "fay")).used, 0, "one release of its bytes");
+});
+
+test("POS-737/b FAIL CLOSED: a replay directory that is not bound, missing, empty of replays or holding one that cannot be read refuses the whole run and the household's delete; so does a world ref with no STATE/log", async () => {
+  const noReplay = replays({ "notes.txt": "not a replay" });
+  const unreadable = replays({ "157.json": "{}" });
+  mkdirSync(join(unreadable, "158.json")); // a directory named like a replay: readFile refuses it
+  for (const [why, over, re] of [
+    ["unset", { replayDir: undefined }, /not configured: the public replays' directory is MEDIA_SWEEP_REPLAY_DIR/],
+    ["missing", { replayDir: join(tmpdir(), "no-such-replays-xyz") }, /./],
+    ["no replay file in it", { replayDir: noReplay }, /holds no replay file/],
+    ["one cannot be read", { replayDir: unreadable }, /./],
+  ]) {
+    const db = LEDGER(), { keys, del } = stubDel();
+    const r = await runSweep({ odb: db, ...sources(over), now: NOW + 40 * DAY_MS, apply: true, del });
+    assert.match(r.refused, /a source could not be read \(replays\)/, `${why}: ${JSON.stringify(r.refused)}`);
+    assert.match(r.sources.find((s) => s.name === "replays").error, re, why);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM media WHERE unreferenced_since IS NOT NULL OR deleted_at IS NOT NULL").get().n, 0, `${why}: no clock, no claim`);
+    const own = await deleteOwnUpload({ odb: db, household: "eve", by: "eve", url: LOOSE, ...sources(over), now: NOW, log: () => {}, del });
+    assert.deepEqual([own.refused?.code, own.refused?.unread], [503, ["replays"]], `${why}: ${JSON.stringify(own)}`);
+    assert.deepEqual(keys, [], `${why}: storage untouched`);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM media WHERE unreferenced_since IS NOT NULL OR deleted_at IS NOT NULL").get().n, 0, `${why}: the household's stamp was taken back`);
+  }
+  // a world ref that holds no STATE/log is unreadable history, not an empty one (git grep answers "no match" for both)
+  const noLog = repo({ "WORLD/marks/alta/mooring/mark.md": `---\nimage: ${HUNG_MARK}\n---\n` });
+  const db = LEDGER();
+  const r = await runSweep({ odb: db, ...sources({ worldClone: noLog }), now: NOW + 40 * DAY_MS, apply: true, del: stubDel().del });
+  assert.match(r.refused, /a source could not be read \(world-history\)/);
+  assert.match(r.sources.find((s) => s.name === "world-history").error, /holds no STATE\/log\/ at .*the world's history cannot be read/);
+  assert.equal(r.sources.find((s) => s.name === "world").error, undefined, "while the world's marks read fine: only the history is unread");
+});
+
+test("POS-737/b: the replay directory is resolved ONCE at the start of a run: a webroot swapped mid-run cannot split the read", async () => {
+  const { symlinkSync, unlinkSync } = await import("node:fs");
+  const releaseA = replays({ "157.json": JSON.stringify({ say: REPLAYED }) });
+  const releaseB = replays({ "157.json": JSON.stringify({ say: "the next release names nothing" }) });
+  const webroot = join(tempDir("media-sweep-webroot-"), "replay");
+  dirs.push(dirname(webroot));
+  symlinkSync(releaseA, webroot, "junction");
+  // a store source's read is the moment the refresh swaps the link: after the run began, before the replays are read
+  const pool = { query: async (sql) => {
+    if (/pg_class/.test(sql)) return { rows: [{ rls: false, can: true, policy: false }] };
+    unlinkSync(webroot); symlinkSync(releaseB, webroot, "junction");
+    return { rows: [] };
+  } };
+  const r = await referenceSet({ ...sources({ replayDir: webroot }), pool, storeSources: [{ table: "posts" }], officeFiles: [] });
+  assert.equal(r.ok, true, JSON.stringify(r.sources));
+  assert.match(readFileSync(join(webroot, "157.json"), "utf8"), /names nothing/, "precondition: the link now points at the other release");
+  assert.ok(r.keys.has(`gil/${sha("1")}.png`), "the run read the release it started on");
 });
 
 // ── the sweep ───────────────────────────────────────────────────────────────
 
 test("DRY (the default): the clock is kept, what would be freed is named, and nothing is claimed or deleted", async () => {
-  const db = FIVE(), w = world(), t = town(), { keys, del } = stubDel();
-  const first = await runSweep({ odb: db, worldClone: w, townClone: t, storeSources: [], now: NOW, del });
+  const db = LEDGER(), src = sources(), { keys, del } = stubDel();
+  const first = await runSweep({ odb: db, ...src, now: NOW, del });
   assert.equal(first.mode, "dry");
-  assert.deepEqual(first.clock, { cleared: 0, stamped: 2, waiting: 0 }, "dane and eve: first sight");
+  assert.deepEqual(first.clock, { cleared: 0, stamped: 2, waiting: 0 }, "fay and eve: first sight");
   assert.equal(first.would_free.files, 0, "first sight is never due");
-  assert.equal(row(db, "dane", sha("d")).unreferenced_since, NOW);
+  assert.equal(row(db, "fay", sha("f")).unreferenced_since, NOW);
 
-  const later = await runSweep({ odb: db, worldClone: w, townClone: t, storeSources: [], now: NOW + GRACE_MS, del });
-  assert.deepEqual(later.would_free.rows.map((r) => r.url).sort(), [OLD, LOOSE]);
-  assert.equal(later.would_free.bytes, 6000);
+  const later = await runSweep({ odb: db, ...src, now: NOW + GRACE_MS, del });
+  assert.deepEqual(later.would_free.rows.map((r) => r.url).sort(), [GONE, LOOSE].sort());
+  assert.equal(later.would_free.bytes, 7000);
   assert.deepEqual(keys, [], "a dry run never reaches storage");
-  assert.equal(row(db, "dane", sha("d")).deleted_at, null, "and claims nothing");
+  assert.equal(row(db, "fay", sha("f")).deleted_at, null, "and claims nothing");
   assert.equal((await mediaQuota(db, "eve")).used, 5000, "the wall is untouched");
 });
 
 test("APPLY: a file unhung for 30 days is claimed, its original and copies deleted, purged; it leaves the wall and stops being held", async () => {
-  const db = FIVE(), w = world(), t = town(), { keys, del } = stubDel();
-  await runSweep({ odb: db, worldClone: w, townClone: t, storeSources: [], now: NOW, del });
-  const r = await runSweep({ odb: db, worldClone: w, townClone: t, storeSources: [], now: NOW + GRACE_MS, apply: true, del });
+  const db = LEDGER(), src = sources(), { keys, del } = stubDel();
+  await runSweep({ odb: db, ...src, now: NOW, del });
+  const r = await runSweep({ odb: db, ...src, now: NOW + GRACE_MS, apply: true, del });
   assert.equal(r.freed.files, 2);
   assert.deepEqual(keys.sort(), [
-    `media/dane/${sha("d")}-256.png`, `media/dane/${sha("d")}-96.png`, `media/dane/${sha("d")}.png`,
     `media/eve/${sha("e")}-256.jpg`, `media/eve/${sha("e")}-96.jpg`, `media/eve/${sha("e")}.jpg`,
+    `media/fay/${sha("f")}-256.png`, `media/fay/${sha("f")}-96.png`, `media/fay/${sha("f")}.png`,
   ]);
   const eve = row(db, "eve", sha("e"));
   assert.deepEqual([eve.deleted_cause, eve.deleted_by, eve.deleted_at, eve.purged_at], ["sweep", "media-sweep", NOW + GRACE_MS, NOW + GRACE_MS]);
@@ -173,7 +301,7 @@ test("A HANG RESETS THE GRACE: a door that hangs the file clears its clock, so t
   assert.equal(await mediaHeldRefusal(LOOSE, { odb: db }), null, "a door hangs it (and touches the clock)");
   assert.equal(row(db, "eve", sha("e")).unreferenced_since, null);
   const { keys, del } = stubDel();
-  const r = await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], now: NOW, apply: true, del });
+  const r = await runSweep({ odb: db, ...sources(), now: NOW, apply: true, del });
   assert.equal(r.freed.files, 0);
   assert.deepEqual(keys, []);
   assert.equal(row(db, "eve", sha("e")).unreferenced_since, NOW, "the sources still do not name it, so its clock starts again from today");
@@ -181,14 +309,14 @@ test("A HANG RESETS THE GRACE: a door that hangs the file clears its clock, so t
 
 test("storage that refuses leaves the row claimed and unpurged, named, and the next run retries it", async () => {
   const db = ledger([{ household: "eve", sha: sha("e"), ext: "jpg", since: NOW - GRACE_MS }]);
-  const r = await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], now: NOW, apply: true,
+  const r = await runSweep({ odb: db, ...sources(), now: NOW, apply: true,
     del: async () => { throw new Error("storage answered 503"); } });
   assert.equal(r.storage_failed.length, 1);
   assert.match(r.storage_failed[0].error, /503/);
   assert.equal(row(db, "eve", sha("e")).purged_at, null);
   assert.notEqual(row(db, "eve", sha("e")).deleted_at, null, "claimed: it no longer counts against the wall");
   const { keys, del } = stubDel();
-  const again = await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], now: NOW + DAY_MS, apply: true, del });
+  const again = await runSweep({ odb: db, ...sources(), now: NOW + DAY_MS, apply: true, del });
   assert.equal(again.unpurged.length, 1);
   assert.equal(again.freed.rows[0].retried, true);
   assert.equal(keys.length, 3);
@@ -198,15 +326,15 @@ test("storage that refuses leaves the row claimed and unpurged, named, and the n
 test("a run that finds more files due than its limit frees NONE and says why", async () => {
   const db = ledger([1, 2, 3].map((n) => ({ household: "eve", sha: sha(String(n)), since: NOW - GRACE_MS })));
   const { keys, del } = stubDel();
-  const r = await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], now: NOW, apply: true, maxDelete: 2, del });
+  const r = await runSweep({ odb: db, ...sources(), now: NOW, apply: true, maxDelete: 2, del });
   assert.match(r.refused, /3 files are due, more than this run's limit of 2/);
   assert.deepEqual(keys, []);
   assert.equal(db.prepare("SELECT count(*) AS n FROM media WHERE deleted_at IS NOT NULL").get().n, 0);
 });
 
 test("a source that cannot be read refuses the whole run: no clock is written, nothing is claimed", async () => {
-  const db = FIVE(), { keys, del } = stubDel();
-  const r = await runSweep({ odb: db, worldClone: world(), townClone: join(tmpdir(), "no-such-town-xyz"), storeSources: [], now: NOW, apply: true, del });
+  const db = LEDGER(), { keys, del } = stubDel();
+  const r = await runSweep({ odb: db, ...sources({ townClone: join(tmpdir(), "no-such-town-xyz") }), now: NOW, apply: true, del });
   assert.match(r.refused, /a source could not be read \(town\)/);
   assert.equal(db.prepare("SELECT count(*) AS n FROM media WHERE unreferenced_since IS NOT NULL").get().n, 0);
   assert.deepEqual(keys, []);
@@ -280,17 +408,197 @@ test("every office door that hangs a media URL is named, and so is the source th
     for (const s of sources) assert.ok(names.has(s), `${file} names ${s}, which is not a source the sweep reads`);
 });
 
+// ── the household's own delete (POS-737/c) ──────────────────────────────────
+//
+// LAW (Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both"): "give a household a
+// delete for its own pictures that nothing uses, with a receipt. Deletion is
+// permanent; a picture still in use can't be deleted." Wright's return (02:21Z):
+// "using the sweep's own reference check. It's refused while anything still uses
+// the picture, and it leaves a receipt. The bytes leave the household's 200 MB
+// wall at once."
+
+/** The sweep's own sources over this file's fixture town; the store is left out (no pool here). */
+const srcs = (over = {}) => ({ ...sources(), pool: null, officeFiles: [], ...over });
+const own = (db, household, url, over = {}) => deleteOwnUpload({ odb: db, household, by: household, url, ...srcs(), now: NOW, log: () => {}, ...over });
+const live = (db, household, s) => { const r = row(db, household, s); return [r.deleted_at, r.purged_at]; };
+
+test("POS-737/c: an own upload nothing uses is deleted AT ONCE, no grace: claimed, original and copies deleted, purged, its bytes off the wall once, with a receipt", async () => {
+  const db = new DatabaseSync(":memory:");
+  const up = await uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG });
+  assert.equal(row(db, "eve", up.sha).unreferenced_since, null, "precondition: no clock runs, so the sweep would wait 30 days");
+  assert.equal((await mediaQuota(db, "eve")).used, PNG.length);
+  const { keys, del } = stubDel();
+  const r = await own(db, "eve", up.url, { del });
+  assert.equal(r.refused, undefined, JSON.stringify(r.refused));
+  assert.deepEqual([r.deleted, r.purged, r.freed_bytes], [true, true, PNG.length]);
+  assert.deepEqual(keys, [`media/eve/${up.sha}.png`, `media/eve/${up.sha}-96.png`, `media/eve/${up.sha}-256.png`], "the original first, then its copies");
+  const after = row(db, "eve", up.sha);
+  assert.deepEqual([after.deleted_cause, after.deleted_by, after.deleted_reason, after.deleted_at, after.purged_at],
+    ["household", "eve", HOUSEHOLD_DELETE_REASON, NOW, NOW]);
+  assert.deepEqual(r.receipt, { url: up.url, household: "eve", bytes: PNG.length, uploaded_by: "eve", cause: "household", deleted_by: "eve",
+    objects: keys, at: new Date(NOW).toISOString() });
+  assert.equal((await mediaQuota(db, "eve")).used, 0, "LAW: \"The bytes leave the household's 200 MB wall at once.\"");
+  assert.deepEqual(await mediaLedgerRows(db, "eve"), [], "and the household's media read no longer lists it");
+  const held = await mediaHeldRefusal(up.url, { odb: db });
+  assert.deepEqual([held.code, held.defect], [422, "the town no longer holds that file"]);
+  assert.match(held.hint, /^its household deleted it — upload it first/, "a door that would hang it is told why, and not the sweep's 30 days");
+
+  // ONCE: the same ask again frees nothing more and touches no storage
+  const again = await own(db, "eve", up.url, { del });
+  assert.deepEqual([again.already, again.freed_bytes, again.receipt.cause], [true, 0, "household"]);
+  assert.equal(keys.length, 3, "no second DELETE");
+  assert.equal((await mediaQuota(db, "eve")).used, 0);
+});
+
+test("POS-737/c: IN USE is refused, on every source the sweep reads: a published mark, a draft only (the media read's blind spot), the town; nothing deleted, nothing freed", async () => {
+  // LAW: "a picture still in use can't be deleted."
+  for (const [household, s, file, where] of [
+    ["alta", sha("a"), HUNG_MARK, ["world", "drafts"]], // a draft branch carries main's marks beside its own
+    ["bree", sha("b"), HUNG_DRAFT, ["drafts"]],
+    ["cole", sha("c"), HUNG_FACE, ["town"]],             // hung by its -96 copy's URL, which names the original
+  ]) {
+    const db = LEDGER(), { keys, del } = stubDel();
+    const r = await own(db, household, file, { del });
+    assert.deepEqual([r.refused?.code, r.refused?.defect], [409, "that file is still in use"], `${household}: ${JSON.stringify(r)}`);
+    assert.deepEqual(r.refused.in_use, where, `${household}: it names where`);
+    assert.deepEqual(keys, [], `${household}: storage untouched`);
+    assert.deepEqual(live(db, household, s), [null, null], `${household}: not claimed`);
+    assert.equal(row(db, household, s).unreferenced_since, null, `${household}: and no clock left running on a hung file`);
+    assert.equal((await mediaQuota(db, household)).used, 1000, `${household}: the wall is untouched`);
+  }
+});
+
+test("POS-737/c: another household's file, a small copy's URL, an address the door never mints and a file the household never held are refused; nothing is touched", async () => {
+  const db = LEDGER(), { keys, del } = stubDel();
+  // fay's GONE is named nowhere (until 2026-11-25 this was dane's OLD, then named only in a log): only the OWNER rule stands between eve and deleting it
+  const foreign = await own(db, "eve", GONE, { del });
+  assert.deepEqual([foreign.refused?.code, foreign.refused?.defect], [403, "that file is another household's"]);
+  assert.deepEqual(live(db, "fay", sha("f")), [null, null]);
+  assert.match((await own(db, "eve", url("eve", sha("e"), "jpg", 256), { del })).refused.defect, /small copy, not an upload/);
+  assert.equal((await own(db, "eve", `${MEDIA_BASE}/m/abc.png`, { del })).refused.code, 422);
+  assert.deepEqual([(await own(db, "eve", url("eve", sha("f"), "jpg"), { del })).refused.code], [404]);
+  assert.deepEqual(keys, []);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM media WHERE deleted_at IS NOT NULL OR unreferenced_since IS NOT NULL").get().n, 0);
+});
+
+test("POS-737/c: FAIL CLOSED — a source that cannot be read refuses, names it, and takes back only its own clock", async () => {
+  const db = ledger([{ household: "eve", sha: sha("e"), ext: "jpg" }, { household: "dane", sha: sha("d"), since: NOW - 5 * DAY_MS }]);
+  const { keys, del } = stubDel();
+  const missing = join(tmpdir(), "no-such-town-xyz");
+  for (const [h, file, clock] of [["eve", LOOSE, null], ["dane", OLD, NOW - 5 * DAY_MS]]) {
+    const r = await own(db, h, file, { del, townClone: missing });
+    assert.deepEqual([r.refused?.code, r.refused?.unread], [503, ["town"]], JSON.stringify(r));
+    assert.match(r.refused.hint, /"could not look" is never "not used"/);
+    assert.deepEqual(live(db, h, h === "eve" ? sha("e") : sha("d")), [null, null]);
+    assert.equal(row(db, h, h === "eve" ? sha("e") : sha("d")).unreferenced_since, clock, `${h}: the clock is as it was`);
+  }
+  // no store at all is a source that cannot be read, too
+  const noPool = await own(db, "eve", LOOSE, { del, storeSources: undefined });
+  assert.equal(noPool.refused?.code, 503);
+  assert.ok(noPool.refused.unread.includes("store:posts"));
+  assert.deepEqual(keys, []);
+});
+
+test("POS-737/c: STORAGE that refuses leaves the file claimed and off the wall (once); the same ask finishes it; a re-upload waits for that, then lives again", async () => {
+  const db = new DatabaseSync(":memory:");
+  const up = await uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG });
+  const failed = await own(db, "eve", up.url, { del: async () => { throw new Error("storage answered 503 to DELETE x"); } });
+  assert.deepEqual([failed.deleted, failed.purged, failed.freed_bytes], [true, false, PNG.length]);
+  const { FAULT_LOGGED } = await import("../src/fault-words.mjs");
+  assert.equal(failed.storage_failed, FAULT_LOGGED, "the resident reads the office's sentence; storage's own words go to the log (POS-578)");
+  assert.doesNotMatch(failed.storage_failed, /503|DELETE/);
+  assert.equal((await mediaQuota(db, "eve")).used, 0, "its bytes left the wall at the claim");
+  await assert.rejects(uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG }),
+    (e) => e.code === 409 && /your household deleted it and storage has not confirmed yet/.test(e.hint));
+  const { keys, del } = stubDel();
+  const done = await own(db, "eve", up.url, { del, now: NOW + 1 });
+  assert.deepEqual([done.deleted, done.purged, done.retried, done.freed_bytes], [true, true, true, 0], "finished, and nothing freed twice");
+  assert.equal(keys.length, 3);
+  assert.equal(row(db, "eve", up.sha).purged_at, NOW + 1);
+  assert.equal((await mediaQuota(db, "eve")).used, 0);
+  // NOT MODERATION: the same bytes come back, in this household and in any other
+  const back = await uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG });
+  assert.equal(back.url, up.url);
+  assert.notEqual(back.already, true);
+  assert.equal((await mediaQuota(db, "eve")).used, PNG.length);
+  assert.ok((await uploadMedia({}, KEY("frank", "frank"), db, { put, bytes: PNG })).url, "no other household is refused the bytes");
+});
+
+test("POS-737/c: A HANG DURING THE CHECK keeps the file — the claim needs the clock the door stamped, and a hanging door clears it", async () => {
+  const db = new DatabaseSync(":memory:");
+  const up = await uploadMedia({}, KEY("eve", "eve"), db, { put, bytes: PNG });
+  // A store source whose read is the moment another door hangs the file: it runs
+  // the hanging doors' own check (media.mjs § mediaHeldRefusal), then answers no rows.
+  let hung = 0;
+  const pool = { query: async (sql) => {
+    if (/pg_class/.test(sql)) return { rows: [{ rls: false, can: true, policy: false }] };
+    assert.equal(await mediaHeldRefusal(up.url, { odb: db }), null, "the hanging door's check passes: the file is live");
+    hung += 1;
+    return { rows: [] };
+  } };
+  const { keys, del } = stubDel();
+  const r = await own(db, "eve", up.url, { del, pool, storeSources: [{ table: "posts" }] });
+  assert.equal(hung, 1, "precondition: the hang ran inside the check");
+  assert.deepEqual([r.refused?.code, r.refused?.defect], [409, "that file is still in use"], JSON.stringify(r));
+  assert.match(r.refused.hint, /a door hung it while the town was checking/);
+  assert.deepEqual(keys, []);
+  assert.deepEqual(live(db, "eve", up.sha), [null, null]);
+  assert.equal((await mediaQuota(db, "eve")).used, PNG.length);
+  // the control: the same check with no hang inside it frees the file
+  const ok = await own(db, "eve", up.url, { del, pool: { query: async (sql) => ({ rows: /pg_class/.test(sql) ? [{ rls: false, can: true, policy: false }] : [] }) }, storeSources: [{ table: "posts" }] });
+  assert.equal(ok.deleted, true, JSON.stringify(ok));
+});
+
+test("POS-737/c leaves the sweep as it was: `locate` adds `holds` only when asked, and a household's claim storage refused is retried by a sweep that applies", async () => {
+  const plain = await referenceSet(srcs());
+  assert.ok(plain.sources.every((s) => !("holds" in s)), "the sweep's report is unchanged");
+  const located = await referenceSet({ ...srcs(), locate: `alta/${sha("a")}.png` });
+  assert.deepEqual(located.sources.filter((s) => s.holds).map((s) => s.name), ["world", "drafts"]);
+  assert.deepEqual([...located.keys].sort(), [...plain.keys].sort(), "and the set is the same set");
+
+  const db = LEDGER();
+  await own(db, "eve", LOOSE, { del: async () => { throw new Error("storage answered 500"); } });
+  const { keys, del } = stubDel();
+  const r = await runSweep({ odb: db, ...sources(), now: NOW + DAY_MS, apply: true, del });
+  assert.equal(r.freed.rows.find((x) => x.url === LOOSE)?.retried, true);
+  assert.equal(keys.filter((k) => k.startsWith("media/eve/")).length, 3);
+  assert.equal(row(db, "eve", sha("e")).deleted_cause, "household", "the sweep finishes it and keeps its cause");
+});
+
+test("POS-737/c: the sweep and the household's delete read the same clones from the office's env", () => {
+  assert.deepEqual(sweepClonesFrom({ WORLD_CLONE: "/w", TOWN_CLONE: "/t", MEDIA_SWEEP_REPLAY_DIR: "/r", MEDIA_SWEEP_EXTRA_CLONES: " /a, ,/b " }),
+    { worldClone: "/w", townClone: "/t", replayDir: "/r", extraClones: ["/a", "/b"] });
+  assert.deepEqual(sweepClonesFrom({}), { worldClone: null, townClone: null, replayDir: null, extraClones: [] },
+    "POS-737/b: an unbound replay directory reads as null, which the reference set refuses (never as a skipped source)");
+  const cli = readFileSync(new URL("../tools/media-sweep.mjs", import.meta.url), "utf8");
+  assert.match(cli, /\.\.\.sweepClonesFrom\(process\.env\)/, "a text pin (the CLI runs nothing at import): the sweep's CLI takes its clones from the one reader");
+});
+
 test("WLD-83: the office's own likeness gallery is a source, so a picture it hangs is never freed", async () => {
   const { writeFileSync: wf } = await import("node:fs");
   const file = join(tempDir("gallery-src-"), "likeness-gallery.json");
   wf(file, JSON.stringify({ household: "starforge", entries: [{ handle: "rei", url: LOOSE }] }));
-  const r = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], officeFiles: [file] });
+  const r = await referenceSet({ ...sources(), pool: null, officeFiles: [file] });
   assert.equal(r.ok, true, JSON.stringify(r.sources));
   assert.ok(r.keys.has(`eve/${sha("e")}.jpg`), "the gallery's picture is referenced");
   assert.ok(r.sources.some((s) => s.name === "office:likeness-gallery.json" && s.found === 1));
-  const db = FIVE();
-  await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], officeFiles: [file], now: NOW });
+  const db = LEDGER();
+  await runSweep({ odb: db, ...sources(), officeFiles: [file], now: NOW });
   assert.equal(row(db, "eve", sha("e")).unreferenced_since, null, "so its clock never starts");
-  const shipped = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [] });
+  const shipped = await referenceSet({ ...sources(), pool: null });
   assert.ok(shipped.sources.some((s) => s.name === "office:likeness-gallery.json"), "the shipped gallery is read by default");
+});
+
+test("POS-737 FIX: the collector's core keeps the raw source name and path for the operator's log, and a hold by history alone is told apart from one with a live holder", async () => {
+  const db = LEDGER(), lines = [], gone = join(tmpdir(), "no-such-extra-xyz");
+  const r = await own(db, "eve", LOOSE, { extraClones: [gone], log: (l) => lines.push(l) });
+  assert.deepEqual([r.refused?.code, r.refused?.unread], [503, [`extra:${gone}`]], "the answer's core carries the raw name (household-media.mjs maps it to public words)");
+  assert.ok(lines.some((l) => l.includes(`extra:${gone}`)), "the operator's log names the raw source and path");
+  // history only, then a live holder beside it
+  const hist = await own(db, "dane", OLD);
+  assert.doesNotMatch(hist.refused.hint, /take it down/);
+  const mixedWorld = repo({ "WORLD/marks/dane/m/mark.md": `image: ${OLD}`, "STATE/log/1.jsonl": JSON.stringify({ say: OLD }) });
+  const mixed = await own(db, "dane", OLD, { worldClone: mixedWorld });
+  assert.ok(mixed.refused.in_use.includes("world") && mixed.refused.in_use.includes("world-history"));
+  assert.match(mixed.refused.hint, /whatever is taken down elsewhere/);
 });

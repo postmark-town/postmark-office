@@ -26,6 +26,10 @@ User=meepo
 WorkingDirectory=/srv/postmark-office
 # The office's own env: the store switch and URL as office_api, WORLD_CLONE,
 # TOWN_CLONE, the R2_* storage keys, and MEDIA_SWEEP_APPLY once it is live.
+# MEDIA_SWEEP_REPLAY_DIR (the site's served world-engine/replay directory,
+# POS-737/b) belongs HERE too, not in an Environment= line below: the office's
+# household delete reads the same reference set and takes only this file. Without
+# it the sweep refuses and frees nothing (DEPLOY.md § 102).
 EnvironmentFile=/etc/postmark-office.env
 Environment=MEDIA_SWEEP_STATE_DIR=/srv/postmark-media-sweep
 # Exit 0 ran (dry or live) · 1 refused (the report says why) · 2 usage · 3 storage

@@ -19,7 +19,7 @@ process.env.R2_ACCESS_KEY_ID = "test-key";
 process.env.R2_SECRET_ACCESS_KEY = "test-secret";
 
 const { MEDIA_BASE, uploadMedia, mediaQuota, mediaHeldRefusal, mediaLedgerHasStates } = await import("../src/media.mjs");
-const { STORE_SOURCES, storeKeys, runSweep, GRACE_MS } = await import("../src/media-sweep.mjs");
+const { STORE_SOURCES, storeKeys, runSweep, GRACE_MS, deleteOwnUpload } = await import("../src/media-sweep.mjs");
 const { paperOnPool, paperworkPoolTypes } = await import("../src/paperwork.mjs");
 const pg = (await import("pg")).default;
 
@@ -39,6 +39,15 @@ function repo(files) {
   return dir;
 }
 const HUNG = `${MEDIA_BASE}/media/alta/${"a".repeat(64)}.png`;
+// POS-737/b (Darko 2026-11-25, "1 as rec"): the world's log and the public replays are sources, so the
+// fixture world carries a STATE/log and the sweep is bound to a replay directory (both name HUNG: a real town's do).
+const world = () => repo({ "WORLD/marks/alta/m/mark.md": `image: ${HUNG}`, "STATE/log/1.jsonl": JSON.stringify({ say: HUNG }) });
+const replayDir = () => {
+  const dir = tempDir("media-sweep-store-replays-");
+  dirs.push(dir);
+  writeFileSync(join(dir, "1.json"), JSON.stringify({ crossing: 1, say: HUNG }));
+  return dir;
+};
 
 test("POS-737 on the store: 080's states and grant, the sources, the RLS refusal, the sweep as office_api, and the office before 080", async (t) => {
   const store = await startStore({ db: "media_sweep_test" });
@@ -78,19 +87,53 @@ test("POS-737 on the store: 080's states and grant, the sources, the RLS refusal
   await t.test("the sweep runs as office_api: dry keeps the clock, a live run frees what is due", async () => {
     const paper = paperOnPool(fresh());
     const up = await uploadMedia({}, KEY, paper, { put, bytes: PNG });
-    const world = repo({ "WORLD/marks/alta/m/mark.md": `image: ${HUNG}` });
+    const worldClone = world(), replays = replayDir();
     const town = repo({ "WHITE_PAGES/alta/PROFILE.md": `avatar_url: ${HUNG}` });
     const pool = fresh();
-    const dry = await runSweep({ odb: paper, pool, worldClone: world, townClone: town, now: NOW });
+    const dry = await runSweep({ odb: paper, pool, worldClone, townClone: town, replayDir: replays, now: NOW });
     assert.equal(dry.refused, undefined, JSON.stringify(dry.sources));
     assert.equal(dry.clock.stamped, 1);
     const keys = [];
-    const live = await runSweep({ odb: paper, pool, worldClone: world, townClone: town, now: NOW + GRACE_MS, apply: true, del: async (k) => { keys.push(k); } });
+    const live = await runSweep({ odb: paper, pool, worldClone, townClone: town, replayDir: replays, now: NOW + GRACE_MS, apply: true, del: async (k) => { keys.push(k); } });
     assert.equal(live.freed.files, 1);
     assert.deepEqual(keys, [`media/eve/${up.sha}.png`, `media/eve/${up.sha}-96.png`, `media/eve/${up.sha}-256.png`]);
     assert.equal((await mediaQuota(paper, "eve")).used, 0);
     const { rows } = await owner.query("SELECT deleted_cause, purged_at FROM office_media WHERE sha = $1", [up.sha]);
     assert.deepEqual(rows[0], { deleted_cause: "sweep", purged_at: String(NOW + GRACE_MS) });
+  });
+
+  // POS-737/c (Darko 2026-11-21, "Yes, both"): a household deletes its own upload that nothing uses.
+  await t.test("102: as office_api, a household's own delete reads every store source, records its cause, and frees the wall", async () => {
+    const paper = paperOnPool(fresh());
+    const k = { household: "gail", handles: new Set(["gail"]) };
+    const up = await uploadMedia({}, k, paper, { put, bytes: PNG });
+    const keys = [];
+    const r = await deleteOwnUpload({ odb: paper, household: "gail", by: "gail", url: up.url, pool: fresh(), now: NOW, log: () => {},
+      worldClone: world(), replayDir: replayDir(), townClone: repo({ "WHITE_PAGES/alta/PROFILE.md": `avatar_url: ${HUNG}` }),
+      del: async (key) => { keys.push(key); } });
+    assert.equal(r.refused, undefined, JSON.stringify(r));
+    assert.deepEqual([r.deleted, r.purged, keys.length], [true, true, 3]);
+    const { rows } = await owner.query("SELECT deleted_cause, deleted_by, purged_at FROM office_media WHERE household = 'gail'");
+    assert.deepEqual(rows[0], { deleted_cause: "household", deleted_by: "gail", purged_at: String(NOW) });
+    assert.equal((await mediaQuota(paper, "gail")).used, 0);
+  });
+
+  await t.test("BEFORE 102: the store's cause check refuses the claim, so the door answers 503 and writes nothing", async () => {
+    // 080's own check, put back for every write from here on (NOT VALID: the row the subtest above freed keeps its cause)
+    await owner.query(`ALTER TABLE office_media DROP CONSTRAINT office_media_deleted_cause_known;
+      ALTER TABLE office_media ADD CONSTRAINT office_media_deleted_cause_known CHECK (deleted_cause IS NULL OR deleted_cause IN ('sweep', 'takedown')) NOT VALID`);
+    const paper = paperOnPool(fresh());
+    const k = { household: "hale", handles: new Set(["hale"]) };
+    const up = await uploadMedia({}, k, paper, { put: async () => {}, bytes: Buffer.concat([PNG]) });
+    const keys = [];
+    const r = await deleteOwnUpload({ odb: paper, household: "hale", by: "hale", url: up.url, pool: fresh(), now: NOW, log: () => {},
+      worldClone: world(), replayDir: replayDir(), townClone: repo({ "WHITE_PAGES/alta/PROFILE.md": `avatar_url: ${HUNG}` }),
+      del: async (key) => { keys.push(key); } });
+    assert.deepEqual([r.refused?.code, r.refused?.hint], [503, "the store has not taken 102_media_deleted_by_household.sql; nothing was deleted"]);
+    assert.deepEqual(keys, []);
+    const { rows } = await owner.query("SELECT deleted_at, unreferenced_since FROM office_media WHERE household = 'hale'");
+    assert.deepEqual(rows[0], { deleted_at: null, unreferenced_since: null }, "nothing claimed, and its own clock taken back");
+    assert.equal((await mediaQuota(paper, "hale")).used, PNG.length);
   });
 
   await t.test("BEFORE 080: an office on this code answers as it always did, and the sweep refuses", async () => {

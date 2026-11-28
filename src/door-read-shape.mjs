@@ -67,6 +67,7 @@ export const HOUSEHOLD_LINES = Object.freeze({
   send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?", "resend?"] },
   "mark-all-read": { says: "Mark your mail as read.", fields: [] },
   "letter-note": { says: "Note a letter privately: no reply needed, waiting on something, or clear it.", fields: ["letter", "state", "on?"] },
+  "delete-media": { says: "Delete an upload of yours that nothing in the town uses.", fields: ["url"] },
   "amend-letter": { says: "Amend a letter of yours before it sails.", fields: ["id", "body"] },
   "withdraw-letter": { says: "Withdraw a letter of yours before it sails.", fields: ["id"] },
   block: { says: "Block a household's mail, both ways, privately.", fields: ["household"] },

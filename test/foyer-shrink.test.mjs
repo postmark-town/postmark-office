@@ -313,6 +313,13 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-22 FOR POS-737/c (Darko 2026-11-21 21:18 EST, "Yes, both"): the household gained the act
+  // `delete-media`, a household's delete for its own upload that nothing uses. ADDITIVE and proven so: the capture
+  // (tools/capture-household-golden.mjs, to a scratch file) differed from the committed golden by exactly
+  // `/acts/20/{act,blurb,teaches,dispatches_to}` and `/acts/20/fields/url/{type,description,required}` (7 leaves, 299 → 306)
+  // and removed or retyped none. The card is appended at the END of the roster, so no act's index moves. PSA for the
+  // release notes: "household { do: \"delete-media\", args: { url } } deletes one of your own uploads for good, with its
+  // small copies, if nothing in the town uses it; it is refused while anything does, and its bytes go back to your wall."
   // ⚑ REGENERATED 2026-11-18 FOR POS-1136 (Darko 14:53 EST, "the town declaring opposed to something should remove it, even parcels"; Wright
   // 20:38Z): the act `declare-stance-on` gained the optional field `preview`, the town's no-write preview (as: "town", one mark). ADDITIVE and
   // proven so: the golden gained exactly `/acts/10/fields/preview/{type,description}` (2 leaves) and removed or retyped none, by hand, not
@@ -719,7 +726,10 @@ test("F7b · the TWENTY-ONE acts that own their name answer their card; the THRE
   // ⚑ TWENTY-ONE → EIGHTEEN, 2026-11-17 (CORE-114): `begin`, `declare` and `buy-parcel-room` left the BARE acts for the
   // OFFERED ones (household-apex.mjs § OFFERED_ACTS): offered by the tier's `next` and the glance's `first_steps`, never listed.
   // Their cards are still read by name (asserted below, with the offered acts) and they still dispatch.
-  assert.equal(bare.length, 18);
+  // ⚑ EIGHTEEN → NINETEEN, 2026-11-22 (POS-737/c): `delete-media` joined as a BARE act. What it frees is listed at
+  // `read: "media"`, a different name, so it shadows no household read. (This test's title predates CORE-114 and is
+  // left as it is, so a name-keyed instrument does not read the test as deleted.)
+  assert.equal(bare.length, 19);
   for (const act of ["begin", "declare", "buy-parcel-room"]) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" still answers its card`);

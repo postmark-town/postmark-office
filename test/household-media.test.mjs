@@ -598,3 +598,220 @@ test("a ledger that fits inside the bound reports itself complete", async () => 
   assert.equal(r.complete, true);
   assert.equal(r.more_note, undefined, "an empty shelf and a cut one must not look alike");
 });
+
+// ── the door that deletes: household { do: "delete-media" } (POS-737/c) ─────
+//
+// LAW (Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both"): "give a household a
+// delete for its own pictures that nothing uses, with a receipt. Deletion is
+// permanent; a picture still in use can't be deleted." The decision is the
+// sweep's (test/media-sweep.test.mjs § the household's own delete); these hold
+// the door: who may ask, what it says, and that the household verb reaches it.
+
+const { deleteMediaAtOffice, DELETE_TEACH, SOURCE_WORDS } = await import("../src/household-media.mjs");
+const { STORE_SOURCES } = await import("../src/media-sweep.mjs");
+
+/** A fixture clone: one commit on main holding these files. */
+function cloneWith(files) {
+  const dir = tempDir("pm-media-del-");
+  for (const [p, body] of Object.entries(files)) {
+    mkdirSync(join(dir, p, ".."), { recursive: true });
+    writeFileSync(join(dir, p), body);
+  }
+  execFileSync("git", ["-C", dir, "init", "-q", "-b", "main"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"], { stdio: "ignore" });
+  return dir;
+}
+const ELSEWHERE = `https://media.postmark.town/media/someone/${"9".repeat(64)}.png`; // a picture the fixture town hangs, so its sources answer
+/** The public replays' directory (POS-737/b): `<crossing>.json` files, here holding `says`. */
+const replayDirWith = (...says) => {
+  const dir = tempDir("pm-media-del-replays-");
+  says.forEach((s, i) => writeFileSync(join(dir, `${i + 1}.json`), JSON.stringify({ crossing: i + 1, say: s })));
+  return dir;
+};
+// Until 2026-11-25 the world's log and the public replays were not read (the accepted replay gap).
+// POS-737/b (Darko, "1 as rec"): history counts as in use, so the fixture town has a log and a replay,
+// and `history` names what each one shows.
+const sourcesHanging = (...urls) => sourcesWithHistory({ hanging: urls });
+const sourcesWithHistory = ({ hanging = [], log = ELSEWHERE, replay = ELSEWHERE } = {}) => ({
+  worldClone: cloneWith({
+    "WORLD/marks/a/mark.md": `image: ${ELSEWHERE}\n${hanging.map((u) => `image: ${u}`).join("\n")}`,
+    "STATE/log/1.jsonl": JSON.stringify({ say: log }),
+  }),
+  townClone: cloneWith({ "WHITE_PAGES/a/PROFILE.md": `avatar_url: ${ELSEWHERE}` }),
+  replayDir: replayDirWith(replay),
+  pool: null, storeSources: [], officeFiles: [],
+});
+
+test("delete-media: the callers the media read refuses, a resident the key does not hold, several residents naming none, and no url, each refused with nothing touched", async () => {
+  const db = odb();
+  const up = await upload(PNG, key(), db);
+  const ask = (k, f) => deleteMediaAtOffice({ url: up.url, ...f }, k, { odb: db, sources: sourcesHanging() });
+  const berth = await ask({ berth: true, slug: "wanderer" }, {});
+  assert.deepEqual([berth.code, berth.defect], [403, "a berth holds no media"]);
+  assert.deepEqual([(await ask({ handles: new Set() }, {})).code, (await ask({ handles: new Set() }, {})).defect], [403, "media is your household's own"]);
+  const stranger = await ask(key(), { handle: "someone-else" });
+  assert.deepEqual([stranger.code, stranger.defect], [403, "\"someone-else\" is not one of your residents"]);
+  const two = await ask(key({ handles: new Set(["tester", "other"]) }), {});
+  assert.deepEqual([two.code, two.defect, two.your_residents], [422, "which of your residents?", ["tester", "other"]]);
+  const nourl = await deleteMediaAtOffice({}, key(), { odb: db });
+  assert.deepEqual([nourl.code, nourl.defect], [422, "which upload?"]);
+  assert.equal((await mediaLedgerRows(db, "testers")).length, 1, "the upload stands");
+});
+
+test("delete-media: an own upload nothing uses is deleted, with the receipt, the wall after and the note; one in use is refused, naming where in a resident's words", async () => {
+  const db = odb();
+  const free = await upload(PNG, key(), db);
+  const hung = await upload(svg("hung"), key(), db);
+  const sources = sourcesHanging(hung.url);
+  const before = await mediaQuota(db, "testers");
+  const deleted = [];
+  const r = await deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources, del: async (k) => { deleted.push(k); } });
+  assert.equal(r.error, undefined, JSON.stringify(r));
+  assert.deepEqual([r.deleted, r.purged, r.freed_bytes], [true, true, free.bytes]);
+  assert.deepEqual(r.receipt.objects, deleted);
+  assert.deepEqual([r.receipt.url, r.receipt.cause, r.receipt.deleted_by, r.receipt.uploaded_by], [free.url, "household", "tester", "tester"]);
+  assert.deepEqual(r.quota, { ceiling: before.ceiling, used: before.used - free.bytes, remaining: before.remaining + free.bytes },
+    "LAW: \"The bytes leave the household's 200 MB wall at once.\"");
+  assert.match(r.note, /^Deleted for good: /);
+
+  const refused = await deleteMediaAtOffice({ url: hung.url }, key(), { odb: db, sources, del: async (k) => { deleted.push(k); } });
+  assert.deepEqual([refused.error, refused.code, refused.defect], ["bounce", 409, "that file is still in use"]);
+  assert.deepEqual(refused.in_use, ["a mark in the world"]);
+  assert.equal(deleted.length, 3, "only the free file's objects were deleted");
+  assert.deepEqual((await mediaLedgerRows(db, "testers")).map((u) => u.url), [hung.url]);
+});
+
+test("delete-media: every source the sweep reads has a resident's words for `in_use`", () => {
+  const names = ["world", "world-history", "replays", "drafts", "town", "office:likeness-gallery.json", ...STORE_SOURCES.map((s) => `store:${s.table}`)];
+  assert.deepEqual(names.filter((n) => !(n in SOURCE_WORDS)), [], "a new source names its words here");
+});
+
+// LAW (Darko, 2026-11-25 08:34 EST, POS-737/b, "1 as rec"): "history counts as in use ... the World's logs
+// (STATE/log/*) and the public replays (/world-engine/replay/*.json)."
+test("delete-media (POS-737/b): a file named only in a World log, or only in a public replay, is refused in the resident's words and frees nothing", async () => {
+  for (const [where, words, over] of [
+    ["a World log", "the world's record (a past crossing's log)", (u) => ({ log: u })],
+    ["a public replay", "a public replay of a past crossing", (u) => ({ replay: u })],
+  ]) {
+    const db = odb();
+    const hung = await upload(svg(`history-${where.split(" ").pop()}`), key(), db);
+    const deleted = [];
+    const r = await deleteMediaAtOffice({ url: hung.url }, key(), { odb: db, sources: sourcesWithHistory(over(hung.url)), del: async (k) => { deleted.push(k); } });
+    assert.deepEqual([r.error, r.code, r.defect], ["bounce", 409, "that file is still in use"], `${where}: ${JSON.stringify(r)}`);
+    assert.deepEqual(r.in_use, [words], `${where}: it says where`);
+    assert.match(r.hint, /record of a past crossing .* a picture it shows stays and cannot be deleted/, `${where}: and that a record is kept`);
+    assert.doesNotMatch(r.hint, /take it down/, `${where}: never advising a past record be taken down`);
+    assert.deepEqual(deleted, [], `${where}: storage untouched`);
+    assert.deepEqual((await mediaLedgerRows(db, "testers")).map((u) => u.url), [hung.url], `${where}: the upload stands`);
+    assert.equal((await mediaQuota(db, "testers")).used, hung.bytes, `${where}: no quota released`);
+  }
+});
+
+test("delete-media (POS-737/b): the door reads the replay directory from the office's env, and without it nothing is deleted (503, naming it)", async () => {
+  const db = odb();
+  const up = await upload(PNG, key(), db);
+  const s = sourcesWithHistory();
+  const env = (extra = {}) => ({ WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone, ...extra });
+  const deleted = [];
+  const ask = (e) => deleteMediaAtOffice({ url: up.url }, key(), { odb: db, env: e, del: async (k) => { deleted.push(k); } });
+  const without = await ask(env());
+  assert.deepEqual([without.code, without.defect], [503, "the town could not check every place this file could hang, so nothing was deleted"], JSON.stringify(without));
+  assert.ok(without.unread.includes(SOURCE_WORDS.replays), "the unbound replay directory is named, in the public words");
+  // bound: the replay source reads (the store's tables are still unreadable here: this odb has no pool)
+  const bound = await ask(env({ MEDIA_SWEEP_REPLAY_DIR: s.replayDir }));
+  assert.equal(bound.unread.includes(SOURCE_WORDS.replays), false, "bound, the door's own env reaches the reference set");
+  assert.equal(bound.unread.includes(SOURCE_WORDS["world-history"]), false);
+  assert.deepEqual(deleted, [], "and nothing was deleted either way");
+});
+
+test("delete-media through the household verb: on the menu, its card readable by name, dispatched to the door, and the media read names it", async () => {
+  const db = odb();
+  await upload(PNG, key(), db);
+  const bare = await householdApex({}, key(), { odb: db, slim: true });
+  assert.ok(bare.acts?.some((a) => a.act === "delete-media"), "the household's bare answer lists the act");
+  const card = await householdApex({ read: "delete-media" }, key(), { odb: db, slim: true });
+  assert.equal(card.card?.act, "delete-media", JSON.stringify(card));
+  assert.deepEqual(Object.keys(card.card.fields), ["url"]);
+  assert.equal(card.card.fields.url.required, true);
+  // another household's upload: refused by the door, through the verb, with the verb's envelope
+  const theirs = await upload(svg("theirs"), key({ household: "others", handles: new Set(["other"]) }), db);
+  const r = await householdApex({ do: "delete-media", args: { url: theirs.url } }, key(), { odb: db });
+  assert.deepEqual([r.error, r.code, r.defect, r.did], ["bounce", 403, "that file is another household's", "delete-media"], JSON.stringify(r));
+  assert.equal((await mediaLedgerRows(db, "others")).length, 1, "their file stands");
+  const media = await mediaRead(key(), { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
+  assert.equal(media.delete, DELETE_TEACH);
+});
+
+// ── POS-737 FIX (Rivet's review of 428ed65d): the delete does not freeze the office ──
+//
+// LAW (Darko, 2026-11-25 08:34 EST, POS-737/b): history counts as in use, so the delete reads the world's
+// whole log. That read runs inside the office's own process, on POST /household, and a synchronous child
+// stalls every other request for its length. ORACLE: another timer, due 1 ms in, runs BEFORE the delete
+// finishes, and a 1 ms heartbeat keeps beating while the sources are read, on every outcome. The
+// synchronous collector this replaced beat 3 to 5 times; the async one 39 or more (measured below).
+async function inFlight(run) {
+  const order = [];
+  let beats = 0;
+  const heart = setInterval(() => { beats += 1; }, 1);
+  const other = new Promise((r) => setTimeout(() => { order.push("another timer ran"); r(); }, 1));
+  const t0 = Date.now();
+  const done = run().then((v) => { order.push("the delete finished"); return v; });
+  await Promise.all([other, done]);
+  clearInterval(heart);
+  console.log(`[liveness] ${beats} heartbeats (1 ms) in ${Date.now() - t0} ms while the delete ran`);
+  return { order, beats, ms: Date.now() - t0, result: await done };
+}
+const PROGRESSED = ["another timer ran", "the delete finished"];
+// MEASURED (this box, 2026-11-25): the async collector beat 39 to 81 times per delete (1 to 2.5 s); the synchronous
+// one it replaced beat 3 to 5 times in 2 to 6 s, because its git children froze the loop between two async file reads.
+// The synchronous count does not grow with the work (no turn of the loop between its children), the async count does,
+// so the delete reads a crowd of extra clones (8 reads of one clone: 24 more git children; measured with 25 reads here: 600 to 1000 beats) and CI's fast box, which
+// first measured 19 beats in 80 ms without the crowd, clears the floor by a wide margin too.
+const MIN_BEATS = 20;
+const CROWD = Array(8).fill(cloneWith({ "README.md": "an extra clone naming no picture" }));
+const alive = (x, label) => {
+  assert.deepEqual(x.order, PROGRESSED, `${label}: another timer ran before the delete finished`);
+  assert.ok(x.beats >= MIN_BEATS, `${label}: the office kept turning while the collector read (${x.beats} heartbeats in ${x.ms} ms, wanted ${MIN_BEATS})`);
+};
+
+test("delete-media (POS-737 FIX): another timer runs while the sources are read, on a refused, an unread and a freed outcome; the answers are as before", async () => {
+  // refused: a file the world's log shows (History counts as in use)
+  const db = odb();
+  const logged = await upload(svg("liveness-log"), key(), db);
+  const deleted = [];
+  const refused = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, sources: { ...sourcesWithHistory({ log: logged.url }), extraClones: CROWD }, del: async (k) => { deleted.push(k); } }));
+  alive(refused, "refused");
+  assert.deepEqual([refused.result.code, refused.result.defect], [409, "that file is still in use"]);
+  // unread: the replay directory is not bound
+  const s = sourcesWithHistory();
+  const unread = await inFlight(() => deleteMediaAtOffice({ url: logged.url }, key(), { odb: db, env: { WORLD_CLONE: s.worldClone, TOWN_CLONE: s.townClone, MEDIA_SWEEP_EXTRA_CLONES: CROWD.join(",") }, del: async (k) => { deleted.push(k); } }));
+  alive(unread, "unread");
+  assert.equal(unread.result.code, 503);
+  assert.ok(unread.result.unread.includes(SOURCE_WORDS.replays));
+  assert.deepEqual(deleted, [], "and nothing was deleted on either");
+  assert.equal((await mediaQuota(db, "testers")).used, logged.bytes, "no quota released");
+  // freed: the control that the deletion path itself is the one being timed
+  const free = await upload(svg("liveness-free"), key(), db);
+  const freed = await inFlight(() => deleteMediaAtOffice({ url: free.url }, key(), { odb: db, sources: { ...sourcesWithHistory(), extraClones: CROWD }, del: async (k) => { deleted.push(k); } }));
+  alive(freed, "freed");
+  assert.deepEqual([freed.result.deleted, freed.result.purged], [true, true]);
+  assert.deepEqual(deleted, freed.result.receipt.objects, "exactly the freed file's objects (an SVG has no small copies)");
+});
+
+test("delete-media (POS-737 FIX): `unread` is in the public words, an extra clone's path never reaches the resident; history and live holders together still say the record stays", async () => {
+  const db = odb();
+  const up = await upload(svg("unread-words"), key(), db);
+  const gone = join(tempDir("pm-media-del-nowhere-"), "no-such-clone");
+  const r = await deleteMediaAtOffice({ url: up.url }, key(), { odb: db, sources: { ...sourcesWithHistory(), extraClones: [gone] } });
+  assert.equal(r.code, 503);
+  assert.ok(r.unread.includes("work the town holds that is not yet published"), JSON.stringify(r.unread));
+  assert.equal(JSON.stringify(r).includes("no-such-clone"), false, "the resident never reads the operator's path");
+  assert.ok(r.unread.every((w) => Object.values(SOURCE_WORDS).includes(w) || w === "work the town holds that is not yet published"), "only public vocabulary");
+  // a file a live mark AND the past record show: the words name both and never advise taking the record down
+  const both = await upload(svg("both-holders"), key(), db);
+  const mixed = await deleteMediaAtOffice({ url: both.url }, key(), { odb: db, sources: sourcesWithHistory({ hanging: [both.url], log: both.url }) });
+  assert.equal(mixed.code, 409);
+  assert.deepEqual(mixed.in_use, [SOURCE_WORDS.world, SOURCE_WORDS["world-history"]]);
+  assert.match(mixed.hint, /That record is kept as it was, so a picture it shows stays and cannot be deleted, whatever is taken down elsewhere/);
+});

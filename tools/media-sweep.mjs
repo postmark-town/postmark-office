@@ -18,9 +18,13 @@
 // branch keeps the files it names, for work not yet published where the
 // world and town clones can see it.
 //
+// MEDIA_SWEEP_REPLAY_DIR: the site's served world-engine/replay directory (the
+// public replays). History counts as in use (POS-737/b), so the replays are a
+// source like the clones: unset or unreadable, the run refuses and frees nothing.
+//
 // Env (the office's own, /etc/postmark-office.env): WORLD_CLONE, TOWN_CLONE,
-// OFFICE_PAPERWORK_STORE, WORLD2_PG, WORLD2_PG_URL, and the R2_* storage keys for
-// a live run.
+// MEDIA_SWEEP_REPLAY_DIR, OFFICE_PAPERWORK_STORE, WORLD2_PG, WORLD2_PG_URL, and
+// the R2_* storage keys for a live run.
 //
 // THE FIRST LIVE RUN IS WRIGHT'S, on Darko's go. The unit ships dry.
 //
@@ -63,7 +67,7 @@ async function main() {
 
   const { openPaper, closePaperworkPools } = await import("../src/paperwork.mjs");
   const { oauthSchema } = await import("../src/oauth.mjs");
-  const { runSweep } = await import("../src/media-sweep.mjs");
+  const { runSweep, sweepClonesFrom } = await import("../src/media-sweep.mjs");
   const odb = await openPaper(resolve(opt("--oauth-db", "oauth.db")), { schema: oauthSchema });
   // The store sources read through the paper's pool when the office is
   // switched, and through their own when it is not; with no store at all they
@@ -76,11 +80,8 @@ async function main() {
   }
   let report;
   try {
-    report = await runSweep({
-      odb, pool, apply, maxDelete,
-      worldClone: process.env.WORLD_CLONE || null, townClone: process.env.TOWN_CLONE || null,
-      extraClones: String(process.env.MEDIA_SWEEP_EXTRA_CLONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
-    });
+    // the same clones the household's own delete reads (media-sweep.mjs § sweepClonesFrom)
+    report = await runSweep({ odb, pool, apply, maxDelete, ...sweepClonesFrom(process.env) });
   } finally {
     await own?.end().catch(() => {});
     await closePaperworkPools();

@@ -3781,6 +3781,29 @@ Box steps (Jetto's hand, never a lane's):
 2. **Deploy the code: the train PR's approval, only once step 1's proof reads as above.** Its own release-train run deploys it. With `OFFICE_AUTODEPLOY` off, the deploy is the hand-carry of that tag, which also follows step 1. A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
 3. **Rollback** of the code needs no store step. The old code ignores `family`, and `spent` rows are inert to it (no reader matches the kind, and its sweep skips their NULL expiry). Refreshes keep working, without the reuse rule. After a later re-deploy, the sweep removes the `spent` rows whose sign-in has no live key left.
 
+## 102: a household deletes its own upload that nothing uses (POS-737/c, the w49 ship)
+
+Darko, 2026-11-21 21:18 EST, POS-737/c, "Yes, both": a household gets a delete for its own pictures that nothing uses, with a receipt. The door is `household { do: "delete-media", args: { url } }` (`CONTRACT.md` has the caller's words; the law is `src/media-sweep.mjs § THE HOUSEHOLD'S OWN DELETE`). It decides on the daily sweep's own reference set, so it reads what the sweep reads: `WORLD_CLONE`, `TOWN_CLONE` and `MEDIA_SWEEP_EXTRA_CLONES` from `/etc/postmark-office.env` (080 § step 2 already puts a clone of unpublished work there, which both the office and the sweep's unit load), and the store through the office's own paper. No unit, timer or grant changes; one env line is new (POS-737/b, below).
+
+**History counts as in use (POS-737/b; Darko, 2026-11-25 08:34 EST, "1 as rec").** The reference set also reads the world's `STATE/log/` at the same two refs (no new setting: `WORLD_CLONE` is already bound), and the public replays, which need one operator's binding in `/etc/postmark-office.env`, the file the office and the sweep's unit both load:
+
+```
+MEDIA_SWEEP_REPLAY_DIR=/var/www/postmark-town-site/world-engine/replay
+```
+
+The webroot is a symlink the site refresh swaps at every :10 and :40; the sweep resolves it once at the start of a run, and the directory must be readable by `meepo`. **The code fails closed without it:** unset, missing, unreadable or holding no `*.json` file, the `replays` source is unread, so the sweep frees nothing (`refused` names `replays`) and a household's delete answers 503. So the env line goes in before the first apply run, or at the deploy; the order is otherwise free. Read it back with one dry run: `sources` carries `world-history` and `replays` with a `found` count and no `error` (`replays` also carries `files`, the corpus size). The spot-check run (`--max-delete 100`) waits for this to be live, and is the operator's, on Darko's go.
+
+**102** widens 080's check on `office_media.deleted_cause` to admit `'household'`, and does nothing else. The order is free: the office on this code against a store without 102 refuses only the household's delete (503, "the store has not taken 102_media_deleted_by_household.sql; nothing was deleted"), and the office before this code never writes the cause.
+
+Box steps (the ship's hand, never a lane's):
+
+1. **Apply 102,** away from the clearing (05:45:40 / 17:45:40Z) and the settlement (06:00 / 18:00Z): it takes `office_media`'s lock for the moment it checks the rows. It is idempotent. Same pipe as 094 above, with `world2/schema/102_media_deleted_by_household.sql`. Proof (the probe `world2/tools/migrations-landed.mjs` holds for 102):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'office_media_deleted_cause_known'"   # names 'household'
+   ```
+2. **Rollback** of the code needs no store step: the old code reads a `household` row as freed, like a swept one (its hang refusal then says the sweep's words), and a re-upload of the same bytes still lives again.
+
 ## Two site rebuilds per run, not three (POS-944, 2026-11-08)
 
 On the evening of 2026-11-07 the town kept moving while the site built, so the refresh rebuilt up to three times per run, and each pass took 12 to 22 minutes. The unit's 45-minute limit (`TimeoutStartSec`) killed the 22:10Z run in its third pass, before its report step, and the sentinel read the missing report as stale. Darko ruled the cap (2026-11-07 22:06 EST, POS-944/a: "Cap at 2 rebuilds per run"). Installed on the box at 03:08Z on 11-08:

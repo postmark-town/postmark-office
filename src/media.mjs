@@ -122,8 +122,11 @@ export function ensureMediaTable(odb) {
 //                       (cleared again by any sweep or door that finds it hung)
 //   deleted_at          the row is CLAIMED for deletion: it is no longer held,
 //                       and its bytes leave the household's wall at once
-//   deleted_cause       'sweep' (unhung past the grace) or 'takedown' (an
-//                       operator, at once, with a reason)
+//   deleted_cause       'sweep' (unhung past the grace), 'takedown' (an
+//                       operator, at once, with a reason) or 'household' (the
+//                       household itself, at once, because nothing used it:
+//                       POS-737/c, migration 102; media-sweep.mjs § THE
+//                       HOUSEHOLD'S OWN DELETE)
 //   deleted_by, deleted_reason   who, and why: the receipt
 //   purged_at           storage answered the DELETE for the original and its
 //                       copies; a claimed row without it is retried next run
@@ -137,6 +140,8 @@ export const MEDIA_STATE_FILE_COLUMNS = Object.freeze([
   ["deleted_by", "TEXT"], ["deleted_reason", "TEXT"], ["purged_at", "INTEGER"],
 ]);
 const STATE_COLUMNS = MEDIA_STATE_FILE_COLUMNS.map(([c]) => c);
+/** The cause a household's own delete records (POS-737/c). The store admits it from 102 on. */
+export const MEDIA_HOUSEHOLD_CAUSE = "household";
 const statesSeen = new WeakSet(); // a paper that has them keeps them; one that lacks them is asked again
 
 /** True when this ledger carries the states (the store has taken 080, or the file was given them). */
@@ -289,6 +294,9 @@ export async function mediaHeldRefusal(url, { odb = LEDGER } = {}) {
     return row.deleted_cause === "takedown"
       ? { code: 422, defect: "the town took that file down",
         hint: "a file the town's operators took down hangs nowhere; hang a different picture — if you think the takedown was a mistake, tell the office (a letter to wright works)" }
+      : row.deleted_cause === MEDIA_HOUSEHOLD_CAUSE
+      ? { code: 422, defect: "the town no longer holds that file",
+        hint: `its household deleted it — ${MEDIA_NOT_HELD_HINT}` }
       : { code: 422, defect: "the town no longer holds that file",
         hint: `it hung nowhere for ${MEDIA_GRACE_DAYS} days and was freed — ${MEDIA_NOT_HELD_HINT}` };
   return null;
@@ -951,7 +959,7 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   if (states && await asPaper(odb).get("SELECT 1 AS down FROM media WHERE sha = ? AND deleted_cause = 'takedown'", sha))
     throw bounce(403, "the town took this file down",
       "a file the town's operators took down cannot be uploaded again, by any household — if you think the takedown was a mistake, tell the office (a letter to wright works)");
-  const had = await asPaper(odb).get(`SELECT ${states ? "deleted_at, purged_at" : "NULL AS deleted_at"} FROM media WHERE household = ? AND sha = ?`, household, sha);
+  const had = await asPaper(odb).get(`SELECT ${states ? "deleted_at, deleted_cause, purged_at" : "NULL AS deleted_at"} FROM media WHERE household = ? AND sha = ?`, household, sha);
   // Same bytes, same wall: answer with the URL that already exists. This sits
   // BEFORE the quota check on purpose — re-sending what you already hold can
   // never be refused for fullness.
@@ -960,9 +968,14 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   // A FREED FILE COMES BACK as a fresh upload: the bytes are put again and its
   // row lives again. Not while the sweep is between its claim and storage's
   // answer, because then the sweep's DELETE could land after this PUT.
+  // A household's own delete (POS-737/c) is finished by the same call again,
+  // and the daily sweep only retries a claim on a run that applies.
   if (had && had.purged_at == null)
-    throw bounce(409, "the town is freeing this exact file right now",
-      "the daily sweep claimed it and storage has not answered yet — send it again after the next sweep");
+    throw had.deleted_cause === MEDIA_HOUSEHOLD_CAUSE
+      ? bounce(409, "the town is freeing this exact file right now",
+        `your household deleted it and storage has not confirmed yet — finish the delete (household { do: "delete-media", args: { url: "${url}" } }), then send it again`)
+      : bounce(409, "the town is freeing this exact file right now",
+        "the daily sweep claimed it and storage has not answered yet — send it again after the next sweep");
   if (used + bytes.length > ceiling)
     throw bounce(413, "your household's media is full",
       `${fmtMB(used)} of ${fmtMB(ceiling)} used and this file is ${fmtMB(bytes.length)} — the wall is ${fmtMB(QUOTA_PER_HOUSEHOLD)} per household; the ceiling is a dial, and a genuine need is a letter to the founders`);

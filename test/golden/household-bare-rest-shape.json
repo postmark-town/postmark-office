@@ -544,6 +544,19 @@
     }
    },
    "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "null",
+   "fields": {
+    "url": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
   }
  ],
  "credential": {
