@@ -1,7 +1,7 @@
 -- deploy/uat/scrub.sql — what UAT's copy of the store loses before anyone signs in (CORE-160).
 --
--- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (resident_notes, letter_notes)
--- AWAITING: Darko's review of every delete and scrub marked `awaiting` in the table below (CORE-165, finding 1 of Truey's review of #1206). Listed one per line next to its statement.
+-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (resident_notes, letter_notes); Darko, 2026-11-27 "yes to all" (Jetto's fifteen-line list on CORE-165, "For Darko: UAT's scrub, one list to review", #1206 at 6ca34cc1: every row marked reviewed below)
+-- RULED (Darko, 2026-11-27, "yes to all"): every delete and scrub that was marked `awaiting` (CORE-165's Rulings). Each is noted next to its statement.
 --
 -- store-restore-scrub.sh refuses to run while this file has a line starting `-- AWAITING:` (nothing here reached
 -- Darko yet), and refuses unless the REVIEWED line above reads `REVIEWED: <Darko's ruling, dated>`. To clear the
@@ -29,12 +29,12 @@
 -- | acts | KEEP | - | the public record; the notary exports it |
 -- | amend_carried | KEEP | - | which settlement carried an amend; derived from public files |
 -- | arrival_entries | KEEP | - | queued enter-on-arrival intents from public walk acts; a trigger refuses every DELETE |
--- | arrival_heard | DELETE | awaiting | where a joining human heard of Postmark: about the human, private to operators (030), carries a free-text note |
--- | arrival_source_pending | DELETE | awaiting | a GitHub id parked with its outreach tag: an ops fact, never on the record (086) |
--- | arrival_sources | DELETE | awaiting | household to outreach tag: an ops fact, never on the record (086) |
+-- | arrival_heard | DELETE | reviewed | where a joining human heard of Postmark: about the human, private to operators (030), carries a free-text note |
+-- | arrival_source_pending | DELETE | reviewed | a GitHub id parked with its outreach tag: an ops fact, never on the record (086) |
+-- | arrival_sources | DELETE | reviewed | household to outreach tag: an ops fact, never on the record (086) |
 -- | ashore | KEEP | - | which handle came ashore; append-only, the town repo shows it |
--- | berth_heard | DELETE | awaiting | a berth's parked where-did-you-hear answer: 030's rules, no pen reads it |
--- | claims | DELETE | awaiting | the DRAFT rows only (007: a draft is a household's private compose space); the public docket stays |
+-- | berth_heard | DELETE | reviewed | a berth's parked where-did-you-hear answer: 030's rules, no pen reads it |
+-- | claims | DELETE | reviewed | the DRAFT rows only (007: a draft is a household's private compose space); the public docket stays |
 -- | crossing_receipts | KEEP | - | the crossing's public receipts |
 -- | depictions | KEEP | - | media-door URLs of pictures made of a resident, append-only record |
 -- | durable_event_memberships | KEEP | - | an ended event's window: already answered by the event's public page (103: "WHAT THIS STORES IS ALREADY PUBLIC") |
@@ -42,21 +42,21 @@
 -- | durable_event_rooms | KEEP | - | an event's rooms as its public page gave them (103) |
 -- | durable_room_says | KEEP | - | a closed room's says: speaker, instant, place and reply edge, all on the public conversations page; no words (103) |
 -- | durable_rooms | KEEP | - | closed rooms as fixed public records: ids, bounds, participants (103; dungeon-wall says are filtered out before they are written) |
--- | earpiece_wakes | DELETE | awaiting | a resident's wake log: row policy for one household (026) |
+-- | earpiece_wakes | DELETE | reviewed | a resident's wake log: row policy for one household (026) |
 -- | escrow_projection | KEEP | - | a projection of public stamps |
 -- | gangway_acts | KEEP | - | the gangway's public acts |
 -- | household_harnesses | SCRUB | reviewed | a resident's harness secret and address (item 3 below) |
 -- | household_pins | KEEP | - | handle, login, GitHub id: the town's public github-ids.json |
--- | households | SCRUB | awaiting | `human` (a name 019 calls the human's own, 101 calls it the private name: unsure which, so it goes) and the `request` part of `likeness_state` (092: PRIVATE); every other column prints into the public households.json |
--- | invite_holds | DELETE | awaiting | the hands' judgment about a household, internal by its own header (087) |
+-- | households | SCRUB | reviewed | `human` (a name 019 calls the human's own, 101 calls it the private name: unsure which, so it goes) and the `request` part of `likeness_state` (092: PRIVATE); every other column prints into the public households.json |
+-- | invite_holds | DELETE | reviewed | the hands' judgment about a household, internal by its own header (087) |
 -- | law_projection | KEEP | - | a projection of the public law |
 -- | letter_notes | DELETE | reviewed | a household's marks on its letters (item 5; "empty both is fine yeah") |
--- | letter_opens | DELETE | awaiting | which letters a household has opened: row policy, not an act, never public (029) |
--- | mail_blocks | DELETE | awaiting | a household blocks a household: private to the two houses and the office (083) |
+-- | letter_opens | DELETE | reviewed | which letters a household has opened: row policy, not an act, never public (029) |
+-- | mail_blocks | DELETE | reviewed | a household blocks a household: private to the two houses and the office (083) |
 -- | mark_carried | KEEP | - | which settlement carried a mark; derived from public files |
 -- | mark_versions | KEEP | - | the public marks' versions |
 -- | marks | KEEP | - | the public record |
--- | oauth_berths | SCRUB | awaiting | the hash goes (item 2, reviewed); the card (a parked, not yet co-signed declaration) goes too: the reviewer leans to null it, and Darko confirms (a flow may depend on it) |
+-- | oauth_berths | SCRUB | reviewed | the hash goes (item 2, reviewed); the card (a parked, not yet co-signed declaration) goes too: the reviewer leans to null it, and Darko confirms (a flow may depend on it) |
 -- | oauth_clients | KEEP | - | dynamic registrations of PUBLIC clients (RFC 7591, oauth.mjs); no secret is stored |
 -- | oauth_codes | DELETE | reviewed | item 1 |
 -- | oauth_key_claims | DELETE | reviewed | item 1: ask_hash is a capability |
@@ -64,19 +64,19 @@
 -- | oauth_tokens | DELETE | reviewed | item 1: every sign-in and household key |
 -- | office_media | KEEP | - | the media quota ledger: byte accounting (household, sha, bytes), no content |
 -- | office_meta | KEEP | - | the town log's drain cursor |
--- | office_role_audit | SCRUB | awaiting | who granted which role stays (GitHub logins the town already shows); the operator's free-text `note` goes |
--- | office_roles | SCRUB | awaiting | the roles stay, by GitHub id and login; the operator's free-text `note` about a person goes |
--- | office_town_journal | DELETE | awaiting | 032 makes it office_api's alone with no export ("rows that are not yet the record (a letter before it sails)"), which is this file's own rule for private; it has a free-text payload. The drain reads past a cursor and never needs old rows |
--- | parcel_room_nonces | DELETE | awaiting | a purchase's retry key: office_api's alone, in no export (096) |
+-- | office_role_audit | SCRUB | reviewed | who granted which role stays (GitHub logins the town already shows); the operator's free-text `note` goes |
+-- | office_roles | SCRUB | reviewed | the roles stay, by GitHub id and login; the operator's free-text `note` about a person goes |
+-- | office_town_journal | DELETE | reviewed | 032 makes it office_api's alone with no export ("rows that are not yet the record (a letter before it sails)"), which is this file's own rule for private; it has a free-text payload. The drain reads past a cursor and never needs old rows |
+-- | parcel_room_nonces | DELETE | reviewed | a purchase's retry key: office_api's alone, in no export (096) |
 -- | position_snapshot_rows | KEEP | - | derived from public acts |
 -- | position_snapshots | KEEP | - | derived from public acts |
 -- | posts | KEEP | - | the public calendar and posts |
 -- | projection_heads | KEEP | - | a projection cursor |
--- | refused_acts | DELETE | awaiting | the private log of an act a door refused, for 90 days (098) |
+-- | refused_acts | DELETE | reviewed | the private log of an act a door refused, for 90 days (098) |
 -- | register_versions | KEEP | - | the public register's versions |
 -- | registry | KEEP | - | the store's own object registry |
 -- | registry_meta | KEEP | - | the households file's metadata |
--- | reports | DELETE | awaiting | a resident's report of a resident: private to the filer and the town's hands (084) |
+-- | reports | DELETE | reviewed | a resident's report of a resident: private to the filer and the town's hands (084) |
 -- | resident_notes | DELETE | reviewed | item 5; "empty both is fine yeah" |
 -- | responses | KEEP | - | RSVPs; the public acts already carry their kind and budget (026) |
 -- | settlement_decisions | KEEP | - | the settlement's public decisions |
@@ -126,7 +126,7 @@
 -- | world_snapshots | KEEP | - | the public notary's snapshots |
 --
 -- UNSURE, for Darko (kept as they are until he says): household_pins.note and renamed (free prose in the public
--- github-ids.json). Leaning, for him to confirm: oauth_berths.card goes (above).
+-- github-ids.json). His "yes to all" (2026-11-27) gave no word on these, so they stay. oauth_berths.card goes (ruled, above).
 --
 -- Kept on purpose, as the public record: household_pins.login, identities.gh_login, office_roles.login,
 -- office_role_audit.login, town_residents.github_address (GitHub logins the town already shows),
@@ -167,39 +167,39 @@ DELETE FROM letter_notes;
 
 -- 6. Everything else a household keeps to itself or the office keeps from the record (Truey's finding 1 on
 --    #1206). Each statement carries its own AWAITING line: none of these is Darko's ruling yet.
--- AWAITING: arrival_source_pending (a GitHub id parked with an outreach tag)
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_source_pending (a GitHub id parked with an outreach tag)
 DELETE FROM arrival_source_pending;
--- AWAITING: arrival_sources (household to outreach tag)
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_sources (household to outreach tag)
 DELETE FROM arrival_sources;
--- AWAITING: arrival_heard (where a joining human heard of Postmark, with a free-text note)
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_heard (where a joining human heard of Postmark, with a free-text note)
 DELETE FROM arrival_heard;
--- AWAITING: berth_heard (a berth's parked answer to the same question)
+-- RULED (Darko, 2026-11-27, "yes to all"): berth_heard (a berth's parked answer to the same question)
 DELETE FROM berth_heard;
--- AWAITING: claims, draft rows only (007: a draft is private to its household until staked; the docket stays whole)
+-- RULED (Darko, 2026-11-27, "yes to all"): claims, draft rows only (007: a draft is private to its household until staked; the docket stays whole)
 DELETE FROM claims WHERE status = 'draft';
--- AWAITING: reports (a resident's report, private to the filer and the town's hands)
+-- RULED (Darko, 2026-11-27, "yes to all"): reports (a resident's report, private to the filer and the town's hands)
 DELETE FROM reports;
--- AWAITING: mail_blocks (a household blocks a household, private to the two houses)
+-- RULED (Darko, 2026-11-27, "yes to all"): mail_blocks (a household blocks a household, private to the two houses)
 DELETE FROM mail_blocks;
--- AWAITING: invite_holds (the hands' judgment about a household)
+-- RULED (Darko, 2026-11-27, "yes to all"): invite_holds (the hands' judgment about a household)
 DELETE FROM invite_holds;
--- AWAITING: letter_opens (which letters a household has opened)
+-- RULED (Darko, 2026-11-27, "yes to all"): letter_opens (which letters a household has opened)
 DELETE FROM letter_opens;
--- AWAITING: earpiece_wakes (a resident's wake log)
+-- RULED (Darko, 2026-11-27, "yes to all"): earpiece_wakes (a resident's wake log)
 DELETE FROM earpiece_wakes;
--- AWAITING: refused_acts (the private log of refused acts)
+-- RULED (Darko, 2026-11-27, "yes to all"): refused_acts (the private log of refused acts)
 DELETE FROM refused_acts;
--- AWAITING: parcel_room_nonces (a room purchase's retry key)
+-- RULED (Darko, 2026-11-27, "yes to all"): parcel_room_nonces (a room purchase's retry key)
 DELETE FROM parcel_room_nonces;
--- AWAITING: office_town_journal (the town's input log: letters not yet sailed, office_api's alone, in no export)
+-- RULED (Darko, 2026-11-27, "yes to all"): office_town_journal (the town's input log: letters not yet sailed, office_api's alone, in no export)
 DELETE FROM office_town_journal;
--- AWAITING: office_roles (the operator's free-text note about a person; the role and login stay)
+-- RULED (Darko, 2026-11-27, "yes to all"): office_roles (the operator's free-text note about a person; the role and login stay)
 UPDATE office_roles SET note = NULL WHERE note IS NOT NULL;
--- AWAITING: office_role_audit (the same note on the audit line; the line stays)
+-- RULED (Darko, 2026-11-27, "yes to all"): office_role_audit (the same note on the audit line; the line stays)
 UPDATE office_role_audit SET note = NULL WHERE note IS NOT NULL;
--- AWAITING: oauth_berths (card: a parked, not yet co-signed declaration; Darko confirms, a flow may depend on it)
+-- RULED (Darko, 2026-11-27, "yes to all"): oauth_berths (card: a parked, not yet co-signed declaration; Darko confirms, a flow may depend on it)
 UPDATE oauth_berths SET card = NULL WHERE card IS NOT NULL;
--- AWAITING: households.human (the human's name: 019 says public file, 101 says private) and households.likeness_state's
+-- RULED (Darko, 2026-11-27, "yes to all"): households.human (the human's name: 019 says public file, 101 says private) and households.likeness_state's
 -- `request` (092: PRIVATE). The official pointer and history in likeness_state stay (the public registry projects them).
 UPDATE households SET human = NULL, likeness_state = NULLIF(likeness_state - 'request', '{}'::jsonb) WHERE human IS NOT NULL OR likeness_state ? 'request';
 

@@ -105,30 +105,35 @@ test("the readback has zero_ labels (to be 0) and present_ labels (to be above 0
   assert.deepEqual(LABELS.filter((l) => !/^(zero|present)_/.test(l)), [], "a label that is neither zero_ nor present_ is read as neither");
 });
 
-test("every `awaiting` row has its AWAITING line, and an AWAITING line names only an `awaiting` row (nothing is quietly reviewed)", () => {
-  const awaiting = ROWS.filter((r) => r.status === "awaiting").map((r) => r.table);
-  assert.ok(awaiting.length >= 12, `the new deletes await Darko: ${awaiting.length}`);
-  for (const t of awaiting) assert.ok(AWAITING_LINES.some((l) => new RegExp(`^-- AWAITING: ${t}\\b`).test(l)), `${t} awaits Darko's review and has no -- AWAITING: ${t} line`);
-  for (const l of AWAITING_LINES.filter((x) => !x.startsWith("-- AWAITING: Darko's review"))) {
-    const t = /^-- AWAITING: ([a-z0-9_]+)/.exec(l)[1];
-    assert.ok(awaiting.includes(t), `"${l}" names ${t}, which the table does not mark awaiting`);
-  }
-  // The REVIEWED line is Darko's own words and names two tables; the table must not call more `reviewed` than his ruling covered.
+// Darko ruled the fifteen-line list on 2026-11-27 ("yes to all", CORE-165's Rulings). Every row that awaited him is now
+// `reviewed`, each with a RULED line beside its statement, and nothing awaits. The `reviewed` set is pinned to exactly what
+// his two rulings covered, so a row can't become `reviewed` without a ruling naming it.
+const RULED_1123 = ["household_harnesses", "letter_notes", "oauth_codes", "oauth_key_claims", "oauth_pending", "oauth_tokens", "resident_notes", "town_pot_receipts"];
+const RULED_1127 = ["arrival_heard", "arrival_source_pending", "arrival_sources", "berth_heard", "claims", "earpiece_wakes", "households", "invite_holds",
+  "letter_opens", "mail_blocks", "oauth_berths", "office_role_audit", "office_roles", "office_town_journal", "parcel_room_nonces", "refused_acts", "reports"];
+// one RULED line per statement; the header's own summary line ("every delete and scrub …") names no table
+const RULED_LINES = SCRUB.split("\n").filter((l) => /^-- RULED \(Darko, 2026-11-27, "yes to all"\): [a-z0-9_]/.test(l) && !/"\): every delete and scrub/.test(l));
+test("nothing awaits Darko: every reviewed row is one his rulings named, and each 11-27 row has its RULED line", () => {
+  assert.deepEqual(ROWS.filter((r) => r.status === "awaiting").map((r) => r.table), [], "a row still awaits Darko's review");
+  assert.deepEqual(AWAITING_LINES, [], "an -- AWAITING: line stands");
   const reviewed = ROWS.filter((r) => r.status === "reviewed").map((r) => r.table).sort();
-  assert.deepEqual(reviewed, ["household_harnesses", "letter_notes", "oauth_codes", "oauth_key_claims", "oauth_pending", "oauth_tokens", "resident_notes", "town_pot_receipts"]);
-  assert.match(SCRUB, /^-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" \(resident_notes, letter_notes\)$/m);
+  assert.deepEqual(reviewed, [...RULED_1123, ...RULED_1127].sort(), "the table calls `reviewed` exactly what Darko's two rulings covered");
+  for (const t of RULED_1127) assert.ok(RULED_LINES.some((l) => new RegExp(`^-- RULED \\(Darko, 2026-11-27, "yes to all"\\): ${t}\\b`).test(l)), `${t} was ruled on 11-27 and has no RULED line beside its statement`);
+  for (const l of RULED_LINES) assert.ok(RULED_1127.includes(/\): ([a-z0-9_]+)/.exec(l)[1]), `"${l}" names a table the 11-27 ruling did not`);
+  // The REVIEWED line is Darko's own words: both rulings, quoted and dated.
+  assert.match(SCRUB, /^-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" \(resident_notes, letter_notes\); Darko, 2026-11-27 "yes to all" \(.+\)$/m);
 });
 
 // ── 2. THE GATE (lib.sh § uat_scrub_gate): the unreviewed scrub still refuses ─────────────────────────────────────
-bashTest("the gate REFUSES the real scrub.sql while any AWAITING line stands, and passes the same file with them removed", () => {
+bashTest("the gate PASSES the real, ruled scrub.sql, and REFUSES the same file once an AWAITING line is added", () => {
   const real = lib('uat_scrub_gate scrub.sql; echo "rc=$?"');
-  assert.match(real.stdout, /AWAITING/, `the refusal names the AWAITING lines: ${real.stdout}`);
-  assert.match(real.stdout, /rc=1/, "a refusal returns 1");
-  // the control: the same file, AWAITING lines gone, is allowed to run — so the refusal above was the AWAITING lines and nothing else
-  const cleared = join(SCRATCH, "scrub-cleared.sql");
-  writeFileSync(cleared, SCRUB.split("\n").filter((l) => !/^-- AWAITING:/.test(l)).join("\n"));
-  const ok = lib('uat_scrub_gate "$F"; echo "rc=$?"', { F: cleared });
-  assert.equal(ok.stdout.trim(), "rc=0", `a reviewed scrub with nothing awaiting may run: ${ok.stdout}`);
+  assert.equal(real.stdout.trim(), "rc=0", `the ruled scrub, nothing awaiting, may run: ${real.stdout}`);
+  // the control: the same file with one AWAITING line refuses, so the pass above is the gate reading it, not a gate that passes anything
+  const pending = join(SCRATCH, "scrub-pending.sql");
+  writeFileSync(pending, SCRUB.replace(/^(-- REVIEWED: .*)$/m, "$1\n-- AWAITING: a new delete Darko has not seen"));
+  const no = lib('uat_scrub_gate "$F"; echo "rc=$?"', { F: pending });
+  assert.match(no.stdout, /AWAITING/, `the refusal names the AWAITING lines: ${no.stdout}`);
+  assert.match(no.stdout, /rc=1/, "a refusal returns 1");
 });
 
 bashTest("the gate also refuses an unreviewed REVIEWED line, a missing one, and an unreadable file", () => {
