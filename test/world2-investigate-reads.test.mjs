@@ -146,13 +146,19 @@ let SKELETON_ROWS = null;
 const FALLBACK_SKELETON = [
   { kind: "skeleton", key: "light", path: "WORLD/skeleton.json", data: { from: "NE" } },
 ];
+// POS-1234 (WLD-197): the skeleton and the oracle's engine are read at ONE resolved ref, the clone's blessed one (test/helpers/world-pair.mjs).
+// This read the clone's WORKING TREE while the engine below reads the blessed tools, so a clone whose checkout and newest blessing differ
+// handed the engine's strict regionAnchors a skeleton from the other ref.
+// Resolved ONCE, as a promise both hooks await: the hooks do not run in file order, so neither may read what the other sets.
+let PAIR_WHY = null;
+const PAIR_READY = (async () => {
+  const { resolveWorldPair } = await import("./helpers/world-pair.mjs");
+  return resolveWorldPair(WORLD_CLONE);
+})().catch((e) => { PAIR_WHY = String(e?.message ?? e); return null; });
 before(async () => {
-  try {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const doc = JSON.parse(readFileSync(join(WORLD_CLONE, "WORLD", "skeleton.json"), "utf8"));
-    SKELETON_ROWS = Object.entries(doc).map(([key, data]) => ({ kind: "skeleton", key, path: "WORLD/skeleton.json", data }));
-  } catch { SKELETON_ROWS = FALLBACK_SKELETON; }
+  const pair = await PAIR_READY;
+  const { skeletonRowsOf } = await import("./helpers/world-pair.mjs");
+  SKELETON_ROWS = pair ? skeletonRowsOf(pair.skeleton) : FALLBACK_SKELETON;
 });
 
 // The receipt's three store sources (POS-142 S3 item 4): `settlements`, the
@@ -199,16 +205,16 @@ let ENGINE = null;
 let ENGINE_WHY = null;
 before(async () => {
   try {
-    const branches = await import("../src/world-branches.mjs");
     const { pathToFileURL } = await import("node:url");
     const { join } = await import("node:path");
-    const clone = WORLD_CLONE;
-    if (!clone) throw new Error("WORLD_CLONE is unset");
+    if (!WORLD_CLONE) throw new Error("WORLD_CLONE is unset");
+    const pair = await PAIR_READY;
+    if (!pair) throw new Error(`the clone's blessed ref could not be resolved (${PAIR_WHY})`);
     // AT THE BLESSED REF, as the door's own engine is (world2-serve.mjs § the blessed
     // engine). This read the freshest main until 2026-10-19, which said "loaded the
     // way the door loads it" and was not: a world pin past the last settlement
     // (WLD-83's, at world#257's descent) gave the oracle an engine the door did not run.
-    const dir = branches.materializeAtRef(clone, branches.blessedRef(clone), "tools");
+    const dir = pair.toolsDir; // the SAME ref the skeleton above was read at
     const at = (f) => import(pathToFileURL(join(dir, "tools", f)).href);
     const [verbs, build] = await Promise.all([at("world-verbs.mjs"), at("world-build.mjs")]);
     ENGINE = { verbs, build };

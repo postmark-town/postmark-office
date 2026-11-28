@@ -153,6 +153,7 @@ const ROSTER = {
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-904: bare, with no credential in reach, it refuses for want of --state before it reads a clone or sends anything
   "tools/bluesky-publish.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "--state <dir> is required" },
+  "tools/bluesky-pds-proof.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "usage: bluesky-pds-proof.mjs" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
@@ -236,6 +237,9 @@ const ROSTER = {
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
   // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
   "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
+  "deploy/durable-rooms-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/durable-rooms-pass.mjs" },
+  // STAR-237: the keep tick's Hearth joins and queued entry pay — no arguments, so it answers its usage and touches nothing
+  "deploy/hearth-joins.mjs": { args: [], code: 2, needle: "usage: node deploy/hearth-joins.mjs" },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
@@ -252,6 +256,8 @@ const ROSTER = {
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
   "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
+  // POS-1259: bare, it asks for --dry-run or --apply before it reads the store, the clone or GitHub
+  "tools/bind-household-account.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/repair-dreaming-household.mjs": { args: ["--bogus"], code: 2, needle: "no arguments but --dry-run" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
@@ -317,6 +323,7 @@ const ROSTER = {
   // No --world-repo: stops on usage before any git or Postgres (POS-612, 075).
   "world2/tools/amend-carried.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
+  "world2/tools/spire-forward-reconcile.mjs": { args: [], env: NO_PG, code: 2, needle: "spire-forward-reconcile.mjs: pass --claim" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },
   // No --world-repo: stops on usage before any git or Postgres (postmark#2897).
@@ -331,6 +338,7 @@ const ROSTER = {
   // POS-341 part 4: the quest snapshot on the store's key base. Stops on a clone that is not a town, before any store is read.
   "world2/tools/quest-snapshot-run.mjs": { args: ["--clone", NOWHERE], env: NO_PG, code: 1, needle: "no town clone with tools/quest-progress.mjs" },
   "world2/tools/town-index-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: town-index-ingest.mjs" },
+  "world2/tools/replay-rooms.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: replay-rooms.mjs" },
   "world2/tools/state-log-rederive.mjs": { args: [], env: { ...NO_PG, WORLD2_PG_URL: "postgres://nobody@localhost/not_scratch" }, code: 2, needle: "REFUSED · WORLD2_PG_URL must name" },
   // POS-155 gave this tool a second door (`--window <N>`, a candle window) beside
   // the exact-crossing `--windows`, so its no-args sentence names both. The

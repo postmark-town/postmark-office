@@ -30,6 +30,8 @@ import { freshenClone, tendingBefore, cloneDirt, needsTendingError, isNeedsTendi
 import { enqueueLetter } from "../src/write.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
+import { seedLetterFields } from "./fixture.mjs"; // POS-1165: a clone that stands for the town carries the reviewed shared field policy
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sh = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const BOT = ["-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid"];
@@ -50,6 +52,7 @@ function town() {
     "WHITE_PAGES/wright/ADDRESS.md": "---\nhandle: wright\n---\n\n# wright\n",
     "WHITE_PAGES/limen/ADDRESS.md": "---\nhandle: limen\n---\n\n# limen\n",
   })) { mkdirSync(dirname(join(clone, rel)), { recursive: true }); writeFileSync(join(clone, rel), text); }
+  seedLetterFields(clone);
   sh(clone, "add", "-A");
   sh(clone, ...BOT, "commit", "-qm", "fixture town");
   sh(clone, "push", "-q", "-u", "origin", "main");

@@ -219,7 +219,11 @@ export function capacityOf(markOrValue, dials = {}) {
 }
 
 /** Is this chest portable? A fixed chest — a bowl — is not. */
-export const portableOf = (mark, dials = {}) => (mark && typeof mark.portable === "boolean" ? mark.portable : chestDials(dials).portable);
+// POS-1260: an instance's stored word counts as the Boolean it spells ("false" is not-portable); anything else falls back to the dial, whose default is untouched
+export const portableOf = (mark, dials = {}) => {
+  const own = mark?.portable === true || mark?.portable === "true" ? true : mark?.portable === false || mark?.portable === "false" ? false : null;
+  return own ?? chestDials(dials).portable;
+};
 /** The chest's welcome: "open" unless it says otherwise. */
 export const welcomeOf = (mark, dials = {}) => (mark && typeof mark.welcome === "string" ? mark.welcome : chestDials(dials).welcome);
 export const WELCOMES = Object.freeze(["open", "closed"]);

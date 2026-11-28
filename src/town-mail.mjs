@@ -487,7 +487,7 @@ async function sendRow(args, key, db, clone, odb, nonce) {
   const spent = await spentNonce(odb, key, { from: args?.from, nonce });
   if (spent) return duplicateReceipt(spent, nonce);
 
-  const plan = validateLetter(args, key, db); // the office's own fence, unchanged and first
+  const plan = validateLetter(args, key, db, null, { clone }); // the office's own fence, unchanged and first
 
   // A RESEND (POS-1027): this letter stands in for one of the sender's that bounced. Judged AFTER the fence (so the key holds the sender before anything about a
   // letter is confirmed) and AFTER the nonce lookup above (so a retry ends where the first call ended). The original is never touched: the link is this row's own

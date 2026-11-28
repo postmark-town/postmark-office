@@ -732,6 +732,16 @@ The next tick settles any record **before** its pull (`pull` ok `unmade` or `lan
 - **What the deploy does not settle:** a tick commit stranded **before** this release has no record, so the new tick doesn't treat it as its own. Its pull refuses as before, and the sentinel's `town_clone` probe names it. Run `git -C /srv/postmark-office/town-clone status -sb` once after the deploy. It should show no `ahead`.
 - **Rollback:** revert the code. The old script never reads the record, so a leftover one changes nothing. Remove it only once `git status -sb` shows the clone level with main.
 
+### A merged Hearth design joins the Hearth ballot by itself, and its entry pay is queued (STAR-237)
+
+`deploy/hearth-joins.mjs` is the tick's step `hearth_joins` (soft, in the receipt after `sparks`, before the snapshot). Under the town lock, after every other write to the clone, it adds each merged design that is not yet a candidate of `postmark-pen/ballot-hearth-default` through the ballot's own amend act (`src/ballots-store.mjs § ballotActInStore`, in this process, as the office's hand `office`: a hand only the tick may name, never the town door), in one act and one town commit. It reads which designs exist from the town clone's main with the quest pass's own `hearthEntries`, and the join window from the ballot's own words (`join through Sun 6 Dec`); a window it cannot read refuses by name. It also plans the Hearth quest, never runs it: with lines owed it writes ONE row, `hearth-entry-owed.json` beside `office-keep.jsonl`, holding every owed entry, its household, the stamps, the digest and the command that applies exactly that plan, and the receipt reads `ok` with `owed:hearth_entry`. The pass itself stays by hand (POS-632).
+
+- **Nothing to install.** Code only: no unit, environment or migration. The row's directory is the receipt log's (`/srv/postmark-harbor/`, already writable by the unit's user); a write that fails is a refused step (`exit:1`), and the joins are unaffected.
+- **The office's environment is root-only** (`/etc/postmark-office.env`, mode 600; the units load it as root), so the office user can't `.` it. Every by-hand run below loads it as root and then runs as the office user, with the office user's home (so git pushes with its own credential): `sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; export HOME=/home/meepo USER=meepo LOGNAME=meepo; cd /srv/postmark-office && exec setpriv --reuid=meepo --regid=meepo --init-groups node <the command>'`. (2026-11-24: the first by-hand pay's `sudo -u meepo sh -c '. /etc/postmark-office.env …'` failed at the `.` before anything ran.)
+- **Before the tag goes live, read what it would do:** the line above with `node deploy/hearth-joins.mjs --town "$TOWN_CLONE" --dry` prints the amend and the owed row it would make, and writes nothing.
+- **To pay what it queued:** read the row, open each entry, and run the `apply` line in it by hand (`tools/quest-pay-plan.mjs`, the by-hand pass, which refuses the tick), the same way: the line above with the row's `apply` command. The next tick finds nothing owed and rewrites the file with `"entries": []`.
+- **Rollback:** revert the code. The joins already made are ballot choices like any other (nothing is ever taken off a staking ballot); the file `hearth-entry-owed.json` is read by nothing else.
+
 ### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
 
 Part 5b (built on w42 as office #433, re-landed on w43) deleted `postmark-office-rehydrate.{service,timer}`, `deploy/office-rehydrate.sh` and the transitional `deploy/office-tick.sh` from the repo, and moved the rehydrate's world hydration (the store's world graph snapshot; `world.db` is retired since switch 3, office #294) into the keeping tick as `deploy/office-world-hydrate.sh`. A code deploy never removes an installed unit, so the box keeps firing the old rehydrate until these steps run. Every step is on the box, as root. **Wright or Darko runs them; no lane does.**
@@ -1726,8 +1736,10 @@ technical settlement, 2026-11-19 05:33Z). Each call, for its one kind:
   login file and never printed. Neither value, nor the session token, nor any
   Authorization header is ever printed, written to state or put in a receipt.
 - **The calls:** `com.atproto.server.createSession`, then
-  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at the deterministic
-  rkey `crossing-<n>` or `settlement-<n>`.
+  `com.atproto.repo.createRecord` of an `app.bsky.feed.post` at a deterministic
+  **TID** (the correction below: the first real send, S187 at 2026-11-22 20:06Z,
+  was refused twice because the post's key type is `tid` and the first
+  version's `crossing-<n>` / `settlement-<n>` are not TIDs).
   - **After anything but success:** the key is asked with `com.atproto.repo.getRecord`
     before anything else is sent. A record there means delivered, and it is kept,
     never overwritten.
@@ -1746,9 +1758,11 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   carry no number.
 - **`--state <dir>` (required):** one directory both calls share, outside any
   checkout, writable by the posting unit. It holds one file per event
-  (`<rkey>.json`: the event, the payload as first composed, every attempt and its
-  outcome, the posted uri) and the event's numbered lock (`<rkey>.lock.<k>`, with
-  `<rkey>.free.<k>` added beside it on release). It is each event's whole history,
+  (`crossing-<n>.json` or `settlement-<n>.json`, the event's NAME, which is not its
+  record key: the event with its instant, the record key, the payload as first
+  composed, every attempt and its outcome, any re-arms, the posted uri) and the
+  event's numbered lock (`<name>.lock.<k>`, with `<name>.free.<k>` added beside
+  it on release). It is each event's whole history,
   and the floor: keep it, and don't remove a lock file by hand.
 - **Safe to repeat:** every call is safe on every tick and from a repeated or
   concurrent hook. A posted event is answered from its file with no network, and
@@ -1757,12 +1771,12 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   reopened while it is the highest, so neither a stale takeover nor a release can
   let a second sender in.
 - **Stdout:** one JSON line per event the call acted on, oldest first:
-  - `{event, rkey, outcome, sends, uri?, detail?}`;
+  - `{event, rkey, outcome, sends, uri?, detail?, rearmed?}`;
   - `{event, rkey, outcome: "held", detail}` for an owed event whose record can't be read;
   - `{event, outcome: "skipped", detail}` for a named event with nothing to post.
   When the call acted on none, it prints one line, `{kind, outcome: "skipped" | "unstarted", detail}`.
 - **Exit codes** come from the most urgent line:
-  - `1`: failed (both sends spent; logged; never sent again);
+  - `1`: failed (both sends spent; logged; never sent again until an operator re-arms it), or `not-rearmed`;
   - `3`: waiting, held, unconfigured or unstarted (nothing more sent; the next run asks again);
   - `0`: posted, reconciled, already, busy or skipped;
   - `2`: cannot run (usage).
@@ -1777,9 +1791,89 @@ node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> [-
   - **A late Daily:** a Daily curated at any hour is posted by the next tick
     after it is committed, however late.
 - **Reading it back, with no key:**
-  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/crossing-<n>`.
+  `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=at://<the account's did>/app.bsky.feed.post/<the event's rkey>`,
+  the `rkey` its receipt line prints (the TID; also `rkey` in the event's state file).
   Confirm the account's handle and did first: `tools/ops-awareness.mjs` reads
   `postmark-town.bsky.social`, while the issue names `@postmark.town`.
+
+### The record key is a TID, and the operator's re-send (POS-904 correction, 2026-11-22)
+
+**The key.** `app.bsky.feed.post` keys are TIDs (13 characters of
+`234567abcdefghijklmnopqrstuvwxyz`, the first among `234567abcdefghij`), and the
+PDS runs that key schema before it does anything else. The publisher derives one
+TID per event from the event's **own immutable instant**, never the moment it
+publishes: the 53-bit microsecond field is the instant's milliseconds, then the
+event's number mod 1000, and the 10-bit clock id is fixed per kind (crossing 1,
+settlement 2). So one event has one key however often it is run, and at whatever
+hour; two kinds never alias; two events of a kind in one second still differ (the number
+is in the key). Two events of a kind can share a key only if they share an instant to the
+millisecond **and** their numbers differ by a multiple of 1000; the current S1-S187 keys are
+all distinct. The publisher refuses such a pair **sequentially**: the second, finding the first
+already recorded with that key, is `held` and nothing is sent. It does **not** serialize two
+such events running **at the same moment** (the check reads the state directory under each
+event's own lock, not under one lock for the kind), so that concurrent alias risk is open and
+tracked as POS-1190, not closed by this correction.
+- **crossing:** the crossing's sailing instant, 00:00Z or 12:00Z (`src/crossings.mjs § crossingSailsAt`).
+- **settlement:** the committer time of the commit the blessed tag `settlement/S<n>`
+  peels to (a tag never moves; a commit's time never changes).
+- An event whose source cannot give its instant is `held` with nothing sent. No
+  instant is ever guessed. The instant is bound into the state file when the event
+  is first seen (`event.at`).
+- The **state file keeps the event's name** (`settlement-187.json`), so nothing
+  already recorded is lost; the record key lives inside it (`rkey`). A state written
+  before the correction, if it is not failed, takes the TID on its next run
+  (`legacy_rkey` keeps the old one, and the first thing asked is getRecord).
+
+**The operator's re-send of ONE failed event, with a receipt.** An ordinary or scheduled
+run never re-arms a failure (the keep passes no such flag). The operator does it, once,
+by hand, naming the event and saying why:
+```sh
+node tools/bluesky-publish.mjs settlement --world <world clone> --state <dir> --settlement 187 --rearm-failed "<reason>"
+```
+It re-arms only a state that says `failed`; gives the event a fresh budget of two
+sends under its TID; keeps its whole history (the failed attempts stay, and a `rearms`
+entry records when, why, the sends spent and the key it failed under); sends the words
+first composed; and asks `getRecord` first, so a record already standing at the key is
+reconciled and never posted twice. The failed file is never deleted. Its stdout line is the
+receipt: `{event, rkey, outcome, sends, rearmed: {at, reason, prior_sends, prior_key, key}}`.
+Nothing else is carried or discovered by that call. S187 is its first use, after the
+correction is live and the switch (the env file's readability) is turned back on.
+
+**The proof against the real PDS, without publishing** (`tools/bluesky-pds-proof.mjs`; the
+credential is read by that run from the posting unit's env and never printed or put in an
+argument). As the town's account, validation on, each of two `createRecord` calls carries a
+`swapCommit` that is a valid CID and is not the repo's head, so neither can write: the PDS
+validates the key first, then compares the swap with the head, and persists nothing before that
+(`createRecord.ts`, `transactor.ts § formatCommit`). The run reads the head, the two keys and both
+absences first and **sends nothing if any of it fails**. Expected: the legacy key
+`settlement-187` answers `400 InvalidRequest` ("Invalid record key…"); the TID answers
+`400 InvalidSwap`; `getRecord` reads `RecordNotFound` for both; the head commit is unchanged.
+**The safe route (the posting switch stays off).** `/etc/postmark-bsky.env` stays at mode `000`: do not
+chmod it, source it into a shell, print it, or put either value in an argument. systemd reads an
+`EnvironmentFile` as root, so a transient unit can run the proof as `meepo` with the two names in its
+environment and nothing else touching them (Jetto's equivalent approved route is also fine). The
+**PDS target is the account's own host**, `https://fibercap.us-west.host.bsky.network` (the
+account's did resolves there; the tool's default `https://bsky.social` is the publisher's, not this
+proof's), passed as `--service`. Replace the two marked paths on the operator host: an isolated office
+checkout at the reviewed head, and the World clone that holds `settlement/S187`:
+```sh
+sudo systemd-run --uid=meepo --pipe --wait --collect \
+  -p EnvironmentFile=/etc/postmark-bsky.env \
+  -p WorkingDirectory="<office checkout at the reviewed head>" \
+  "$(command -v node)" tools/bluesky-pds-proof.mjs \
+  --world "<World clone holding S187>" --settlement 187 \
+  --service https://fibercap.us-west.host.bsky.network
+```
+This is the guarded proof, not the deployment and not S187's re-send. Confirm the binding is the town
+account without exposing it (a yes/no compare of the identifier, as Jetto's first run did). The publisher
+stays off, and the failed S187 state is left untouched: its actual re-send (`--rearm-failed`) is only
+after the correction ships.
+
+The run prints one JSON report (no credential, token or header in it), and its exit is 0 only when every
+expected answer came. Return the exit status and the report. The three results it carries (the legacy
+key's `InvalidRequest` from validation, the TID's `InvalidSwap`, both `RecordNotFound` afterwards with an
+unchanged repo head) belong in the PR. Anything unexpected or inconclusive is not a pass, and does not
+authorize a public test post (that is Darko's).
 
 ## Branch previews (`/preview/<slug>/`, 2026-07-20)
 
@@ -2138,6 +2232,42 @@ shows the town's own ferry lines, then `git: committed — ferry: …` and
 three tools run in the ferry again, as before. The socket can stay. To take it
 away, run `sudo systemctl disable --now postmark-town-tool.socket` and remove
 its two unit files.
+
+### UAT only: the stamp trust binding (POS-1214, paired with town POS-1213)
+
+**Never on prod.** Prod binds no trust file, and every stamp verifier behaves
+exactly as before (with `STAMP_UAT_TRUST` unset or empty). This section teaches
+the UAT install; it has not been applied anywhere, and nothing here is a
+successful UAT crossing.
+
+UAT signs its own mints with its own key, so its stamp ledger is a prod-signed
+prefix followed by UAT-signed lines. The town verifier takes a handoff (the base
+key through a trusted seal, UAT's public key only after it: town
+`tools/stamp-verify.mjs` § stampKeyPlan), and the office hands it over from one
+operator-owned file, read through `src/stamp-trust.mjs`:
+
+- **The file:** `/etc/postmark-uat/stamp-trust.json`, owned by root, read-only to
+  the office: `{ "pubkeyPem": "<UAT's PUBLIC key, SPKI PEM>", "afterSeal": "<the
+  trusted seal of the copied prefix's last line, 64 hex>" }`. Public material
+  only: a private key, a third field, a path inside the town clone, or UAT's key
+  equal to the base key is refused by name. The directory doesn't exist on the
+  box until this install makes it.
+- **The town-tool sandbox:** install
+  `deploy/postmark-town-tool@.service-dropin-uat-stamp-trust.conf` as
+  `/etc/systemd/system/postmark-town-tool@.service.d/uat-stamp-trust.conf`, then
+  `sudo systemctl daemon-reload`. It sets the one path the sandbox accepts and
+  binds the file and `src/stamp-trust.mjs` read-only. A missing file stops the
+  instance; an unusable one refuses the verify.
+- **The office's own consumers** read `STAMP_UAT_TRUST` from their own
+  environment, with the same path: `postmark-office.service` (the admission
+  replay and the store's stamp chain), `postmark-ferry.service` (the store mint
+  pass), `postmark-office-keep.service` (the keep tick's verify), and the dev
+  rehearsal's parity gate (`world2/tools/stamp-mint-parity.mjs`) when it runs
+  there. Each gets `Environment=STAMP_UAT_TRUST=/etc/postmark-uat/stamp-trust.json`
+  in a UAT-only drop-in of its own. **That is a later operator install piece:
+  documented here, not applied, and no drop-in for it ships in this tree.**
+- **Rollback:** remove the drop-ins and `daemon-reload`. With the variable gone,
+  every path is production's again.
 
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
@@ -3051,7 +3181,10 @@ Postgres change), or on any machine that can read the bucket:
                                                      # it uploads last, so a night without one didn't finish
     aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
     cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
-    pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> world2-<stamp>.dump
+    # the pen roles first: they are cluster-wide, never in a dump (§ Install); a missing one stops the restore by name.
+    # And a pg_restore of the SERVER's major (16 on prod): a 17 or later sends `SET transaction_timeout`, which a 16
+    # refuses, and the restore stops there (measured in CI, POS-1199)
+    pg_restore --exit-on-error --no-owner -d <new-empty-db> world2-<stamp>.dump
 
 Then put back what rode beside the dump, as `LATEST.json` names it:
 - **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
@@ -3061,10 +3194,27 @@ Then put back what rode beside the dump, as `LATEST.json` names it:
   because its roles are in the dump.
 
 What comes back is up to 24 hours old (the dump's RPO), since the WAL and the
-base backups don't leave the box. **The grants are a named gap.** The dump is
-taken `--no-owner --no-acl`, so it carries the schema and the rows but not the
-pens' grants. They live in the schema files (`world2/schema/*.sql`), and
-re-applying them to a restored store has not been rehearsed.
+base backups don't leave the box. **The grants ride the dump (POS-1199).** It
+is taken `--no-owner` with its ACLs, so every grant and revoke the migrations
+made, and the default privileges, come back with the restore: the office's
+pools, the clearing's pen and the read workers answer on the restored store, as
+the restore rehearsal checks (its grants check compares every privilege with
+live; its office check reads the restored store as `office_api`). What a dump
+never holds is cluster-wide: **make the pen roles before the restore**
+(`world2_owner`, `office_api`, `clearing_job`, `law_ingester`,
+`snapshot_reader`, `stance_reader` and any later grantee, as § Install made
+them). The database's `CONNECT` is Postgres's default, which nothing here
+revokes. **The boundary is the hand carry, not a date.** The box runs the
+hand-carried `/srv/world2-lab/ops/world2-backup.sh`, which a tag deploy does not
+update, so merging or shipping POS-1199 is not that carry. A dump made by the old
+`--no-acl` box script carries no grants, and its restore still comes back
+owner-only, until the corrected script is carried into `/srv/world2-lab/ops/`
+(an operator step still to do, not done by this change). Check any dump before
+trusting it: `pg_restore --list <dump> | grep -c ' ACL '`; zero means no ACL
+entries in that dump. For such a backup, re-applying the grants from
+`world2/schema/*.sql` by hand is the old gap, and is not rehearsed. The
+rehearsal compares grants with live at the time it runs, so a migration made
+since the dump can show as a difference; that difference is not waived.
 
 **`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
 into a scratch database and compares that with a live store, so it needs one
@@ -3717,3 +3867,67 @@ Darko, 2026-11-13: "Printout only", and three answers the same evening: **/a "Ev
 4. Confirm it with the roll-call, whose manifest is the old release's again.
 
 While rolled back, the store's registry no longer follows the sweep's file, so a later cutover's seed refuses by name if they differ; that registry is reconciled by a person before the seed runs again. After a printout is tagged, there is no rollback to the sweep: the store numbers seals and the keeper no longer tags, so the old crossing and the new numbers would disagree. Stop `postmark-settlement.timer` and fix forward; a tag is never moved or deleted.
+
+## 103: durable rooms, and each ended event's own window (POS-1203, CORE-170)
+
+Darko, 2026-11-23 18:35 EST: "sparks, galleries, conversations, they should all be durable". Until this, an event's rooms and gallery were worked out again on every read from the settlements this office remembers (60 of them, the ear's), so every event's gallery went blank about a month after it began, and the conversations page re-derived every room at each start. Now a **closed room is a fixed record in the store**, an **ended event's rooms are fixed to its own window**, the keeping tick fixes both **as they happen**, and the replay writes the history back to the first say once. The settlement an event's window is older than no longer matters once it is fixed. **Live hearing is not touched** (`hearing-window.mjs` keeps its window and its 60); no permission, money, stake or completion rule changes. Everything stored is already public on the conversations page and the event page; a say spoken inside a dungeon's walls is never stored.
+
+- **A room is fixed only when it truly closes:** a settlement passed and the hour after it ran out with no say in the room (`hearing-window.mjs § roomOpen`, the one rule). A room carried across a settlement by a say in that hour, and an open room, keep their ids and are **not** stored yet; when they close, they are fixed under the same id. Old talk with no reply links is a timeline (`has_replies` false) and stays one; a say with no place, or older than the oldest settlement world main holds, is counted and left out, never invented.
+- **An ended event keeps the rooms and says of its own window** (`durable_event_*`): the rooms with a say inside the window near its place, as they stood at the window's end, each with its says up to then. Talk that carries on in one of those rooms later is never the event's attendance, and neither making its sparks nor returning its stake changes the record. The keeping tick's own step fixes **every ended event the public event read covers**, whatever its stake, whether it came due for the money, and whether free-event drafting is configured (§ step 4); the completion's best-effort freeze (`event-sparks.mjs § freezeEventRooms`) is a second, earlier chance and never holds a spark or a stake's return. A flagged frame (below) is carried into the event's record too. **An event still ON (a season longer than the ear's sixty settlements) reads the historical record, not the ear:** `events-store.mjs` takes every published settlement (`hearing.recorded()`), and `eventEvidence` joins the fixed closed rooms with a say in the window near its place (`durable-rooms.mjs § archivedRoomRows`, `eventEvidenceInputs` then `composeEventEvidence`) to the rooms derived from only the says no fixed room holds (the open and carried portion), so the closed history is never reclustered per read. Nothing is made final until the event ends; a window opening before the oldest published settlement is still unknown, not none. The completion's own read (the sparks pass, `completionEdges`) uses the same historical list, so an otherwise-eligible long event is not held for want of rooms on its first pass; what is due, the ledger, backing, return and the free-event cutoff are untouched.
+- **The conversations door** answers `?room=` (by the id it was issued under, an alias, or the same handle in the same second) and `?circle=` (a say's id) for a fixed room from the store, with each say's recorded place. **The bare list and `?before=` list fixed closed rooms from their records too**, by the id they were issued under, so a list, the room's own read and a cold start agree even after the reconstruction's anchors or dials move; the kept rooms still answer for the open and carried rooms, for a room not yet fixed (merged without a room twice) and for the envelope's counts. A store without 103 answers as before.
+
+**The order, Darko's go first (SHIPPING § 1: a store migration), and the history is written, judged, BEFORE the code can read it.** The keeping tick's `rooms` step and the completion's freeze are writers of history the moment the new release runs, and **migration-landed is not approval to write data**: the first new tick with nothing stored would otherwise write every closed room and ended event (the costume awards' frame included, insert-only, so permanent) before anyone looked. So the first write is the operator's replay, from a **staged tree that is not the serving one** (the route § the w43 history uses: a separate directory beside the office, its own `node_modules`, never run from `/srv/postmark-office`, which a keeper launches), **before the train PR is approved**; approving the train PR IS the deploy (§ The auto-deploy), so there is no later moment.
+
+1. **Apply 103 BEFORE the code, from the reviewed commit, and only once the hold is established.** The hold, before anything is applied: coordinate that the train's deploy approval (approving the train PR IS the deploy) cannot happen until the staged dry run, the lead's frame judgment, the apply and the final re-dry-run below are all complete. **If that hold is not established, do not apply 103.** This is the pre-deploy sequence, not a new gate, marker or service.
+   
+   **Apply 103** (the file is not on the box until the tag is rsynced, so source it from the reviewed commit, as 094's § does). Additive, idempotent (re-applying also adds `durable_event_rooms.frame_flag` to a store that took an earlier 103), `office_api` gets INSERT and SELECT on five new tables and nothing else (no UPDATE, no DELETE, nothing to `snapshot_reader`). The release before this one ignores them.
+   On the maintainer's machine (the SQL is read from the reviewed commit and piped over SSH; the database name is derived and tested INSIDE the remote script, as 094's § does, and no box path is read here):
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office   # the maintainer's office clone
+   REF=<the reviewed commit>                     # or origin/train/2026-w49 once #1210 has landed there; the 103 file is the same at both
+   git -C $CLONE fetch -q origin
+   git -C $CLONE show "$REF:world2/schema/103_durable_rooms.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (a separate block, run in a box shell; the probe `world2/tools/migrations-landed.mjs` holds for 103):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('durable_rooms') IS NOT NULL AND to_regclass('durable_room_says') IS NOT NULL AND to_regclass('durable_event_memberships') IS NOT NULL AND to_regclass('durable_event_rooms') IS NOT NULL AND to_regclass('durable_event_room_says') IS NOT NULL, has_table_privilege('office_api', 'durable_rooms', 'INSERT'), has_table_privilege('office_api', 'durable_rooms', 'UPDATE')"   # t|t|f
+   ```
+2. **Stage the reviewed code, once, beside the office** (from the maintainer's machine; `/srv/postmark-office-durable-stage` is a NEW directory and the step refuses one that already holds anything). It holds the commit's tree and its production `node_modules` and nothing else: no clone, no `.db`, no env. Nothing here is on the serving path, so no keeper launches it.
+   ```sh
+   # CLONE and REF are step 1's (the maintainer's clone and the reviewed commit, or the tag once the train has landed)
+   git -C $CLONE fetch -q origin
+   git -C $CLONE archive --format=tar "$REF" | ssh meepo-ec2 'set -e; S=/srv/postmark-office-durable-stage
+     df -h /srv; sudo install -d -o meepo -g meepo -m 0755 "$S"; test -z "$(sudo ls -A "$S")"
+     sudo -u meepo tar -x -C "$S"; cd "$S" && sudo -H -u meepo npm ci --omit=dev --no-audit --no-fund'
+   ```
+3. **The dry run, from the staged tree. It writes nothing.** It connects as the office's own role (`office_api`, from the office's env), the only one holding INSERT, and groups with **every `settlement: sweep` commit on world main** (fetch the world clone first; it refuses to run with none).
+   ```sh
+   sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-durable-stage && runuser -u meepo -- git -C "$WORLD_CLONE" fetch -q origin main && exec runuser -u meepo -- node world2/tools/replay-rooms.mjs --world "$WORLD_CLONE"'   # the World clone is meepo's: fetched as its owner, as the replay reads it; the report, nothing written
+   ```
+   **Read it, and RETURN `suspect_frames` (rooms) and `events.suspect_frames` (events holding one) to the lead for judgment BEFORE any `--apply`; the tests here approve nothing about the real frame, and CORE-155's browsing is not that judgment.** The report: `rooms.closed` / `rooms.to_write` / `rooms.timeline_only` / `rooms.open_or_carried` (not written yet); `says.unplaced`, `says.ungrouped_before_first_settlement`, `says.dungeon_interior_never_read`, `says.first_say`; `events.unknown` (an ended event whose window opens before the oldest settlement world main holds, or whose rooms cannot be told: left as it was, **never written as "no rooms"**); and `suspect_frames`: rooms whose bounds span more than 20 km, written exactly as derived and listed for judgment, never repaired. The costume awards' room `t1793353930000-seraphina` (about 95 km by 99 km) is expected here, and an event holding it is flagged too. **HOLD: if the report is unreadable, errors, or the judgment is not given, STOP. Nothing was written, 103's tables stay empty and ignored by the release that still serves, and the train PR is not approved.**
+4. **Apply, from the same staged tree, only once the lead has judged the frames.** One transaction, idempotent (a second `--apply` writes nothing new and moves no id). Note the start instant.
+   ```sh
+   date -u +%Y-%m-%dT%H:%M:%SZ      # write it down: the apply's start, UTC
+   sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd /srv/postmark-office-durable-stage && exec runuser -u meepo -- node world2/tools/replay-rooms.mjs --world "$WORLD_CLONE" --apply'
+   ```
+   After it: `written.rooms.drift` and `written.rooms.failed` must be `[]` (a stored room the rules would now derive differently is **reported and left**: the stored record is the identity; a non-empty list is a finding to bring back, not something to fix by hand). Prove it from the store (step 7's queries). **Undo, only BEFORE the train PR is approved:** the five tables hold only what this run wrote, so the migration's own rollback (drop them, delete their registry rows) undoes it whole; nothing else was touched.
+5. **Re-run the dry run immediately before approving the train PR** (talk that closed in the gap is the only thing new: the replay is idempotent, so apply again if it lists any, after the same judgment if a frame is flagged). **Then approve the train PR: the deploy.** The new release's `rooms` step then only KEEPS UP (new-only, the few rooms and events since); it never holds history it was not shown.
+6. **It keeps itself current: the keeping tick's `rooms` step (no new timer or service).** `deploy/office-keep.sh` runs `node deploy/durable-rooms-pass.mjs --world "$WORLD_CLONE"` in the tick that already runs, after the settlements rows and the positions snapshot and outside the town lock, as a receipt step (`rooms`: ok, skip `prereq:no_migration` when 103 has not landed or the World holds no settlement, refused otherwise; the roll-call's keep row judges it like its neighbours). It fixes each room once it truly closes and each ended event, **new only**: its inputs (the says no fixed room holds, the marks, the ended events not yet fixed) are read in one short read-only lease that is RELEASED, the unfixed talk is composed with no connection held, rooms land in one small transaction (each room whole or not at all) and each event in its own. A failed write is reported and asked again by the next tick; it is never a prerequisite of a spark or a stake's return (the sparks pass runs earlier, and nothing here waits on or gates it). Its one output line carries counts and ids, and names any frame it flagged. **Order: steps 1-5 first, from the staged tree; the release that carries this step only keeps up, and skips until 103 is there.**
+7. **Prove it, from the store:**
+   ```sh
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*), count(*) FILTER (WHERE has_replies), count(*) FILTER (WHERE frame_flag IS NOT NULL), min(first_at), max(latest_at) FROM durable_rooms"
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM durable_room_says"   # every say in exactly one room: no duplicate act_id is possible
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT e.event_id, e.rooms_count, e.source FROM durable_event_memberships e ORDER BY e.window_from"
+   ```
+   and read an old event's page (`town { read: "calendar", args: { event: "<host>/<slug>" } }`): its `evidence.room_history` is `complete` and its gallery is a gallery, past the 60-settlement window, **where before the replay it answered unknown rooms and a null gallery**.
+
+**Rollback** is the migration's own header: the five tables dropped and their registry rows deleted. The code reads around their absence, so the release can stay; every read then answers as it did before 103. Nothing in the store is edited by this change (a fixed record is insert only; `acts` is untouched).
+
+**What this does not do (named, not hidden):** the kept rooms are still built once per start from `acts` (they answer open and carried rooms and the envelope's counts); a room's stored says carry the place they were fixed with, but its words are read from `acts`, which never changes. An event whose window opens before the oldest settlement world main holds, with no fixed record, stays unknown rather than none. The site's viewers (`calendar.mjs`, `circle-reader-mount.mjs`, `fetch-town-data.mjs`, the event pages) need no change to read this, and the site's own build bounds (25 past-event pages, 400 evidence reads) are the site's (Facet's fit note on CORE-170): durable evidence does not make an omitted page appear. Browsing the durable record (replay, time travel) is CORE-155.
+
+### The events archive (the publisher half; POS-1203 with CORE-174)
+
+`deploy/site-refresh.sh` resets the extract tree before every fetch, so the site's capped events input could never accumulate. The site keeps an archive it merges and writes atomically itself at **`POSTMARK_EVENTS_ARCHIVE`**, and the publisher now (a) hands that path to `tools/fetch-town.mjs` beside `POSTMARK_LETTER_CACHE`, **default `$SITE_REFRESH_ROOT/events-archive.json`** (an explicitly set path is respected; one inside `site/`, `build/` or `town/` is refused), and (b) **seeds it once, only when it does not exist**, from the events input a previous pass left in the extract tree, **before** this pass's reset takes it. The bytes are copied as they are (their own evidence and read stamps stay; nothing is restamped as newly read) and `events-archive.json.seed-note.json` names the source and says it is a *retained pre-reset input, not a verified last-published snapshot* (a release holds `dist-town`, not the raw input, and the build tree's overlaid copy can be a failed attempt's). An existing archive is never touched, an empty or committed input is no seed, and with nothing to seed from the pass logs `events archive: nothing to seed from … a bootstrap coverage limit, not proof nothing was lost`. Nothing is rebuilt from rendered HTML. **Activation and the read-back of whatever source exists are the operator's, in the handover; no production action is taken by the lane.** The site's merge, provenance and atomic write are CORE-174 (#486).

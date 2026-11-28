@@ -1,0 +1,7 @@
+[Unit]
+Description=Keep the office loop-lag record past its 60 minutes, and snapshot it at every idle-transaction kill (POS-1098)
+# Reads telemetry/loop-lag-4380.json and the Postgres log; writes only /var/lib/postmark-loop-lag-keep. Root, to read the log.
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/usr/bin/node /srv/postmark-office/deploy/loop-lag-keep.mjs

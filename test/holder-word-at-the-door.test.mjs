@@ -105,7 +105,12 @@ test("S8 · holderWordOf, the door's one adjudication, pure: the bounds, the tie
   const snap = lawSnapshotFromRows(LAW);
   const cp = (n, p) => snapProperty(snap, n, p);
   const ext = (n) => snap.classes.get(String(n))?.extends ?? null;
-  assert.deepEqual(holderWordOf({ payload: { holder: true, capacity: 12, open: false }, klass: "thing", classProperty: cp, extendsOf: ext }), { holder: true, capacity: 12, open: false });
+  // POS-1260: judged as Booleans, written as canon's words (a capacity stays a number)
+  assert.deepEqual(holderWordOf({ payload: { holder: true, capacity: 12, open: false }, klass: "thing", classProperty: cp, extendsOf: ext }), { holder: "true", capacity: 12, open: "false" });
+  // and the words already accepted come back as the same words
+  assert.deepEqual(holderWordOf({ payload: { holder: "true", capacity: 12, open: "false", portable: "false" }, klass: "thing", classProperty: cp, extendsOf: ext }), { holder: "true", capacity: 12, open: "false", portable: "false" });
+  assert.deepEqual(holderWordOf({ payload: { portable: false }, klass: "thing", classProperty: cp, extendsOf: ext }), { portable: "false" });
+  assert.deepEqual(holderWordOf({ payload: { portable: true }, klass: "thing", classProperty: cp, extendsOf: ext }), { portable: "true" });
   assert.equal(holderWordOf({ payload: {}, klass: "thing", classProperty: cp, extendsOf: ext }), null);
   assert.throws(() => holderWordOf({ payload: { holder: true, capacity: 121 }, klass: "thing", classProperty: cp, extendsOf: ext }), /a capacity of 121 is outside 1\.\.120/);
   assert.throws(() => holderWordOf({ payload: { holder: false }, klass: "halloween-candy-bowl", classProperty: cp, extendsOf: ext }), /the town's on a halloween-candy-bowl/);

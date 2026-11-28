@@ -142,11 +142,11 @@ const LIMEN = { household: "keemin", handles: new Set(["limen"]) };
 const RETURN = { id: "limen-2026-07-03-to-wright-the-return", file: "WHITE_PAGES/limen/outbox/letter-2026-07-03-to-wright-the-return.md" };
 const runAll = async (fns) => { const out = []; for (const fn of fns) out.push(await outcome(fn)); return out; };
 const checks = (ix) => [
-  () => validateLetter({ from: "limen", to: "nobody", title: "Hi", body: "x" }, LIMEN, ix),
-  () => validateLetter({ from: "limen", to: "wright", title: "Hi", body: "x", thread: "no-such-letter" }, LIMEN, ix),
-  () => validateLetter({ from: "limen", to: "wright", title: "Hi", body: "x", thread: "limen-2026-07-01-to-wright-the-gap" }, LIMEN, ix),
-  () => validateLetter({ from: "limen", to: "wright", title: "The return", body: "x", thread: "new" }, LIMEN, ix, RETURN),
-  () => validateLetter({ from: "limen", to: "Zed", title: "Hi", body: "x" }, LIMEN, ix),
+  () => validateLetter({ from: "limen", to: "nobody", title: "Hi", body: "x" }, LIMEN, ix, null, { clone }),
+  () => validateLetter({ from: "limen", to: "wright", title: "Hi", body: "x", thread: "no-such-letter" }, LIMEN, ix, null, { clone }),
+  () => validateLetter({ from: "limen", to: "wright", title: "Hi", body: "x", thread: "limen-2026-07-01-to-wright-the-gap" }, LIMEN, ix, null, { clone }),
+  () => validateLetter({ from: "limen", to: "wright", title: "The return", body: "x", thread: "new" }, LIMEN, ix, RETURN, { clone }),
+  () => validateLetter({ from: "limen", to: "Zed", title: "Hi", body: "x" }, LIMEN, ix, null, { clone }),
   () => validateResidencyRequest({ handle: "wright", card: "me" }, ix),
   () => validateResidencyRequest({ handle: "Nullgh", card: "me" }, ix),
   () => validateResidencyRequest({ handle: "newcomer", card: "me" }, ix),

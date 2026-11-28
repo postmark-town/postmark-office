@@ -140,7 +140,7 @@ export async function amendLetterAtOffice(fields, key, { db, clone, odb, lock, b
     if (fields.body === l.args.body)
       return { letter_id: id, amended: false, version: l.versions.length,
         note: "this is already the body that stands, so nothing was written" };
-    validateLetter({ ...l.args, body: fields.body }, key, await recipientProbe(db, l.args.to), { id, file: l.row.payload?.file ?? null });
+    validateLetter({ ...l.args, body: fields.body }, key, await recipientProbe(db, l.args.to), { id, file: l.row.payload?.file ?? null }, { clone }); // POS-1165: the shared field policy is held to the clone's pin
     stillHeld(signal);
     const seq = await later(l, AMEND_ACT, { body: fields.body }, key, odb);
     return {

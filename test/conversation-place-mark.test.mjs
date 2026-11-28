@@ -19,7 +19,9 @@ const C = await import("../src/circles.mjs");
 const port = await import("../world2/tools/conversations.mjs");
 const { penVoiceAct } = await import("../src/world.mjs");
 
-const T = Date.parse("2026-11-19T20:00:00Z");
+// POS-1218: until then this clock read 2026-11-19, before circles went live (2026-11-22T10:19:06.729Z), where an identified parentless
+// say reads as pre-circles timeline speech; the roots here are circles, so they are spoken after it.
+const T = Date.parse("2026-11-23T20:00:00Z");
 const DIR = mkdtempSync(join(tmpdir(), "place-mark-"));
 let logN = 0;
 const A = "quill/the-yard", B = "quill/the-porch";

@@ -58,6 +58,16 @@ export function draftsCutoffOf(raw) {
   return Number.isFinite(t) ? t : { invalid: s };
 }
 
+/**
+ * THE SETTLEMENTS A COMPLETION READS ITS EVENT'S ROOMS WITH (POS-1203): every one world main published (`hearing.recorded()`), not the ear's newest sixty
+ * (`settlements()`). A completion reads the event's WINDOW, a historical read; an event whose window opened before the sixtieth-newest settlement (CORE-163's
+ * season runs 37 days) would otherwise answer "rooms unknown" and be held, waiting on the archive producer. Nothing about what is due, the ledger, the
+ * backing, the return or the free-event cutoff reads these. Unreadable answers [] and the completion is held, as ever.
+ */
+export async function completionEdges(world, createHearingWindow) {
+  try { const h = createHearingWindow({ repo: world }); await h.refresh(); return h.recorded() ?? []; } catch { return []; }
+}
+
 function arg(argv, name) { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
@@ -97,8 +107,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const { townDay } = await import("../src/votes.mjs");
   const { createHearingWindow } = await import("../src/hearing-window.mjs");
   const world = arg(argv, "--world") ?? env.WORLD_CLONE ?? resolve(HERE, "..", "world-clone");
-  let edges = [];
-  try { const h = createHearingWindow({ repo: world }); await h.refresh(); edges = h.settlements() ?? []; } catch { edges = []; }
+  const edges = await completionEdges(world, createHearingWindow);
   const keyPem = readFileSync(keyPath, "utf8");
   let refused = 0;
   for (const row of due) {

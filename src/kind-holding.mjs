@@ -169,7 +169,7 @@ export function portableMark(mark, classProperty) {
   const p = className == null ? null : classProperty(className, "portable") ?? null;
   const own = p?.tier === "sovereign" && mark?.portable !== undefined ? truth(mark.portable) : null;
   // #499's chest marks said portable on themselves, with no property behind them
-  const legacy = p == null && typeof mark?.portable === "boolean" ? mark.portable : null;
+  const legacy = p == null ? truth(mark?.portable) : null; // POS-1260: the stored word "false" is not-portable, as the Boolean was
   return own ?? legacy ?? truth(p?.value) ?? true;
 }
 
@@ -208,8 +208,18 @@ export function holderWordOf({ payload = {}, klass, classProperty, extendsOf }) 
   if (law.capacity_refused) throw bounce(422, law.capacity_refused, `leave capacity off for its class's ${holdingOf({ className: klass, classProperty }).capacity ?? "default"}`);
   if ((out.capacity !== undefined || out.open !== undefined) && !law.holder)
     throw bounce(422, "capacity and open belong to a holder", "add holder: true, or leave them off: a thing holds nothing unless its maker says so");
-  return out;
+  return wordsOf(out);
 }
+
+/**
+ * CANON'S WORDS FOR THE THREE TRUTH FIELDS (POS-1260, WLD-258's office half). A mark file says `open: true` and the world's parser keeps the
+ * word "true"; the office wrote the Boolean true into the claim, the act and the store, so a record and the file it becomes disagreed in type
+ * (Worldkeeper 2026-11-26: three marks, eight fields). Judged above as Booleans, so every refusal and the holding law read what they always
+ * read, then WRITTEN as the words, at the pen. A capacity stays the whole number it is. A word sent stays that word.
+ */
+export const TRUTH_FIELDS = Object.freeze(["holder", "open", "portable"]);
+export const wordOfTruth = (b) => (b === true ? "true" : b === false ? "false" : b);
+const wordsOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, TRUTH_FIELDS.includes(k) ? wordOfTruth(v) : v]));
 
 /** Room left in a holder: its capacity less everything it holds (both maps, plus whole things). */
 export const roomIn = ({ capacity, fold, holder, things = 0, inFlight = 0 }) =>

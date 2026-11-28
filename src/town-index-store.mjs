@@ -41,7 +41,7 @@ import {
   mailListOf, letterListNoRegion, letterListPage, letterPageCap, correspondentsOf, mailAwaitingOf, searchPage, metricsMailOf,
   rollEntry, residentPageOf, townSummaryOf, residentOf, windowReadOf, psaFoldOf, doorstepOf, DOORSTEP_SIZES, PSA_SLUG, CARD_MAIL,
 } from "./queries.mjs";
-import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
+import { isResidentHandle, isPublicResident, PEN_HANDLE } from "./residency.mjs"; // the door's admission grammar, as readRoll filters by it
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
@@ -516,7 +516,7 @@ export async function officeHandles(q) {
 // by the readers that want it, residentList for one), never a card.
 let _roster = { asOf: undefined, entries: null };
 export async function roster(q) {
-  return rosterOf(await rosterRows(q));
+  return rosterEntries(q);
 }
 
 /** The SQL half of roster: the kept entries when the store's head has not moved, else the cards' rows (POS-1064: parsed after the connection is back). */
@@ -530,6 +530,37 @@ function rosterOf({ asOf, entries, rows }) {
   const built = rows.map((r) => rollEntry(r.handle, JSON.parse(r.json)));
   _roster = { asOf, entries: built };
   return built;
+}
+
+/**
+ * ONE COLD LOAD PER HEAD, SHARED (POS-1098). When the head moves, the first read of the roster reads every card (26-48 MB) and parses them (about
+ * 0.23 s of main-thread CPU, measured on a 389-card store); until it finishes the memo is cold, so every read that arrived meanwhile read and
+ * parsed them again. A caller that holds its connection for the whole roster (`roster`, hence residentList and the bare list; the doorstep's
+ * split read, which parses after its connection is back, keeps its own `rosterRows`) now waits for a load already running for the SAME head
+ * and takes its entries; if that load fails it does its own, so a failure is never shared. (The waiter holds its connection for at most that
+ * one load: the alternative was its own read and parse.) `knownAsOf` is the head the caller has already read.
+ */
+let _rosterLoad = null;                                     // { asOf, promise → entries }
+const _resident = { page_hits: 0, page_misses: 0, roster_loads: 0, roster_shared: 0 };
+/** The counters behind the bare list's reuse (POS-1098): page hits and misses, cold roster loads, and loads a concurrent read shared. For measurement and the tests. */
+export const residentCacheStats = () => ({ ..._resident });
+async function rosterEntries(q, knownAsOf = null) {
+  const asOf = knownAsOf ?? await townIndexAsOf(q);
+  if (_roster.entries && _roster.asOf === asOf) return _roster.entries;
+  if (_rosterLoad && _rosterLoad.asOf === asOf) {
+    const shared = await _rosterLoad.promise.catch(() => null);
+    if (shared) { _resident.roster_shared += 1; return shared; }
+  }
+  const load = { asOf, promise: null };
+  load.promise = (async () => {
+    const rows = (await q.query(`SELECT handle, json FROM town_residents ORDER BY handle COLLATE "C"`)).rows;
+    _resident.roster_loads += 1;
+    return rosterOf({ asOf, rows });
+  })();
+  _rosterLoad = load;
+  const done = () => { if (_rosterLoad === load) _rosterLoad = null; };
+  load.promise.then(done, done);
+  return load.promise;
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
@@ -634,7 +665,10 @@ export async function probeWithMailState(handle, { env = process.env, standing =
 }
 
 /** Test seam: forget the roster memo (a suite that rewrites rows under one head). */
-export function __resetRosterForTest() { _roster = { asOf: undefined, entries: null }; }
+export function __resetRosterForTest() {
+  _roster = { asOf: undefined, entries: null }; _rosterLoad = null; _pages = { asOf: undefined, byOpts: new Map() };
+  for (const k of Object.keys(_resident)) _resident[k] = 0;
+}
 /** Test seam: forget the held probe (a suite whose stores share one head, the fixture's). */
 export function __resetProbeForTest() { _probeRows = null; holdStoreProbe(null); }
 
@@ -643,9 +677,36 @@ export async function residentList(q) {
   return (await roster(q)).filter((e) => isResidentHandle(e.handle)).map((e) => ({ ...e }));
 }
 
-/** The roster page over residentList (the page shape is queries.mjs § residentPageOf). */
+// THE BARE LIST, COMPOSED ONCE PER HEAD (POS-1098). A page is the roll with the admission grammar applied, copied, filtered and cut: pure of
+// the roster's entries and the ask. Both are fixed while the store's head (town_meta as_of, the roster memo's own key) is, so the composed page is
+// kept under (head, ask) and each read gets its OWN COPY: a hit never re-filters the roll, and what a caller does to its copy (the last_active
+// stamp the door writes onto every row, from the acts it reads per request) never reaches the kept one. The head's identity alone therefore
+// freezes nothing that moves faster than it: last_active is read again for every answer. No expiry and no age is invented: a new head is a new
+// key and the old pages go with it; at most PAGE_KEEP different asks are kept (the ask is the caller's, so the count must not be).
+const PAGE_KEEP = 16;
+let _pages = { asOf: undefined, byOpts: new Map() };
+const pageAsk = (o = {}) => JSON.stringify([o.limit ?? null, o.offset ?? null, o.since ?? null, o.office ?? null]);
+
+/**
+ * THE PUBLIC ROLL (POS-1240): residentList without the Pen. `residentList` stays the OPERATIONAL roll (the position doors' handles, refreshStoreRoll, the Pen's own paths); this is
+ * what a reader is shown as the town's residents. Each caller its own copies; the roster's kept entries are never mutated.
+ */
+export async function publicResidentList(q) {
+  return (await roster(q)).filter((e) => isPublicResident(e.handle)).map((e) => ({ ...e }));
+}
+
+/** The roster page over the PUBLIC roll (the page shape is queries.mjs § residentPageOf): the Pen is left out BEFORE the filters, the paging and the counts. */
 export async function residentPage(q, opts = {}) {
-  return residentPageOf(await residentList(q), opts);
+  const asOf = await townIndexAsOf(q);
+  const ask = pageAsk(opts);
+  if (_pages.asOf === asOf && _pages.byOpts.has(ask)) { _resident.page_hits += 1; return structuredClone(_pages.byOpts.get(ask)); }
+  _resident.page_misses += 1;
+  const entries = await rosterEntries(q, asOf);
+  const page = residentPageOf(entries.filter((e) => isPublicResident(e.handle)).map((e) => ({ ...e })), opts);
+  if (_pages.asOf !== asOf) _pages = { asOf, byOpts: new Map() };
+  if (!_pages.byOpts.has(ask) && _pages.byOpts.size >= PAGE_KEEP) _pages.byOpts.delete(_pages.byOpts.keys().next().value);
+  _pages.byOpts.set(ask, structuredClone(page));
+  return page;
 }
 
 /** The index meta the town card reads, from the store's own town_meta. */
@@ -655,8 +716,9 @@ async function storeMeta(q) {
 
 /** The town card (queries.mjs § townSummaryOf): the store's own meta, never a caller's. */
 export async function townSummary(q) {
-  const all = (await roster(q)).filter((e) => e.is_office).map((e) => e.handle).sort();
-  return townSummaryOf(await storeMeta(q), all, (await residentList(q)).length);
+  // the town card's population is the PUBLIC one (POS-1240): its resident count and its offices both leave the Pen out
+  const all = (await roster(q)).filter((e) => e.is_office && isPublicResident(e.handle)).map((e) => e.handle).sort();
+  return townSummaryOf(await storeMeta(q), all, (await publicResidentList(q)).length);
 }
 
 /** A resident's stored card, parsed, or null. */
@@ -1018,7 +1080,8 @@ export async function doorstepRows(q, handle, opts = {}) {
       sent: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery' AND from_h = $1", [handle]),
     },
     town: {
-      residents: await one("SELECT COUNT(*) AS n FROM town_residents"),
+      // POS-1240: the town's resident count on a doorstep is the PUBLIC roll's: the Pen is not one (its row, record and history are untouched)
+      residents: await one("SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $1", [PEN_HANDLE]),
       deliveries: await one("SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'delivery'"),
       lastDelivery: (await q.query(`SELECT MAX(date COLLATE "C") AS d FROM town_ledger WHERE kind = 'delivery'`)).rows[0]?.d ?? null,
     },
@@ -1189,7 +1252,8 @@ export function doorstepFromRows(rows, handle, opts = {}) {
   const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
   const { asOf } = rows;
   const parts = {
-    arrivals: rosterOf(rows.arrivals).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
+    // POS-1240: "the latest arrivals" a doorstep shows are the PUBLIC residents (the Pen is not one; only the Pen: the twin's arrivals are every card, as they were)
+    arrivals: rosterOf(rows.arrivals).filter((e) => e.handle !== PEN_HANDLE).map((e) => ({ handle: e.handle, joined: e.joined, is_office: e.is_office })),
     awaiting: mailAwaitingFrom(rows.awaiting, handle, { offset, standing: opts.standing ?? null }),
     mail: mailListOf(handle, "inbox", mailPageOf(rows.mail)),
     stamps: stampsDetailOf(rows.stamps.row, { holoRows: rows.stamps.holoRows, keepingRows: rows.stamps.keepingRows }),
@@ -1379,15 +1443,17 @@ export async function search(q, term, { limit, offset } = {}) {
   const n = Math.min(Math.max(wholeNumber(limit) || SEARCH_LETTERS, 1), 200);
   const start = Math.max(wholeNumber(offset) || 0, 0);
   const lettersTotal = await count(q, `SELECT COUNT(*) AS n FROM town_letters WHERE ${like("id", "$1")} OR ${like("json", "$1")}`, [pattern]);
-  const residentsTotal = await count(q, `SELECT COUNT(*) AS n FROM town_residents WHERE ${like("handle", "$1")} OR ${like("json", "$1")}`, [pattern]);
+  // POS-1240: the resident bucket is the PUBLIC roll's (searchPage points it back at list_residents): the Pen is left out BEFORE the count and the cap. Letters it authored
+  // are letters, and stay in the letters bucket; its record is reached by its handle, not through this bucket.
+  const residentsTotal = await count(q, `SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $2 AND (${like("handle", "$1")} OR ${like("json", "$1")})`, [pattern, PEN_HANDLE]);
   const residents = (await q.query(`SELECT handle FROM town_residents
-      WHERE ${like("handle", "$1")} OR ${like("json", "$1")}
+      WHERE handle <> $5 AND (${like("handle", "$1")} OR ${like("json", "$1")})
       ORDER BY CASE
         WHEN handle = $2        THEN 0
         WHEN ${like("handle", "$3")} THEN 1
         WHEN ${like("handle", "$1")} THEN 2
         ELSE 3 END, handle COLLATE "C"
-      LIMIT $4`, [pattern, term, `${term}%`, SEARCH_RESIDENTS])).rows.map((r) => r.handle);
+      LIMIT $4`, [pattern, term, `${term}%`, SEARCH_RESIDENTS, PEN_HANDLE])).rows.map((r) => r.handle);
   const letters = (await q.query(`SELECT ${LETTER_COLS} FROM town_letters WHERE ${like("id", "$1")} OR ${like("json", "$1")} ORDER BY ${NEWEST} LIMIT $2 OFFSET $3`,
     [pattern, n, start])).rows.map(excerpt);
   return searchPage({ q: term, n, start, lettersTotal, residentsTotal, residents, letters });
@@ -1536,7 +1602,8 @@ async function metricsMailRows(q) {
     bounces: await count(q, "SELECT COUNT(*) AS n FROM town_ledger WHERE kind = 'bounce'"),
     letters: await count(q, "SELECT COUNT(*) AS n FROM town_letters"),
     threads: await count(q, "SELECT COUNT(*) AS n FROM town_threads"),
-    residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents"),
+    // POS-1240: the mail pulse's resident total is the PUBLIC roll's (one population with the roster and the town card, queries.mjs § ONE ROLL): the Pen is not one
+    residents: await count(q, "SELECT COUNT(*) AS n FROM town_residents WHERE handle <> $1", [PEN_HANDLE]),
   };
   const threadJsons = newest ? (await q.query("SELECT json FROM town_threads ORDER BY root")).rows.map((t) => t.json) : [];
   return { newest, dayCountRows, totals, threadJsons };

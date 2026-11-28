@@ -80,6 +80,7 @@ const ALLOWED = {
   "settle-join-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "standing-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "static-keys-retire.mjs": [1, `${OWN}: a tool's own printout`],
+  "stamp-lines.mjs": [1, `${OWN}: StampTrustUnusable's own sentence (POS-1214, src/stamp-trust.mjs), as one of the store verifier's problems, which month-close's operator report and the stamp-lines tool print; the class carries no HTTP code, so a door that meets it thrown answers FAULT_LOGGED`],
   "store-pool.mjs": [2, `${OWN}: classifiers`],
   "store-txn-watch.mjs": [1, `${OWN}: a status row`],
   "store-writedown.mjs": [1, `${OPERATOR} (the write-down pass's report)`],
