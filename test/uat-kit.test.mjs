@@ -519,6 +519,106 @@ test("TEXT PIN (weak): nginx-uat.sh never chains `nginx -t &&` into a success li
   assert.ok(code.indexOf("grep -q 'server_name uat.postmark.town;' \"$NEWV\"") < code.indexOf('cat "$NEWV" > "$OUT"'));
 });
 
+// THE AGENT PATHS (CORE-200; Darko 2026-11-28 "unblock agent access"). uat-gate-map.conf is read here and evaluated
+// the way nginx evaluates a map: exact keys first, then the `~` regexes in order, then the default. The machine map
+// is exact strings only (Truey's finding 1 on #1262), so no regex dialect question arises there; the two regexes
+// (the backslash class, the gate's key) use no `$` anchor. nginx's own read of the file is a box receipt
+// (a throwaway nginx -t and curl run, in the PR), not this test.
+const GATE_MAP = read("uat-gate-map.conf");
+/** One `map … $<name> { … }` block of a map file, as nginx evaluates it. */
+function nginxMap(text, name) {
+  const at = text.indexOf(`$${name} {`);
+  assert.ok(at > 0, `the map file defines $${name}`);
+  const body = text.slice(at, text.indexOf("\n}", at));
+  let dflt = null; const exact = new Map(); const res = [];
+  for (const line of body.split("\n").slice(1)) {
+    const m = /^\s*("([^"]*)"|(\S+))\s+(\S+);$/.exec(line);
+    if (!m) continue;
+    const key = m[2] ?? m[3];
+    if (key === "default") dflt = m[4];
+    // nginx: `~` is a case-sensitive PCRE (`\z` is the true end of the string: JS's `$` with no flags is the same)
+    else if (key.startsWith("~")) res.push([new RegExp(key.slice(1).replace(/\\z$/, "$")), m[4], key.slice(1)]);
+    // nginx compares a map's plain string keys IGNORING CASE (the real-nginx run on #1262 let /API/MCP through one)
+    else exact.set(key.toLowerCase(), m[4]);
+  }
+  const ev = (s) => (exact.has(s.toLowerCase()) ? exact.get(s.toLowerCase()) : (res.find(([re]) => re.test(s))?.[1] ?? dflt));
+  return { exact, res, eval: ev };
+}
+/** What the generated vhost answers, by the maps: 400 (a backslash), 403 (the gate) or 200 (through). */
+function gateOf(text) {
+  const machine = nginxMap(text, "uat_machine_path"), uriRefuse = nginxMap(text, "uat_uri_refuse"), refuse = nginxMap(text, "uat_gate_refuse");
+  return (uri, jwt = "") => (uriRefuse.eval(uri) === "1" ? 400 : refuse.eval(`${machine.eval(uri)}:${jwt}`) === "1" ? 403 : 200);
+}
+const gate = gateOf(GATE_MAP);
+// the documents and endpoints the office serves (src/oauth.mjs's discovery routes, its MACHINE_FACING pair; /mcp),
+// as nginx exposes them: exactly these, and every one is in the Cloudflare Access list in README step 6
+const MACHINE_PATHS = ["/api/mcp", "/api/oauth/register", "/api/oauth/token",
+  "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/api/mcp",
+  "/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/api",
+  "/.well-known/openid-configuration", "/.well-known/openid-configuration/api",
+  "/api/.well-known/oauth-protected-resource", "/api/.well-known/oauth-authorization-server", "/api/.well-known/openid-configuration"];
+// Truey's inputs on #1262 (as `$uri`, nginx's decoded path), and the browser half of the sign-in, and look-alikes
+const WALKS = ["/.well-known/oauth-protected-resource/..\\..\\oauth\\authorize", "/api/.well-known/openid-configuration/..\\..\\berth",
+  "/.well-known/oauth-authorization-server/api/..\\..\\oauth\\consent", "/api/mcp\\..\\oauth\\authorize"];
+const GATED = ["/", "/join/", "/api/oauth/authorize", "/api/oauth/github/callback", "/api/oauth/consent", "/api/oauth/human",
+  "/api/oauth/berth-cosign", "/api/oauth/claim-cosign", "/api/oauth/likeness", "/api/mcpx", "/api/mcp/", "/api/mcp/tools",
+  "/api/mcp\n", "/api/oauth/tokens", "/api/oauth/token/x", "/api/town", "/api/world", "/.well-known/oauth-protected-resource/x",
+  "/.well-known/oauth-protected-resource/api/mcp/x", "/.well-known/acme-challenge/x", "/.well-known/security.txt", "/x/api/mcp",
+  "/API/MCP", "/Api/Mcp", "/api/MCP", "/api/OAuth/Token", "/.WELL-KNOWN/openid-configuration", "/_well-known/openid-configuration"];
+test("the gate map lets past exactly the twelve machine paths, each a literal anchored case-sensitive row, and the README's Access list is the same twelve", () => {
+  const machine = nginxMap(GATE_MAP, "uat_machine_path");
+  assert.equal(machine.exact.size, 0, "no plain string rows: nginx compares those ignoring case");
+  // every row is ^<literal>\z: only lowercase letters, digits, '/', '-', '_' and an escaped '.', so no wildcard, tail or alternation
+  for (const [, , src] of machine.res) assert.match(src, /^\^(?:[a-z0-9/_-]|\\\.)+\\z$/, `${src} is a literal, anchored at both ends`);
+  assert.deepEqual(machine.res.map(([, , src]) => src.slice(1, -2).replace(/\\\./g, ".")).sort(), [...MACHINE_PATHS].sort());
+  for (const uri of MACHINE_PATHS) assert.equal(gate(uri), 200, `${uri} must pass without a JWT`);
+  const readme = read("README.md");
+  for (const p of MACHINE_PATHS) assert.ok(readme.includes("`" + p.slice(1) + "`"), `README step 6 lists ${p.slice(1)} for the Access app`);
+  assert.ok(!/`(api\/)?\.well-known\/\*`/.test(readme), "the Access list names exact paths, never a .well-known wildcard");
+});
+test("the browser half of the sign-in, the site and look-alikes stay gated; a backslash walk is refused even with a JWT", () => {
+  for (const uri of GATED) { assert.equal(gate(uri), 403, `${JSON.stringify(uri)} must stay behind Access`); assert.equal(gate(uri, "x"), 200); }
+  for (const uri of WALKS) { assert.equal(gate(uri), 400, `${JSON.stringify(uri)} is a backslash walk`); assert.equal(gate(uri, "x"), 400, "refused with a JWT too"); }
+});
+test("each lock holds alone, and the negatives can fail: restore the open tail AND drop the backslash rule, and the walk gets through", () => {
+  const tail = "    ~^(/api)?/\\.well-known/(oauth-protected-resource|oauth-authorization-server|openid-configuration)(/.*)?$ 1;\n";
+  const withTail = GATE_MAP.replace("    ~^/\\.well-known/oauth-protected-resource\\z 1;\n", tail);
+  assert.notEqual(withTail, GATE_MAP, "the mutation applied");
+  // the class rule alone still refuses the walk
+  for (const uri of WALKS.slice(0, 3)) assert.equal(gateOf(withTail)(uri), 400, `the backslash rule holds ${uri} with the tail restored`);
+  // with the class rule gone too, the old tail lets the walk through: the instance fix is what refuses it then
+  const open = withTail.replace(/\n\s*"~\\x5c" 1;/, "");
+  assert.notEqual(open, withTail, "the second mutation applied");
+  assert.equal(gateOf(open)(WALKS[0]), 200, "both locks off: the walk reaches the office (the bug #1262 found)");
+  assert.equal(gate(WALKS[0]), 400, "and the file as committed refuses it");
+  // the exact map alone: drop only the backslash rule from the committed file, and the exact rows still gate the walk (403)
+  const exactOnly = GATE_MAP.replace(/\n\s*"~\\x5c" 1;/, "");
+  assert.notEqual(exactOnly, GATE_MAP, "the third mutation applied");
+  for (const uri of WALKS) assert.equal(gateOf(exactOnly)(uri), 403, `the exact rows alone keep ${JSON.stringify(uri)} behind Access`);
+  // and the case rule can fail: the same twelve as plain string keys (compared ignoring case) let /API/MCP through
+  const plain = GATE_MAP.replace(/^    ~\^(\S+)\\z 1;$/gm, (m, p) => `    ${p.replace(/\\\./g, ".")} 1;`);
+  assert.notEqual(plain, GATE_MAP, "the fourth mutation applied");
+  assert.equal(gateOf(plain)("/API/MCP"), 200, "plain keys: nginx lets a case variant through");
+  assert.equal(gate("/API/MCP"), 403, "the committed anchored rows refuse it");
+});
+test("the gate refuses by default: any drift in its key refuses, never opens (Truey's finding 4)", () => {
+  const refuse = nginxMap(GATE_MAP, "uat_gate_refuse");
+  assert.equal(refuse.eval("0:"), "1", "not a machine path, no JWT");
+  assert.equal(refuse.eval("1:"), "0"); assert.equal(refuse.eval("1:x"), "0"); assert.equal(refuse.eval("0:x"), "0");
+  for (const drift of ["", ":", "x", ":x", "2:x", "01:x"]) assert.equal(refuse.eval(drift), "1", `a drifted key ${JSON.stringify(drift)} refuses`);
+});
+test("TEXT PIN (weak): nginx-uat.sh installs the map, emits the backslash refusal before the gate, and checks both", () => {
+  const sh = read("nginx-uat.sh");
+  assert.match(sh, /install -m 0644 "\$HERE\/uat-gate-map\.conf"\s+\/etc\/nginx\/conf\.d\/uat-gate-map\.conf/);
+  assert.match(sh, /\\n\\1if \(\$uat_uri_refuse\) \{ return 400; \}\\n\\1if \(\$cf_edge = 0\) \{ return 403; \}\\n\\1if \(\$uat_gate_refuse\) \{ return 403; \}\|' \\/,
+    "the generated server block refuses a backslash, then the edge, then the gate, in that order");
+  assert.ok(!/\\1if \(\$http_cf_access_jwt_assertion = ""\)/.test(sh), "the old presence-only if is no longer generated");
+  assert.match(sh, /grep -c 'if \(\\\$uat_gate_refuse\) \{ return 403; \}' "\$NEWV"\)" = 1 \] \|\| uat_die/);
+  assert.match(sh, /grep -c 'if \(\\\$uat_uri_refuse\) \{ return 400; \}' "\$NEWV"\)" = 1 \] \|\| uat_die/);
+  assert.match(sh, /the backslash refusal is not before the gate/);
+  assert.match(sh, /grep -q 'http_cf_access_jwt_assertion = ""' "\$NEWV" && uat_die/);
+});
+
 test("TEXT PIN (weak): units.sh gives /srv/uat-stubs only to units that already write /srv/postmark-office; the sandboxed ones get nothing", () => {
   const sh = read("units.sh");
   assert.match(sh, /if grep -q '\^ReadWritePaths=\/srv\/postmark-office' "\$f"; then echo "ReadWritePaths=-\/srv\/uat-stubs"; fi/);
