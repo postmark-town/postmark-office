@@ -504,7 +504,9 @@ function authorCorrection(run, folder, merge) {
     if (before === after) continue;
     const sansAuthor = (t) => String(t ?? "").replace(/\r\n/g, "\n").replace(/^author:.*\n?/m, "");
     const [added = "0", removed = "0"] = run("diff", "--numstat", parent, sha, "--", path).split("\t");
-    return { commit: sha, subject: subject.join("\t"), author: after, before, git_author: gitAuthor, git_date: gitDate,
+    // the date in one form, UTC, whatever Git prints for %aI (a newer Git writes Z where an older one wrote +00:00)
+    const when = Number.isFinite(Date.parse(gitDate)) ? new Date(Date.parse(gitDate)).toISOString().replace(/\.000Z$/, "Z") : gitDate;
+    return { commit: sha, subject: subject.join("\t"), author: after, before, git_author: gitAuthor, git_date: when,
       only_author_line: sansAuthor(beforeText) === sansAuthor(afterText), added: Number(added) || 0, removed: Number(removed) || 0 };
   }
   return null;

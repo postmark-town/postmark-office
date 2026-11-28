@@ -505,9 +505,9 @@ test("hearth: the entries come from the town's main: a folder with hearth.html, 
     // the later commits: typo's fix and fox-hearth's rewrite are named; lone-wolf, never changed, has none
     const t = { git_author: "t <t@t>", only_author_line: true, added: 1, removed: 1 };
     assert.deepEqual([by.typo.author, by.typo.later], ["lone-wolff", { commit: fix, subject: "typo: fix the author line (#11)", author: "lone-wolf", before: "lone-wolff",
-      git_date: "2026-11-13T18:00:00+00:00", ...t }]);
+      git_date: "2026-11-13T18:00:00Z", ...t }]);
     assert.deepEqual(by["fox-hearth"].later, { commit: thief, subject: "a later PR: fox-hearth's author line", author: "thief-house", before: "fox-hearth",
-      git_date: "2026-11-13T12:00:00+00:00", ...t });
+      git_date: "2026-11-13T12:00:00Z", ...t });
     assert.equal(by["lone-wolf"].later, undefined);
     const rows = planQuestPays({ items: hearthItems(got, { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: hHouseOf, isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14" });
     assert.deepEqual(rows.filter((r) => r.owed).map((r) => [r.ref, r.handle]), [["hearth:fox-hearth", "alden"], ["hearth:lone-wolf", "wolf"]], "the read feeds the plan");
@@ -530,7 +530,7 @@ test("hearth: --accept-author pays one named entry by its corrected author, show
     assert.equal(hoard.later.commit, correction);
     assert.notEqual(hoard.later.commit, copyedit, "the later copyedit is not the correcting commit");
     assert.deepEqual([hoard.later.before, hoard.later.author, hoard.later.git_author, hoard.later.git_date, hoard.later.only_author_line],
-      [null, "hoard-house", "Wright <wright@example.invalid>", "2026-11-13T20:00:00+00:00", false], "the table became front matter: it changed other lines too");
+      [null, "hoard-house", "Wright <wright@example.invalid>", "2026-11-13T20:00:00Z", false], "the table became front matter: it changed other lines too");
     const plan = (accepted = new Set(), over = {}) => planQuestPays({ items: hearthItems(got, { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: hHouseOf,
       isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14", accepted, ...over });
     // UNACCEPTED, a later author edit pays nothing, and the row names the correction and the flag
@@ -548,7 +548,7 @@ test("hearth: --accept-author pays one named entry by its corrected author, show
     const text = renderPlan(rows, { date: "2026-11-14", quest: HQ });
     assert.match(text, / {2}hearth:hoard · hoarder · gh:60 · 10 · owed · by hoard-house on 2026-11-13\n/);
     assert.ok(text.includes(`      ACCEPTED by --accept-author: the author line, none at the merge, reads "hoard-house" since commit ${correction} "hoard's Hearth entry: its title and author as front matter"`));
-    assert.ok(text.includes("      that commit, as Git records it (unverified: the acceptance is the hand's): by Wright <wright@example.invalid> on 2026-11-13T20:00:00+00:00; in hearth.md it also changed other lines (+"));
+    assert.ok(text.includes("      that commit, as Git records it (unverified: the acceptance is the hand's): by Wright <wright@example.invalid> on 2026-11-13T20:00:00Z; in hearth.md it also changed other lines (+"));
     const parsed = parseQuestPlan(text);
     assert.equal(planDiffers(parsed, rows, "2026-11-14"), null);
     // THE DIGEST CARRIES THE ACCEPTANCE AND ITS COMMIT: neither an added acceptance nor a different correction applies under the old one
