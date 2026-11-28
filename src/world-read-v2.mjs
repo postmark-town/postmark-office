@@ -79,7 +79,7 @@ export const PUBLIC_ACTS = Object.freeze({
 export const ACT_GROUPS = Object.freeze({
   speak: ["say"],
   move: ["walk", "enter", "exit", "ride"],
-  make: ["leave-mark", "withdraw"],
+  make: ["leave-mark", "spark", "withdraw"], // POS-1222: a spark is leave-mark with the spark filled in
   back: ["stake", "unstake"],
   carry: ["take", "give", "drop", "consume", "refill"],
   creatures: ["watch", "approach", "shoo", "call", "offer", "whisper"], // a creature's afforded actions, shown when one is in sight (POS-672)

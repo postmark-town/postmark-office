@@ -94,6 +94,7 @@ import {
   lensNoteFor, // POS-823: the line a lens read carries when the lens changed nothing for the household
   servedLedgerNow, // POS-1048: one enter-record scan for every ledger read of a burst of acts
 } from "./world.mjs";
+import { SPARK_ACT, SPARK_TOOL, sparkAct } from "./spark-verb.mjs"; // POS-1222: world { do: "spark" }, leave-mark with the spark filled in
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
 import { carrierReader, movementV2Enabled, stopDepartures, vesselServiceFrom } from "./world-movement.mjs";
@@ -823,6 +824,10 @@ const DISPATCH = {
   say: { tool: "world_say", run: (args, key) => worldSay(args, key) },
   walk: { tool: "world_walk", run: (args, key) => walkViaOffice(WORLD_CLONE, args, key) },
   "leave-mark": { tool: "world_leave_mark", run: (args, key) => leaveMarkViaOffice(WORLD_CLONE, args, key) },
+  // A SPARK IN ONE CALL (POS-1222): the resident class grants `spark`, its residue the spark class. It is leave-mark with
+  // kind: "spark" and the spark's machinery filled in from its event or circle (spark-verb.mjs); leave-mark writes it. The
+  // standpoint rides the handler's context so a spark tied to nothing stands where its maker does, as the apex already knows.
+  [SPARK_ACT]: { tool: SPARK_TOOL, run: (args, key, ctx) => sparkAct(args, key, ctx) },
   // The revision family's second verb (founder-ruled 2026-08-19). Amend needs
   // no row of its own: it IS leave-mark with amend: true — a newer declaration
   // on your own node, the same primitive wearing its revision face.
@@ -1031,6 +1036,10 @@ export const FIELD_NEAR = Object.freeze({
   give: { who: ["to"], recipient: ["to"] },
   ride: { stop: ["to"], mark_id: ["to"] },
   "note-to-self": { text: ["body"], note: ["body"] },
+  // POS-1222: a spark is never anchored. `parent` is the containment edge it never writes; its own link is parent_spark
+  spark: { parent: { fields: ["parent_spark"], says: "parent_spark (your spark's own link to another spark: a spark is never anchored, so it takes no parent, and the link names it without placing this one)" },
+    parent_id: { fields: ["parent_spark"], says: "parent_spark (your spark's own link to another spark: a spark is never anchored, so it takes no parent_id)" },
+    headline: ["title"], body: ["title"], name: ["title"], text: ["recounting"], story: ["recounting"], stamps: ["put_forward"] },
 });
 
 /** { <unknown field>: { fields, says } } for each unknown field with a likely meaning among `allowed`. Exported to be falsified bare. */
@@ -3666,6 +3675,9 @@ async function apexDo(args, key, ctx = {}) {
         db: store.db, spineIds, handle: standingHandle(args, key),
         household: houseOf(standingHandle(args, key)),
         crossing: currentCrossing(), witnessStamp, nowMs: Date.now(),
+        // POS-1222: where the act is taken from, as the orient above found it (a spark tied to nothing stands there)
+        standpoint: Number.isFinite(Number(oriented?.standpoint?.x)) && Number.isFinite(Number(oriented?.standpoint?.y))
+          ? { x: Number(oriented.standpoint.x), y: Number(oriented.standpoint.y) } : null,
       };
       // ── THE HAND, NOT A FLAG (2026-08-27) ─────────────────────────────────
       //
