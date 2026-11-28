@@ -70,10 +70,14 @@ chown "$UAT_USER":root /var/www
 sudo -u "$UAT_USER" -H git config --global user.name "uat (postmark UAT box)"
 sudo -u "$UAT_USER" -H git config --global user.email "uat@uat.postmark.town.invalid"
 [ -d /var/www/postmark-town-site ] && [ ! -L /var/www/postmark-town-site ] && rmdir /var/www/postmark-town-site 2>/dev/null || true
-# the meeps' home stays closed to UAT (750, and only rei's ACL besides): say so rather than assume it
-if sudo -n -u "$UAT_USER" test -r /home/meepo 2>/dev/null; then uat_die "$UAT_USER can read /home/meepo; close it before going on."; fi
+# the meeps' home stays closed to UAT (750, and only rei's ACL besides): say so rather than assume it. Since CORE-72's
+# no-root login (2026-11-28) the meeps run as `meeps` in /home/meeps; /home/meepo is the ops login's. Both stay closed.
+for h in /home/meepo /home/meeps; do
+  if [ -d "$h" ] && sudo -n -u "$UAT_USER" test -r "$h" 2>/dev/null; then uat_die "$UAT_USER can read $h; close it before going on."; fi
+done
 
 uat_say "the marker"
+install -d -o root -g root -m 0755 "$(dirname "$UAT_MARKER")"
 {
   echo "This machine runs Postmark's UAT (CORE-165) beside the town's meeps: town-rig. Provisioned $(date -u +%FT%TZ) by deploy/uat/provision.sh."
   echo "UAT runs as $UAT_USER inside $UAT_SLICE (4 cores, 16 GB). Its store is $UAT_DB. It never pushes to GitHub: its remotes are /srv/uat-stubs."
