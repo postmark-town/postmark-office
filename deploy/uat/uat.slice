@@ -5,15 +5,21 @@
 #
 # AllowedCPUs, not CPUQuota: four whole cores, the last four. Inside the slice, nproc and Node's availableParallelism
 # answer 4, as on prod, so worker pools size as they do there, rather than seeing 16 cores and being throttled to 4.
-# The other twelve cores are left to everything else on the box, the town's meeps and Letta among them. So the cap is
-# also their protection, by construction rather than by weight. MemoryMax is prod's RAM. MemoryHigh starts reclaim
-# just under it, as a 16 GB box would. Swap is off, as on prod (no swap there).
+# AllowedCPUs CONFINES UAT to cores 12-15; it does not keep anything else off them. The other twelve cores are the
+# meeps' by habit, not by reservation: a meep or a system job may still land on 12-15, and then a load run's numbers
+# are not prod's (CORE-165, finding 9). CPUWeight decides who wins those cores when they are contended, and it is the
+# MEEPS who win: 25 against letta-town's 1000 on the live box, which is CORE-72's step 1 (Darko, 2026-11-24): when the
+# meeps and UAT want the same core, UAT yields. It is a weight, not a reservation; a true one would be AllowedCPUs=0-11
+# on system.slice and user.slice, a change to the box's other tenants that is a person's to make (README § Open).
+# MemoryMax is prod's RAM. MemoryHigh starts reclaim just under it, as a 16 GB box would. Swap is off,
+# as on prod (no swap there).
 [Unit]
 Description=UAT: Postmark's frozen release, capped to prod's size (4 cores, 16 GB; CORE-165)
 Before=slices.target
 
 [Slice]
 AllowedCPUs=12-15
+CPUWeight=25
 MemoryAccounting=yes
 MemoryHigh=15G
 MemoryMax=16G
