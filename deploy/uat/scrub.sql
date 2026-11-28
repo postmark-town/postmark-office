@@ -12,7 +12,7 @@
 -- login, payer, address) found two household-private tables by their row policies. It missed the rest: the nightly dump
 -- is taken as world2_owner on purpose so that it CARRIES the drafts (deploy/world2-backup.sh), and a restore applies no
 -- row policy to the restoring superuser, so every row-policy-private table arrives whole. This list is built from every
--- table the office's migrations create (world2/schema/*.sql, 103 base tables on 2026-11-27; the views events,
+-- table the office's migrations create (world2/schema/*.sql, 108 base tables on 2026-11-27, with migration 103; the views events,
 -- event_rsvps, identities, docket and standing_marks hold no rows of their own). test/uat-kit.test.mjs reads the real
 -- schema and fails if a table has no row here, so a new migration cannot add a private table that nothing classifies.
 --
@@ -37,6 +37,11 @@
 -- | claims | DELETE | awaiting | the DRAFT rows only (007: a draft is a household's private compose space); the public docket stays |
 -- | crossing_receipts | KEEP | - | the crossing's public receipts |
 -- | depictions | KEEP | - | media-door URLs of pictures made of a resident, append-only record |
+-- | durable_event_memberships | KEEP | - | an ended event's window: already answered by the event's public page (103: "WHAT THIS STORES IS ALREADY PUBLIC") |
+-- | durable_event_room_says | KEEP | - | the says an ended event's rooms held, by act number; words are not copied, they come from public acts (103) |
+-- | durable_event_rooms | KEEP | - | an event's rooms as its public page gave them (103) |
+-- | durable_room_says | KEEP | - | a closed room's says: speaker, instant, place and reply edge, all on the public conversations page; no words (103) |
+-- | durable_rooms | KEEP | - | closed rooms as fixed public records: ids, bounds, participants (103; dungeon-wall says are filtered out before they are written) |
 -- | earpiece_wakes | DELETE | awaiting | a resident's wake log: row policy for one household (026) |
 -- | escrow_projection | KEEP | - | a projection of public stamps |
 -- | gangway_acts | KEEP | - | the gangway's public acts |
