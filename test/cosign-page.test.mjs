@@ -91,6 +91,18 @@ test("S3 · the styled likeness choice: the ruled words whole, two answers as th
   assert.doesNotMatch(likenessChoice(), /lk-opt|sf-t/);
 });
 
+test("S5 · an outcome's own first paragraph is Regina's to say, once, above its title; the rest follows; a body with no lead paragraph has no bubble", () => {
+  const html = cosignOutcome("Already co-signed", `\n  <p><strong>quill</strong> is already co-signed.</p>\n  <p class="muted">Second words.</p>`);
+  assert.match(html, /<div class="reg-bubble"><span class="reg-name">Regina the Registrar<\/span><strong>quill<\/strong> is already co-signed\.<\/div><\/div><p class="jf-kicker">The town office · co-sign<\/p><h1 class="jf-q">Already co-signed<\/h1>\s*<p class="muted">Second words\.<\/p>/);
+  assert.equal(html.split("is already co-signed.").length - 1, 1, "said once, not repeated under the title");
+  const muted = cosignOutcome("T", `<p class="muted">Only muted.</p>`);
+  assert.match(muted, /Regina the Registrar<\/span>Only muted\.<\/div>/, "a lead paragraph with a class is still the lead");
+  const none = cosignOutcome("T", `<ul><li>a list first</li></ul>`);
+  assert.doesNotMatch(none, /<div class="reg-bubble">/);
+  assert.match(none, /<h1 class="jf-q">T<\/h1><ul><li>a list first<\/li><\/ul>/);
+  assert.match(cosignOutcome("T", "<p>x</p>"), /\.reg-bubble a\{color:#975b27\}/, "a link in her bubble reads on her paper (4.77:1), not the night sky's gold");
+});
+
 test("S4 · the co-sign page wears the join's look: Regina's picture and bubble as the join draws her, the quill tile, the night sky", () => {
   const html = cosignOutcome("Co-signed", registrarSays("Hello."));
   // CORE-188 (site #503, join-draft.mjs § REGISTRAR_PICTURE and REGISTRAR_NAME): her own picture by its full asset constant, and her name

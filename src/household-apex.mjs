@@ -64,6 +64,11 @@ const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").rep
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
+// THE BERTH ROAD'S the- RULE (POS-1237, the lead's FIX at ebcb635c): a chosen handle on begin may not begin the-, the outcome the road
+// had when the berth's name was the handle (the berth desk refuses a the-* slug). Said in begin's refusal, its standing `next` line and
+// its card's handle; never a town-wide reservation, and not in declare's shared schema.
+export const BERTH_ROAD_THE_RULE = "a chosen handle may not begin the- (the berth desk's rule, kept from when the berth's name was the handle); berth- and human-of- are the town's reserved prefixes, at every door";
+
 // `b` names the berth's mint (POS-761): a link stays this berth's, never a later visitor's under the same name
 export const cosignUrlFor = (slug, mintedAt = null) => `${PUBLIC_BASE}/oauth/berth-cosign?slug=${encodeURIComponent(slug)}${mintedAt == null ? "" : `&b=${Math.round(Number(mintedAt) / 1000)}`}`;
 
@@ -1020,7 +1025,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       ...(decl ? { declaration: { household: decl.household, handle: decl.handle ?? key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
       next:
         tier === "berth" ? [
-          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; give handle: to choose the resident name you will keep, 2–40 characters; left out, your berth name becomes your handle)`,
+          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; give handle: to choose the resident name you will keep, 2–40 characters, not beginning the- on this road; left out, your berth name becomes your handle)`,
           "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
@@ -1133,12 +1138,13 @@ async function doBegin(fields, key, { odb, db }) {
   // is parked identity only, never ownership: the human's co-sign and the settlement gates run unchanged, and are re-judged there.
   let chosen = null;
   if (fields?.handle != null && String(fields.handle).trim() !== "") {
-    // THE TOWN'S OWN PREFIX, AS THE BERTH DESK SAYS IT (server.mjs § POST /berth): while the berth's slug was the resident's handle, the desk's
-    // the-* refusal covered it; the chosen handle that now stands in its place keeps that rule, in the desk's words (Wright, POS-1237's w49 read:
-    // "refuses a the- or berth- start with a message that names the rule"). berth-* is the town's reserved-prefix rule, judged just below.
+    // THIS ROAD'S the- RULE (BERTH_ROAD_THE_RULE): while the berth's slug was the resident's handle, the berth desk's the-* refusal
+    // (server.mjs § POST /berth) covered it; the chosen handle that now stands in its place keeps that outcome (Wright, POS-1237's w49
+    // read: "refuses a the- or berth- start with a message that names the rule"). It is this road's, not a town-wide reservation:
+    // declare and request_residency still take a the- handle, as the town's law allows. berth-* is that law, judged just below.
     const asked = String(fields.handle).trim().toLowerCase();
     if (asked.startsWith("the-"))
-      return bounce(422, `"${asked}" wears the town's own prefix`, "the-* is the town's namespace and berth-* is added for you — pick a plain name", { field: "handle" });
+      return bounce(422, `"${asked}" begins the-, which a chosen handle on the berth road may not`, `${BERTH_ROAD_THE_RULE} — pick a plain name`, { field: "handle" });
     try { chosen = validateResidencyRequest({ ...fields, handle: fields.handle }, db).handle; }
     catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field ?? "handle" }); }
   }
@@ -1216,8 +1222,14 @@ function fieldsForAct(act, { schemas, schemaRequired } = {}, { human = false } =
   // `human`: the card read carries the schema's human hints (title, examples,
   // x-group, x-multiline — world-apex.mjs § withoutHumanHints says why the
   // index never does). A form for a person is generated from the CARD.
-  // begin takes declare's fields, the human's question included (POS-570)
-  if (act === "declare" || act === "begin") return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+  // begin takes declare's fields, the human's question included (POS-570); its own copy of the handle says this road's the- rule
+  // (BERTH_ROAD_THE_RULE), and declare's shared schema does not
+  if (act === "declare") return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+  if (act === "begin") {
+    const fields = actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+    if (fields.handle) fields.handle = { ...fields.handle, description: `${fields.handle.description} On this road (begin), ${BERTH_ROAD_THE_RULE}.` };
+    return fields;
+  }
   const own = APEX_ONLY_FIELDS[act];
   if (own) return actionFields(own.properties, own.required, { strip, human });
   return actionFields(schemas?.[spec.tool] ?? {}, schemaRequired?.[spec.tool] ?? [], { strip, human });

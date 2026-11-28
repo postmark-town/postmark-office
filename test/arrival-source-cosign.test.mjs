@@ -316,7 +316,7 @@ test("POS-1237 · C5 the served co-sign wears the join's look around the same fo
   const deniedText = await denied.text();
   assert.equal(denied.status, 200);
   assert.match(deniedText, /<h1 class="jf-q">Not co-signed<\/h1>/);
-  assert.match(deniedText, /class="reg-face"|class="jf-art"/);
+  assert.match(deniedText, /<span class="reg-name">Regina the Registrar<\/span>Nothing was run\. The declaration stays parked; your agent&#39;s berth stands as it was\.|<span class="reg-name">Regina the Registrar<\/span>Nothing was run\. The declaration stays parked; your agent's berth stands as it was\./, "Regina says the outcome's own words");
   assert.equal(await houseRow("linden-cosign"), null, "nothing founded");
   // the road's own refusals wear it too (the w49 finish: a tester's link to a sunset berth stays in the join's look), same words and code
   const lost = await fetch(`${BASE}/oauth/berth-cosign?slug=no-such-berth-c5`);
@@ -346,6 +346,41 @@ test("POS-1237 · C6 a declaration the door refuses at the approval answers in t
   assert.match(text, /The door refused it \(<code>household<\/code>\): <strong>a household&#39;s name must make a key of 2–40 characters/, "the door's own words, escaped");
   assert.match(text, /Nothing was founded and nothing is stuck/);
   assert.doesNotMatch(text, /<h1>Postmark — the town office<\/h1>/);
+  // Regina says the outcome's own first words (CORE-188: on every screen); they are moved into her bubble, never repeated or rewritten
+  assert.match(text, /<div class="reg-bubble"><span class="reg-name">Regina the Registrar<\/span>The door refused it \(<code>household<\/code>\)/);
+  assert.equal(text.split("The door refused it").length - 1, 1, "the lead is said once, by her");
+});
+
+test("POS-1237 · C7 an expired berth co-sign row keeps the road's look at the GitHub return and at the approval, same 400 and words; a missing row stays plain", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const expire = (id) => { const db = new DatabaseSync(join(tmp, "oauth.db")); try { db.prepare("UPDATE pending SET expires = 1 WHERE id = ?").run(id); } finally { db.close(); } };
+  // at the GitHub return: the link set a to-github row; it expires before GitHub sends the human back
+  ghIdentity = { id: 1237007, login: "cosign-human-c7" };
+  await boardAndBegin("cosign-expire-a", "203.0.113.77", { household: "Expired House A" });
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=cosign-expire-a`, { redirect: "manual" });
+  const state = new URL(r1.headers.get("location")).searchParams.get("state");
+  expire(state);
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const back = await fetch(r2.headers.get("location"));
+  const backText = await back.text();
+  assert.equal(back.status, 400);
+  assert.match(backText, /<h1 class="jf-q">Expired<\/h1>/, "the road's look");
+  assert.match(backText, /Regina the Registrar<\/span>This sign-in took too long or was already used\. Close the tab and try connecting again\./);
+  // at the approval: the consent row expires before the human presses the button; nothing is founded
+  const page = await openCoSign("cosign-expire-b", "Expired House B", { forwardedFor: "203.0.113.78" });
+  expire(page.pending_id);
+  const late = await approve(page, "");
+  const lateText = await late.text();
+  assert.equal(late.status, 400);
+  assert.match(lateText, /<h1 class="jf-q">Expired<\/h1>/);
+  assert.match(lateText, /This sign-in expired\. Start over from your connector\./);
+  assert.equal(await houseRow("expired-house-b"), null, "nothing founded");
+  // a row that is not there names no road: the plain page, as every other road
+  const lost = await fetch(`${BASE}/oauth/github/callback?state=no-such-pending-c7&code=x`);
+  const lostText = await lost.text();
+  assert.equal(lost.status, 400);
+  assert.match(lostText, /<h1>Postmark — the town office<\/h1>/);
+  assert.doesNotMatch(lostText, /reg-face|jf-art/);
 });
 
 // ── POS-1237 · THE CHOSEN FINAL HANDLE (Wright: "the office carries the chosen final handle separately from the temporary berth slug") ──
@@ -447,17 +482,26 @@ test("POS-1237 · H4 the normal refusals at begin, by name and writing nothing: 
   }
 });
 
-test("POS-1237 · H4b (Wright's w49 read) a chosen handle starting the- or berth- is refused at begin with words that name the rule; the- in the berth desk's own words", async () => {
-  // the berth desk's refusal of the same prefix, as it answers a slug today
+test("POS-1237 · H4b (Wright's w49 read) a chosen handle starting the- or berth- is refused at begin with words that name the rule; the- is this road's rule, said as this road's and declared on begin alone", async () => {
+  const { BERTH_ROAD_THE_RULE } = await import("../src/household-apex.mjs");
+  // the berth desk still refuses a the-* slug (the road's outcome before the chosen handle stood apart)
   const desk = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.120" }, body: JSON.stringify({ slug: "the-lighthouse" }) });
-  const deskBody = await desk.json();
   assert.equal(desk.status, 422);
-  const { begun: the, body: theBody } = await boardAndBegin("fh-the-0", "203.0.113.121", { household: "Refused Handle", handle: "the-lighthouse" });
+  const { key: theKey, begun: the, body: theBody } = await boardAndBegin("fh-the-0", "203.0.113.121", { household: "Refused Handle", handle: "the-lighthouse" });
   assert.equal(the.status, 422, JSON.stringify(theBody));
-  assert.equal(theBody.defect, '"the-lighthouse" wears the town\'s own prefix');
-  assert.equal(theBody.hint, "the-* is the town's namespace and berth-* is added for you — pick a plain name");
-  assert.equal(theBody.hint, deskBody.hint, "the same rule, in the berth desk's own words");
+  assert.equal(theBody.defect, '"the-lighthouse" begins the-, which a chosen handle on the berth road may not');
+  assert.equal(theBody.hint, `${BERTH_ROAD_THE_RULE} — pick a plain name`);
+  assert.match(theBody.hint, /a chosen handle may not begin the- \(the berth desk's rule, kept from when the berth's name was the handle\); berth- and human-of- are the town's reserved prefixes, at every door/);
+  assert.doesNotMatch(theBody.hint, /town's namespace|added for you/, "no town-wide claim, and nothing true only of a berth slug");
   assert.equal(await parkedOf("fh-the-0"), null);
+  // DECLARED ON begin: its standing next line and its own card's handle say it; declare's card does not
+  const rest = async (body) => (await fetch(`${BASE}/household`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${theKey}` }, body: JSON.stringify(body) })).json();
+  const standing = await rest({ read: "standing" });
+  assert.ok((standing.next ?? []).some((l) => /2–40 characters, not beginning the- on this road/.test(l)), JSON.stringify(standing.next));
+  const beginCard = await rest({ read: "begin" });
+  assert.match(beginCard.card.fields.handle.description, /On this road \(begin\), a chosen handle may not begin the- /);
+  const declareCard = await rest({ read: "declare" });
+  assert.doesNotMatch(declareCard.card.fields.handle.description, /the-/, "declare's shared handle stays as it is");
   const { begun: berth, body: berthBody } = await boardAndBegin("fh-berth-0", "203.0.113.122", { household: "Refused Handle", handle: "berth-lighthouse" });
   assert.equal(berth.status, 409, JSON.stringify(berthBody));
   assert.match(berthBody.hint, /wears the berth- reserved prefix \(the reserved-prefix rule: no resident handle begins with berth- or human-of-\)/, "the town's rule, named");

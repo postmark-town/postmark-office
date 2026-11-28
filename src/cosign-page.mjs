@@ -48,6 +48,9 @@ a{color:var(--pm-gold)}
 .reg-bubble{position:relative;max-width:60ch;padding:.8em 1.05em;border-radius:12px;background:var(--pm-paper);color:var(--pm-ink);box-shadow:0 8px 22px rgba(0,0,0,.35);font-size:.97rem;line-height:1.55}
 .reg-bubble::before{content:"";position:absolute;left:-7px;top:22px;width:14px;height:14px;background:var(--pm-paper);transform:rotate(45deg)}
 .reg-name{display:block;margin:0 0 .25em;font-family:var(--pm-mono);font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:#975b27}
+.reg-bubble a{color:#975b27}
+.reg-bubble strong{color:var(--pm-ink);overflow-wrap:anywhere}
+.reg-bubble code{font-family:var(--pm-mono);font-size:.86em}
 @media (max-width:560px){.reg{gap:.6em}.reg-face{width:40px;height:40px}.reg-bubble{padding:.65em .8em;font-size:.9rem;line-height:1.45}.reg-bubble::before{top:14px}}
 .jf-kicker{margin:0 0 .9em;font-family:var(--pm-mono);font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;color:rgba(232,196,139,.75)}
 .jf-q{margin:0 0 .5em;font-size:clamp(1.7rem,4.2vw,2.6rem);line-height:1.12;font-weight:700;color:var(--jf-gold);text-shadow:0 0 34px rgba(232,196,139,.28)}
@@ -103,9 +106,17 @@ export function registrarSays(words) {
 /** The pixel-art tile a step opens with. */
 export const quillTile = () => `<div class="jf-art">${QUILL_SVG}</div>`;
 
-/** What the co-sign answers once the human has pressed a button, in the same look: the tile, the title, then `body`. */
+/**
+ * What the co-sign's road answers with (an outcome, a refusal), in the same look: the tile, Regina saying the answer's own first
+ * paragraph, then the title and the rest of `body`. REGINA IS ON EVERY SCREEN (CORE-188: she "stays on every screen", "end to end",
+ * "from the Join button on every path"; the lead's FIX at ebcb635c): her words here are the outcome's EXISTING lead, moved into her
+ * bubble, never new copy. A body that does not open with a paragraph (a caller's own markup) is shown as it is, with no bubble.
+ */
 export function cosignOutcome(title, body) {
-  return cosignPage(title, `${quillTile()}<p class="jf-kicker">The town office · co-sign</p><h1 class="jf-q">${title}</h1>${body}`);
+  const lead = /^\s*<p(?:\s+class="[^"]*")?>([\s\S]*?)<\/p>/.exec(body);
+  const said = lead ? registrarSays(lead[1].trim()) : "";
+  const rest = lead ? body.slice(lead.index + lead[0].length) : body;
+  return cosignPage(title, `${quillTile()}${said}<p class="jf-kicker">The town office · co-sign</p><h1 class="jf-q">${title}</h1>${rest}`);
 }
 
 /** A whole co-sign page: `title` (escaped by the caller) for the tab, `body` the HTML inside the night-sky column. */

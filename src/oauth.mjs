@@ -812,6 +812,9 @@ h1{font-size:1.3em}button{font:inherit;padding:.5em 1.4em;cursor:pointer}
 // its link's own refusals, its GitHub return's and its approval's, as well as its consent page. Chosen by the pending row's kind (or
 // the road's own route); the words, codes and the form are the same either way, and every other road keeps `page`.
 const pageFor = async (kind) => (kind === "berth-cosign" ? (await import("./cosign-page.mjs")).cosignOutcome : page);
+// AN EXPIRED ROW STILL NAMES ITS ROAD (the lead's FIX at ebcb635c): its kind, read only to choose the shell; the row is not
+// otherwise read, kept or consumed here. A missing row, or one that does not parse, names none, and keeps the plain page.
+const kindOfRow = (row) => { try { return row ? JSON.parse(row.json)?.kind ?? null : null; } catch { return null; } };
 
 const html = (res, code, body) => {
   res.writeHead(code, { "content-type": "text/html; charset=utf-8" });
@@ -1072,7 +1075,7 @@ async function handleOauthRoute(req, res, ctx) {
   if (req.method === "GET" && path === "/oauth/github/callback") {
     const pendingId = url.searchParams.get("state") ?? "";
     const row = await odb.get("SELECT json, expires FROM pending WHERE id = ?", pendingId);
-    if (!row || row.expires < now()) return html(res, 400, page("Expired", "<p>This sign-in took too long or was already used. Close the tab and try connecting again.</p>"));
+    if (!row || row.expires < now()) return html(res, 400, (await pageFor(kindOfRow(row)))("Expired", "<p>This sign-in took too long or was already used. Close the tab and try connecting again.</p>"));
     const pending = JSON.parse(row.json);
     const pg = await pageFor(pending.kind);
     if (pending.stage !== "to-github") return html(res, 400, pg("Out of order", "<p>This sign-in is in the wrong state. Start over.</p>"));
@@ -1318,7 +1321,7 @@ async function handleOauthRoute(req, res, ctx) {
   if (req.method === "POST" && path === "/oauth/consent") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
     const row = await odb.get("SELECT json, expires FROM pending WHERE id = ?", body.pending_id ?? "");
-    if (!row || row.expires < now()) return html(res, 400, page("Expired", "<p>This sign-in expired. Start over from your connector.</p>"));
+    if (!row || row.expires < now()) return html(res, 400, (await pageFor(kindOfRow(row)))("Expired", "<p>This sign-in expired. Start over from your connector.</p>"));
     const pending = JSON.parse(row.json);
     if (pending.stage !== "consent" || pending.nonce !== body.nonce)
       return html(res, 400, (await pageFor(pending.kind))("Out of order", "<p>This consent form is stale. Start over.</p>"));
