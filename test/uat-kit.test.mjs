@@ -585,6 +585,10 @@ test("each lock holds alone, and the negatives can fail: restore the open tail A
   assert.notEqual(open, withTail, "the second mutation applied");
   assert.equal(gateOf(open)(WALKS[0]), 200, "both locks off: the walk reaches the office (the bug #1262 found)");
   assert.equal(gate(WALKS[0]), 400, "and the file as committed refuses it");
+  // the exact map alone: drop only the backslash rule from the committed file, and the exact rows still gate the walk (403)
+  const exactOnly = GATE_MAP.replace(/\n\s*"~\\x5c" 1;/, "");
+  assert.notEqual(exactOnly, GATE_MAP, "the third mutation applied");
+  for (const uri of WALKS) assert.equal(gateOf(exactOnly)(uri), 403, `the exact rows alone keep ${JSON.stringify(uri)} behind Access`);
 });
 test("the gate refuses by default: any drift in its key refuses, never opens (Truey's finding 4)", () => {
   const refuse = nginxMap(GATE_MAP, "uat_gate_refuse");
