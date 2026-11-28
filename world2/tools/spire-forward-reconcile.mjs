@@ -11,7 +11,8 @@
 // ── THE RULED JOB (Wright 2026-11-27, on Darko's go on WLD-260; Rivet's lead FIX at 21:48Z) ──────────────────────────────────
 //
 // "The store's row for `wright/the-starforge-spire`, and its door claim from WLD-253's re-kind, carry no `rooms`. Preserve every
-// later legitimate change (the door class, `into`, `lands_at`, `points`)." Then a crossing writes the line out of Git. "No hand edit
+// later legitimate change (the door class, `into`, `lands_at`, `points`)." Then a crossing writes the line out of Git (that is the
+// goal; this tool does not itself make it happen: see § PUBLICATION IS A SEPARATE SELECTION STEP). "No hand edit
 // of `WORLD/` data, no bulk import, no historical snapshot rewrite." WLD-135 (5aacbe95) deleted the 22 rooms from the Spire's file;
 // WLD-253's re-kind built the Spire's door claim from the store's older body, which still held them, and the 18:00Z sweep of
 // 2026-11-27 wrote them back (S197). Both inputs say it: this removes the one field from BOTH, and nothing else.
@@ -27,15 +28,13 @@
 //     TOOL AND NOT A DOOR: env WORLD2_CLEARING_URL, one transaction, the open window FOR UPDATE). So the writer boundary is that
 //     pen, and no grant, role or trigger changes. A resident door or `world2_owner` cannot do this: the guard refuses them (the
 //     test proves it).
-//   · THE CROSSING PRINTS FROM THE SEAL, SO THE CORRECTED ROW REACHES GIT WITHOUT RE-DATING ITS LOCK. The settlement that writes
-//     `WORLD/marks/` is deploy/settlement-auto.sh → settlement-printout.mjs print: it takes the two sealed lists (the last printed
-//     snapshot's and this window's), prints every mark whose SEALED VERSION differs (`deltaOf`, `printedDelta`), and renders it from
-//     that version row through `entriesOf` → store-writedown.mjs § planStoreWriteDown. The seal (world-snapshot-seal.mjs §
-//     STANDING_ROWS_SQL) copies EVERY standing row as `slug, kind, owner, body, geometry, parent, data`: no `locked_window`. So
-//     removing `rooms` (and adding the marker) changes the Spire's version digest at the next seal, and the printout carries it
-//     whatever the row's `locked_window`. (fold-delta.mjs selects by `locked_window`, but nothing in deploy/ or the workflows runs
-//     it.) The claim's `data` is never sealed or printed. This tool therefore writes no lock window: the open window is read only
-//     to be named in the marker.
+//   · PUBLICATION IS A SEPARATE SELECTION STEP. Docket crossings run deploy/settlement-auto.sh → fold-input-cli.mjs →
+//     fold-delta.mjs::foldDelta, which selects rows by the closed window's `marks.locked_window`, then renders and writes them.
+//     This tool changes neither that lock nor the claim chain, so its data correction alone does not offer an already-published
+//     mark locked in an earlier window. A sealed-version printout can notice changed data, but code on a train is not evidence
+//     that this is the running publisher. The store row and named claim can therefore be clean while Git still carries `rooms`.
+//     Record those two store facts separately; the Git witness requires the separately agreed publication route and its crossing.
+//     The claim's `data` is not itself printed. The open window is read here only to be named in the marker.
 //
 // ── WHAT IT WRITES, EXACTLY ─────────────────────────────────────────────────────────────────────────────────────────────────
 //
@@ -78,12 +77,10 @@
 //   3  read-back:                SELECT m.data ? 'rooms', m.locked_window, jsonb_array_length(m.geometry->'points'),
 //                                       (SELECT data ? 'rooms' FROM claims WHERE id = '<claim>') FROM marks m
 //                                 WHERE slug = 'wright/the-starforge-spire';   -- false, 337 (unchanged), 22, false
-//   4  the crossing (nothing to do): the window closes and the clearing's seal records the corrected row as a NEW version beside
-//      the old; the settlement's printout (settlement-printout.mjs) measures the two sealed lists, names the Spire as changed, and
-//      its planner prints the file without the `rooms:` line and with every other line unchanged. Read-back after the seal:
-//        SELECT s.window_id, l.digest FROM world_snapshots s JOIN world_snapshot_marks l ON l.marks_digest = s.marks_digest
-//         WHERE l.slug = 'wright/the-starforge-spire' ORDER BY s.window_id DESC LIMIT 2;   -- two different digests
-//      and, after the printout, `git show main:WORLD/marks/wright/the-starforge-spire/mark.md` has no `rooms:` line.
+//   4  publication: use the separately agreed route that offers the clean row to the active crossing's selector. A new sealed
+//      version alone does not select an earlier-locked, already-published row on the docket path. After that route and crossing,
+//      read the actual published commit's `WORLD/marks/wright/the-starforge-spire/mark.md`: it must have no `rooms:` line.
+//      Name any other file changes that the chosen route introduces; do not infer the Git witness from a seal digest alone.
 //   5  then, and only then, the World's assertion (POS-1263) after the actual crossing witness.
 
 import { createHash } from "node:crypto";
