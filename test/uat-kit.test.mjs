@@ -519,6 +519,34 @@ test("TEXT PIN (weak): nginx-uat.sh never chains `nginx -t &&` into a success li
   assert.ok(code.indexOf("grep -q 'server_name uat.postmark.town;' \"$NEWV\"") < code.indexOf('cat "$NEWV" > "$OUT"'));
 });
 
+// THE AGENT PATHS (CORE-165; Darko 2026-11-28 "unblock agent access"): uat-gate-map.conf's regexes, run here against
+// the paths that must pass without an Access JWT and the browser paths that must not. JS and nginx's PCRE agree on
+// these plain patterns; nginx's own read of the file is a box receipt (nginx -t), not this test.
+const GATE_MAP = read("uat-gate-map.conf");
+const MACHINE_RES = [...GATE_MAP.slice(GATE_MAP.indexOf("map $uri $uat_machine_path"), GATE_MAP.indexOf("map \"$uat_machine_path"))
+  .matchAll(/^\s*~(\S+) 1;$/gm)].map((m) => new RegExp(m[1]));
+const isMachine = (uri) => MACHINE_RES.some((re) => re.test(uri));
+test("the gate map lets past exactly the machine endpoints, and never the browser half of the sign-in or the site", () => {
+  assert.equal(MACHINE_RES.length, 4, "four machine patterns: mcp, register, token, the discovery documents");
+  for (const uri of ["/api/mcp", "/api/mcp/", "/api/oauth/register", "/api/oauth/token", "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/api/mcp", "/.well-known/oauth-authorization-server", "/api/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration", "/api/.well-known/openid-configuration"]) assert.ok(isMachine(uri), `${uri} must pass without a JWT`);
+  for (const uri of ["/", "/join/", "/api/oauth/authorize", "/api/oauth/github/callback", "/api/oauth/consent", "/api/oauth/human",
+    "/api/oauth/berth-cosign", "/api/oauth/claim-cosign", "/api/oauth/likeness", "/api/mcpx", "/api/mcp/tools", "/api/oauth/tokens",
+    "/api/oauth/token/x", "/api/town", "/api/world", "/.well-known/acme-challenge/x", "/.well-known/security.txt", "/x/api/mcp"])
+    assert.ok(!isMachine(uri), `${uri} must stay behind Access`);
+  assert.match(GATE_MAP, /^map "\$uat_machine_path:\$http_cf_access_jwt_assertion" \$uat_gate_refuse \{\n\s*default 0;\n\s*"0:" 1;\n\}/m,
+    "refuse only when it is not a machine path AND the JWT header is empty");
+});
+test("TEXT PIN (weak): nginx-uat.sh installs the gate map, emits the map's gate in place of the presence-only if, and checks both", () => {
+  const sh = read("nginx-uat.sh");
+  assert.match(sh, /install -m 0644 "\$HERE\/uat-gate-map\.conf"\s+\/etc\/nginx\/conf\.d\/uat-gate-map\.conf/);
+  assert.match(sh, /\\n\\1if \(\$uat_gate_refuse\) \{ return 403; \}\|' \\/, "the generated gate reads the map");
+  assert.ok(!/\\1if \(\$http_cf_access_jwt_assertion = ""\)/.test(sh), "the old presence-only if is no longer generated");
+  assert.match(sh, /grep -c 'if \(\\\$uat_gate_refuse\) \{ return 403; \}' "\$NEWV"\)" = 1 \] \|\| uat_die/);
+  assert.match(sh, /grep -q 'http_cf_access_jwt_assertion = ""' "\$NEWV" && uat_die/);
+});
+
 test("TEXT PIN (weak): units.sh gives /srv/uat-stubs only to units that already write /srv/postmark-office; the sandboxed ones get nothing", () => {
   const sh = read("units.sh");
   assert.match(sh, /if grep -q '\^ReadWritePaths=\/srv\/postmark-office' "\$f"; then echo "ReadWritePaths=-\/srv\/uat-stubs"; fi/);
