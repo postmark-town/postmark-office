@@ -23,8 +23,10 @@
 #         does not have: an open item in README § Open, for a person to decide.
 #       - The machine endpoints an agent's connector calls without a browser (/api/mcp, the OAuth register and
 #         token endpoints, the .well-known discovery documents) pass WITHOUT the header: uat-gate-map.conf names
-#         them, and Cloudflare Access bypasses the same paths (Darko, 2026-11-28: "unblock agent access"). The
-#         browser half of the sign-in stays behind Access, so only a uat-tester can mint an agent's token.
+#         each as one exact path, and Cloudflare Access bypasses the same paths (Darko, 2026-11-28: "unblock agent
+#         access"). The browser half of the sign-in stays behind Access, so only a uat-tester can mint an agent's
+#         token. A backslash anywhere in the path is refused (400) before the gate: the office's URL parse turns it
+#         into a slash, so a backslash walk under a machine path would otherwise reach any door (#1262, finding 1).
 # The http{}-level files go in first, as DEPLOY.md § 4 says.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,7 +84,7 @@ sed -E \
   -e '/^\s*ssl_certificate(_key)? /d' \
   -e '/^\s*include \/etc\/letsencrypt\/options-ssl-nginx\.conf;/d' \
   -e '/^\s*ssl_dhparam /d' \
-  -e 's|^(\s*)server_name postmark\.town;|\1server_name uat.postmark.town;\n\1# THE GATE (dev'"'"'s, CORE-160): a request must carry a non-empty Access JWT header. PRESENCE ONLY: Cloudflare Access in front of the tunnel is the gate, and nothing here verifies the JWT. The machine endpoints in uat-gate-map.conf pass without one (CORE-165, agents).\n\1if ($cf_edge = 0) { return 403; }\n\1if ($uat_gate_refuse) { return 403; }|' \
+  -e 's|^(\s*)server_name postmark\.town;|\1server_name uat.postmark.town;\n\1# THE GATE (dev'"'"'s, CORE-160): a request must carry a non-empty Access JWT header. PRESENCE ONLY: Cloudflare Access in front of the tunnel is the gate, and nothing here verifies the JWT. The machine endpoints in uat-gate-map.conf pass without one (CORE-165, agents), and a backslash in the path is refused first.\n\1if ($uat_uri_refuse) { return 400; }\n\1if ($cf_edge = 0) { return 403; }\n\1if ($uat_gate_refuse) { return 403; }|' \
   -e 's#https://postmark\.town#https://uat.postmark.town#g' \
   > "$NEWV"
 
@@ -90,6 +92,9 @@ sed -E \
 grep -q 'server_name uat.postmark.town;' "$NEWV" || uat_die "the generated vhost has no uat server_name (left at $NEWV; $OUT is untouched)"
 [ "$(grep -c 'if (\$cf_edge = 0)' "$NEWV")" = 1 ] || uat_die "the generated vhost does not carry the gate exactly once (left at $NEWV; $OUT is untouched)"
 [ "$(grep -c 'if (\$uat_gate_refuse) { return 403; }' "$NEWV")" = 1 ] || uat_die "the generated vhost does not carry the JWT gate (uat_gate_refuse) exactly once (left at $NEWV; $OUT is untouched)"
+[ "$(grep -c 'if (\$uat_uri_refuse) { return 400; }' "$NEWV")" = 1 ] || uat_die "the generated vhost does not refuse a backslash path (uat_uri_refuse) exactly once (left at $NEWV; $OUT is untouched)"
+# the backslash refusal must come before the gate, so no machine path can be reached by a backslash walk
+[ "$(grep -n 'if (\$uat_uri_refuse)' "$NEWV" | cut -d: -f1)" -lt "$(grep -n 'if (\$uat_gate_refuse)' "$NEWV" | cut -d: -f1)" ] || uat_die "the backslash refusal is not before the gate (left at $NEWV; $OUT is untouched)"
 grep -q 'http_cf_access_jwt_assertion = ""' "$NEWV" && uat_die "the old presence-only JWT if survived beside the map's gate (left at $NEWV; $OUT is untouched)"
 [ "$(grep -c '^\s*listen ' "$NEWV")" = 1 ] && grep -q "listen 127.0.0.1:$PORT;" "$NEWV" || uat_die "the generated vhost must listen on 127.0.0.1:$PORT and nowhere else (left at $NEWV; $OUT is untouched)"
 grep -E 'server_name[^;]*(^|[ ])(www\.)?postmark\.town;' "$NEWV" && uat_die "a prod server_name survived in $NEWV ($OUT is untouched)"
