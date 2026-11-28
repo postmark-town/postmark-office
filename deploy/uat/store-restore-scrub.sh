@@ -129,10 +129,11 @@ MIG="$(mktemp -d /var/tmp/uat-migrate.XXXXXX)"
 mkdir -p "$MIG/release/world2/tools" "$MIG/release/world2/schema"
 cp "$RELEASE/world2/tools/migrations-landed.mjs" "$MIG/release/world2/tools/"
 cp "$RELEASE"/world2/schema/*.sql "$MIG/release/world2/schema/"
-cp "$HERE/migrate-plan.mjs" "$MIG/"
-# pgpass: host:port:db:user:password, with \ and : in the password escaped; one line, nobody's, 0600
+cp "$HERE/migrate-plan.mjs" "$HERE/scrub.sql" "$MIG/"
+# pgpass: host:port:db:user:password, with \ and : in the password escaped; one line, nobody's, 0600, and good for ONE
+# database, the copy being restored ($NEW is [a-z0-9_]), so the file opens nothing else on the box
 PGP="${OWNER_PW//\\/\\\\}"; PGP="${PGP//:/\\:}"
-printf '127.0.0.1:*:*:world2_owner:%s\n' "$PGP" > "$MIG/pgpass"
+printf '127.0.0.1:*:%s:world2_owner:%s\n' "$NEW" "$PGP" > "$MIG/pgpass"
 unset PGP OWNER_PW
 chown -R nobody: "$MIG"; chmod -R go-rwx "$MIG"; chmod 0600 "$MIG/pgpass"
 uat_say "copied $(ls "$MIG/release/world2/schema" | wc -l) schema files and migrations-landed.mjs; one digest over them all: $(cd "$MIG/release" && sha256sum world2/tools/migrations-landed.mjs world2/schema/*.sql | sha256sum | cut -c1-16)"
@@ -148,7 +149,11 @@ AFTER="$(asnobody "$NODE" "$MIG/migrate-plan.mjs" --db "$NEW" --release "$MIG/re
 [ -z "$AFTER" ] || uat_die "after applying, these migrations still read as not landed: $(echo $AFTER); $NEW is left for a look, $UAT_DB is untouched"
 
 uat_say "scrub (scrub.sql), then the readback: every label it names, once; zero_* must be 0 and present_* above 0"
-OUT="$(sudo -u postgres psql -q -v ON_ERROR_STOP=1 -d "$NEW" -tA -F' ' -f "$HERE/scrub.sql")" || uat_die "the scrub failed; $UAT_DB is untouched"
+# As world2_owner over loopback, run as nobody, like the migrations: the copy's tables, functions and triggers are the
+# owner's (own.sql), and a trigger function replaced by a carried migration would otherwise run as the superuser. The
+# owner is not bound by row policy (no FORCE: that is why the dump carries drafts), so every statement and the readback
+# see every row; test/uat-kit.test.mjs runs the whole scrub as world2_owner and checks it still empties every private table.
+OUT="$(asnobody psql -h 127.0.0.1 -U world2_owner -X -q -v ON_ERROR_STOP=1 -d "$NEW" -tA -F' ' -f "$MIG/scrub.sql")" || uat_die "the scrub failed; $NEW is left for a look, $UAT_DB is untouched"
 echo "$OUT" | grep -E ' [0-9]+$' | sed 's/^/  /' || true
 RB="$(uat_check_readback "$HERE/scrub.sql" "$OUT")" || { echo "$RB" >&2; uat_die "the scrub readback failed; $NEW is left for a look, $UAT_DB is untouched"; }
 

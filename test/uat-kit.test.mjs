@@ -55,11 +55,16 @@ const asLines = (rows) => rows.map((r) => `${r.t} ${r.count}`).join("\n");
 
 const store = await startStore({ db: "uat_kit_test" });
 const su = await store.connect("postgres");
+// store-restore-scrub.sh runs the scrub as world2_owner over loopback, not as a superuser (review note 1): the readback and the
+// scrub run here the same way. The owner is not bound by row policy (no FORCE), which is why the dump carries drafts.
+const ownerConn = await store.connect("world2_owner");
+const oq = (sql) => ownerConn.query(sql);
 const ROLE = `uat_probe_${process.pid}`;   // a role is cluster-wide on the tree's shared server: dropped in the one teardown below
 after(async () => {
   await su.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => {});
   // the swap test's scratch databases (shared server: they would outlive the file); SW is defined below, before this runs
   for (const s of ["", "_new", "_new2", "_prev", "_prev_old"]) await su.query(`DROP DATABASE IF EXISTS ${SW}${s} WITH (FORCE)`).catch(() => {});
+  await ownerConn.end().catch(() => {});
   await su.end().catch(() => {});
   await store.stop();
 });
@@ -170,7 +175,7 @@ bashTest("the readback fails on a missing label, a repeated one, a non-zero zero
 
 // ── 4. THE SCRUB, RUN on a real store: private rows go, the public record stays ───────────────────────────────────
 test("on an EMPTY restored copy the readback reads zeros AND fails its present_ controls (zeros prove nothing)", async () => {
-  const rb = lastRows(await q(READBACK_SQL));
+  const rb = lastRows(await oq(READBACK_SQL));
   const out = asLines(rb);
   assert.ok(rb.filter((r) => r.t.startsWith("zero_")).every((r) => Number(r.count) === 0), "an empty store counts zero everywhere");
   if (HAS_BASH) {
@@ -235,14 +240,16 @@ test("THE SCRUB RUN: seeded with a row in every private table, the scrub removes
   assert.equal(Number((await q(`SELECT count(*) FROM claims WHERE status = 'draft'`)).rows[0].count), 2);
 
   // control: the readback sees what the seed planted (so the zeros after are the scrub's doing)
-  const pre = lastRows(await q(READBACK_SQL));
+  const who = (await oq(`SELECT current_user AS u, (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS su`)).rows[0];
+  assert.deepEqual(who, { u: "world2_owner", su: false }, "the scrub and its readback run as the NON-superuser owner, as the script's loopback connection does");
+  const pre = lastRows(await oq(READBACK_SQL));
   const nonZero = pre.filter((r) => r.t.startsWith("zero_") && Number(r.count) > 0).map((r) => r.t);
   for (const want of ["zero_claims_drafts", "zero_reports", "zero_mail_blocks", "zero_households_human", "zero_households_likeness_request", "zero_refused_acts", "zero_arrival_heard", "zero_parcel_room_nonces",
     "zero_berths_with_a_real_hash", "zero_harness_secrets_or_live_addresses", "zero_payers", "zero_office_roles_note", "zero_office_role_audit_note", "zero_berths_card", "zero_office_town_journal"]) {
     assert.ok(nonZero.includes(want), `before the scrub the readback must count the planted ${want}`);
   }
 
-  const out = lastRows(await q(SCRUB));
+  const out = lastRows(await oq(SCRUB));
   const lines = asLines(out);
   const after = await counts();
   assert.deepEqual(PRIVATE_TABLES.filter((t) => after[t] !== 0), [], "every private table is empty after the scrub");
@@ -424,6 +431,48 @@ test("migrate-plan: a migration the copy lacks is planned (in order), applied as
   } finally { await owner.end(); }
 });
 
+// ── 7b. THE UNITS (review note 4): units.sh installs prod's units by glob, so every unit must be judged ─────────────
+const DEPLOY = join(ROOT, "deploy");
+const UNIT_RE = /^postmark-.*\.(service|timer|socket)$/;
+bashTest("units.lists.sh: every unit file this tree carries is named in a list (or is the service of a listed timer or socket); a new unit is refused by name", () => {
+  const files = readdirSync(DEPLOY).filter((n) => UNIT_RE.test(n));
+  assert.ok(files.length > 40, `the denominator is read from deploy/: ${files.length} unit files`);
+  const run = (dir) => lib('. ./units.lists.sh; uat_unclassified_units "$D"', { D: dir });
+  const real = run(DEPLOY);
+  assert.equal(real.stdout, "", `every unit file is classified, none is silently installed: ${real.stdout}${real.stderr}`);
+  // the control: the same check, over a directory holding units nobody has judged, names exactly them
+  const fresh = tempDir("uat-units-");
+  for (const n of ["postmark-newthing.service", "postmark-newthing.timer", "postmark-ferry.service", "postmark-another.socket"]) writeFileSync(join(fresh, n), "[Unit]\n");
+  assert.deepEqual(run(fresh).stdout.trim().split("\n").sort(), ["postmark-another.socket", "postmark-newthing.service", "postmark-newthing.timer"],
+    "an unlisted unit and its timer are named; the ferry's service is covered by its listed timer");
+});
+
+bashTest("units.lists.sh: the lists are disjoint, and prod's planned restart and the root-run loop-lag keeper are MASKED on UAT", () => {
+  const dup = lib('. ./units.lists.sh; printf "%s\\n" "${ENABLE[@]}" "${MASK[@]}" "${ASK[@]}" "${KEEP_UNSTARTED[@]}" | sort | uniq -d');
+  assert.equal(dup.stdout, "", `a unit in two lists: ${dup.stdout}`);
+  const masked = lib('. ./units.lists.sh; printf "%s\\n" "${MASK[@]}"').stdout.split("\n");
+  for (const u of ["postmark-planned-restart.service", "postmark-planned-restart.timer", "postmark-loop-lag-keep.service", "postmark-loop-lag-keep.timer"]) {
+    assert.ok(masked.includes(u), `${u} must be masked on UAT`);
+    assert.ok(readdirSync(DEPLOY).includes(u), `control: ${u} is a unit this tree carries`);
+  }
+  // the premises of the two calls, read from the unit files: the restarter restarts Postgres and the office; the keeper has no User= (root)
+  assert.match(readFileSync(join(DEPLOY, "postmark-planned-restart.sh"), "utf8"), /systemctl restart "\$u"/);
+  assert.doesNotMatch(readFileSync(join(DEPLOY, "postmark-loop-lag-keep.service"), "utf8"), /^User=/m, "no User=: the keeper runs as root, from the uat-owned tree");
+  assert.match(readFileSync(join(DEPLOY, "postmark-loop-lag-keep.service"), "utf8"), /ExecStart=\/usr\/bin\/node \/srv\/postmark-office\/deploy\/loop-lag-keep\.mjs/);
+});
+
+test("TEXT PIN (weak): units.sh sources the lists and refuses an unclassified unit before it installs anything; the scrub runs as world2_owner; the pgpass is for one database", () => {
+  const units = read("units.sh");
+  assert.ok(units.indexOf("uat_unclassified_units") < units.indexOf('install -m 0644 "$f" /etc/systemd/system/'), "the check runs before the glob installs");
+  assert.match(units, /\. "\$HERE\/units\.lists\.sh"/);
+  const sh = read("store-restore-scrub.sh");
+  const code = sh.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  assert.match(code, /OUT="\$\(asnobody psql -h 127\.0\.0\.1 -U world2_owner [^\n]*-f "\$MIG\/scrub\.sql"\)"/, "the scrub runs as the owner, as nobody");
+  assert.ok(!/sudo -u postgres psql[^\n]*scrub\.sql/.test(code), "and no longer as the superuser");
+  assert.match(code, /printf '127\.0\.0\.1:\*:%s:world2_owner:%s\\n' "\$NEW" "\$PGP"/, "the pgpass names the one database");
+  assert.ok(!/127\.0\.0\.1:\*:\*:/.test(code), "no wildcard database in the pgpass");
+});
+
 // ── 8. TEXT PINS for what runs only on the box (weak: they read the scripts, they run nothing) ─────────────────────
 test("TEXT PIN (weak): store-restore-scrub.sh checks the gate before any network call, the swap is one transaction, and a trap restarts the units", () => {
   const sh = read("store-restore-scrub.sh");
@@ -431,7 +480,7 @@ test("TEXT PIN (weak): store-restore-scrub.sh checks the gate before any network
   assert.match(sh, /pg_restore --exit-on-error --dbname "\$NEW"/);
   const at = (s) => { const i = sh.indexOf(s); assert.ok(i > 0, `${s} is in the script`); return i; };
   assert.ok(at('pg_restore --exit-on-error') < at('-f "$HERE/own.sql"') && at('-f "$HERE/own.sql"') < at('-f "$HERE/grants.sql"')
-    && at('-f "$HERE/grants.sql"') < at('"$MIG/migrate-plan.mjs" --db') && at('"$MIG/migrate-plan.mjs" --db') < at('-f "$HERE/scrub.sql"'),
+    && at('-f "$HERE/grants.sql"') < at('"$MIG/migrate-plan.mjs" --db') && at('"$MIG/migrate-plan.mjs" --db') < at('-f "$MIG/scrub.sql"'),
     "restore, owners, grants, migrations, then the scrub");
   assert.match(sh, /trap finish EXIT/);
   assert.match(sh, /STOPPED=1[\s\S]*systemctl stop[\s\S]*STOPPED=0/, "the units are marked stopped before they are, and cleared only after they start again");

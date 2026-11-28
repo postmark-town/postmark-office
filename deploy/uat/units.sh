@@ -29,33 +29,11 @@ uat_require_user
 SRC=/srv/postmark-office/deploy
 [ -f "$SRC/postmark-office.service" ] || uat_die "$SRC has no unit files: carry the frozen release into /srv/postmark-office first (README § The order)."
 
-# What runs: the office, the town's crossing chain, the store's candle and projections, and the site.
-ENABLE=(
-  postmark-office.service
-  postmark-town-seal.socket postmark-town-tool.socket
-  postmark-ferry.timer postmark-crossing-save.timer
-  postmark-office-keep.timer
-  postmark-settlement.timer postmark-world2-clearing.timer
-  postmark-town-index.timer postmark-world2-law-ingest.timer
-  postmark-site-refresh.timer
-  postmark-harbor-watch.timer
-)
-# What never runs on UAT, masked so no hand can start it by accident:
-MASK=(
-  postmark-paypal-watch.service postmark-paypal-watch.timer     # real payments
-  postmark-stripe-watch.service postmark-stripe-watch.timer     # real payments
-  postmark-usdc-watch.service postmark-usdc-watch.timer         # real payments
-  postmark-earpiece.service postmark-earpiece.timer             # wakes REAL residents during an event's window
-  postmark-media-sweep.service postmark-media-sweep.timer       # frees media in a real bucket
-  postmark-world2-backup.service postmark-world2-backup.timer   # UAT is a copy; it ships nothing to prod's bucket
-  postmark-world2-notary.service postmark-world2-notary.timer   # nothing from UAT pushes off-box (Wright, CORE-165, 2026-11-24); off by ruling, not a gap to fix
-  postmark-settlement-shadow.service postmark-settlement-shadow.timer  # UAT is the rehearsal; the shadow is prod's
-  postmark-dev-freshen.service postmark-dev-freshen.timer       # dev's, not UAT's
-  postmark-world2-ingest.service postmark-world2-ingest.timer   # disabled on prod too (split into law/marks)
-  postmark-tmp-janitor.service postmark-tmp-janitor.timer       # deletes MEEPO's /tmp files: on town-rig, the meeps'
-)
-# Left off, a person decides (README § Open): the sentinel posts to a Discord webhook (UAT's own, or none).
-ASK=(postmark-site-sentinel.timer)
+# Which units run, which are masked, which wait for a person, which are installed and left: units.lists.sh. The check
+# below refuses a unit in the carried release that no list names, BEFORE the glob installs it (CORE-165, review note 4).
+. "$HERE/units.lists.sh"
+UNCLASSIFIED="$(uat_unclassified_units "$SRC")"
+[ -z "$UNCLASSIFIED" ] || uat_die "these units in $SRC are in no list of units.lists.sh (read each, then put it in ONE list): $(echo $UNCLASSIFIED)"
 
 uat_say "install the unit files from $SRC (the frozen release's)"
 for f in "$SRC"/postmark-*.service "$SRC"/postmark-*.timer "$SRC"/postmark-*.socket; do

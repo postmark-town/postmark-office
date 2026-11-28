@@ -132,8 +132,9 @@
 -- office_role_audit.login, town_residents.github_address (GitHub logins the town already shows),
 -- oauth_berths.cosigned_gh_login.
 --
--- Runs in one transaction against the freshly restored copy, never against a live store. It runs as the postgres
--- superuser, which no row policy binds, so the readback below counts every row, not the rows a policy would show.
+-- Runs in one transaction against the freshly restored copy, never against a live store. It runs as world2_owner, over
+-- loopback (store-restore-scrub.sh), not as a superuser: the owner owns every table here and no policy is FORCEd on it, so
+-- no row policy binds it, and the readback below counts every row, not the rows a policy would show.
 
 BEGIN;
 

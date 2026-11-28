@@ -131,6 +131,24 @@ uat_store_json() { # <night> <restored_at> <scrub's REVIEWED text>
   printf '{"night":%s,"restored_at":%s,"scrub":%s}\n' "$(uat_json_str "$1")" "$(uat_json_str "$2")" "$(uat_json_str "$3")"
 }
 
+# The units no list names (CORE-165, review note 4). units.sh installs prod's units by glob, so a unit a later train adds
+# would be installed, and possibly enabled or run as root, without anyone having read it. Needs ENABLE, MASK, ASK and
+# KEEP_UNSTARTED (units.lists.sh). A unit is classified when it is named in one of them, or is the service of a timer or
+# socket that is. Prints each unclassified unit's name, one per line; prints nothing when all are classified.
+uat_unclassified_units() { # <the release's deploy dir>
+  local f u stem k hit
+  for f in "$1"/postmark-*.service "$1"/postmark-*.timer "$1"/postmark-*.socket; do
+    [ -e "$f" ] || continue
+    u="$(basename "$f")"; stem="${u%.*}"; hit=0
+    for k in "${ENABLE[@]}" "${MASK[@]}" "${ASK[@]}" "${KEEP_UNSTARTED[@]}"; do
+      if [ "$k" = "$u" ]; then hit=1; fi
+      case "$u" in *.service) if [ "$k" = "$stem.timer" ] || [ "$k" = "$stem.socket" ]; then hit=1; fi ;; esac
+    done
+    if [ "$hit" = 0 ]; then echo "$u"; fi
+  done
+  return 0
+}
+
 # UAT's user is its own: never the meeps' `meepo`, and it must exist (provision.sh makes it).
 uat_require_user() {
   [ "$UAT_USER" != meepo ] || uat_die "UAT_USER is meepo, the meeps' Letta user on this box. UAT runs as its own user."
