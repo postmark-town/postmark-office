@@ -1,17 +1,140 @@
 -- deploy/uat/scrub.sql — what UAT's copy of the store loses before anyone signs in (CORE-160).
 --
--- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (resident_notes, letter_notes)
+-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (resident_notes, letter_notes); Darko, 2026-11-27 "yes to all" (Jetto's fifteen-line list on CORE-165, "For Darko: UAT's scrub, one list to review", #1206 at 6ca34cc1: every row marked reviewed below)
+-- RULED (Darko, 2026-11-27, "yes to all"): every delete and scrub that was marked `awaiting` (CORE-165's Rulings). Each is noted next to its statement.
 --
--- store-restore-scrub.sh refuses to run until the line above reads `REVIEWED: <Darko's ruling, dated>`.
--- The list is Jetto's proposal from 2026-11-23 (CORE-160, "the scrub list for Darko"), checked against
--- prod's columns that night (information_schema, read-only: every column whose name says token, secret,
--- hash, login, payer, address and the like), and for household-private tables (row policies to office_api):
--- resident_notes and letter_notes are the two, and both go (5). arrival_source_pending held 0 rows.
+-- store-restore-scrub.sh refuses to run while this file has a line starting `-- AWAITING:` (nothing here reached
+-- Darko yet), and refuses unless the REVIEWED line above reads `REVIEWED: <Darko's ruling, dated>`. To clear the
+-- first, Darko rules on each awaiting row; the keeper then deletes that row's AWAITING line and extends REVIEWED with
+-- his words and the date. Nothing here is a ruling of his except what the REVIEWED line quotes.
 --
--- The rule: keep the public record (handles, households, acts, marks, letters, settlements) so UAT tests
--- what residents see; drop every credential, every household-private word, and anything that would let UAT
--- reach a real person or system.
--- Runs in one transaction against the freshly restored copy, never against a live store.
+-- WHY THE LIST GREW. The first list (Jetto, 2026-11-23, checked against prod's columns by name: token, secret, hash,
+-- login, payer, address) found two household-private tables by their row policies. It missed the rest: the nightly dump
+-- is taken as world2_owner on purpose so that it CARRIES the drafts (deploy/world2-backup.sh), and a restore applies no
+-- row policy to the restoring superuser, so every row-policy-private table arrives whole. This list is built from every
+-- table the office's migrations create (world2/schema/*.sql, the base tables of the migrated schema; the views events,
+-- event_rsvps, identities, docket and standing_marks hold no rows of their own). test/uat-kit.test.mjs reads the real
+-- schema and fails if a table has no row here, so a new migration cannot add a private table that nothing classifies.
+--
+-- The rule: keep the public record (handles, households, acts, marks, letters, settlements) so UAT tests what
+-- residents see; drop every credential, every household-private word, and anything that would let UAT reach a real
+-- person or system. "Public" is what a migration's own header calls public (a table the notary exports, a copy of the
+-- public town repo, a projection of public acts). A table is private if its header says so, if it sits behind a row
+-- policy for one household, or if office_api alone holds it and no export reads it.
+--
+-- THE CLASSIFICATION (verdict: DELETE the rows, SCRUB a column, KEEP, or UNSURE = kept as is until Darko says;
+-- status: `reviewed` is quoted on the REVIEWED line, `awaiting` is not yet his):
+--
+-- | table | verdict | status | why |
+-- | acts | KEEP | - | the public record; the notary exports it |
+-- | amend_carried | KEEP | - | which settlement carried an amend; derived from public files |
+-- | arrival_entries | KEEP | - | queued enter-on-arrival intents from public walk acts; a trigger refuses every DELETE |
+-- | arrival_heard | DELETE | reviewed | where a joining human heard of Postmark: about the human, private to operators (030), carries a free-text note |
+-- | arrival_source_pending | DELETE | reviewed | a GitHub id parked with its outreach tag: an ops fact, never on the record (086) |
+-- | arrival_sources | DELETE | reviewed | household to outreach tag: an ops fact, never on the record (086) |
+-- | ashore | KEEP | - | which handle came ashore; append-only, the town repo shows it |
+-- | berth_heard | DELETE | reviewed | a berth's parked where-did-you-hear answer: 030's rules, no pen reads it |
+-- | claims | DELETE | reviewed | the DRAFT rows only (007: a draft is a household's private compose space); the public docket stays |
+-- | crossing_receipts | KEEP | - | the crossing's public receipts |
+-- | depictions | KEEP | - | media-door URLs of pictures made of a resident, append-only record |
+-- | durable_event_memberships | KEEP | - | an ended event's window: already answered by the event's public page (103: "WHAT THIS STORES IS ALREADY PUBLIC") |
+-- | durable_event_room_says | KEEP | - | the says an ended event's rooms held, by act number; words are not copied, they come from public acts (103) |
+-- | durable_event_rooms | KEEP | - | an event's rooms as its public page gave them (103) |
+-- | durable_room_says | KEEP | - | a closed room's says: speaker, instant, place and reply edge, all on the public conversations page; no words (103) |
+-- | durable_rooms | KEEP | - | closed rooms as fixed public records: ids, bounds, participants (103; dungeon-wall says are filtered out before they are written) |
+-- | earpiece_wakes | DELETE | reviewed | a resident's wake log: row policy for one household (026) |
+-- | escrow_projection | KEEP | - | a projection of public stamps |
+-- | gangway_acts | KEEP | - | the gangway's public acts |
+-- | household_harnesses | SCRUB | reviewed | a resident's harness secret and address (item 3 below) |
+-- | household_pins | KEEP | - | handle, login, GitHub id: the town's public github-ids.json |
+-- | households | SCRUB | reviewed | `human` (a name 019 calls the human's own, 101 calls it the private name: unsure which, so it goes) and the `request` part of `likeness_state` (092: PRIVATE); every other column prints into the public households.json |
+-- | invite_holds | DELETE | reviewed | the hands' judgment about a household, internal by its own header (087) |
+-- | law_projection | KEEP | - | a projection of the public law |
+-- | letter_notes | DELETE | reviewed | a household's marks on its letters (item 5; "empty both is fine yeah") |
+-- | letter_opens | DELETE | reviewed | which letters a household has opened: row policy, not an act, never public (029) |
+-- | mail_blocks | DELETE | reviewed | a household blocks a household: private to the two houses and the office (083) |
+-- | mark_carried | KEEP | - | which settlement carried a mark; derived from public files |
+-- | mark_versions | KEEP | - | the public marks' versions |
+-- | marks | KEEP | - | the public record |
+-- | oauth_berths | SCRUB | reviewed | the hash goes (item 2, reviewed); the card (a parked, not yet co-signed declaration) goes too: the reviewer leans to null it, and Darko confirms (a flow may depend on it) |
+-- | oauth_clients | KEEP | - | dynamic registrations of PUBLIC clients (RFC 7591, oauth.mjs); no secret is stored |
+-- | oauth_codes | DELETE | reviewed | item 1 |
+-- | oauth_key_claims | DELETE | reviewed | item 1: ask_hash is a capability |
+-- | oauth_pending | DELETE | reviewed | item 1 |
+-- | oauth_tokens | DELETE | reviewed | item 1: every sign-in and household key |
+-- | office_media | KEEP | - | the media quota ledger: byte accounting (household, sha, bytes), no content |
+-- | office_meta | KEEP | - | the town log's drain cursor |
+-- | office_role_audit | SCRUB | reviewed | who granted which role stays (GitHub logins the town already shows); the operator's free-text `note` goes |
+-- | office_roles | SCRUB | reviewed | the roles stay, by GitHub id and login; the operator's free-text `note` about a person goes |
+-- | office_town_journal | DELETE | reviewed | 032 makes it office_api's alone with no export ("rows that are not yet the record (a letter before it sails)"), which is this file's own rule for private; it has a free-text payload. The drain reads past a cursor and never needs old rows |
+-- | parcel_room_nonces | DELETE | reviewed | a purchase's retry key: office_api's alone, in no export (096) |
+-- | position_snapshot_rows | KEEP | - | derived from public acts |
+-- | position_snapshots | KEEP | - | derived from public acts |
+-- | posts | KEEP | - | the public calendar and posts |
+-- | projection_heads | KEEP | - | a projection cursor |
+-- | refused_acts | DELETE | reviewed | the private log of an act a door refused, for 90 days (098) |
+-- | register_versions | KEEP | - | the public register's versions |
+-- | registry | KEEP | - | the store's own object registry |
+-- | registry_meta | KEEP | - | the households file's metadata |
+-- | reports | DELETE | reviewed | a resident's report of a resident: private to the filer and the town's hands (084) |
+-- | resident_notes | DELETE | reviewed | item 5; "empty both is fine yeah" |
+-- | responses | KEEP | - | RSVPs; the public acts already carry their kind and budget (026) |
+-- | settlement_decisions | KEEP | - | the settlement's public decisions |
+-- | settlement_publications | KEEP | - | the settlement's public printouts |
+-- | settlements | KEEP | - | the public record |
+-- | stamp_lines | KEEP | - | the stamp ledger's lines: the town repo's public ledger |
+-- | stamp_projection | KEEP | - | a projection of public stamps |
+-- | standing_acts | KEEP | - | the public acts that stand |
+-- | town_bulletin | KEEP | - | a copy of the public town repo (town_* below are all this) |
+-- | town_discovery_chunks | KEEP | - | the public letters, cut for search |
+-- | town_funding_holo | KEEP | - | a copy of the public town repo |
+-- | town_funding_invalid | KEEP | - | a copy of the public town repo |
+-- | town_funding_keeping_mint | KEEP | - | a copy of the public town repo |
+-- | town_funding_roll | KEEP | - | a copy of the public town repo |
+-- | town_homes | KEEP | - | a copy of the public town repo |
+-- | town_index_snapshots | KEEP | - | a copy of the public town repo |
+-- | town_ledger | KEEP | - | a copy of the public town repo |
+-- | town_letter_edges | KEEP | - | the public letters' reply graph |
+-- | town_letters | KEEP | - | the town's letters: published, residents' data is public |
+-- | town_mail_lines | KEEP | - | the mail ledger's lines, a copy of the public town repo |
+-- | town_mail_state | KEEP | - | derived from the public mail ledger |
+-- | town_meta | KEEP | - | a copy of the public town repo |
+-- | town_pot_escrow | KEEP | - | a copy of the public town repo |
+-- | town_pot_receipts | SCRUB | reviewed | the receipt and its amount stay; who paid goes (item 4) |
+-- | town_pot_stakers | KEEP | - | a copy of the public town repo |
+-- | town_pots | KEEP | - | a copy of the public town repo |
+-- | town_quest_progress | KEEP | - | a copy of the public town repo |
+-- | town_quest_standing | KEEP | - | a copy of the public town repo |
+-- | town_regions | KEEP | - | a copy of the public town repo |
+-- | town_repo_log | KEEP | - | a copy of the public town repo |
+-- | town_residents | KEEP | - | the residents' public pages, GitHub logins the town already shows |
+-- | town_roll | KEEP | - | the public roll |
+-- | town_rooms | KEEP | - | every white-pages room and the login its address names |
+-- | town_stamps | KEEP | - | a copy of the public town repo |
+-- | town_threads | KEEP | - | a copy of the public town repo |
+-- | windows | KEEP | - | the candle's public windows |
+-- | world_graph_edges | KEEP | - | the world's public graph |
+-- | world_graph_events | KEEP | - | the world's public graph |
+-- | world_graph_geometry | KEEP | - | the world's public graph |
+-- | world_graph_lints | KEEP | - | the world's public graph |
+-- | world_graph_meta | KEEP | - | the world's public graph |
+-- | world_graph_nodes | KEEP | - | the world's public graph |
+-- | world_graphs | KEEP | - | the world's public graph |
+-- | world_snapshot_folds | KEEP | - | the public notary's snapshots |
+-- | world_snapshot_marks | KEEP | - | the public notary's snapshots |
+-- | world_snapshot_register | KEEP | - | the public notary's snapshots |
+-- | world_snapshots | KEEP | - | the public notary's snapshots |
+--
+-- UNSURE, for Darko (kept as they are until he says): household_pins.note and renamed (free prose in the public
+-- github-ids.json). His "yes to all" (2026-11-27) gave no word on these, so they stay. oauth_berths.card goes (ruled, above).
+--
+-- Kept on purpose, as the public record: household_pins.login, identities.gh_login, office_roles.login,
+-- office_role_audit.login, town_residents.github_address (GitHub logins the town already shows),
+-- oauth_berths.cosigned_gh_login.
+--
+-- Runs in one transaction against the freshly restored copy, never against a live store. It runs as world2_owner, over
+-- loopback (store-restore-scrub.sh), not as a superuser: the owner owns every table here and no policy is FORCEd on it, so
+-- no row policy binds it, and the readback below counts every row, not the rows a policy would show.
 
 BEGIN;
 
@@ -29,7 +152,9 @@ UPDATE oauth_berths SET token_hash = 'uat-scrubbed:' || slug;
 --    resident's agent. UAT must never call a real harness.
 --    `address` is NOT NULL (checked 2026-11-23), so it gets an address that cannot route (.invalid, RFC 2606),
 --    kept distinct per row in case a constraint wants it.
-UPDATE household_harnesses SET secret = NULL, address = 'https://harness.invalid/uat-scrubbed/' || md5(address);
+--    A webhook row must carry a secret (household_harnesses_secret: kind = 'webhook' iff secret IS NOT NULL), so
+--    it carries one that is not the resident's; a letta row has none.
+UPDATE household_harnesses SET secret = CASE WHEN kind = 'webhook' THEN 'uat-scrubbed' END, address = 'https://harness.invalid/uat-scrubbed/' || md5(address);
 
 -- 4. Who paid a pot (town_pot_receipts.payer: a payment identity). The receipt and its amount stay.
 UPDATE town_pot_receipts SET payer = 'uat-scrubbed';
@@ -39,19 +164,83 @@ UPDATE town_pot_receipts SET payer = 'uat-scrubbed';
 --    but not from the box; UAT's copy carries none. Testers write their own.
 DELETE FROM resident_notes;
 DELETE FROM letter_notes;
+
+-- 6. Everything else a household keeps to itself or the office keeps from the record (Truey's finding 1 on
+--    #1206). Each statement carries its own RULED line: Darko ruled them all on 2026-11-27 ("yes to all", CORE-165).
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_source_pending (a GitHub id parked with an outreach tag)
 DELETE FROM arrival_source_pending;
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_sources (household to outreach tag)
+DELETE FROM arrival_sources;
+-- RULED (Darko, 2026-11-27, "yes to all"): arrival_heard (where a joining human heard of Postmark, with a free-text note)
+DELETE FROM arrival_heard;
+-- RULED (Darko, 2026-11-27, "yes to all"): berth_heard (a berth's parked answer to the same question)
+DELETE FROM berth_heard;
+-- RULED (Darko, 2026-11-27, "yes to all"): claims, draft rows only (007: a draft is private to its household until staked; the docket stays whole)
+DELETE FROM claims WHERE status = 'draft';
+-- RULED (Darko, 2026-11-27, "yes to all"): reports (a resident's report, private to the filer and the town's hands)
+DELETE FROM reports;
+-- RULED (Darko, 2026-11-27, "yes to all"): mail_blocks (a household blocks a household, private to the two houses)
+DELETE FROM mail_blocks;
+-- RULED (Darko, 2026-11-27, "yes to all"): invite_holds (the hands' judgment about a household)
+DELETE FROM invite_holds;
+-- RULED (Darko, 2026-11-27, "yes to all"): letter_opens (which letters a household has opened)
+DELETE FROM letter_opens;
+-- RULED (Darko, 2026-11-27, "yes to all"): earpiece_wakes (a resident's wake log)
+DELETE FROM earpiece_wakes;
+-- RULED (Darko, 2026-11-27, "yes to all"): refused_acts (the private log of refused acts)
+DELETE FROM refused_acts;
+-- RULED (Darko, 2026-11-27, "yes to all"): parcel_room_nonces (a room purchase's retry key)
+DELETE FROM parcel_room_nonces;
+-- RULED (Darko, 2026-11-27, "yes to all"): office_town_journal (the town's input log: letters not yet sailed, office_api's alone, in no export)
+DELETE FROM office_town_journal;
+-- RULED (Darko, 2026-11-27, "yes to all"): office_roles (the operator's free-text note about a person; the role and login stay)
+UPDATE office_roles SET note = NULL WHERE note IS NOT NULL;
+-- RULED (Darko, 2026-11-27, "yes to all"): office_role_audit (the same note on the audit line; the line stays)
+UPDATE office_role_audit SET note = NULL WHERE note IS NOT NULL;
+-- RULED (Darko, 2026-11-27, "yes to all"): oauth_berths (card: a parked, not yet co-signed declaration; Darko confirms, a flow may depend on it)
+UPDATE oauth_berths SET card = NULL WHERE card IS NOT NULL;
+-- RULED (Darko, 2026-11-27, "yes to all"): households.human (the human's name: 019 says public file, 101 says private) and households.likeness_state's
+-- `request` (092: PRIVATE). The official pointer and history in likeness_state stay (the public registry projects them).
+UPDATE households SET human = NULL, likeness_state = NULLIF(likeness_state - 'request', '{}'::jsonb) WHERE human IS NOT NULL OR likeness_state ? 'request';
 
--- Kept on purpose, as the public record: household_pins.login, identities.gh_login, office_roles.login,
--- office_role_audit.login, office_town_journal.gh_login, town_residents.github_address (GitHub logins
--- the town already shows), oauth_berths.cosigned_gh_login.
-
--- The readback the script prints: each must be 0.
-SELECT 'oauth_tokens' AS t, count(*) FROM oauth_tokens
-UNION ALL SELECT 'oauth_key_claims', count(*) FROM oauth_key_claims
-UNION ALL SELECT 'berths with a real hash', count(*) FROM oauth_berths WHERE token_hash NOT LIKE 'uat-scrubbed:%'
-UNION ALL SELECT 'harness secrets or live addresses', count(*) FROM household_harnesses WHERE secret IS NOT NULL OR address NOT LIKE 'https://harness.invalid/uat-scrubbed/%'
-UNION ALL SELECT 'payers', count(*) FROM town_pot_receipts WHERE payer IS DISTINCT FROM 'uat-scrubbed'
-UNION ALL SELECT 'resident_notes', count(*) FROM resident_notes
-UNION ALL SELECT 'letter_notes', count(*) FROM letter_notes;
+-- THE READBACK the script reads. One line per label, `<label> <count>`, and store-restore-scrub.sh's check
+-- (lib.sh § uat_check_readback) demands EVERY label below, exactly once:
+--   zero_*     must be 0: what the scrub was to remove, counted after;
+--   present_*  must be above 0: the restored copy still holds the public record. A readback of zeros proves nothing
+--              if the tables were empty to begin with (a dump restored into the wrong database, a failed restore),
+--              so these show the counts are counts of something.
+-- A label missing from the output, a line printed twice, or no output at all fails. Adding a deleted table adds its
+-- zero_ label here; the test reads the labels off this file, so the script and the file cannot disagree.
+SELECT 'zero_oauth_tokens' AS t, count(*) FROM oauth_tokens
+UNION ALL SELECT 'zero_oauth_codes', count(*) FROM oauth_codes
+UNION ALL SELECT 'zero_oauth_pending', count(*) FROM oauth_pending
+UNION ALL SELECT 'zero_oauth_key_claims', count(*) FROM oauth_key_claims
+UNION ALL SELECT 'zero_berths_with_a_real_hash', count(*) FROM oauth_berths WHERE token_hash NOT LIKE 'uat-scrubbed:%'
+UNION ALL SELECT 'zero_harness_secrets_or_live_addresses', count(*) FROM household_harnesses WHERE secret IS DISTINCT FROM (CASE WHEN kind = 'webhook' THEN 'uat-scrubbed' END) OR address NOT LIKE 'https://harness.invalid/uat-scrubbed/%'
+UNION ALL SELECT 'zero_payers', count(*) FROM town_pot_receipts WHERE payer IS DISTINCT FROM 'uat-scrubbed'
+UNION ALL SELECT 'zero_resident_notes', count(*) FROM resident_notes
+UNION ALL SELECT 'zero_letter_notes', count(*) FROM letter_notes
+UNION ALL SELECT 'zero_arrival_source_pending', count(*) FROM arrival_source_pending
+UNION ALL SELECT 'zero_arrival_sources', count(*) FROM arrival_sources
+UNION ALL SELECT 'zero_arrival_heard', count(*) FROM arrival_heard
+UNION ALL SELECT 'zero_berth_heard', count(*) FROM berth_heard
+UNION ALL SELECT 'zero_claims_drafts', count(*) FROM claims WHERE status = 'draft'
+UNION ALL SELECT 'zero_reports', count(*) FROM reports
+UNION ALL SELECT 'zero_mail_blocks', count(*) FROM mail_blocks
+UNION ALL SELECT 'zero_invite_holds', count(*) FROM invite_holds
+UNION ALL SELECT 'zero_letter_opens', count(*) FROM letter_opens
+UNION ALL SELECT 'zero_earpiece_wakes', count(*) FROM earpiece_wakes
+UNION ALL SELECT 'zero_refused_acts', count(*) FROM refused_acts
+UNION ALL SELECT 'zero_parcel_room_nonces', count(*) FROM parcel_room_nonces
+UNION ALL SELECT 'zero_office_town_journal', count(*) FROM office_town_journal
+UNION ALL SELECT 'zero_office_roles_note', count(*) FROM office_roles WHERE note IS NOT NULL
+UNION ALL SELECT 'zero_office_role_audit_note', count(*) FROM office_role_audit WHERE note IS NOT NULL
+UNION ALL SELECT 'zero_berths_card', count(*) FROM oauth_berths WHERE card IS NOT NULL
+UNION ALL SELECT 'zero_households_human', count(*) FROM households WHERE human IS NOT NULL
+UNION ALL SELECT 'zero_households_likeness_request', count(*) FROM households WHERE likeness_state ? 'request'
+UNION ALL SELECT 'present_acts', count(*) FROM acts
+UNION ALL SELECT 'present_marks', count(*) FROM marks
+UNION ALL SELECT 'present_households', count(*) FROM households
+UNION ALL SELECT 'present_claims_not_draft', count(*) FROM claims WHERE status <> 'draft';
 
 COMMIT;

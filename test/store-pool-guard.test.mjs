@@ -92,9 +92,13 @@ test("a pool connection's kernel keepalive timer is the initial delay, not the k
   try {
     client = await pool.connect();
     const port = client.connection.stream.localPort;
+    const hex = (n) => n.toString(16).toUpperCase().padStart(4, "0");
+    // THIS CONNECTION'S ROW, NOT ANY ROW WITH ITS PORT: /proc/net/tcp also holds the sockets other tests in this shard closed a moment ago,
+    // and a TIME_WAIT row (timer 3) on the same ephemeral local port is not this socket. So the row is the one whose local port is the
+    // client's, whose peer is this test's server, and whose state is ESTABLISHED (01).
     const row = readFileSync("/proc/net/tcp", "utf8").split("\n").slice(1)
       .map((l) => l.trim().split(/\s+/))
-      .find((f) => f[1]?.endsWith(`:${port.toString(16).toUpperCase().padStart(4, "0")}`));
+      .find((f) => f[1]?.endsWith(`:${hex(port)}`) && f[2]?.endsWith(`:${hex(server.address().port)}`) && f[3] === "01");
     assert.ok(row, `the client socket (port ${port}) is in /proc/net/tcp`);
     const [timer, ticks] = row[5].split(":").map((x) => parseInt(x, 16));
     assert.equal(timer, 2, "the socket's running timer is the keepalive timer");

@@ -31,6 +31,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
 import { markRecord, recordKindOf } from "./mark-record.mjs";
+import { keptDoorFields } from "./door-class.mjs"; // POS-1238: an amend keeps the entry and door fields it does not send
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
 import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
@@ -350,8 +351,16 @@ async function main() {
     const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
     return framing?.at ?? null;
   };
+  // AN AMEND KEEPS A MARK'S ENTRY AND A DOOR'S FIELDS (POS-1238; door-class.mjs § keptDoorFields): what it does not send is
+  // the prior record's, so new words on a door never delete where it leads. The door law is the checkout's own, when it has one.
+  let kept = {};
+  if (amending) {
+    let law = null;
+    try { law = await import(pathToFileURL(join(CLONE, "tools", "door-law.mjs")).href); } catch { law = null; }
+    kept = keptDoorFields(p, priorRec, { law });
+  }
   // a new description writes `kind: predicate` (W2's rename, WLD-73 G10); the parent check above reads either form
-  const fileRec = { ...p, kind: recordKindOf(p.kind) };
+  const fileRec = { ...p, ...kept, kind: recordKindOf(p.kind) };
   if (relativeTree) {
     const origin = frameOrigin();
     if (origin) {

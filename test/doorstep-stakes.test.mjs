@@ -335,7 +335,8 @@ test("postmark#3757 · an engine that carries no unpublish rule judges nothing, 
   assert.equal(seg.at_risk, null);
   const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
   assert.equal(by["berthillon/the-orchard-bench"].at_risk, null, "a registry row goes unjudged");
-  assert.equal(by["berthillon/the-old-lantern"].at_risk, false, "founding estate needs no rule: the registry does not hold it");
+  // WLD-252 (Darko 2026-11-25; review R1): registry absence is no exemption, so a mark with no row needs the rule too, and with none read it is unjudged
+  assert.equal(by["berthillon/the-old-lantern"].at_risk, null, "a mark with no row goes unjudged too, never called safe");
   assert.equal(seg.note, undefined);
 });
 
@@ -668,4 +669,71 @@ test("POS-902 · a prolific house's doorstep, through the injected reader: the n
     assert.match(down.stakes.unavailable, /unknown, not zero/);
     assert.equal(down.stakes.count, 60);
   } finally { await restore(); await ix.stop(); }
+});
+
+// ── WLD-252 · a mark with NO registry row is the sweep's to judge too (Darko, 2026-11-25 08:53 EST) ──
+// The doorstep measures; the engine decides. With an engine that spells an unregistered mark (world tools/unpublish-verdict.mjs § unregisteredEntry,
+// WLD-252) the doorstep asks the engine's own verdict about it, with the engine's own filing index; with an engine that predates it, that engine's
+// sweep never takes such a mark, and the doorstep says exactly that (false), as before. The rule below is a RECORDER of what the doorstep hands in:
+// it judges nothing itself, so these tests pin the wiring, and the rule stays the engine's.
+const UNREG = (household) => ({ household, unregistered: true });
+const recorder = (answer) => { const calls = []; const rule = (entry, inputs) => { calls.push({ entry, inputs }); return answer(entry, inputs); }; return { rule, calls }; };
+const LANTERN = "berthillon/the-old-lantern";
+const tiered = MARKS.map((m) => (m.id === LANTERN ? { ...m, tier: "market" } : m));
+
+test("WLD-252 · a no-row mark is asked of the engine's verdict as its unregistered entry, with the escrow, the walked tier, held and its current filing", () => {
+  const rec = recorder((entry, inputs) => (entry.unregistered ? { unpublish: true, why: "unregistered-commons-unbacked", path: inputs.currentPath() } : VERDICT.unpublishVerdict(entry, inputs)));
+  const rows = stakesRowsFrom({ handles: ["berthillon"], marks: tiered, registry: REGISTRY, byMark: ESCROW, rule: rec.rule, pathOnMain: onMain,
+    unregisteredEntry: UNREG, currentPathOf: (id) => (id === LANTERN ? "WORLD/marks/berthillon/the-old-lantern/mark.md" : null) });
+  const asked = rec.calls.find((c) => c.entry.unregistered);
+  assert.deepEqual(asked.entry, { household: null, unregistered: true }, "the engine's own spelling, nothing invented");
+  assert.equal(asked.inputs.escrow, 0);
+  assert.equal(asked.inputs.standing, "market", "the tier the fold walked");
+  assert.equal(asked.inputs.held, false);
+  assert.equal(asked.inputs.currentPath(), "WORLD/marks/berthillon/the-old-lantern/mark.md", "the engine's filing index, at the ref");
+  const lantern = rows.find((r) => r.mark === LANTERN);
+  assert.equal(lantern.at_risk, true, "the engine said it would be taken, so the doorstep says at risk");
+  assert.equal(lantern.class, null, "and it still has no registry class");
+  assert.equal(lantern.act, stakeEnvelope(LANTERN), "with the stake that would keep it");
+  assert.equal(rec.calls.filter((c) => c.entry.unregistered).length, 1, "only the one no-row mark is asked that way");
+});
+
+test("WLD-252 · the engine's answer is the doorstep's: kept (held, backed, home) reads false, unread reads null — never a false 'safe'", () => {
+  for (const [answer, want] of [[{ unpublish: false, why: "held" }, false], [{ unpublish: false, why: "walks-not-commons" }, false], [{ unpublish: null, why: "filing-unread" }, null]]) {
+    const rec = recorder((entry, inputs) => (entry.unregistered ? answer : VERDICT.unpublishVerdict(entry, inputs)));
+    const rows = stakesRowsFrom({ handles: ["berthillon"], marks: tiered, registry: REGISTRY, byMark: ESCROW, rule: rec.rule, pathOnMain: onMain, unregisteredEntry: UNREG });
+    assert.equal(rows.find((r) => r.mark === LANTERN).at_risk, want, `${answer.why}: ${want}`);
+  }
+  // held is measured from the print, as for a row
+  const rec = recorder(() => ({ unpublish: false, why: "held" }));
+  stakesRowsFrom({ handles: ["berthillon"], marks: tiered.map((m) => (m.id === LANTERN ? { ...m, held_by: "limen" } : m)), registry: REGISTRY, byMark: ESCROW, rule: rec.rule, pathOnMain: onMain, unregisteredEntry: UNREG });
+  assert.equal(rec.calls.find((c) => c.entry.unregistered).inputs.held, true);
+});
+
+test("WLD-252 · an engine that predates it (no unregisteredEntry) keeps today's answer exactly: a no-row mark is not at risk, and its verdict is not asked", async () => {
+  const rec = recorder((entry, inputs) => VERDICT.unpublishVerdict(entry, inputs));
+  const rows = stakesRowsFrom({ handles: ["berthillon"], marks: tiered, registry: REGISTRY, byMark: ESCROW, rule: rec.rule, pathOnMain: onMain, unregisteredEntry: null });
+  assert.equal(rows.find((r) => r.mark === LANTERN).at_risk, false);
+  assert.equal(rec.calls.some((c) => c.entry.unregistered), false);
+  const seg = await stakesFor(["berthillon"], readers({ unregistered: async () => null, filingAt: async () => () => null }));
+  assert.equal(seg.rows.find((r) => r.mark === LANTERN).at_risk, false, "through stakesFor too");
+  // and the readers it is handed are asked at the registry's ref, never thrown on
+  const seen = [];
+  const seg2 = await stakesFor(["berthillon"], readers({ unregistered: async () => { throw new Error("no engine"); }, filingAt: async (ref) => { seen.push(ref); throw new Error("no git"); } }));
+  assert.deepEqual(seen, ["origin/main"], "the filing is asked at the ref the registry was read at");
+  assert.equal(seg2.rows.find((r) => r.mark === LANTERN).at_risk, false, "the RULE was read; only its spelling of a no-row mark was not: judged as the old engine judges it");
+});
+
+test("WLD-252 (review R1) · an engine that could not be read at all judges NOTHING: a no-row mark reads null like every row, never 'not at risk'", async () => {
+  const rows = stakesRowsFrom({ handles: ["berthillon"], marks: tiered, registry: REGISTRY, byMark: ESCROW, rule: null, pathOnMain: onMain, unregisteredEntry: null });
+  assert.equal(rows.find((r) => r.mark === LANTERN).at_risk, null, "rule unread + no spelling: unjudged, not safe");
+  assert.ok(rows.every((r) => r.at_risk === null), "and every row with it");
+  // CONTROL: a readable old engine (the rule read, no spelling) keeps today's false
+  const old = stakesRowsFrom({ handles: ["berthillon"], marks: tiered, registry: REGISTRY, byMark: ESCROW, rule: VERDICT.unpublishVerdict, pathOnMain: onMain, unregisteredEntry: null });
+  assert.equal(old.find((r) => r.mark === LANTERN).at_risk, false);
+  // through stakesFor: an engine whose rule and spelling both fail to load says so, and the no-row mark is not called safe
+  const seg = await stakesFor(["berthillon"], readers({ rule: async () => null, unregistered: async () => null, filingAt: async () => () => null }));
+  assert.match(seg.unavailable, /never called safe/);
+  assert.equal(seg.rows.find((r) => r.mark === LANTERN).at_risk, null);
+  assert.equal(seg.at_risk, null);
 });

@@ -1,0 +1,29 @@
+{
+  "_doc": "POS-1238's seed of the World's landed door law, byte for byte. World #444 (WLD-253, CORE-129 layer 1) merged to postmark-world main as b775f7975fe221ab2377d1260a22366a0033a500; the office suite's pinned world clone (test/clone-pins.json) predates it by 361 commits, and moving that pin is its own issue. So test/door-class.test.mjs lays these files over a synthetic world built from the pinned clone's tools: the five tools are tools/door-law.mjs and the four modules it imports (class-properties, mark-kind, admin-makers, and claim-instant, which mark-kind imports), loaded by the office's own worldToolModule exactly as production loads them; the seventeen records are the Keeping Works class chain door reads (postmark-node, mark, sited, thing and door, each with its makers; mark's entry, thing's entry: none, and door's into, lands_at and requires), with the three marks they nest under, read by the office's own law-ingest (deriveLaw) into the law snapshot. Fetched with gh api repos/postmark-town/postmark-world/contents/<path>?ref=<sha> (Accept: application/vnd.github.raw). Do not edit: re-seed from a newer World sha, and the test holds every file to its sha256 below.",
+  "repo": "https://github.com/postmark-town/postmark-world.git",
+  "sha": "b775f7975fe221ab2377d1260a22366a0033a500",
+  "files": {
+    "tools/door-law.mjs": "06beaa12949720b10cf696caad0cdd79d7bf288ebc287b3a6fd799bcb639027e",
+    "tools/class-properties.mjs": "bc34389d6f4ef19d39cae44550a12555294984dc0b1b5971da3d8c6e6feed4ab",
+    "tools/mark-kind.mjs": "9b86e48fb53bfd652090fff98b58e11360f54a5d4c5ff2c1f6dbd2add5369b26",
+    "tools/admin-makers.mjs": "c236ef6867df6d36cc05cbc5d4d625fce7081a811034de8f0dc81d4b47ee0724",
+    "tools/claim-instant.mjs": "26b8dc3e3112e58cfd80e247977de4dd00a0bd02c19866ebc81f4f62f9365791",
+    "WORLD/marks/let-there-be-light/mark.md": "2fbb13ead62e99e768f10ab49cc0afe85ab543d61ff75a8c553e2cb7f72610ea",
+    "WORLD/marks/let-there-be-light/the-town-centre/mark.md": "53cf24c016bcc7783f6990c5dc8896509a04cbb37d060c3b25d5bec1a60fc937",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/mark.md": "59f417cab2dc7ff407cb59e679452f13fed9266e7c612aa093e09cc836b584ba",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark.md": "9e829f375a478b8f8cf42a1d10bf1f91f554f9a9a1dc1add4560b94d49ac0130",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/postmark-node-makers/mark.md": "d27b4da60629b6f10ddde737fef644b7c22a8e995baed5fff728d989488d73b8",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/mark.md": "172a76e85a948422504ab83bb7fac88b09c1b37386b87ea4975cf6044e70bbe3",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/mark-entry/mark.md": "4c9845dcf2c0afa5afe46b3b670a7d44582c001f1218e2eddfbeb43a68c67627",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/sited/mark.md": "e42fe3f0f0c7881923ae3cdc5e3d5fccdca7b796e0c96327de09d960b8deb85b",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/sited/sited-makers/mark.md": "bbfdc36a757014a2c9a55df732e0abd2e3ace4e15c1c66a0120d14f66497b11a",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/thing/mark.md": "1a25819f07096756aa6275ede7df986c9d880a68b21fcbc4eb2560ba6afebadc",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/thing/thing-makers/mark.md": "fe2ea1e286cb527c9a66d788f2a81ba0935a3fcdb288462b92bceaea1c1938ad",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/thing/thing-entry/mark.md": "b4e0ee843a5372ea90e46e0c46f7d7efd886c4cbd3eba9d10960386e2bc5412b",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/door/mark.md": "8c20b94a7229ed33604abed16b9dadadfd79dcf89217e09aca05be11b25683b3",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/door/door-makers/mark.md": "976a8aec403e737fd823f8eb82088072f2fc1ba6967be05442c5f8b09fe86295",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/door/door-into/mark.md": "2fcea050aad48833b4570efae1466bd11bb0524481f2b3330d5b5092342a163e",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/door/door-lands-at/mark.md": "f65c31c7339cf2f1a3576a4dc9314831a77b9a6d2fda0eee2ba64fb075a34a94",
+    "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node/mark/door/door-requires/mark.md": "5162ba77ec6b5d2f3c83883a58082c634c5a7a3c515008557c28d4707d6e2e8d"
+  }
+}

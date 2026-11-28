@@ -29,13 +29,17 @@ const CLONE = join(process.cwd(), "world-clone");
 const TOWN = join(process.cwd(), "town-clone");
 const SKIP = (!existsSync(CLONE) || !existsSync(TOWN)) && "no pinned world and town clones in this tree";
 const store = await startStore({ db: "pos_1221_segments" });
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 after(async () => {
   for (const k of FLAGS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; }
   await store.stop();
 });
-Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE });
+// THE JOURNAL ROAD, prod's flags (mark-footprint-caps.test.mjs's discipline). With WORLD_SINGLE_LOG unset, test 2's leave took the git door, whose draft
+// checkout FETCHES origin into the SHARED world clone (world-branches.mjs § ensureDraftCheckout): in CI that moved origin/main from the pin to
+// today's World main, and a file running beside this one (read-workers § 6, POS-1098's CI case) heard its voices against a settlement edge that had
+// moved mid-test. Test 2 accepts either road; it now takes the journal (the fix POS-1238's #1251 found for the same collision).
+Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "mark", W2_GUARDS: "1", WORLD_CLONE: CLONE, WORLD_SINGLE_LOG: "1" });
 
 const within = async (fn) => { const tm = newTiming(); const out = await runTiming(tm, fn); return { out, seg: timingLine(tm, { door: "mcp-act", status: 200 })?.act?.seg ?? {} }; };
 // both runs of one act on one wall clock, so the dates an answer carries match (TEST-DESIGN § Clocks); the segments' clock is performance.now, untouched
@@ -52,7 +56,9 @@ const actsCount = async () => {
   try { return Number((await c.query("SELECT count(*)::int AS n FROM acts")).rows[0].n); }
   finally { await c.end(); }
 };
-const residentMark = (canon) => canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.at && String(m.id).startsWith(`${m.by}/`)
+// a mark of no class (POS-1238): the amends below send kind: "sited" alone, and an amend that drops a class the rig's unread
+// class layer cannot place is refused by the door's own rule, which is not what these segments measure
+const residentMark = (canon) => canon.marks.find((m) => m.by !== "the-town" && m.kind === "sited" && m.class == null && m.at && String(m.id).startsWith(`${m.by}/`)
   && m.parent_id == null && m.at.x > -300 && m.at.x < 300 && m.at.y > -300 && m.at.y < 300);
 
 test("1 · the journal path: a preview names its steps and answers byte for byte as with no request; a real leave names the witness and the write", { skip: SKIP }, async () => {

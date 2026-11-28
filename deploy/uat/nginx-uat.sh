@@ -10,9 +10,17 @@
 # edge to this nginx on loopback. So the generated vhost:
 #   · keeps only prod's main server block (the port-80 redirect and the www block have no meaning behind a tunnel);
 #   · listens on 127.0.0.1:8480 only, plain HTTP (TLS ends at Cloudflare's edge, and the tunnel is encrypted);
-#   · names uat.postmark.town and carries dev's GATE: only traffic with an Access JWT enters. Tunnel traffic arrives
-#     from 127.0.0.1, which the edge map already counts as edge (cf-edge-map.conf), so the JWT is the check that
-#     matters, and Access (Darko's step) decides who holds one.
+#   · names uat.postmark.town and carries dev's GATE, which on UAT admits a request that reached this listener AND
+#     carries a non-empty Cf-Access-Jwt-Assertion header. WHAT THAT IS, AND IS NOT (CORE-165, finding 3):
+#       - Tunnel traffic arrives from 127.0.0.1, which the edge map counts as edge (the operator on the box), so
+#         `$cf_edge` is 1 for every request that can reach this listener. The first `if` can never refuse here; it is
+#         kept so the vhost stays dev's, line for line.
+#       - The JWT is tested for PRESENCE only. Nothing here checks its signature, audience or expiry, so any process on
+#         this box (the meeps are on it) can curl 127.0.0.1:8480 with any header value and be let in.
+#       - Who may sign in is therefore decided by Cloudflare Access, in front of the tunnel (Darko's step), and by
+#         nothing on this box. From the internet the only road to this listener is the tunnel, so that is the gate; from
+#         the box itself there is none. Verifying the JWT against Cloudflare's keys would need an nginx module the box
+#         does not have: an open item in README § Open, for a person to decide.
 # The http{}-level files go in first, as DEPLOY.md § 4 says.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +50,12 @@ install -m 0644 "$SRC/nginx-ops-gate.access.conf" /etc/nginx/snippets/postmark-o
 
 uat_say "the vhost, generated from prod's main server block"
 OUT=/etc/nginx/sites-available/postmark-uat
+# Generated beside the live vhost and checked THERE; only a file that passed its checks is moved into place, and a
+# config nginx refuses puts the previous vhost back (CORE-165, finding 4). Before this, the live file was overwritten
+# first and checked after, and `nginx -t && systemctl reload nginx` in a `set -e` script could fail and still fall
+# through to the success line below.
+NEWV="$(mktemp /etc/nginx/sites-available/.postmark-uat.XXXXXX)"
+PREV=""; [ -e "$OUT" ] && PREV="$(mktemp /etc/nginx/sites-available/.postmark-uat-prev.XXXXXX)" && cat "$OUT" > "$PREV"
 # 1. keep what precedes the first server block (the maps) and the one block whose server_name is postmark.town;
 awk '
   BEGIN { depth = 0; inblock = 0; seen = 0 }
@@ -62,18 +76,27 @@ sed -E \
   -e '/^\s*ssl_certificate(_key)? /d' \
   -e '/^\s*include \/etc\/letsencrypt\/options-ssl-nginx\.conf;/d' \
   -e '/^\s*ssl_dhparam /d' \
-  -e 's|^(\s*)server_name postmark\.town;|\1server_name uat.postmark.town;\n\1# THE GATE (dev'"'"'s, CORE-160): only traffic carrying the Access JWT enters UAT. The tunnel arrives from loopback.\n\1if ($cf_edge = 0) { return 403; }\n\1if ($http_cf_access_jwt_assertion = "") { return 403; }|' \
+  -e 's|^(\s*)server_name postmark\.town;|\1server_name uat.postmark.town;\n\1# THE GATE (dev'"'"'s, CORE-160): a request must carry a non-empty Access JWT header. PRESENCE ONLY: Cloudflare Access in front of the tunnel is the gate, and nothing here verifies the JWT.\n\1if ($cf_edge = 0) { return 403; }\n\1if ($http_cf_access_jwt_assertion = "") { return 403; }|' \
   -e 's#https://postmark\.town#https://uat.postmark.town#g' \
-  > "$OUT"
+  > "$NEWV"
 
 # The generated file must say what it should, and nothing of prod's front may survive.
-grep -q 'server_name uat.postmark.town;' "$OUT" || uat_die "the generated vhost has no uat server_name"
-[ "$(grep -c 'if (\$cf_edge = 0)' "$OUT")" = 1 ] || uat_die "the generated vhost does not carry the gate exactly once"
-[ "$(grep -c '^\s*listen ' "$OUT")" = 1 ] && grep -q "listen 127.0.0.1:$PORT;" "$OUT" || uat_die "the generated vhost must listen on 127.0.0.1:$PORT and nowhere else"
-grep -E 'server_name[^;]*(^|[ ])(www\.)?postmark\.town;' "$OUT" && uat_die "a prod server_name survived in $OUT"
-grep -q -E 'letsencrypt|ssl_certificate' "$OUT" && uat_die "a certificate line survived in $OUT"
+grep -q 'server_name uat.postmark.town;' "$NEWV" || uat_die "the generated vhost has no uat server_name (left at $NEWV; $OUT is untouched)"
+[ "$(grep -c 'if (\$cf_edge = 0)' "$NEWV")" = 1 ] || uat_die "the generated vhost does not carry the gate exactly once (left at $NEWV; $OUT is untouched)"
+[ "$(grep -c '^\s*listen ' "$NEWV")" = 1 ] && grep -q "listen 127.0.0.1:$PORT;" "$NEWV" || uat_die "the generated vhost must listen on 127.0.0.1:$PORT and nowhere else (left at $NEWV; $OUT is untouched)"
+grep -E 'server_name[^;]*(^|[ ])(www\.)?postmark\.town;' "$NEWV" && uat_die "a prod server_name survived in $NEWV ($OUT is untouched)"
+grep -q -E 'letsencrypt|ssl_certificate' "$NEWV" && uat_die "a certificate line survived in $NEWV ($OUT is untouched)"
 
+# Into place, then nginx's own verdict on the whole config. On a refusal the previous vhost goes back (or, on a first
+# run, the link and the file come out) and the script says so and stops: it never prints the success line below.
+cat "$NEWV" > "$OUT"
 ln -sf "$OUT" /etc/nginx/sites-enabled/postmark-uat
 rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx
+if ! nginx -t; then
+  if [ -n "$PREV" ]; then cat "$PREV" > "$OUT"; uat_say "nginx refused the new vhost: the previous $OUT is back"
+  else rm -f /etc/nginx/sites-enabled/postmark-uat "$OUT"; uat_say "nginx refused the new vhost: it is taken out again (there was none before)"; fi
+  uat_die "nginx -t refused the generated vhost, so nothing was reloaded (nginx's own reason is above). The refused vhost is kept at $NEWV${PREV:+, the previous one at $PREV}"
+fi
+systemctl reload nginx || uat_die "nginx accepted the config but systemctl reload nginx failed: see journalctl -u nginx. The generated vhost is $OUT"
+rm -f "$NEWV" ${PREV:+"$PREV"}   # this script's own temp files
 uat_say "uat.postmark.town is served from $OUT on 127.0.0.1:$PORT (generated; edit prod's copy of record, then rerun)"

@@ -153,6 +153,7 @@ const ROSTER = {
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-904: bare, with no credential in reach, it refuses for want of --state before it reads a clone or sends anything
   "tools/bluesky-publish.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "--state <dir> is required" },
+  "tools/bluesky-pds-proof.mjs": { args: [], env: { BSKY_IDENTIFIER: undefined, BSKY_APP_PASSWORD: undefined }, code: 2, needle: "usage: bluesky-pds-proof.mjs" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
@@ -247,12 +248,16 @@ const ROSTER = {
   // reads a plan, spawns a mint or touches a key. The needle is that refusal.
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
   "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
+  // CORE-165: UAT's migration plan; no --db or --release, so it refuses on usage before it runs sudo or psql.
+  "deploy/uat/migrate-plan.mjs": { args: [], code: 2, needle: "usage: migrate-plan.mjs --db" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
   "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
+  // POS-1259: bare, it asks for --dry-run or --apply before it reads the store, the clone or GitHub
+  "tools/bind-household-account.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/repair-dreaming-household.mjs": { args: ["--bogus"], code: 2, needle: "no arguments but --dry-run" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
@@ -318,6 +323,7 @@ const ROSTER = {
   // No --world-repo: stops on usage before any git or Postgres (POS-612, 075).
   "world2/tools/amend-carried.mjs": { args: [], env: NO_PG, code: 2, needle: "--world-repo <checkout> is required" },
   "world2/tools/review-rule.mjs": { args: [], env: NO_PG, code: 2, needle: "review-rule.mjs: which claim?" },
+  "world2/tools/spire-forward-reconcile.mjs": { args: [], env: NO_PG, code: 2, needle: "spire-forward-reconcile.mjs: pass --claim" },
   "world2/tools/roll-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: roll-ingest.mjs" },
   "world2/tools/seed-import.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: seed-import.mjs" },
   // No --world-repo: stops on usage before any git or Postgres (postmark#2897).

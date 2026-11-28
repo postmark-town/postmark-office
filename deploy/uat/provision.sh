@@ -9,7 +9,7 @@
 #     nginx 1.24.0). Node 22 goes to /usr/bin/node from NodeSource; /usr/local/bin/node (the meeps' v25) is left
 #     exactly as it is, and UAT's units pin PATH to /usr/bin first (units.sh);
 #   · makes UAT's own system user, `uat`: not in meepo's group, with no right to meepo's home (750, rei's ACL only);
-#   · installs uat.slice (4 cores, 16 GB: prod's size, which is also the meeps' protection) and puts Postgres and
+#   · installs uat.slice (4 cores, 16 GB: prod's size; its CPUWeight of 25 makes UAT yield to the meeps on those cores, it does not reserve them) and puts Postgres and
 #     nginx inside it, since only UAT uses them here;
 #   · writes the marker the other scripts require.
 # It writes no credential and starts no Postmark unit. Idempotent: a second run changes nothing it already did.
@@ -25,9 +25,11 @@ uat_refuse_prod
 
 uat_say "the slice first, so Postgres and nginx start inside it"
 install -m 0644 "$HERE/uat.slice" /etc/systemd/system/uat.slice
+# OOMScoreAdjust=500: under memory pressure UAT is stopped, never the meeps beside it (CORE-72, Darko 2026-11-24 08:33 EST);
+# postgres's package ships -900, which this overrides.
 for svc in postgresql@16-main nginx; do
   install -d /etc/systemd/system/$svc.service.d
-  printf '[Service]\nSlice=%s\n' "$UAT_SLICE" > /etc/systemd/system/$svc.service.d/uat-slice.conf
+  printf '[Service]\nSlice=%s\nOOMScoreAdjust=500\n' "$UAT_SLICE" > /etc/systemd/system/$svc.service.d/uat-slice.conf
 done
 systemctl daemon-reload
 
@@ -56,9 +58,18 @@ uat_say "UAT's own user, and the trees prod's units expect, all its own"
 id "$UAT_USER" >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/$UAT_USER --shell /bin/bash "$UAT_USER"
 if id -nG "$UAT_USER" | tr ' ' '\n' | grep -qx meepo; then uat_die "$UAT_USER is in meepo's group; it must not be."; fi
 for d in /srv/postmark-office /srv/postmark-site-refresh /srv/uat-stubs /srv/world2-lab /srv/world2-lab/ops \
-         /srv/postmark-harbor /srv/postmark-sentinel /var/www/postmark-town-site; do
+         /srv/postmark-harbor /srv/postmark-sentinel /var/www/postmark-panes /var/www/postmark-ops; do
   install -d -o "$UAT_USER" -g "$UAT_USER" -m 0755 "$d"
 done
+# /var/www is the office user's on prod (meepo there, uat here): the site refresh makes .postmark-town-site.next
+# BESIDE the webroot and renames that symlink over it, so /var/www/postmark-town-site must NOT exist as a directory.
+chown "$UAT_USER":root /var/www
+# uat's git identity, as prod's meepo has its own (~/.gitconfig): the ferry's town tools commit with it, and
+# with none git refuses ("unable to auto-detect email address", 2026-11-24 00:00Z). Never a real address: UAT
+# pushes only to its stubs.
+sudo -u "$UAT_USER" -H git config --global user.name "uat (postmark UAT box)"
+sudo -u "$UAT_USER" -H git config --global user.email "uat@uat.postmark.town.invalid"
+[ -d /var/www/postmark-town-site ] && [ ! -L /var/www/postmark-town-site ] && rmdir /var/www/postmark-town-site 2>/dev/null || true
 # the meeps' home stays closed to UAT (750, and only rei's ACL besides): say so rather than assume it
 if sudo -n -u "$UAT_USER" test -r /home/meepo 2>/dev/null; then uat_die "$UAT_USER can read /home/meepo; close it before going on."; fi
 
