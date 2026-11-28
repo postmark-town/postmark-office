@@ -166,7 +166,7 @@ DELETE FROM resident_notes;
 DELETE FROM letter_notes;
 
 -- 6. Everything else a household keeps to itself or the office keeps from the record (Truey's finding 1 on
---    #1206). Each statement carries its own AWAITING line: none of these is Darko's ruling yet.
+--    #1206). Each statement carries its own RULED line: Darko ruled them all on 2026-11-27 ("yes to all", CORE-165).
 -- RULED (Darko, 2026-11-27, "yes to all"): arrival_source_pending (a GitHub id parked with an outreach tag)
 DELETE FROM arrival_source_pending;
 -- RULED (Darko, 2026-11-27, "yes to all"): arrival_sources (household to outreach tag)

@@ -19,7 +19,8 @@
 //     THE COVERAGE test reds on the missing statement.
 //   · lib.sh § uat_check_readback: make it return 0 whatever it is given (the old `awk` on zero lines). THE READBACK
 //     tests red on the empty output, the missing label, and the present_ control.
-//   · lib.sh § uat_scrub_gate: drop the AWAITING branch. THE GATE test reds on the real file.
+//   · lib.sh § uat_scrub_gate: drop the AWAITING branch. THE GATE test reds on its control (the real file with one
+//     AWAITING line added); the real file itself is ruled and passes.
 //   · scrub.sql: delete one readback label. THE COVERAGE test reds, and so does the script's own check at the box.
 
 import test, { after, before } from "node:test";
@@ -105,6 +106,8 @@ test("the readback has zero_ labels (to be 0) and present_ labels (to be above 0
   assert.deepEqual(LABELS.filter((l) => !/^(zero|present)_/.test(l)), [], "a label that is neither zero_ nor present_ is read as neither");
 });
 
+// Reversed by the 11-27 ruling (#1259). Until then this test asserted that at least 12 rows awaited Darko, each with its
+// AWAITING line, and that `reviewed` named only the eight 11-23 rows.
 // Darko ruled the fifteen-line list on 2026-11-27 ("yes to all", CORE-165's Rulings). Every row that awaited him is now
 // `reviewed`, each with a RULED line beside its statement, and nothing awaits. The `reviewed` set is pinned to exactly what
 // his two rulings covered, so a row can't become `reviewed` without a ruling naming it.
@@ -125,6 +128,9 @@ test("nothing awaits Darko: every reviewed row is one his rulings named, and eac
 });
 
 // ── 2. THE GATE (lib.sh § uat_scrub_gate): the unreviewed scrub still refuses ─────────────────────────────────────
+// Reversed by the 11-27 ruling (#1259). Until then this test asserted the opposite: that the gate REFUSED the real file
+// while its AWAITING lines stood, with the cleared file as the control. Ruled, the real file passes, and the control
+// (one AWAITING line added) now carries the refusal.
 bashTest("the gate PASSES the real, ruled scrub.sql, and REFUSES the same file once an AWAITING line is added", () => {
   const real = lib('uat_scrub_gate scrub.sql; echo "rc=$?"');
   assert.equal(real.stdout.trim(), "rc=0", `the ruled scrub, nothing awaiting, may run: ${real.stdout}`);
