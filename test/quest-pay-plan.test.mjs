@@ -29,7 +29,7 @@ import { OFFICE_ROOT } from "./fixture-paths.mjs";
 delete process.env.OFFICE_KEEP;
 delete process.env.INVOCATION_ID;
 const { planQuestPays, renderPlan, parseQuestPlan, planDiffers, planDigest, isMarkedLetter, commentItems, letterItems, recipientOf, housesFrom, deliveredLetters, fetchComments, townEngine, main, QUEST_SOURCES,
-  hearthItems, housesFromRoll, hearthEntries, readHearthMeta, renderApplyHint, questOpen } =
+  hearthItems, housesFromRoll, hearthEntries, readHearthMeta, renderApplyHint, questOpen, receiptMessage } =
   await import("../tools/quest-pay-plan.mjs");
 
 const Q = "read-v2-feedback";
@@ -266,8 +266,9 @@ test("the plan over the town's own engine: its QUEST_PAY terms, line builder and
 const HQ = "hearth-entry";
 const HSOURCE = QUEST_SOURCES[HQ];
 const HTERMS = { amount: 10, once_per: "household", from: "2026-11-10", until: null };
-const ROLL = { "fox-hearth": { residents: ["fox-meep", "alden", "corwin"] }, "lone-wolf": { residents: ["wolf"] }, "ghost-house": { residents: ["nobody"] } };
-const HKEYS = { "fox-meep": "gh:20", alden: "gh:20", corwin: "gh:20", wolf: "gh:30" };
+const ROLL = { "fox-hearth": { residents: ["fox-meep", "alden", "corwin"] }, "lone-wolf": { residents: ["wolf"] }, "ghost-house": { residents: ["nobody"] },
+  "hoard-house": { residents: ["hoarder"] } };
+const HKEYS = { "fox-meep": "gh:20", alden: "gh:20", corwin: "gh:20", wolf: "gh:30", hoarder: "gh:60" };
 const hHouseOf = housesFromRoll(ROLL, { keyOf: (h) => HKEYS[h], hasRoom: (h) => h in HKEYS, date: "2026-11-14" });
 const hLineOf = ({ date, handle, quest, household }) => `- ${date} · MINT → ${handle} · 10 · for: quest:${quest}/${household} · by: the-town`;
 const E = (id, author, date, extra = {}) => ({ id, author, line: `${id}'s design.`, date, commit: `${id.length}`.padStart(40, "a"), subject: `Merge pull request #1 from x/${id}`, ...extra });
@@ -406,7 +407,7 @@ test("hearth: a handle that is also another household's slug is ambiguous and pa
 
 test("hearth: an unbound or ambiguous row names the later commit that changed the author line, and still pays nothing", () => {
   const later = (author) => ({ commit: "b".repeat(40), subject: "fix our author line (#9)", author });
-  const note = (to) => ` · a later commit, bbbbbbbbb "fix our author line (#9)", changed the author line to ${to}; a hand decides`;
+  const note = (to, ref) => ` · a later commit, bbbbbbbbb "fix our author line (#9)", changed the author line to ${to}; a hand decides (--accept-author ${ref} accepts it)`;
   const rows = planQuestPays({ items: hearthItems([
     E("typo", "the-burow", "2026-11-12", { later: later("the-burrow") }),
     E("both", "wisp", "2026-11-12", { later: later("bramble") }),
@@ -414,9 +415,9 @@ test("hearth: an unbound or ambiguous row names the later commit that changed th
     E("fixed", "corwin", "2026-11-12", { later: later("thief-house") }),
   ], { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: aHouseOf, isMeep: () => false, lineOf: hLineOf, date: "2026-11-14" });
   const by = Object.fromEntries(rows.map((r) => [r.ref, r]));
-  assert.equal(by["hearth:typo"].why, `unbound: the author "the-burow" is no resident on the roll and no household with a resident here${note('"the-burrow"')}`);
-  assert.equal(by["hearth:both"].why, `ambiguous: "wisp" is a household's slug and the handle of a resident of another household; a hand decides${note('"bramble"')}`);
-  assert.equal(by["hearth:blank"].why, `unbound: its hearth.md names no author${note('"glow"')}`);
+  assert.equal(by["hearth:typo"].why, `unbound: the author "the-burow" is no resident on the roll and no household with a resident here${note('"the-burrow"', "hearth:typo")}`);
+  assert.equal(by["hearth:both"].why, `ambiguous: "wisp" is a household's slug and the handle of a resident of another household; a hand decides${note('"bramble"', "hearth:both")}`);
+  assert.equal(by["hearth:blank"].why, `unbound: its hearth.md names no author${note('"glow"', "hearth:blank")}`);
   assert.deepEqual(rows.filter((r) => r.owed).map((r) => [r.ref, r.handle, r.why]), [["hearth:fixed", "corwin", "owed"]],
     "nothing pays from the later line: only the entry whose author resolved at the merge is owed, and an owed row carries no note");
 });
@@ -426,8 +427,8 @@ test("hearth: an unbound or ambiguous row names the later commit that changed th
 // infrastructure folder, a folder with no hearth.html and an uncommitted one.
 function hearthTown() {
   const dir = tempDir("quest-hearth-");
-  const g = (args, at) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-C", dir, ...args],
-    { encoding: "utf8", env: { ...process.env, ...(at ? { GIT_AUTHOR_DATE: at, GIT_COMMITTER_DATE: at } : {}) } });
+  const g = (args, at, who = null) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-C", dir, ...args],
+    { encoding: "utf8", env: { ...process.env, ...(at ? { GIT_AUTHOR_DATE: at, GIT_COMMITTER_DATE: at } : {}), ...(who ? { GIT_AUTHOR_NAME: who[0], GIT_AUTHOR_EMAIL: who[1] } : {}) } });
   const put = (path, text) => { mkdirSync(join(dir, path, ".."), { recursive: true }); writeFileSync(join(dir, path), text); };
   const H = "PROJECTS/household-hearths";
   g(["init", "-q", "-b", "main"]);
@@ -470,15 +471,26 @@ function hearthTown() {
   put(`${H}/typo/hearth.md`, "---\nauthor: lone-wolf\n---\nA typo.\n");
   g(["add", `${H}/typo`]); g(["commit", "-q", "-m", "typo: fix the author line (#11)"], "2026-11-13T18:00:00Z");
   const fix = g(["rev-parse", "HEAD"]).trim();
+  // POS-1265, the-hoard's shape: merged with its author in a table (no front-matter author), corrected by a later commit that writes
+  // the front matter (an UNVERIFIED Git author: the tool trusts no one by it), then touched by a copyedit that leaves the author alone
+  put(`${H}/hoard/hearth.html`, "<hearth-house></hearth-house>\n");
+  put(`${H}/hoard/hearth.md`, "| title | author |\n|---|---|\n| The hoard | hoard-house |\n\nA hoard of letters.\n");
+  g(["add", `${H}/hoard`]); g(["commit", "-q", "-m", "hoard: our Hearth (#12)"], "2026-11-13T19:00:00Z");
+  put(`${H}/hoard/hearth.md`, "---\ntitle: The hoard\nauthor: hoard-house\n---\n\nA hoard of letters.\n");
+  g(["add", `${H}/hoard`]); g(["commit", "-q", "-m", "hoard's Hearth entry: its title and author as front matter"], "2026-11-13T20:00:00Z", ["Wright", "wright@example.invalid"]);
+  const correction = g(["rev-parse", "HEAD"]).trim();
+  put(`${H}/hoard/hearth.md`, "---\ntitle: The hoard\nauthor: hoard-house\n---\n\nA hoard of letters, kept.\n");
+  g(["add", `${H}/hoard`]); g(["commit", "-q", "-m", "hoard: a copyedit"], "2026-11-13T21:00:00Z");
+  const copyedit = g(["rev-parse", "HEAD"]).trim();
   put(`${H}/drafty/hearth.html`, "<hearth-house></hearth-house>\n"); // never committed: not on main
-  return { dir, merge, direct, fix, thief };
+  return { dir, merge, direct, fix, thief, correction, copyedit };
 }
 
 test("hearth: the entries come from the town's main: a folder with hearth.html, not in capitals, dated by the commit that merged it, in the town's time", () => {
   const { dir, merge, direct, fix, thief } = hearthTown();
   try {
     const got = hearthEntries(dir, HSOURCE);
-    assert.deepEqual(got.map((e) => e.id), ["broken", "default", "fox-hearth", "linked", "lone-wolf", "typo"], "STARTER is infrastructure; drafty was never committed");
+    assert.deepEqual(got.map((e) => e.id), ["broken", "default", "fox-hearth", "hoard", "linked", "lone-wolf", "typo"], "STARTER is infrastructure; drafty was never committed");
     const by = Object.fromEntries(got.map((e) => [e.id, e]));
     assert.match(by.broken.problem, /^not an entry: no hearth\.html/);
     assert.deepEqual([by["fox-hearth"].date, by["fox-hearth"].commit, by["fox-hearth"].subject],
@@ -491,16 +503,99 @@ test("hearth: the entries come from the town's main: a folder with hearth.html, 
     assert.deepEqual([by["lone-wolf"].date, by["lone-wolf"].commit], ["2026-11-12", direct]);
     assert.equal(by.default.author, "postmark");
     // the later commits: typo's fix and fox-hearth's rewrite are named; lone-wolf, never changed, has none
-    assert.deepEqual([by.typo.author, by.typo.later], ["lone-wolff", { commit: fix, subject: "typo: fix the author line (#11)", author: "lone-wolf" }]);
-    assert.deepEqual(by["fox-hearth"].later, { commit: thief, subject: "a later PR: fox-hearth's author line", author: "thief-house" });
+    const t = { git_author: "t <t@t>", only_author_line: true, added: 1, removed: 1 };
+    assert.deepEqual([by.typo.author, by.typo.later], ["lone-wolff", { commit: fix, subject: "typo: fix the author line (#11)", author: "lone-wolf", before: "lone-wolff",
+      git_date: "2026-11-13T18:00:00Z", ...t }]);
+    assert.deepEqual(by["fox-hearth"].later, { commit: thief, subject: "a later PR: fox-hearth's author line", author: "thief-house", before: "fox-hearth",
+      git_date: "2026-11-13T12:00:00Z", ...t });
     assert.equal(by["lone-wolf"].later, undefined);
     const rows = planQuestPays({ items: hearthItems(got, { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: hHouseOf, isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14" });
     assert.deepEqual(rows.filter((r) => r.owed).map((r) => [r.ref, r.handle]), [["hearth:fox-hearth", "alden"], ["hearth:lone-wolf", "wolf"]], "the read feeds the plan");
     const typo = rows.find((r) => r.ref === "hearth:typo");
-    assert.deepEqual([typo.owed, typo.why], [false, `unbound: the author "lone-wolff" is no resident on the roll and no household with a resident here · a later commit, ${fix.slice(0, 9)} "typo: fix the author line (#11)", changed the author line to "lone-wolf"; a hand decides`],
+    assert.deepEqual([typo.owed, typo.why], [false, `unbound: the author "lone-wolff" is no resident on the roll and no household with a resident here · a later commit, ${fix.slice(0, 9)} "typo: fix the author line (#11)", changed the author line to "lone-wolf"; a hand decides (--accept-author hearth:typo accepts it)`],
       "a misspelt line at the merge stays unpaid, and the row names the PR that fixed it");
     assert.equal(rows.find((r) => r.ref === "hearth:fox-hearth").why, "owed", "a resolved row carries no note, though its line changed later");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// POS-1265 (Wright, 2026-11-28: "the acceptance is the proof"): --accept-author hearth:<name>, one entry per flag. The hand's yes to
+// a corrected author line; the correcting commit is evidence, unverified, and the tool judges no one by it.
+test("hearth: --accept-author pays one named entry by its corrected author, shows the real correcting commit, and binds the digest and the receipt", () => {
+  const { dir, correction, copyedit, fix } = hearthTown();
+  try {
+    const got = hearthEntries(dir, HSOURCE);
+    const hoard = got.find((e) => e.id === "hoard");
+    // THE CORRECTION, NOT THE COPYEDIT: the newest commit that changed the author line, though a later one touched the file
+    assert.equal(hoard.author, null, "merged with its author in a table: no author at the merge");
+    assert.equal(hoard.later.commit, correction);
+    assert.notEqual(hoard.later.commit, copyedit, "the later copyedit is not the correcting commit");
+    assert.deepEqual([hoard.later.before, hoard.later.author, hoard.later.git_author, hoard.later.git_date, hoard.later.only_author_line],
+      [null, "hoard-house", "Wright <wright@example.invalid>", "2026-11-13T20:00:00Z", false], "the table became front matter: it changed other lines too");
+    const plan = (accepted = new Set(), over = {}) => planQuestPays({ items: hearthItems(got, { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: hHouseOf,
+      isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14", accepted, ...over });
+    // UNACCEPTED, a later author edit pays nothing, and the row names the correction and the flag
+    const before = plan();
+    const unaccepted = before.find((r) => r.ref === "hearth:hoard");
+    assert.equal(unaccepted.owed, false);
+    assert.equal(unaccepted.why, `unbound: its hearth.md names no author · a later commit, ${correction.slice(0, 9)} "hoard's Hearth entry: its title and author as front matter", changed the author line to "hoard-house"; a hand decides (--accept-author hearth:hoard accepts it)`);
+    // ACCEPTED: owed by its corrected author, with no founder or identity proof (the commit's Git author is a fixture's, unverified)
+    const rows = plan(new Set(["hearth:hoard"]));
+    const accepted = rows.find((r) => r.ref === "hearth:hoard");
+    assert.deepEqual([accepted.owed, accepted.handle, accepted.household, accepted.n, accepted.author], [true, "hoarder", "gh:60", 10, "hoard-house"]);
+    assert.equal(accepted.accepted.commit, correction);
+    assert.deepEqual(rows.filter((r) => r.owed).map((r) => r.ref), ["hearth:fox-hearth", "hearth:lone-wolf", "hearth:hoard"], "only the named entry changes (rows in merge-day order)");
+    // THE PLAN SHOWS THE EVIDENCE, AND READS BACK
+    const text = renderPlan(rows, { date: "2026-11-14", quest: HQ });
+    assert.match(text, / {2}hearth:hoard · hoarder · gh:60 · 10 · owed · by hoard-house on 2026-11-13\n/);
+    assert.ok(text.includes(`      ACCEPTED by --accept-author: the author line, none at the merge, reads "hoard-house" since commit ${correction} "hoard's Hearth entry: its title and author as front matter"`));
+    assert.ok(text.includes("      that commit, as Git records it (unverified: the acceptance is the hand's): by Wright <wright@example.invalid> on 2026-11-13T20:00:00Z; in hearth.md it also changed other lines (+"));
+    const parsed = parseQuestPlan(text);
+    assert.equal(planDiffers(parsed, rows, "2026-11-14"), null);
+    // THE DIGEST CARRIES THE ACCEPTANCE AND ITS COMMIT: neither an added acceptance nor a different correction applies under the old one
+    const d0 = planDigest(before), d1 = planDigest(rows);
+    assert.notEqual(d1, d0, "an acceptance moves the digest");
+    const otherCommit = rows.map((r) => (r.accepted ? { ...r, accepted: { ...r.accepted, commit: "c".repeat(40) } } : r));
+    assert.notEqual(planDigest(otherCommit), d1, "a different correcting commit moves it too");
+    assert.equal(planDigest(before.filter((r) => !r.accepted)), d0, "a plan with no acceptance digests as it did");
+    const hint = renderApplyHint(d1, { town: "/t", quest: HQ, discussion: null, date: "2026-11-14", keyPath: "/k", rejected: new Set(), accepted: new Set(["hearth:hoard"]) });
+    assert.match(hint, /--date 2026-11-14 --accept-author hearth:hoard --apply --key \/k --expect sha256:/, "the apply command carries the flag");
+    // THE RECEIPT names the entry, the correcting sha and the acceptance by flag
+    const receipt = receiptMessage(rows.filter((r) => r.owed), { quest: HQ });
+    assert.ok(receipt.includes(`quest:hearth-entry/gh:60 → hoarder · 10 (hearth:hoard, hoard-house) · author accepted by --accept-author hearth:hoard: corrected in ${correction}`));
+    assert.match(receipt, /quest:hearth-entry\/gh:30 → wolf · 10 \(hearth:lone-wolf, lone-wolf\)$/m, "an unaccepted row's receipt line is as before");
+    // ACCEPTED, BUT NO ROLLED HOUSEHOLD: fox-hearth's later author "thief-house" is no resident and no household with one
+    const thief = plan(new Set(["hearth:fox-hearth"])).find((r) => r.ref === "hearth:fox-hearth");
+    assert.deepEqual([thief.owed, thief.why], [false, 'unbound: the accepted author "thief-house" is no resident on the roll and no household with a resident here']);
+    // ONCE PER HOUSEHOLD: typo's corrected author is lone-wolf, whose household lone-wolf's own entry already holds; and an already-paid house
+    const typo = plan(new Set(["hearth:typo"])).find((r) => r.ref === "hearth:typo");
+    assert.equal(typo.owed, false);
+    assert.match(typo.why, /^duplicate: the household's hearth:lone-wolf is the one paid/);
+    const paid = plan(new Set(["hearth:hoard"]), { paid: new Map([["gh:60", { handle: "hoarder", date: "2026-11-20" }]]) }).find((r) => r.ref === "hearth:hoard");
+    assert.deepEqual([paid.owed, paid.why], [false, "already paid: hoarder on 2026-11-20"], "a second payment is never minted");
+    // AN ACCEPTANCE OF NO CORRECTION accepts nothing (main stops before the plan; the plan holds the same line)
+    const none = plan(new Set(["hearth:lone-wolf"])).find((r) => r.ref === "hearth:lone-wolf");
+    assert.deepEqual([none.owed, none.why], [false, "accepted by --accept-author, but no commit after its merge changed its author line: nothing to accept"]);
+    assert.ok(fix);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("hearth: --accept-author is the Hearth quest's, one entry per flag, never with --reject on the same entry", async () => {
+  const out = [];
+  const opts = { log: (s) => out.push(s), err: (s) => out.push(`ERR ${s}`), env: {} };
+  assert.equal(await main(["--town", OFFICE_ROOT, "--quest", Q, "--discussion", "7", "--accept-author", "hearth:hoard"], opts), 1);
+  assert.match(out.join("\n"), /--accept-author is the Hearth quest's/);
+  out.length = 0;
+  assert.equal(await main(["--town", OFFICE_ROOT, "--quest", HQ, "--accept-author", "hearth:a,hearth:b"], opts), 1);
+  assert.match(out.join("\n"), /--accept-author takes one Hearth ref per flag \(hearth:<folder>\), got "hearth:a,hearth:b"/);
+  out.length = 0;
+  assert.equal(await main(["--town", OFFICE_ROOT, "--quest", HQ, "--accept-author", "comment:12"], opts), 1);
+  assert.match(out.join("\n"), /one Hearth ref per flag/);
+  out.length = 0;
+  assert.equal(await main(["--town", OFFICE_ROOT, "--quest", HQ, "--accept-author", "hearth:hoard", "--reject", "hearth:hoard"], opts), 1);
+  assert.match(out.join("\n"), /hearth:hoard is both accepted and rejected/);
+  out.length = 0;
+  assert.equal(await main(["--town", OFFICE_ROOT, "--quest", HQ, "--accept-author", "hearth:hoard", "--accept-author", "hearth:typo"], opts), 1, "two flags parse; no town engine here, so it stops there");
+  assert.match(out.join("\n"), /no tools\/stamp-mint\.mjs/);
 });
 
 const HEARTH_TOWN = (() => {
