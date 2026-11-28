@@ -1,0 +1,1 @@
+POS-1237 at ebcb635c (on 65881c76): the berth co-sign's road, before (65881c76) and after (ebcb635c), whole frames at 390 px (phone) and 1440 px (desktop). Rendered from the routed office (src/server.mjs, a mock GitHub, a fixture store and clone); every name and id is invented. Pictures only: no code on this branch.
