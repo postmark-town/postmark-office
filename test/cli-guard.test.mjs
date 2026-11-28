@@ -244,6 +244,8 @@ const ROSTER = {
   // reads a plan, spawns a mint or touches a key. The needle is that refusal.
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
   "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
+  // CORE-165: UAT's migration plan; no --db or --release, so it refuses on usage before it runs sudo or psql.
+  "deploy/uat/migrate-plan.mjs": { args: [], code: 2, needle: "usage: migrate-plan.mjs --db" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },

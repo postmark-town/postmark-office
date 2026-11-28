@@ -9,7 +9,7 @@
 #     nginx 1.24.0). Node 22 goes to /usr/bin/node from NodeSource; /usr/local/bin/node (the meeps' v25) is left
 #     exactly as it is, and UAT's units pin PATH to /usr/bin first (units.sh);
 #   · makes UAT's own system user, `uat`: not in meepo's group, with no right to meepo's home (750, rei's ACL only);
-#   · installs uat.slice (4 cores, 16 GB: prod's size, which is also the meeps' protection) and puts Postgres and
+#   · installs uat.slice (4 cores, 16 GB: prod's size; its CPUWeight favours UAT on those cores, it does not reserve them) and puts Postgres and
 #     nginx inside it, since only UAT uses them here;
 #   · writes the marker the other scripts require.
 # It writes no credential and starts no Postmark unit. Idempotent: a second run changes nothing it already did.

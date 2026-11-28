@@ -55,7 +55,11 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now cloudflared-uat.service
+# enable, then RESTART: `enable --now` starts a stopped unit but leaves a running one alone, and the connector reads
+# TUNNEL_TOKEN only at start, so a rerun with a rotated token would otherwise keep the old token until the next
+# boot (CORE-165, finding 11).
+systemctl enable --quiet cloudflared-uat.service
+systemctl restart cloudflared-uat.service
 sleep 5
 systemctl is-active --quiet cloudflared-uat.service || uat_die "cloudflared-uat did not stay up: journalctl -u cloudflared-uat (the token is not in it)"
 uat_say "the tunnel connector is up. Cloudflare's dashboard shows it HEALTHY; uat.postmark.town answers through Access once nginx-uat.sh has run."
