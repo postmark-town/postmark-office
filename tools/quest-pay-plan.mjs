@@ -5,9 +5,11 @@
 //        the plan: writes nothing, needs no key; it ends with its digest and the
 //        one command that applies it
 //   node tools/quest-pay-plan.mjs --town <town-clone> --quest <id> --discussion <n> --date YYYY-MM-DD [--reject …] --apply --key <pem> --expect <digest>
-//   node tools/quest-pay-plan.mjs --town <town-clone> --quest hearth-entry [--date …] [--reject <hearth:name,…>] [--apply --key <pem> --expect <digest>]
+//   node tools/quest-pay-plan.mjs --town <town-clone> --quest hearth-entry [--date …] [--reject <hearth:name,…>] [--accept-author hearth:<name> …] [--apply --key <pem> --expect <digest>]
 //        the Hearth quest (POS-985): no --discussion; its evidence is the town
-//        clone's own main, and it reads no store and no GitHub
+//        clone's own main, and it reads no store and no GitHub.
+//        --accept-author hearth:<name> (POS-1265), one entry per flag: the hand
+//        accepts the author line a later commit corrected (see THE HEARTH QUEST)
 //
 //   env: WORLD2_PG_URL (or PG*), the office's own store — the plan reads the
 //        residents' GitHub bindings (identities) from it, and nothing else;
@@ -96,6 +98,20 @@
 // The rows add three reasons: "not an entry" (no hearth.html, or one of the
 // three files not plain, which the site skips too), "ambiguous" and "unread"
 // (the clone's history does not say when it merged).
+//
+// A CORRECTED AUTHOR LINE (POS-1265; Wright, 2026-11-28: "the acceptance is
+// the proof"). An author line changed after the merge pays nothing by itself:
+// the row names the commit that corrected it, and a hand decides. Naming the
+// entry in --accept-author hearth:<name> (one per flag) is that hand's yes, as
+// --reject is its no: the corrected author is then judged by the same rules (a
+// household with a resident on the roll, once per household). The correcting
+// commit is the newest after the merge whose author line differs from its
+// parent's, never a later copyedit; the plan prints its full sha, its Git author
+// and date as Git records them (unverified: the tool authenticates no one and
+// reads no network), the line before and after, and whether it changed anything
+// else in hearth.md. The digest carries the acceptance and its commit, the
+// printed apply command carries the flag, and the landing commit's message (the
+// receipt) names the entry, the correcting sha and that it was accepted by flag.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -221,7 +237,7 @@ export function housesFromRoll(households, { keyOf, hasRoom, date }) {
  * household → { handle, date } already in the ledger for this quest;
  * `lineOf(row)` the town's builder; `rejected` a Set of refs a hand named.
  */
-export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new Map(), lineOf, date, rejected = new Set() }) {
+export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new Map(), lineOf, date, rejected = new Set(), accepted = new Set() }) {
   const rows = [];
   const held = new Map(); // household -> the ref that holds it in this plan, across both sources (Q1)
   // An item with no day (a Hearth entry whose merge was not read) sorts first, so the order stays total.
@@ -235,11 +251,20 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     if (d.problem) { nothing(d.problem); continue; }
     if (rejected.has(d.ref)) { nothing(d.source === "hearth" ? "rejected: a hand read it — not this household's own Hearth" : "rejected: a hand read it — not feedback"); continue; }
     if (d.source === "letter" && d.body == null) { nothing(`no letter on file: the ledger delivered it, and WHITE_PAGES/${d.to}/inbox holds no ${d.link} for a hand to read`); continue; }
-    const house = houseOf(d);
+    // A CORRECTED AUTHOR, ACCEPTED BY A HAND (POS-1265; Wright, 2026-11-28: "the acceptance is the proof"): --accept-author names
+    // one entry, and the author its correcting commit wrote is the one judged, by the same rules (a household with a resident on
+    // the roll, ambiguity, the meep, once per household). The commit is the hand's evidence, never verified here.
+    const accept = d.source === "hearth" && accepted.has(d.ref);
+    if (accept && !d.later) { nothing("accepted by --accept-author, but no commit after its merge changed its author line: nothing to accept"); continue; }
+    const judged = accept ? { ...d, author: d.later.author } : d;
+    if (accept) base.author = d.later.author ?? "-";
+    const house = houseOf(judged);
     // The author is read at the merge, so a later fix to the line pays nothing by
-    // itself; an unbound or ambiguous Hearth row names that later commit and what
-    // the line says now, for the hand to decide (Truey's FIX at f7e8a9b).
-    const later = d.later ? ` · a later commit, ${d.later.commit.slice(0, 9)} "${d.later.subject}", changed the author line to ${d.later.author ? `"${d.later.author}"` : "nothing"}; a hand decides` : "";
+    // itself; an unbound or ambiguous Hearth row names the commit that corrected
+    // it and what the line says now, for the hand to decide (Truey's FIX at
+    // f7e8a9b), and the flag that accepts it (POS-1265).
+    const later = d.later && !accept ? ` · a later commit, ${d.later.commit.slice(0, 9)} "${d.later.subject}", changed the author line to ${d.later.author ? `"${d.later.author}"` : "nothing"}; a hand decides (--accept-author ${d.ref} accepts it)` : "";
+    if (accept && !house) { nothing(`unbound: the accepted author ${d.later.author ? `"${d.later.author}"` : "(none)"} is no resident on the roll and no household with a resident here`); continue; }
     if (!house) {
       nothing(d.source === "letter" ? `unbound: ${d.author} has no room here`
         : d.source === "hearth" ? (d.author ? `unbound: the author "${d.author}" is no resident on the roll and no household with a resident here${later}` : `unbound: its hearth.md names no author${later}`)
@@ -261,7 +286,7 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     try { line = lineOf({ date, handle, quest, household: house.household }); }
     catch (e) { nothing(`refused: ${String(e?.message ?? e).split(/\r?\n/)[0]}`, at); continue; }
     held.set(house.household, d.ref);
-    rows.push({ ...base, ...at, n: terms.amount, why: "owed", owed: true, line });
+    rows.push({ ...base, ...at, n: terms.amount, why: "owed", owed: true, line, ...(accept ? { accepted: d.later } : {}) });
   }
   return rows;
 }
@@ -271,7 +296,10 @@ const firstLineOf = (body) => String(body ?? "").split(/\r?\n/).map((l) => l.tri
 // ── the plan, printed ───────────────────────────────────────────────────────
 
 const HEADER_RE = /^quest pay plan for ([a-z0-9][a-z0-9-]*) — (\d+) (?:piece\(s\) of feedback|Hearth entr\(ies\)) qualify, (\d+) already paid, (\d+) pay nothing, (\d+) owed \((\d+) stamps\), dated (\d{4}-\d{2}-\d{2})$/;
-const ROW = (r) => `  ${r.ref} · ${r.handle ?? "-"} · ${r.household ?? "-"} · ${r.n} · ${r.why} · by ${r.author} on ${r.date}\n      ${r.source === "letter" ? `a letter to the postmaster: ${r.link}` : r.source === "hearth" ? `a Hearth entry: ${r.link}, merged in ${r.via}` : r.link}\n      "${r.first}"`;
+const ROW = (r) => `  ${r.ref} · ${r.handle ?? "-"} · ${r.household ?? "-"} · ${r.n} · ${r.why} · by ${r.author} on ${r.date}\n      ${r.source === "letter" ? `a letter to the postmaster: ${r.link}` : r.source === "hearth" ? `a Hearth entry: ${r.link}, merged in ${r.via}` : r.link}\n      "${r.first}"${r.accepted ? ACCEPTED(r.accepted) : ""}`;
+// an accepted correction, as the hand reads it before the apply (POS-1265): the commit Git records, never verified here
+const ACCEPTED = (c) => `\n      ACCEPTED by --accept-author: the author line, ${c.before ? `"${c.before}"` : "none"} at the merge, reads "${c.author}" since commit ${c.commit} "${c.subject}"`
+  + `\n      that commit, as Git records it (unverified: the acceptance is the hand's): by ${c.git_author} on ${c.git_date}; in hearth.md ${c.only_author_line ? "it changed only the author line" : "it also changed other lines"} (+${c.added} -${c.removed})`;
 const OWED_RE = /^ {2}((?:comment|letter|hearth):\S+) · (\S+) · (\S+) · (\d+) · owed · by (\S+) on (\d{4}-\d{2}-\d{2})$/;
 const alreadyPaid = (r) => !r.owed && r.why.startsWith("already paid");
 
@@ -292,14 +320,23 @@ export function renderPlan(rows, { date, quest }) {
   return `${out.join("\n")}\n`;
 }
 
-/** sha256 over the owed rows' refs and exact lines, in order: the digest pins which feedback was read as well as what it pays. PURE. */
+/**
+ * sha256 over the owed rows' refs and exact lines, in order: the digest pins which feedback was read as well as what it pays.
+ * An accepted row adds its correcting commit (POS-1265), so an acceptance, or a different correction, is never applied under a
+ * digest reviewed without it; a plan with no acceptance digests exactly as before. PURE.
+ */
 export function planDigest(rows) {
-  const lines = rows.filter((r) => r.owed).map((r) => `${r.ref}\n${r.line}`);
+  const lines = rows.filter((r) => r.owed).map((r) => `${r.ref}\n${r.line}${r.accepted ? `\naccepted-author:${r.accepted.commit}` : ""}`);
   return `sha256:${createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16)}`;
 }
 
-export const renderApplyHint = (digest, { town, quest, discussion, date, keyPath, rejected }) =>
-  `digest: ${digest}\napply exactly this plan with:\n  node tools/quest-pay-plan.mjs --town ${town} --quest ${quest}${discussion ? ` --discussion ${discussion}` : ""} --date ${date}${rejected.size ? ` --reject ${[...rejected].join(",")}` : ""} --apply --key ${keyPath} --expect ${digest}\n`;
+export const renderApplyHint = (digest, { town, quest, discussion, date, keyPath, rejected, accepted = new Set() }) =>
+  `digest: ${digest}\napply exactly this plan with:\n  node tools/quest-pay-plan.mjs --town ${town} --quest ${quest}${discussion ? ` --discussion ${discussion}` : ""} --date ${date}${rejected.size ? ` --reject ${[...rejected].join(",")}` : ""}${[...accepted].map((a) => ` --accept-author ${a}`).join("")} --apply --key ${keyPath} --expect ${digest}\n`;
+
+/** The landing commit's message: the receipt the ledger's reader finds. An accepted row names its entry, its correcting commit and that a hand accepted it by flag (POS-1265). PURE. */
+export const receiptMessage = (owed, { quest }) =>
+  `mint: the reviewed quest pass (POS-632), ${owed.length} line(s) for quest:${quest}\n\n${owed.map((r) => `quest:${quest}/${r.household} → ${r.handle} · ${r.n} (${r.ref}, ${r.author})`
+    + (r.accepted ? ` · author accepted by --accept-author ${r.ref}: corrected in ${r.accepted.commit}` : "")).join("\n")}`;
 
 /** The plan, read back. PURE. Throws on a plan it cannot account for. */
 export function parseQuestPlan(text) {
@@ -406,10 +443,11 @@ export function readHearthMeta(raw) {
  * of the first-parent commit that brought its hearth.html to main, and the
  * author and line are its hearth.md AT THAT COMMIT: the merge the row shows,
  * so a later change to the author line cannot move the 10 while the hand
- * opens the original PR (Truey's FIX on #995). When a later first-parent
- * commit changed the author line, the row also carries
- * `later: { commit, subject, author }` (the line as it reads now), which pays
- * nothing by itself. Or { id, problem } for a folder
+ * opens the original PR (Truey's FIX on #995). When the author line reads
+ * differently now, the row also carries `later`: the commit that corrected it
+ * (authorCorrection, POS-1265: the newest after the merge to change the line,
+ * never a later copyedit), which pays nothing unless a hand accepts it
+ * (--accept-author). Or { id, problem } for a folder
  * with no hearth.html, or whose hearth.html, hearth.css or hearth.md is not a
  * plain file on main (not an entry: the site refuses such a file and skips the
  * whole entry, postmark-site tools/sync-hearths.mjs), or with no commit that
@@ -435,15 +473,41 @@ export function hearthEntries(town, source, { run = (...a) => git(town, ...a) } 
     if (!merged) { out.push({ id, problem: "unread: the clone's history does not say when its hearth.html reached main" }); continue; }
     const md = list(merged[0], `${source.dir}/${id}`).get("hearth.md");
     const meta = plain(md) ? readHearthMeta(run("cat-file", "blob", md.sha)) : { author: null, line: "" };
-    // The newest first-parent commit to touch hearth.md: when it is not the merge
-    // and the author line now differs, the row can name it (`later`).
-    const last = run("log", "-1", "--first-parent", "--diff-merges=first-parent", "--no-patch", "--format=%H%x09%s", "HEAD", "--", `${source.dir}/${id}/hearth.md`).split("\t");
     const now = files.get("hearth.md");
     const nowAuthor = plain(now) ? readHearthMeta(run("cat-file", "blob", now.sha)).author : null;
-    const later = last[0] && last[0] !== merged[0] && nowAuthor !== meta.author ? { commit: last[0], subject: last.slice(1).join("\t"), author: nowAuthor } : null;
+    const later = nowAuthor !== meta.author ? authorCorrection(run, `${source.dir}/${id}`, merged[0]) : null;
     out.push({ id, ...meta, date: townDate(Date.parse(merged[1])), commit: merged[0], subject: merged.slice(2).join("\t"), ...(later ? { later } : {}) });
   }
   return out;
+}
+
+/**
+ * THE COMMIT THAT CORRECTED THE AUTHOR LINE (POS-1265): of the first-parent commits after the merge that touched the entry's
+ * hearth.md, the newest whose author line differs from its first parent's, which is the one that set the line it reads now. A
+ * later commit that touched the file without changing the author line (a copyedit) is not it. Returns { commit (full sha),
+ * subject, author (after), before, git_author, git_date (as Git records them: NOT verified, evidence for the hand only),
+ * only_author_line (whether the commit changed nothing else in hearth.md), added, removed (its line counts in hearth.md) }, or null.
+ */
+function authorCorrection(run, folder, merge) {
+  const path = `${folder}/hearth.md`;
+  const textAt = (rev) => {
+    const f = /^(\d+) (\w+) ([0-9a-f]+)\t/.exec(run("ls-tree", rev, "--", path));
+    return f && f[2] === "blob" && (f[1] === "100644" || f[1] === "100755") ? run("cat-file", "blob", f[3]) : null;
+  };
+  const authorOf = (text) => (text == null ? null : readHearthMeta(text).author);
+  const touches = run("log", "--first-parent", "--diff-merges=first-parent", "--no-patch", "--format=%H%x09%P%x09%an <%ae>%x09%aI%x09%s", `${merge}..HEAD`, "--", path)
+    .split(/\r?\n/).filter(Boolean).map((l) => l.split("\t"));
+  for (const [sha, parents, gitAuthor, gitDate, ...subject] of touches) {
+    const parent = parents.split(" ")[0];
+    const [beforeText, afterText] = [textAt(parent), textAt(sha)];
+    const [before, after] = [authorOf(beforeText), authorOf(afterText)];
+    if (before === after) continue;
+    const sansAuthor = (t) => String(t ?? "").replace(/\r\n/g, "\n").replace(/^author:.*\n?/m, "");
+    const [added = "0", removed = "0"] = run("diff", "--numstat", parent, sha, "--", path).split("\t");
+    return { commit: sha, subject: subject.join("\t"), author: after, before, git_author: gitAuthor, git_date: gitDate,
+      only_author_line: sansAuthor(beforeText) === sansAuthor(afterText), added: Number(added) || 0, removed: Number(removed) || 0 };
+  }
+  return null;
 }
 
 /** The town's household roll, `households` of its tools/households.json (slug → { residents, … }). A read that fails throws: the pass stops. */
@@ -533,6 +597,14 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   const badRef = rejects.find((r) => !REF_RE.test(r));
   if (badRef) { err(`quest-pay-plan: --reject takes the plan's refs (comment:<id>, letter:<letter-id> or hearth:<folder>), got ${JSON.stringify(badRef)}`); return 1; }
   const rejected = new Set(rejects);
+  // --accept-author hearth:<name>, ONE entry per flag (POS-1265): the hand's yes to one corrected author line, as --reject is its no
+  const accepts = argv.flatMap((a, i) => (a === "--accept-author" ? [String(argv[i + 1] ?? "")] : []));
+  if (accepts.length && !hearth) { err(`quest-pay-plan: --accept-author is the Hearth quest's (a corrected author line); ${quest} has none. Nothing read.`); return 1; }
+  const badAccept = accepts.find((a) => !/^hearth:[^\s,]+$/.test(a));
+  if (badAccept != null) { err(`quest-pay-plan: --accept-author takes one Hearth ref per flag (hearth:<folder>), got ${JSON.stringify(badAccept)}`); return 1; }
+  const both = accepts.find((a) => rejected.has(a));
+  if (both) { err(`quest-pay-plan: ${both} is both accepted and rejected — a hand says one or the other. Nothing read.`); return 1; }
+  const accepted = new Set(accepts);
   if (apply && (!keyPath || !existsSync(keyPath))) { err("quest-pay-plan: --apply needs --key <ed25519-private-pem>"); return 1; }
   if (apply && !expect) { err("quest-pay-plan: --apply needs --expect <digest>, the digest the plan printed. Nothing written."); return 1; }
   const date = arg("--date", argv) ?? townDate(Date.now());
@@ -559,17 +631,23 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
         got = { ...got, letters: got.letters ?? deliveredLetters(town, source.letters_to, engine.parseMailLedger) };
       }
     } catch (e) { return { error: String(e?.message ?? e) }; }
+    // an acceptance names an entry the read found, whose author line a later commit corrected; anything else stops the pass
+    for (const ref of accepted) {
+      const entry = (got.entries ?? []).find((e) => `hearth:${e.id}` === ref);
+      if (!entry) return { error: `quest-pay-plan: --accept-author ${ref} names no Hearth entry on the town's main. Nothing written.` };
+      if (!entry.later) return { error: `quest-pay-plan: --accept-author ${ref}: no commit after its merge changed its author line, so there is no correction to accept. Nothing written.` };
+    }
     const houseOf = hearth
       ? housesFromRoll(got.households, { keyOf: engine.keyOf, hasRoom: engine.hasRoom, date })
       : housesFrom(got.bindings, { keyOf: engine.keyOf, hasRoom: engine.hasRoom, date });
     const items = hearth ? hearthItems(got.entries, { source }) : [...commentItems(got.comments, { discussion }), ...letterItems(got.letters, { source })];
-    const rows = planQuestPays({ items, quest, terms: engine.terms, houseOf, isMeep: engine.isMeep, paid: engine.paid, lineOf: engine.lineOf, date, rejected });
+    const rows = planQuestPays({ items, quest, terms: engine.terms, houseOf, isMeep: engine.isMeep, paid: engine.paid, lineOf: engine.lineOf, date, rejected, accepted });
     const digest = planDigest(rows);
     const text = printed(renderPlan(rows, { date, quest }));
     log(text.trimEnd());
     if (!apply) {
       log("");
-      log(renderApplyHint(digest, { town, quest, discussion, date, keyPath: keyPath ?? env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem", rejected }).trimEnd());
+      log(renderApplyHint(digest, { town, quest, discussion, date, keyPath: keyPath ?? env.STAMP_KEY ?? "/srv/postmark-office/stamp-key.pem", rejected, accepted }).trimEnd());
       return { planOnly: true };
     }
     log(`digest: ${digest}`);
@@ -587,7 +665,7 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
     }
     const verified = spawn(town, verifyArgv(town));
     if (verified.status !== 0) return { error: `quest-pay-plan: the town's stamp-verify is red after the quest lines — ${firstLine(verified)}. The whole apply is put back, nothing written.` };
-    const message = `mint: the reviewed quest pass (POS-632), ${owed.length} line(s) for quest:${quest}\n\n${owed.map((r) => `quest:${quest}/${r.household} → ${r.handle} · ${r.n} (${r.ref}, ${r.author})`).join("\n")}`;
+    const message = receiptMessage(owed, { quest });
     const landed = await landStamped(town, [join(town, LEDGER_REL)], message, { env });
     if (landed?.error) return { error: `quest-pay-plan: the quest lines could not land (${landed.error.defect ?? landed.error.code}). Put back, nothing written.` };
     return { written: owed, commit: landed };
