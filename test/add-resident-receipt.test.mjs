@@ -385,7 +385,7 @@ test('5c · WIRING: no door hands requestResidency the town log (the apex, the f
 
 test('6a · the contract: request_residency takes the nonce for the apex and POST /residency alike, and still names a stranger field', () => {
   assert.deepEqual([...DOOR_FIELDS.request_residency], ["nonce"]);
-  const declared = { handle: {}, card: {} };
+  const declared = { handle: {}, full_address: {} }; // POS-1237: the field is full_address; `card` below is read as it (one-contract.mjs § FIELD_ALIASES)
   const ok = judgeActFields({ tool: "request_residency", declared, fields: { handle: "a", card: "b", nonce: "n" }, exempt: ["handle"] });
   assert.equal(ok.bounce, undefined);
   assert.equal(ok.fields.nonce, "n");

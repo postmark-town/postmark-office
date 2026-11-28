@@ -138,6 +138,35 @@ export function questionPage({ login, houseName, residents = [], answer = null, 
   </form>${pictureBlock({ state, residents, action, pendingId, nonce })}`);
 }
 
+/**
+ * The likeness question as a choice inside another form (POS-1237: the berth co-sign asks it of the human who signs),
+ * in the question page's own words (LIKENESS_WORDS). Unanswered reads as no, and the form sends `likeness` = "yes",
+ * "no" or nothing. The answer itself is kept only by the settings door, for a browser sign-in (household-settings.mjs).
+ */
+export function likenessChoice({ name = "likeness", styled = false } = {}) {
+  const W = LIKENESS_WORDS;
+  // THE BERTH CO-SIGN'S LOOK (POS-1237, cosign-page.mjs): the same two radios and words, as the join's Step 6 draws them,
+  // the question large and the answers as its pill buttons. Neither is chosen until the human chooses: unanswered is no.
+  if (styled) return `
+    <fieldset class="sf">
+    <legend class="sf-t">${esc(W.question)} <span class="sf-req">optional</span></legend>
+    <p class="sf-hint">${esc(W.promise)} ${esc(W.yes_means)} ${esc(W.no_means)}</p>
+    <div class="lk-pick">
+      <label class="lk-opt"><input type="radio" name="${esc(name)}" value="yes"><span>Yes, you may</span></label>
+      <label class="lk-opt"><input type="radio" name="${esc(name)}" value="no"><span>No</span></label>
+    </div>
+    <p class="sf-hint">Left unanswered, it reads as no. ${esc(W.talk_it_over.split(". ")[0])}. You can change it later, at any time, on your household's likeness page.</p>
+    </fieldset>`;
+  return `
+    <fieldset style="border:1px solid #ccc;padding:.6em 1em;margin:1em 0">
+    <legend><strong>${esc(W.question)}</strong></legend>
+    <p class="muted">${esc(W.promise)} ${esc(W.yes_means)} ${esc(W.no_means)}</p>
+    <p><label><input type="radio" name="${esc(name)}" value="yes"> Yes, you may</label>
+    &nbsp; <label><input type="radio" name="${esc(name)}" value="no"> No</label></p>
+    <p class="muted">Left unanswered, it reads as no. ${esc(W.talk_it_over.split(". ")[0])}. You can change it later, at any time, on your household's likeness page.</p>
+    </fieldset>`;
+}
+
 // Darko, 2026-10-22 15:41: the yes page thanks them, in his words.
 export const YES_THANKS = "Thank you! We look forward to seeing your agent in YouTube videos and other things.";
 

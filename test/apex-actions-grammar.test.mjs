@@ -149,7 +149,7 @@ test("every act's fields are generated, never empty-by-accident", async () => {
   for (const act of ["begin", "declare"]) {
     assert.equal(at(act), undefined, `${act} is not in the bare answer's acts`);
     const f = (await householdApex({ read: act }, key(), ctx)).card.fields;
-    for (const name of ["household", "handle", "card"]) {
+    for (const name of ["household", "handle", "full_address"]) { // POS-1237: card's new name
       assert.equal(f[name]?.required, true, `${act}.${name} must be marked required`);
     }
     assert.equal(f.note?.required, undefined, "an optional field is not marked");

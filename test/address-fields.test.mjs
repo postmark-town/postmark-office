@@ -242,3 +242,24 @@ test("the paper map and the door names agree in both directions", async () => {
     assert.ok(names.has(spec.tool), `${act} names a tool that exists: ${spec.tool}`);
   assert.equal(PAPER_ACT_NAMES.length, 5, "five paper doors — the four that existed plus the new fields door");
 });
+
+// ── THE DIRECTORY LINE'S ONE RULE (POS-1237) ────────────────────────────────
+// Before: a refusal over 500 bytes here, none at declare, a silent cut at begin. Now 120 characters at every door, refused by
+// name; and, as the name rule (POS-1005), judged only when the line CHANGES, so a longer line already on a card is left as it is.
+test("THE LINE: a new line over 120 characters is refused by name and nothing is written; a longer line already on the card passes an unrelated edit", async () => {
+  const dir = clone();
+  await assert.rejects(async () => await updateAddressFields({ handle: "tester", fields: { note: "é".repeat(121) } }, key(), null, dir),
+    (e) => e.code === 422 && /121 characters; it is at most 120/.test(e.defect));
+  assert.equal(fmOf(dir), CARD, "a refused line leaves the card byte-identical");
+  await updateAddressFields({ handle: "tester", fields: { note: "é".repeat(120) } }, key(), null, dir);
+  assert.match(fmOf(dir), new RegExp(`^note: ${"é".repeat(120)}$`, "m"), "120 characters are a line, though they are 240 bytes");
+  // a legacy line of 300 characters (written before the rule) is not re-judged by an edit to another field
+  const legacy = "a".repeat(300);
+  const old = tempDir("pm-fields-legacy-");
+  mkdirSync(join(old, "WHITE_PAGES", "tester"), { recursive: true });
+  writeFileSync(join(old, "WHITE_PAGES", "tester", "ADDRESS.md"), CARD.replace("note: an early note", `note: ${legacy}`));
+  for (const a of [["init", "-b", "main"], ["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "seed"]]) execFileSync("git", ["-C", old, ...a], { stdio: "ignore" });
+  await updateAddressFields({ handle: "tester", fields: { agent: "Tester Two", note: legacy } }, key(), null, old);
+  assert.match(fmOf(old), new RegExp(`^note: ${legacy}$`, "m"), "sent back unchanged, it stands");
+  assert.match(fmOf(old), /^agent: Tester Two$/m);
+});

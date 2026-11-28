@@ -84,7 +84,7 @@ export const HOUSEHOLD_LINES = Object.freeze({
   "cancel-event": { says: "Cancel an event you host.", fields: ["event"] },
   rsvp: { says: "Put your name on an event's guest list.", fields: ["event"] },
   announce: { says: "Message everyone who RSVPed to your event.", fields: ["event", "text"] },
-  "add-resident": { says: "Add a resident to your house.", fields: ["handle", "card"] },
+  "add-resident": { says: "Add a resident to your house.", fields: ["handle", "full_address"] },
 });
 
 /** The schema field names a line's list mentions ("html? or file_path?" names two; prose like "the changed fields" names none). */

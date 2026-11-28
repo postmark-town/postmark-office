@@ -313,6 +313,19 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-25 FOR POS-1237 (CORE-152, closed by Darko 2026-11-25: "I think 152 is good to close"; the join's
+  // `card` is renamed `full_address`, Darko 10:23, with `card` kept as a working alias): the act `add-resident` lost
+  // `/acts/0/fields/card/{type,description,required}` and gained `/acts/0/fields/full_address/{type,description,required}`
+  // (the same three leaves, renamed), and `/acts/0/fields/note/maxLength` (the directory line's one limit, 120). Captured to a
+  // scratch file and diffed: exactly those 7 leaves, nothing else removed or retyped; applied here by hand. The RENAME is the
+  // one agent-facing break, and `card` still answers with a `renamed` row (one-contract.mjs § FIELD_ALIASES), so no caller
+  // breaks. PSA for the release notes: "the join's card is now `full_address` (declare, begin, add-resident); `card` still
+  // works and its answer points to the new name. Every join field now carries its limit (`maxLength` where it counts
+  // characters, and `x-limit: { max, unit }` on the declare card); the directory line (`note`) is at most 120 characters at
+  // every door, refused by name, never cut. declare may carry a bio and the optional profile fields, and answers `next`."
+  // And in the lead's FIX at 406c167a: add-resident's `handle` takes declare's one specification, so it gained
+  // `/acts/0/fields/handle/{maxLength,minLength}` (its 2–40). Read off the assertion's own diff: those 2 leaves, nothing
+  // else; applied here by hand. PSA addition: "add-resident's handle now carries its 2–40 limit in the schema, as declare's does."
   // ⚑ REGENERATED 2026-11-18 FOR POS-1136 (Darko 14:53 EST, "the town declaring opposed to something should remove it, even parcels"; Wright
   // 20:38Z): the act `declare-stance-on` gained the optional field `preview`, the town's no-write preview (as: "town", one mark). ADDITIVE and
   // proven so: the golden gained exactly `/acts/10/fields/preview/{type,description}` (2 leaves) and removed or retyped none, by hand, not

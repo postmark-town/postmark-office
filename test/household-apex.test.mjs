@@ -108,6 +108,46 @@ test("begin: parks the declaration and hands back the one link", async () => {
   assert.equal(JSON.parse(row.card).household, "The Bridge");
 });
 
+// POS-1237 (CORE-152): begin takes declare's whole contract — full_address (card still answering, pointed), the line and how they
+// persist refused by name and never cut (they were cut at 500 characters here), and the profile judged by its own door and parked
+test("POS-1237 · begin: an over-limit line or persistence line is refused by name, never cut; a valid one parks whole, with the profile and the full address", async () => {
+  const berthKey = (slug) => ({ berth: true, slug, household: null, handles: new Set() });
+  await mintBerth(odb, "limit-walker");
+  const long = await householdApex({ do: "begin", args: { household: "H", full_address: "words", note: "x".repeat(121) } }, berthKey("limit-walker"), { odb });
+  assert.deepEqual([long.code, long.field], [422, "note"]);
+  assert.match(long.defect, /121 characters; it is at most 120/);
+  const heavy = await householdApex({ do: "begin", args: { household: "H", full_address: "words", architecture: "x".repeat(501) } }, berthKey("limit-walker"), { odb });
+  assert.deepEqual([heavy.code, heavy.field], [413, "architecture"]);
+  const bio = await householdApex({ do: "begin", args: { household: "H", full_address: "words", bio: "x".repeat(401) } }, berthKey("limit-walker"), { odb });
+  assert.deepEqual([bio.code, bio.field], [422, "bio"], "the profile door's own refusal, before anything parks");
+  assert.equal(odb.prepare("SELECT card FROM berths WHERE slug = 'limit-walker'").get().card, null, "nothing parked by any refusal");
+
+  const line = "y".repeat(120), arch = "z".repeat(500);
+  const ok = await householdApex({ do: "begin", args: { household: "The Lamp", full_address: "I keep the lamps.", note: line, architecture: arch,
+    bio: "a lamp-keeper", pronouns: "she/her", color: "C90", color_name: "lamp gold", runtime: "a small model" } }, berthKey("limit-walker"), { odb });
+  assert.ok(!ok.error, JSON.stringify(ok).slice(0, 300));
+  const parked = JSON.parse(odb.prepare("SELECT card FROM berths WHERE slug = 'limit-walker'").get().card);
+  assert.deepEqual([parked.card, parked.note, parked.architecture], ["I keep the lamps.", line, arch], "whole, never cut (the parked key stays `card`, so older parked rows still run)");
+  assert.deepEqual([parked.bio, parked.pronouns, parked.color, parked.color_name, parked.runtime], ["a lamp-keeper", "she/her", "#cc9900", "lamp gold", "a small model"]);
+
+  await mintBerth(odb, "old-name-walker");
+  const old = await householdApex({ do: "begin", args: { household: "H", card: "I use the old name." } }, berthKey("old-name-walker"), { odb });
+  assert.ok(!old.error, JSON.stringify(old).slice(0, 300));
+  assert.deepEqual(old.result.renamed, [{ field: "card", now: "full_address", answers_until: null }], "the old name still begins, pointed to the new one (on the act's own receipt, POS-70)");
+  assert.equal(JSON.parse(odb.prepare("SELECT card FROM berths WHERE slug = 'old-name-walker'").get().card).card, "I use the old name.");
+});
+
+test("POS-1237 · begin never takes the human's own fields: a bearer cannot set the town name, short line, pronouns of the human or the likeness answer", async () => {
+  await mintBerth(odb, "human-probe");
+  const key = { berth: true, slug: "human-probe", household: null, handles: new Set() };
+  for (const field of ["town_name", "short_line", "likeness", "human_profile"]) {
+    const r = await householdApex({ do: "begin", args: { household: "H", full_address: "words", [field]: "yes" } }, key, { odb });
+    assert.equal(r.code, 422, `${field}: ${JSON.stringify(r).slice(0, 200)}`);
+    assert.deepEqual(r.unknown_fields, [field], `${field} is not a field begin takes`);
+  }
+  assert.equal(odb.prepare("SELECT card FROM berths WHERE slug = 'human-probe'").get().card, null, "nothing parked");
+});
+
 test("POS-761: begin parks on THIS berth only, and its link names the berth's mint", async () => {
   await mintBerth(odb, "renamed-walker", null, { t: 1_900_200_000 });
   const first = { berth: true, slug: "renamed-walker", household: null, handles: new Set(), mintedAt: 1_900_200_000 * 1000 };
@@ -143,7 +183,8 @@ test("begin: a declaration without its parts bounces naming the part", async () 
   assert.equal(noHouse.refusal, REFUSALS.NO_HOUSE, "the same frozen object, not an equal-looking one");
   assert.equal(noHouse.code, 422);
   const noCard = await householdApex({ do: "begin", args: { household: "H" } }, key, { odb });
-  assert.match(noCard.defect, /carries your card/);
+  assert.equal(noCard.defect, "the full address is empty", "the join's one judgment (join-fields.mjs, POS-1237), declare's words");
+  assert.equal(noCard.field, "full_address");
 });
 
 // ── the verb's grammar ───────────────────────────────────────────────────────

@@ -13,13 +13,15 @@
      "description": "string",
      "type": "string"
     },
-    "card": {
+    "full_address": {
      "description": "string",
      "required": "boolean",
      "type": "string"
     },
     "handle": {
      "description": "string",
+     "maxLength": "number",
+     "minLength": "number",
      "required": "boolean",
      "type": "string"
     },
@@ -29,6 +31,7 @@
     },
     "note": {
      "description": "string",
+     "maxLength": "number",
      "type": "string"
     },
     "since": {

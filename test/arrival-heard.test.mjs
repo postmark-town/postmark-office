@@ -233,8 +233,10 @@ test("H5b · a co-signed begin (POS-570) lands the berth's parked answer by its 
   // it to this exec. The click itself is a field act (household-apex.test.mjs's
   // header), so the wiring is read where it is written.
   const oauth = readFileSync(join(ROOT, "src", "oauth.mjs"), "utf8");
-  assert.match(oauth, /declareViaOffice\(ctx\.clone, \{ \.\.\.decl, handle: pending\.slug \},[\s\S]{0,200}?mint: false, heardFrom: pending\.slug \}\)/,
-    "the berth co-sign passes its slug, so the parked answer lands");
+  // POS-1237: the declared handle is the chosen one (`wanted`, the berth's slug only when none was parked); the parked answer is still the BERTH's, by its slug
+  assert.match(oauth, /const wanted = String\(decl\.handle \?\? ""\)\.trim\(\) \|\| pending\.slug;/, "the co-sign declares the chosen handle, the slug when none");
+  assert.match(oauth, /declareViaOffice\(ctx\.clone, \{ \.\.\.decl, handle: wanted \},[\s\S]{0,200}?mint: false, heardFrom: pending\.slug \}\)/,
+    "the berth co-sign passes its slug as the berth, so the parked answer lands");
   const declareSrc = readFileSync(join(ROOT, "src", "declare.mjs"), "utf8");
   assert.match(declareSrc, /key: \{ ghId: key\.ghId, ghLogin: key\.ghLogin \},\n\s+\.\.\.\(heardFrom \? \{ heardFrom \} : \{\}\),\n\s+\}\);/, "declareViaOffice hands heardFrom to the exec's payload");
 });
@@ -306,7 +308,10 @@ test("H11 · declare and begin both ask, last and optional (POS-570: begin valid
   assert.deepEqual(DECLARE_SCHEMA.properties.heard.enum, HEARD_LABELS);
   assert.equal("BEGIN_PROPERTIES" in declareModule, false, "begin's question-less copy of the schema is gone");
   const apex = readFileSync(join(ROOT, "src", "household-apex.mjs"), "utf8");
-  assert.match(apex, /if \(act === "declare" \|\| act === "begin"\) return actionFields\(DECLARE_SCHEMA\.properties/, "begin's card is declare's fields");
+  assert.match(apex, /if \(act === "declare"\) return actionFields\(DECLARE_SCHEMA\.properties/, "declare's card is its schema's fields");
+  // begin's card is declare's fields too, the question included; only its handle adds this road's the- rule (POS-1237, BERTH_ROAD_THE_RULE)
+  assert.match(apex, /if \(act === "begin"\) \{\s*const fields = actionFields\(DECLARE_SCHEMA\.properties, DECLARE_SCHEMA\.required/, "begin's card is declare's fields");
+  assert.match(apex, /if \(fields\.handle\) fields\.handle = \{ \.\.\.fields\.handle, description: `\$\{fields\.handle\.description\} On this road \(begin\), \$\{BERTH_ROAD_THE_RULE\}\.` \};\s*return fields;/, "and differs only in its handle's words");
   assert.match(apex, /const declared = act === "declare" \|\| act === "begin" \? DECLARE_SCHEMA\.properties/, "begin's validator is declare's schema");
 });
 

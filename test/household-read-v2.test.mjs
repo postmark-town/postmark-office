@@ -198,7 +198,7 @@ test("D1 · every can act names every field it takes, grouped by intent", async 
   assert.match(actFields("profile"), /pronouns\?/);
   // CORE-114: no caller's can lists begin, declare or buy-parcel-room: they are offered (the tier's next; first_steps)
   assert.equal(text.match(/\b(begin|declare|buy-parcel-room) \{/), null);
-  assert.equal(can.house, "add-resident { handle, card }");
+  assert.equal(can.house, "add-resident { handle, full_address }"); // POS-1237: card's new name
 });
 
 test("D2 · the house's human is named by the house, from one function", () => {

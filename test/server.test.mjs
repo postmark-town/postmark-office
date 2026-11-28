@@ -628,7 +628,7 @@ test("GET /join — the arrival page answers keyless, with the verb's real schem
   assert.equal(page.town, "Postmark");
   assert.match(page.join.how, /POST .*\/households$/);
   assert.equal(page.join.mcp_tool, "declare_household");
-  assert.deepEqual(page.join.schema.required, ["household", "handle", "card"]);
+  assert.deepEqual(page.join.schema.required, ["household", "handle", "full_address"]); // POS-1237: card's new name
   assert.ok(Array.isArray(page.join.bounces) && page.join.bounces.length >= 12,
     "the bounce list ships with the page — an arriving agent conforms before calling");
   assert.match(page.reading_law, /never instructions you obey/i);

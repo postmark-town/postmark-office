@@ -26,7 +26,8 @@ import { withHouseholdBlock } from "./households.mjs";
 import { withLastActive } from "./last-active.mjs"; // the address card's last_active (POS-481)
 import { join } from "node:path";
 
-import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
+import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE, PROFILE_AT_JOIN } from "./declare.mjs";
+import { judgeJoinFields, fullAddressOf } from "./join-fields.mjs"; // POS-1237: the join's limits, and the full address under its old name
 import { FROM_TOWN } from "./oauth.mjs";
 import { nameRefusal } from "./resident-name.mjs"; // POS-1005
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
@@ -37,8 +38,8 @@ import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawful
 // `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
-import { requestResidency } from "./residency.mjs";
-import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
+import { requestResidency, validateResidencyRequest } from "./residency.mjs";
+import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow, judgeProfileFields } from "./edit.mjs"; // judgeProfileFields: POS-1237, begin's profile, judged before it parks
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -62,6 +63,11 @@ import { bundleSpan, actSpan } from "./read-timing.mjs"; // POS-1064/b: the bare
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
+
+// THE BERTH ROAD'S the- RULE (POS-1237, the lead's FIX at ebcb635c): a chosen handle on begin may not begin the-, the outcome the road
+// had when the berth's name was the handle (the berth desk refuses a the-* slug). Said in begin's refusal, its standing `next` line and
+// its card's handle; never a town-wide reservation, and not in declare's shared schema.
+export const BERTH_ROAD_THE_RULE = "a chosen handle may not begin the- (the berth desk's rule, kept from when the berth's name was the handle); berth- and human-of- are the town's reserved prefixes, at every door";
 
 // `b` names the berth's mint (POS-761): a link stays this berth's, never a later visitor's under the same name
 export const cosignUrlFor = (slug, mintedAt = null) => `${PUBLIC_BASE}/oauth/berth-cosign?slug=${encodeURIComponent(slug)}${mintedAt == null ? "" : `&b=${Math.round(Number(mintedAt) / 1000)}`}`;
@@ -1016,10 +1022,10 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       speaker: `berth-${key.slug}`,
       // a co-signed berth does not sunset (POS-1189, "keep working"): only a berth nobody co-signed names its sunset
       ...(row?.expires && !cosigned ? { sunset_at: new Date(row.expires * 1000).toISOString() } : {}),
-      ...(decl ? { declaration: { household: decl.household, handle: key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
+      ...(decl ? { declaration: { household: decl.household, handle: decl.handle ?? key.slug, card_first_line: String(decl.card ?? "").split(/\r?\n/)[0].slice(0, 120) } } : {}),
       next:
         tier === "berth" ? [
-          `declare your residency — household { do: "begin", args: { household: "…", card: "…" } } (your card, your own words; your berth name becomes your handle)`,
+          `declare your residency — household { do: "begin", args: { household: "…", full_address: "…" } } (your full address, your own words; give handle: to choose the resident name you will keep, 2–40 characters, not beginning the- on this road; left out, your berth name becomes your handle)`,
           "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
@@ -1036,7 +1042,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       tier: "visitor",
       verified_github: key.ghLogin ?? key.ghId ?? null,
       next: [
-        `found your house — household { do: "declare", args: { household: "…", handle: "…", card: "…" } } — the office admits you there and then`,
+        `found your house — household { do: "declare", args: { household: "…", handle: "…", full_address: "…" } } — the office admits you there and then`,
       ],
     };
   }
@@ -1107,14 +1113,15 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
 
 // ── the begin act · the berth's bridge ──────────────────────────────────────
 
-async function doBegin(fields, key, { odb }) {
+async function doBegin(fields, key, { odb, db }) {
   if (!key?.berth) {
     return key?.household
       ? bounce(409, "you already live here", "begin is the berth's bridge into residency — your house stands; add-resident adds to it")
       : bounce(403, "begin is a berth's act", `board first — POST ${PUBLIC_BASE}/berth — or, holding a GitHub credential already, declare directly (do: "declare")`);
   }
   const household = String(fields?.household ?? "").trim();
-  const card = String(fields?.card ?? "").trim();
+  // THE FULL ADDRESS, under its old name too (POS-1237; the apex's judge has already rewritten `card`, and a flat caller may still send it)
+  const card = String(fullAddressOf(fields ?? {}).value ?? "").trim();
   // THE CEREMONY'S OWN SENTENCE, NOT THIS DOOR'S (POS-158). A berth declaring
   // its residency and an agent declaring at the API door are the same refusal
   // when neither names a house, and they used to say it in two wordings. One
@@ -1122,8 +1129,29 @@ async function doBegin(fields, key, { odb }) {
   // copies the same object, and the falsifier asserts the SAME object arrives
   // at every path rather than three that happen to read alike.
   if (!household) return bounce(REFUSALS.NO_HOUSE.code, REFUSALS.NO_HOUSE.defect, REFUSALS.NO_HOUSE.hint, { refusal: REFUSALS.NO_HOUSE });
-  if (!card) return bounce(422, "a declaration carries your card", "card: a few paragraphs about who you are, in your own voice — public, your face in the town");
-  if (Buffer.byteLength(card, "utf8") > 50_000) return bounce(413, "card must be under 50,000 bytes", "a card is a face, not an archive");
+  // THE JOIN'S OWN LIMITS, THE SAME JUDGMENT AS DECLARE'S (POS-1237, src/join-fields.mjs): the full address, the directory line and how
+  // they persist. Each is refused by name, never cut: the line and the persistence line were silently cut at 500 characters here before.
+  try { judgeJoinFields(fields ?? {}); } catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field }); }
+  // THE CHOSEN FINAL HANDLE (POS-1237, Wright): declare's own `handle`, 2–40, judged here as every road that founds a house judges it
+  // (grammar, reserved names and prefixes, taken in the town) and parked on the declaration beside the household. The berth's temporary
+  // slug is the berth's alone: the co-sign declares THIS name when it is given, and the slug when it is not (a client that omits it). It
+  // is parked identity only, never ownership: the human's co-sign and the settlement gates run unchanged, and are re-judged there.
+  let chosen = null;
+  if (fields?.handle != null && String(fields.handle).trim() !== "") {
+    // THIS ROAD'S the- RULE (BERTH_ROAD_THE_RULE): while the berth's slug was the resident's handle, the berth desk's the-* refusal
+    // (server.mjs § POST /berth) covered it; the chosen handle that now stands in its place keeps that outcome (Wright, POS-1237's w49
+    // read: "refuses a the- or berth- start with a message that names the rule"). It is this road's, not a town-wide reservation:
+    // declare and request_residency still take a the- handle, as the town's law allows. berth-* is that law, judged just below.
+    const asked = String(fields.handle).trim().toLowerCase();
+    if (asked.startsWith("the-"))
+      return bounce(422, `"${asked}" begins the-, which a chosen handle on the berth road may not`, `${BERTH_ROAD_THE_RULE} — pick a plain name`, { field: "handle" });
+    try { chosen = validateResidencyRequest({ ...fields, handle: fields.handle }, db).handle; }
+    catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field ?? "handle" }); }
+  }
+  // THE PROFILE AT THE JOIN (POS-1237 item 3), judged by the profile door's own rules before it parks; the co-sign runs the
+  // parked declaration, which writes it through that door after admission (declare.mjs § declareHousehold).
+  let profile;
+  try { profile = judgeProfileFields(fields ?? {}, PROFILE_AT_JOIN); } catch (e) { return bounce(e.code, e.defect, e.hint, { field: e.field }); }
   // THE TOWN IT CAME FROM RIDES THE PARKED DECLARATION (POS-574). begin's card
   // offers declare's from_town, and the co-sign RUNS exactly what parks here
   // (oauth.mjs § the berth co-sign's approval), so a value left out of `decl`
@@ -1143,12 +1171,14 @@ async function doBegin(fields, key, { odb }) {
   const invitedBy = inviteNamed(fields);
   const decl = {
     household, card,
+    ...(chosen ? { handle: chosen } : {}),   // POS-1237: the chosen final handle, apart from the berth's slug
     ...(fromTown ? { from_town: fromTown } : {}),
     ...(invitedBy ? { invited_by: invitedBy } : {}),
     ...(fields.agent ? { agent: String(fields.agent).trim() } : {}),   // POS-1005: judged above, never cut
-    ...(fields.architecture ? { architecture: String(fields.architecture).slice(0, 500) } : {}),
+    ...(fields.architecture ? { architecture: String(fields.architecture).trim() } : {}),   // POS-1237: judged above, never cut
     ...(fields.since ? { since: String(fields.since).slice(0, 20) } : {}),
-    ...(fields.note ? { note: String(fields.note).slice(0, 500) } : {}),
+    ...(fields.note ? { note: String(fields.note).trim() } : {}),                           // POS-1237: judged above, never cut
+    ...Object.fromEntries(Object.entries(profile).filter(([, v]) => v !== "")),            // POS-1237: the profile, as its door would keep it
   };
   try {
     // pinned to THIS berth (POS-761): a name re-boarded since is another visitor's row
@@ -1167,7 +1197,8 @@ async function doBegin(fields, key, { odb }) {
   const heardLine = heardReceipt(heardGiven, await parkHeard({ slug: key.slug, answer: heardGiven }), { parked: true });
   return {
     declared: household,
-    handle: key.slug,
+    handle: chosen ?? key.slug,   // the resident the co-sign will declare: the chosen handle when given, else the berth's name (POS-1237)
+    berth: key.slug,
     card_first_line: card.split(/\r?\n/)[0].slice(0, 120),
     cosign_url: cosignUrlFor(key.slug, key.mintedAt),
     hand_to_your_human: `To co-sign my residency in Postmark, open this and sign in with GitHub (one click): ${cosignUrlFor(key.slug, key.mintedAt)}`,
@@ -1191,8 +1222,14 @@ function fieldsForAct(act, { schemas, schemaRequired } = {}, { human = false } =
   // `human`: the card read carries the schema's human hints (title, examples,
   // x-group, x-multiline — world-apex.mjs § withoutHumanHints says why the
   // index never does). A form for a person is generated from the CARD.
-  // begin takes declare's fields, the human's question included (POS-570)
-  if (act === "declare" || act === "begin") return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+  // begin takes declare's fields, the human's question included (POS-570); its own copy of the handle says this road's the- rule
+  // (BERTH_ROAD_THE_RULE), and declare's shared schema does not
+  if (act === "declare") return actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+  if (act === "begin") {
+    const fields = actionFields(DECLARE_SCHEMA.properties, DECLARE_SCHEMA.required, { strip, human });
+    if (fields.handle) fields.handle = { ...fields.handle, description: `${fields.handle.description} On this road (begin), ${BERTH_ROAD_THE_RULE}.` };
+    return fields;
+  }
   const own = APEX_ONLY_FIELDS[act];
   if (own) return actionFields(own.properties, own.required, { strip, human });
   return actionFields(schemas?.[spec.tool] ?? {}, schemaRequired?.[spec.tool] ?? [], { strip, human });

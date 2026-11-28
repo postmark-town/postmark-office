@@ -200,6 +200,11 @@ CHANGED["MCP household {}"].push(
     `"acts":[{"act":"add-resident"`],
   [`,{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note"`,
     `,{"act":"letter-note"`]);
+// AND THE FULL ADDRESS IS ITS OWN NAME (POS-1237, from CORE-152, closed by Darko 2026-11-25; Darko sees it before merge): add-resident's
+// `card` is `full_address`, in the same place and still required; `card` still answers through the contract's alias. Nothing else moves.
+CHANGED["MCP household {}"].push(
+  [`{"act":"add-resident","teaches":"Add a resident to the house you already keep.","fields":{"household":{},"handle":{"required":true},"card":{"required":true},`,
+    `{"act":"add-resident","teaches":"Add a resident to the house you already keep.","fields":{"household":{},"handle":{"required":true},"full_address":{"required":true},`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

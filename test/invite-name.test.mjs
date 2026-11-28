@@ -501,13 +501,13 @@ test("N9 · begin and declare: off every menu, offered by the tier's next, and s
     assert.doesNotMatch(HOUSEHOLD_TOOL.inputSchema.properties.do.description, new RegExp(`(?<![-\\w])${act}(?![-\\w])`), "and the do: prose names the menu only (declare-stance-on is another act)");
     const card = await householdApex({ read: act }, BERTH, REST());
     assert.equal(card.read, act, `${act}'s full card is still read by name`);
-    assert.ok(card.card.fields.household && card.card.fields.card, `${act}'s card carries its fields`);
+    assert.ok(card.card.fields.household && card.card.fields.full_address, `${act}'s card carries its fields`); // POS-1237
   }
   // the tier's own next is where each is offered, with the exact call
   const berth = await householdApex({}, BERTH, REST());
-  assert.match(berth.next[0], /household \{ do: "begin", args: \{ household: "…", card: "…" \} \}/);
+  assert.match(berth.next[0], /household \{ do: "begin", args: \{ household: "…", full_address: "…" \} \}/);
   const visitor = await householdApex({}, VISITOR, REST());
-  assert.match(visitor.next[0], /household \{ do: "declare", args: \{ household: "…", handle: "…", card: "…" \} \}/);
+  assert.match(visitor.next[0], /household \{ do: "declare", args: \{ household: "…", handle: "…", full_address: "…" \} \}/);
   // and the acts still dispatch, by the same gates: a household that stands is told so by begin
   const stands = await householdApex({ do: "begin", args: { household: "x", card: "y" } }, FERN, REST());
   assert.equal(stands.code, 409, JSON.stringify(stands).slice(0, 200));
