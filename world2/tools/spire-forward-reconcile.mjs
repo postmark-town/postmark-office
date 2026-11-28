@@ -28,13 +28,18 @@
 //     TOOL AND NOT A DOOR: env WORLD2_CLEARING_URL, one transaction, the open window FOR UPDATE). So the writer boundary is that
 //     pen, and no grant, role or trigger changes. A resident door or `world2_owner` cannot do this: the guard refuses them (the
 //     test proves it).
-//   · PUBLICATION IS A SEPARATE SELECTION STEP. Docket crossings run deploy/settlement-auto.sh → fold-input-cli.mjs →
-//     fold-delta.mjs::foldDelta, which selects rows by the closed window's `marks.locked_window`, then renders and writes them.
-//     This tool changes neither that lock nor the claim chain, so its data correction alone does not offer an already-published
-//     mark locked in an earlier window. A sealed-version printout can notice changed data, but code on a train is not evidence
-//     that this is the running publisher. The store row and named claim can therefore be clean while Git still carries `rooms`.
-//     Record those two store facts separately; the Git witness requires the separately agreed publication route and its crossing.
-//     The claim's `data` is not itself printed. The open window is read here only to be named in the marker.
+//   · PUBLICATION IS A SEPARATE SELECTION STEP. The docket chain the S198 receipt matched is the w48 release's deployed source
+//     frame (fa2fc329; the same deploy/settlement-auto.sh `main` and `train/2026-w48` carry): deploy/settlement-auto.sh →
+//     fold-input-cli.mjs → fold-delta.mjs::foldDelta, which selects rows by the closed window's `marks.locked_window`, then
+//     renders (renderedMark) and writes them (the store write-down). That is the frame this paragraph is anchored to, not an
+//     account of this w49 tree: `train/2026-w49`'s deploy/settlement-auto.sh instead runs settlement-printout.mjs print (the
+//     sealed-version delta), and this comment neither transfers the docket rule onto that producer nor claims its runtime selection
+//     was measured. On the S198 frame, this tool changes neither that lock nor the claim chain, so its data correction alone does
+//     not offer an already-published mark locked in an earlier window. A sealed-version printout can notice changed data, but code
+//     on a train is not evidence that it is the running publisher. The store row and named claim can therefore be clean while Git
+//     still carries `rooms`. Record those two store facts separately; the Git witness requires the separately agreed
+//     publication route and its crossing (POS-1179). The claim's `data` is not itself printed. The open window is read here only
+//     to be named in the marker.
 //
 // ── WHAT IT WRITES, EXACTLY ─────────────────────────────────────────────────────────────────────────────────────────────────
 //
@@ -77,8 +82,8 @@
 //   3  read-back:                SELECT m.data ? 'rooms', m.locked_window, jsonb_array_length(m.geometry->'points'),
 //                                       (SELECT data ? 'rooms' FROM claims WHERE id = '<claim>') FROM marks m
 //                                 WHERE slug = 'wright/the-starforge-spire';   -- false, 337 (unchanged), 22, false
-//   4  publication: use the separately agreed route that offers the clean row to the active crossing's selector. A new sealed
-//      version alone does not select an earlier-locked, already-published row on the docket path. After that route and crossing,
+//   4  publication (POS-1179): use the separately agreed route that offers the clean row to the active crossing's selector. A
+//      new sealed version alone does not select an earlier-locked, already-published row on the S198 frame's docket path. After that route and crossing,
 //      read the actual published commit's `WORLD/marks/wright/the-starforge-spire/mark.md`: it must have no `rooms:` line.
 //      Name any other file changes that the chosen route introduces; do not infer the Git witness from a seal digest alone.
 //   5  then, and only then, the World's assertion (POS-1263) after the actual crossing witness.
