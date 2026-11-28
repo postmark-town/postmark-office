@@ -89,10 +89,46 @@ uat_role_sql() { # <role name> <password or empty>
   local r="$1" pw="$2" q
   case "$r" in ''|*[!a-z0-9_]*) echo "bad role name" >&2; return 1 ;; esac
   q="${pw//\'/\'\'}"
+  # Postgres writes a failing statement's TEXT to its log (log_min_error_statement), and an ALTER ROLE ... PASSWORD
+  # carries the password. The session is the superuser's, so it may turn both off for itself before the statement runs.
+  printf "SET log_min_error_statement = 'panic';\nSET log_statement = 'none';\n"
   printf 'DO $do$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN CREATE ROLE %s; END IF; END $do$;\n' "'$r'" "$r"
   if [ -z "$pw" ]; then printf 'ALTER ROLE %s NOLOGIN;\n' "$r"
   else printf "ALTER ROLE %s LOGIN PASSWORD '%s';\n" "$r" "$q"
   fi
+}
+
+# The swap, as one statement Postgres runs as one transaction (a DO block is atomic): the live database becomes
+# <live>_prev, the copy before it becomes <live>_prev_old, the new one becomes <live>. A rename that fails (a session
+# still connected to any of them) rolls all three back and the live name is as it was. A name that is absent is skipped,
+# so a first run and a rerun are the same call. The oldest copy is dropped by the caller, after this has committed.
+uat_swap_sql() { # <live db> <new db>
+  local live="$1" new="$2" n
+  for n in "$live" "$new"; do case "$n" in ''|*[!a-z0-9_]*) echo "bad database name" >&2; return 1 ;; esac; done
+  cat <<SQL
+DO \$swap\$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_database WHERE datname = '${live}_prev') THEN
+    EXECUTE format('ALTER DATABASE %I RENAME TO %I', '${live}_prev', '${live}_prev_old');
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_database WHERE datname = '${live}') THEN
+    EXECUTE format('ALTER DATABASE %I RENAME TO %I', '${live}', '${live}_prev');
+  END IF;
+  EXECUTE format('ALTER DATABASE %I RENAME TO %I', '${new}', '${live}');
+END
+\$swap\$;
+SQL
+}
+
+# uat-store.json's one line, as valid JSON: the REVIEWED text carries double quotes (Darko's own words), which a plain
+# interpolation left unescaped. Backslash first, then the quote, newline and tab.
+uat_json_str() { # <text>
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+uat_store_json() { # <night> <restored_at> <scrub's REVIEWED text>
+  printf '{"night":%s,"restored_at":%s,"scrub":%s}\n' "$(uat_json_str "$1")" "$(uat_json_str "$2")" "$(uat_json_str "$3")"
 }
 
 # UAT's user is its own: never the meeps' `meepo`, and it must exist (provision.sh makes it).

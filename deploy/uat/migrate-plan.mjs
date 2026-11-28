@@ -10,9 +10,13 @@
 // world2_owner (the way every file's own header says), and then scrubs. The rest goes to stderr.
 //
 // It REFUSES (exit 2, nothing on stdout) when any file has no probe, since a runner that cannot tell whether a migration
-// landed would either re-apply it (014 is not idempotent) or skip it. It runs as root, importing the release's own
-// migrations-landed.mjs: the same trust units.sh already gives the release (it installs its unit files as root).
-// The probes reach the copy through `sudo -u postgres psql`, never over the network and never with a password.
+// landed would either re-apply it (014 is not idempotent) or skip it.
+//
+// WHO RUNS IT (CORE-165, review tax 2). The release tree is carried and written by `uat`, whose office faces the internet
+// behind Access, so nothing from it may run as root or as the postgres superuser. store-restore-scrub.sh copies the
+// schema files and migrations-landed.mjs into a directory of its own and runs THIS file from that copy as `nobody`, with
+// a pgpass file for world2_owner: the probes and the migrations reach the copy's database as world2_owner (a role that
+// owns only that database's objects), through psql on loopback, never as a superuser and never as root.
 
 import { execFileSync } from "node:child_process";
 import { readdirSync, realpathSync } from "node:fs";
@@ -26,10 +30,10 @@ export function planMigrations(landed) {
   return { apply: landed.filter((r) => r.state === "missing").map((r) => r.file), refuse: [] };
 }
 
-/** Ask `db` (through psql as postgres) one boolean probe at a time, the shape landedIn wants. */
+/** Ask `db` (psql on loopback as world2_owner; the password is PGPASSFILE's) one boolean probe at a time, the shape landedIn wants. */
 export function psqlQuery(db) {
   return async (sql) => {
-    const out = execFileSync("sudo", ["-n", "-u", "postgres", "psql", "-X", "-q", "-tA", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql], { encoding: "utf8" });
+    const out = execFileSync("psql", ["-h", "127.0.0.1", "-U", "world2_owner", "-X", "-q", "-tA", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql], { encoding: "utf8" });
     return { rows: [{ landed: out.trim() === "t" }] };
   };
 }

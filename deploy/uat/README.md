@@ -13,7 +13,7 @@ UAT is **prod-shaped on purpose**: the repo's own unit files, paths, ports and s
 | | prod (EC2) | UAT (town-rig) |
 |---|---|---|
 | who runs it | `meepo` | **`uat`**, its own system user: not in meepo's group, no right to meepo's home. On town-rig, `meepo` is the meeps' Letta user. |
-| size | t3.xlarge, 4 vCPU, 16 GB | **`uat.slice`**: cores 12–15 only (`AllowedCPUs`), `CPUWeight=500` there, 16 GB (`MemoryMax`), no swap. UAT can't use more than four cores. It doesn't own them: nothing keeps a meep or a system job off cores 12–15, so the weight makes UAT win them when contended (see § Open). |
+| size | t3.xlarge, 4 vCPU, 16 GB | **`uat.slice`**: cores 12–15 only (`AllowedCPUs`), `CPUWeight=25` there (the live box has `letta-town` at 1000: CORE-72 step 1, 2026-11-24), 16 GB (`MemoryMax`), no swap. UAT can't use more than four cores. It doesn't own them: nothing keeps a meep or a system job off cores 12–15, and where they meet, the meeps win and UAT yields (see § Open). |
 | Node | v22 | Node 22 at `/usr/bin/node`; each unit's PATH puts it first. The meeps' `/usr/local/bin/node` (v25) isn't touched. |
 | the store | `world2_dev` (the live record) | `world2_uat`: last night's prod dump, restored and scrubbed (`store-restore-scrub.sh`, `scrub.sql`), read with UAT's own read-only AWS key |
 | what it pushes to | GitHub's town, world and notary | local bare stubs in `/srv/uat-stubs` (`stubs.sh`); no GitHub token on it |
@@ -29,7 +29,7 @@ It's also where heavy work that shouldn't run on prod's box goes. The POS-1191 b
 2. **Cloudflare:** ~~install `cloudflared` on town-rig~~ (**done 09:30 EST**). Then make the tunnel, with public hostname `uat.postmark.town` → `http://127.0.0.1:8480`, and its **Access application** (who may sign in, like dev's). The tunnel's token goes to Jetto as a file, never pasted.
 3. **GitHub:** an OAuth app for `https://uat.postmark.town` (its client id and secret go in `office.env`). **Its callback URL is `https://uat.postmark.town/api/oauth/github/callback`**, with `/api`: the office sends `${PUBLIC_BASE}/oauth/github/callback` and `PUBLIC_BASE` carries `/api` as on prod. It is a GitHub-side setting no script here can check; a wrong one fails sign-in with "redirect_uri not associated with the app".
 4. **UAT's own keys,** never copies of prod's: a witness key, the creature seed key, the store role passwords. No Bluesky, PayPal, Stripe or USDC credential, ever.
-5. **The scrub review.** `scrub.sql` is reviewed for the tables its `REVIEWED:` line names (the sign-ins, harnesses, payers, `resident_notes`, `letter_notes`). Every other delete and scrub in it (drafts, reports, mail blocks, invite holds, letter opens, earpiece wakes, refused acts, the arrival answers, `households.human` and the likeness request) is `awaiting` his review in the table at its top, with an `AWAITING:` line. `store-restore-scrub.sh` refuses while any `AWAITING:` line stands, and until the `REVIEWED:` line names his ruling for all of it. The UNSURE rows are his to call too.
+5. **The scrub review.** `scrub.sql` is reviewed for the tables its `REVIEWED:` line names (the sign-ins, harnesses, payers, `resident_notes`, `letter_notes`). Every other delete and scrub in it (drafts, reports, mail blocks, invite holds, letter opens, earpiece wakes, refused acts, the arrival answers, the town journal, the operator notes on roles, `oauth_berths.card`, `households.human` and the likeness request) is `awaiting` his review in the table at its top, with an `AWAITING:` line. `store-restore-scrub.sh` refuses while any `AWAITING:` line stands, and until the `REVIEWED:` line names his ruling for all of it. The UNSURE rows are his to call too.
 
 ## The order (on town-rig, as root)
 
@@ -65,7 +65,7 @@ At each freeze: carry the frozen release, run `store-restore-scrub.sh` (a fresh 
 
 - **The scrub's open rulings:** every `awaiting` and UNSURE row in `scrub.sql`'s table (CORE-165).
 - **The gate does not verify the Access JWT.** `nginx-uat.sh` admits any request to `127.0.0.1:8480` with a non-empty `Cf-Access-Jwt-Assertion`; from the internet that is Cloudflare Access's doing, from the box itself (the meeps share it) there is no gate. Verifying the JWT would need an nginx module.
-- **Cores 12–15 are not reserved.** `CPUWeight` favours UAT; a reservation is `AllowedCPUs=0-11` on `system.slice` and `user.slice`, which changes the box's other tenants.
+- **Cores 12–15 are not reserved.** `CPUWeight=25` makes UAT yield to the meeps (CORE-72), so a load run on a busy box can read slower than prod would; a reservation is `AllowedCPUs=0-11` on `system.slice` and `user.slice`, which changes the box's other tenants.
 - **The sentinel.** It posts to a Discord webhook. Give UAT its own channel, or leave it off (`units.sh` leaves it off).
 - **`TOWN_PUSH`, `POSTMARK_TOWN_REPO` and the human tokens** are marked CHECK in `env/office.env.template`.
 - **The site refresh's `POSTMARK_API`** (prod's unit points at a read pool on :4390). Point it at UAT's office, or bring the read pool too.

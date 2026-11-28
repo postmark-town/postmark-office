@@ -12,7 +12,7 @@
 -- login, payer, address) found two household-private tables by their row policies. It missed the rest: the nightly dump
 -- is taken as world2_owner on purpose so that it CARRIES the drafts (deploy/world2-backup.sh), and a restore applies no
 -- row policy to the restoring superuser, so every row-policy-private table arrives whole. This list is built from every
--- table the office's migrations create (world2/schema/*.sql, 108 base tables on 2026-11-27, with migration 103; the views events,
+-- table the office's migrations create (world2/schema/*.sql, the base tables of the migrated schema; the views events,
 -- event_rsvps, identities, docket and standing_marks hold no rows of their own). test/uat-kit.test.mjs reads the real
 -- schema and fails if a table has no row here, so a new migration cannot add a private table that nothing classifies.
 --
@@ -56,7 +56,7 @@
 -- | mark_carried | KEEP | - | which settlement carried a mark; derived from public files |
 -- | mark_versions | KEEP | - | the public marks' versions |
 -- | marks | KEEP | - | the public record |
--- | oauth_berths | SCRUB | reviewed | the hash goes (item 2); the card (a parked declaration) is kept, see UNSURE below |
+-- | oauth_berths | SCRUB | awaiting | the hash goes (item 2, reviewed); the card (a parked, not yet co-signed declaration) goes too: the reviewer leans to null it, and Darko confirms (a flow may depend on it) |
 -- | oauth_clients | KEEP | - | dynamic registrations of PUBLIC clients (RFC 7591, oauth.mjs); no secret is stored |
 -- | oauth_codes | DELETE | reviewed | item 1 |
 -- | oauth_key_claims | DELETE | reviewed | item 1: ask_hash is a capability |
@@ -64,9 +64,9 @@
 -- | oauth_tokens | DELETE | reviewed | item 1: every sign-in and household key |
 -- | office_media | KEEP | - | the media quota ledger: byte accounting (household, sha, bytes), no content |
 -- | office_meta | KEEP | - | the town log's drain cursor |
--- | office_role_audit | KEEP | - | who granted which role: GitHub logins the town already shows |
--- | office_roles | KEEP | - | the office's roles, by GitHub id and login |
--- | office_town_journal | UNSURE | - | the town's input log; its header says the rows are "not yet the record (a letter before it sails)" so the notary does not export it. Kept: secrets are not in it (gh ids and logins are public) and UAT's drain writes only to its stubs. Darko decides if a letter not yet sailed is private enough to drop |
+-- | office_role_audit | SCRUB | awaiting | who granted which role stays (GitHub logins the town already shows); the operator's free-text `note` goes |
+-- | office_roles | SCRUB | awaiting | the roles stay, by GitHub id and login; the operator's free-text `note` about a person goes |
+-- | office_town_journal | DELETE | awaiting | 032 makes it office_api's alone with no export ("rows that are not yet the record (a letter before it sails)"), which is this file's own rule for private; it has a free-text payload. The drain reads past a cursor and never needs old rows |
 -- | parcel_room_nonces | DELETE | awaiting | a purchase's retry key: office_api's alone, in no export (096) |
 -- | position_snapshot_rows | KEEP | - | derived from public acts |
 -- | position_snapshots | KEEP | - | derived from public acts |
@@ -125,14 +125,12 @@
 -- | world_snapshot_register | KEEP | - | the public notary's snapshots |
 -- | world_snapshots | KEEP | - | the public notary's snapshots |
 --
--- UNSURE, for Darko (kept as they are until he says):
---   office_town_journal (row above); oauth_berths.card, the declaration a berth parks until its human co-signs (a founding
---   declaration is public once it lands, but a parked one is not yet); office_roles.note and office_role_audit.note
---   (an operator's free-text note on a role); household_pins.note and renamed (free prose in the public github-ids.json).
+-- UNSURE, for Darko (kept as they are until he says): household_pins.note and renamed (free prose in the public
+-- github-ids.json). Leaning, for him to confirm: oauth_berths.card goes (above).
 --
 -- Kept on purpose, as the public record: household_pins.login, identities.gh_login, office_roles.login,
--- office_role_audit.login, office_town_journal.gh_login, town_residents.github_address (GitHub logins
--- the town already shows), oauth_berths.cosigned_gh_login.
+-- office_role_audit.login, town_residents.github_address (GitHub logins the town already shows),
+-- oauth_berths.cosigned_gh_login.
 --
 -- Runs in one transaction against the freshly restored copy, never against a live store. It runs as the postgres
 -- superuser, which no row policy binds, so the readback below counts every row, not the rows a policy would show.
@@ -192,6 +190,14 @@ DELETE FROM earpiece_wakes;
 DELETE FROM refused_acts;
 -- AWAITING: parcel_room_nonces (a room purchase's retry key)
 DELETE FROM parcel_room_nonces;
+-- AWAITING: office_town_journal (the town's input log: letters not yet sailed, office_api's alone, in no export)
+DELETE FROM office_town_journal;
+-- AWAITING: office_roles (the operator's free-text note about a person; the role and login stay)
+UPDATE office_roles SET note = NULL WHERE note IS NOT NULL;
+-- AWAITING: office_role_audit (the same note on the audit line; the line stays)
+UPDATE office_role_audit SET note = NULL WHERE note IS NOT NULL;
+-- AWAITING: oauth_berths (card: a parked, not yet co-signed declaration; Darko confirms, a flow may depend on it)
+UPDATE oauth_berths SET card = NULL WHERE card IS NOT NULL;
 -- AWAITING: households.human (the human's name: 019 says public file, 101 says private) and households.likeness_state's
 -- `request` (092: PRIVATE). The official pointer and history in likeness_state stay (the public registry projects them).
 UPDATE households SET human = NULL, likeness_state = NULLIF(likeness_state - 'request', '{}'::jsonb) WHERE human IS NOT NULL OR likeness_state ? 'request';
@@ -225,6 +231,10 @@ UNION ALL SELECT 'zero_letter_opens', count(*) FROM letter_opens
 UNION ALL SELECT 'zero_earpiece_wakes', count(*) FROM earpiece_wakes
 UNION ALL SELECT 'zero_refused_acts', count(*) FROM refused_acts
 UNION ALL SELECT 'zero_parcel_room_nonces', count(*) FROM parcel_room_nonces
+UNION ALL SELECT 'zero_office_town_journal', count(*) FROM office_town_journal
+UNION ALL SELECT 'zero_office_roles_note', count(*) FROM office_roles WHERE note IS NOT NULL
+UNION ALL SELECT 'zero_office_role_audit_note', count(*) FROM office_role_audit WHERE note IS NOT NULL
+UNION ALL SELECT 'zero_berths_card', count(*) FROM oauth_berths WHERE card IS NOT NULL
 UNION ALL SELECT 'zero_households_human', count(*) FROM households WHERE human IS NOT NULL
 UNION ALL SELECT 'zero_households_likeness_request', count(*) FROM households WHERE likeness_state ? 'request'
 UNION ALL SELECT 'present_acts', count(*) FROM acts

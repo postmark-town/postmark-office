@@ -58,6 +58,8 @@ const su = await store.connect("postgres");
 const ROLE = `uat_probe_${process.pid}`;   // a role is cluster-wide on the tree's shared server: dropped in the one teardown below
 after(async () => {
   await su.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => {});
+  // the swap test's scratch databases (shared server: they would outlive the file); SW is defined below, before this runs
+  for (const s of ["", "_new", "_new2", "_prev", "_prev_old"]) await su.query(`DROP DATABASE IF EXISTS ${SW}${s} WITH (FORCE)`).catch(() => {});
   await su.end().catch(() => {});
   await store.stop();
 });
@@ -70,8 +72,11 @@ test("scrub.sql classifies EVERY base table the office's migrations create, and 
   const { rows } = await q(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') ORDER BY 1`);
   const real = rows.map((r) => r.relname);
-  assert.ok(real.length > 90, `the denominator is read from the real schema: ${real.length} base tables`);
   const listed = ROWS.map((r) => r.table);
+  // the denominator is read from the real schema, never typed: as many rows as base tables, and the header states no number to go stale
+  assert.ok(real.length > 0, "the migrated schema has base tables");
+  assert.equal(listed.length, real.length, `${listed.length} classified rows for ${real.length} base tables the migrations create`);
+  assert.doesNotMatch(SCRUB.split("\n").filter((l) => l.startsWith("--") && !l.startsWith("-- |")).join("\n"), /\b\d+ base tables\b/, "the header states no table count of its own");
   assert.deepEqual(real.filter((t) => !listed.includes(t)), [], "a table the migrations create has no row in scrub.sql's classification (add a verdict: DELETE, SCRUB, KEEP or UNSURE)");
   assert.deepEqual(listed.filter((t) => !real.includes(t)), [], "scrub.sql classifies a table the schema does not create");
   assert.equal(new Set(listed).size, listed.length, "a table is classified twice");
@@ -105,7 +110,7 @@ test("every `awaiting` row has its AWAITING line, and an AWAITING line names onl
   }
   // The REVIEWED line is Darko's own words and names two tables; the table must not call more `reviewed` than his ruling covered.
   const reviewed = ROWS.filter((r) => r.status === "reviewed").map((r) => r.table).sort();
-  assert.deepEqual(reviewed, ["household_harnesses", "letter_notes", "oauth_berths", "oauth_codes", "oauth_key_claims", "oauth_pending", "oauth_tokens", "resident_notes", "town_pot_receipts"]);
+  assert.deepEqual(reviewed, ["household_harnesses", "letter_notes", "oauth_codes", "oauth_key_claims", "oauth_pending", "oauth_tokens", "resident_notes", "town_pot_receipts"]);
   assert.match(SCRUB, /^-- REVIEWED: Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" \(resident_notes, letter_notes\)$/m);
 });
 
@@ -192,6 +197,15 @@ const SEED = `
   INSERT INTO oauth_tokens (token_hash, kind, gh_id, gh_login) VALUES ('hash-one', 'household', 1, 'alpha-gh');
   INSERT INTO oauth_codes (code, json, expires) VALUES ('c1', '{}', 1);
   INSERT INTO oauth_pending (id, json, expires) VALUES ('p1', '{}', 1);
+  INSERT INTO oauth_berths (slug, token_hash, created, expires, card, cosigned_gh_login) VALUES
+    ('berth-one', 'real-berth-hash-1', 1, 2, '{"declare":"parked"}', 'alpha-gh'), ('berth-two', 'real-berth-hash-2', 1, 2, NULL, NULL);
+  INSERT INTO household_harnesses (handle, household, kind, address, secret, registered_at) VALUES
+    ('alpha', 'hh:alpha', 'webhook', 'https://alpha.example/real-hook', 'the-residents-real-secret', now()),
+    ('beta',  'hh:beta',  'letta',   'letta-conversation-real-7',       NULL,                        now());
+  INSERT INTO town_pot_receipts (seq, pot, rail, usd, date, receipt, payer, digest) VALUES (1, 'pot-a', 'paypal', 5, '2026-11-01', 'r1', 'payer-real-identity', 'd1');
+  INSERT INTO office_roles (subject, role, login, granted_at, granted_by, note) VALUES ('1', 'hands', 'alpha-gh', '2026-11-01', 'wright', 'an operator note about a person');
+  INSERT INTO office_role_audit (at, action, subject, role, login, actor, note) VALUES ('2026-11-01', 'grant', '1', 'hands', 'alpha-gh', 'wright', 'the same note');
+  INSERT INTO office_town_journal (class, act, household, payload, written_at) VALUES ('letter', 'send', 'hh:alpha', 'a letter not yet sailed', '2026-11-26');
   INSERT INTO oauth_key_claims (ask_hash, handle, token_hash, created, expires) VALUES ('ask1', 'alpha', 'hash-two', 1, 2);
   INSERT INTO resident_notes (handle, household, body, written_at) VALUES ('alpha', 'hh:alpha', 'to my returning self', now());
   INSERT INTO letter_notes (household, letter, state, marked_at, marked_by) VALUES ('hh:alpha', 'l1', 'no-reply', now(), 'alpha');
@@ -210,7 +224,7 @@ const SEED = `
   INSERT INTO berth_heard (slug, heard, note, parked_at) VALUES ('berth-1', 'friend', 'n', now());
   INSERT INTO parcel_room_nonces (household, nonce, handle, nth) VALUES ('alpha', 'buy-parcel-room:n1', 'alpha', 2);
 `;
-const PRIVATE_TABLES = ["oauth_tokens", "oauth_codes", "oauth_pending", "oauth_key_claims", "resident_notes", "letter_notes", "reports", "mail_blocks",
+const PRIVATE_TABLES = ["office_town_journal", "oauth_tokens", "oauth_codes", "oauth_pending", "oauth_key_claims", "resident_notes", "letter_notes", "reports", "mail_blocks",
   "invite_holds", "letter_opens", "earpiece_wakes", "refused_acts", "arrival_heard", "arrival_sources", "arrival_source_pending", "berth_heard", "parcel_room_nonces"];
 
 test("THE SCRUB RUN: seeded with a row in every private table, the scrub removes them all and leaves the public record, and the readback reads it", async () => {
@@ -223,7 +237,8 @@ test("THE SCRUB RUN: seeded with a row in every private table, the scrub removes
   // control: the readback sees what the seed planted (so the zeros after are the scrub's doing)
   const pre = lastRows(await q(READBACK_SQL));
   const nonZero = pre.filter((r) => r.t.startsWith("zero_") && Number(r.count) > 0).map((r) => r.t);
-  for (const want of ["zero_claims_drafts", "zero_reports", "zero_mail_blocks", "zero_households_human", "zero_households_likeness_request", "zero_refused_acts", "zero_arrival_heard", "zero_parcel_room_nonces"]) {
+  for (const want of ["zero_claims_drafts", "zero_reports", "zero_mail_blocks", "zero_households_human", "zero_households_likeness_request", "zero_refused_acts", "zero_arrival_heard", "zero_parcel_room_nonces",
+    "zero_berths_with_a_real_hash", "zero_harness_secrets_or_live_addresses", "zero_payers", "zero_office_roles_note", "zero_office_role_audit_note", "zero_berths_card", "zero_office_town_journal"]) {
     assert.ok(nonZero.includes(want), `before the scrub the readback must count the planted ${want}`);
   }
 
@@ -245,6 +260,18 @@ test("THE SCRUB RUN: seeded with a row in every private table, the scrub removes
   assert.equal(hh[0].likeness.answer, "yes", "the household's likeness ANSWER is public and stays");
   assert.deepEqual(hh[0].likeness_state, { official: { version: 1, proof: "p", since: "s", depicts: ["alpha"] } }, "the request goes; the official pointer, which the public registry projects, stays");
   assert.equal(hh[1].likeness_state, null, "a likeness_state holding only a request becomes null");
+
+  // the SCRUB statements, on rows (a broken UPDATE, or none, must red here: before, the zero_ counts read 0 over empty tables)
+  assert.deepEqual((await q(`SELECT slug, token_hash, card, cosigned_gh_login FROM oauth_berths ORDER BY slug`)).rows,
+    [{ slug: "berth-one", token_hash: "uat-scrubbed:berth-one", card: null, cosigned_gh_login: "alpha-gh" },
+     { slug: "berth-two", token_hash: "uat-scrubbed:berth-two", card: null, cosigned_gh_login: null }], "berth hashes and cards go; the slug and the co-sign login stay");
+  const hs = (await q(`SELECT handle, kind, address, secret FROM household_harnesses ORDER BY handle`)).rows;
+  assert.deepEqual(hs.map((h) => [h.handle, h.kind, h.secret]), [["alpha", "webhook", "uat-scrubbed"], ["beta", "letta", null]], "a webhook keeps a (UAT's) secret, a letta row has none");
+  for (const h of hs) assert.match(h.address, /^https:\/\/harness\.invalid\/uat-scrubbed\/[0-9a-f]{32}$/, `${h.handle}'s address cannot route`);
+  assert.notEqual(hs[0].address, hs[1].address, "the addresses stay distinct per row");
+  assert.deepEqual((await q(`SELECT seq, usd, payer FROM town_pot_receipts`)).rows, [{ seq: 1, usd: 5, payer: "uat-scrubbed" }], "the receipt and its amount stay, the payer goes");
+  assert.deepEqual((await q(`SELECT login, note FROM office_roles`)).rows, [{ login: "alpha-gh", note: null }], "the role and login stay, the operator's note goes");
+  assert.deepEqual((await q(`SELECT login, action, note FROM office_role_audit`)).rows, [{ login: "alpha-gh", action: "grant", note: null }]);
 });
 
 // ── 5. THE ROLE SQL (finding 2): a password is data in a pipe, and survives every character ───────────────────────
@@ -273,6 +300,69 @@ test("TEXT PIN (weak: reads the script, runs nothing): no psql in store-restore-
   const sh = read("store-restore-scrub.sh").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
   assert.ok(!/-v\s+pw=/.test(sh) && !/PASSWORD\s+['"]?\$/.test(sh), "a `-v pw=` or an inline PASSWORD literal is back");
   assert.match(sh, /uat_role_sql "\$1" "\$pw" \| sudo -u postgres psql/, "the role SQL is piped to psql's standard input");
+});
+
+bashTest("the role SQL turns off statement logging for its own session first, so a failing ALTER ROLE cannot write the password to the log", () => {
+  const r = lib('uat_role_sql "$R" "$PW"', { R: ROLE, PW: "s3cret'x" });
+  const lines = r.stdout.split("\n");
+  assert.equal(lines[0], "SET log_min_error_statement = 'panic';");
+  assert.equal(lines[1], "SET log_statement = 'none';");
+  assert.ok(lines.findIndex((l) => l.includes("PASSWORD")) > 1, "the SETs come before the statement that carries the password");
+});
+
+// ── 5b. THE SWAP (review tax 3): lib.sh's uat_swap_sql, run on scratch databases ─────────────────────────────────
+const SW = `uatsw_${process.pid}`;
+const dbOf = async (name) => { const c = await store.connect("postgres", name); try { return (await c.query("SELECT v FROM marker")).rows[0].v; } finally { await c.end(); } };
+const exists = async (name) => (await q("SELECT 1 FROM pg_database WHERE datname = $1", [name])).rowCount === 1;
+const mk = async (name, v) => {
+  await q(`CREATE DATABASE ${name}`);
+  const c = await store.connect("postgres", name);
+  try { await c.query(`CREATE TABLE marker (v text); INSERT INTO marker VALUES ('${v}')`); } finally { await c.end(); }
+};
+
+bashTest("uat_swap_sql: clean, it makes live->prev, prev->prev_old, new->live, twice running; with a session held on the live copy it rolls back whole", async () => {
+  const swapSql = (live, nw) => { const r = lib('uat_swap_sql "$L" "$N"', { L: live, N: nw }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
+  // RUN 1, clean, with no previous copy: a first run is the same call as a rerun
+  await mk(SW, "live-1"); await mk(`${SW}_new`, "new-1");
+  await q(swapSql(SW, `${SW}_new`));
+  assert.equal(await dbOf(SW), "new-1", "the new copy is live");
+  assert.equal(await dbOf(`${SW}_prev`), "live-1", "the old live copy is kept as _prev");
+  assert.equal(await exists(`${SW}_new`), false, "the new name is gone");
+  assert.equal(await exists(`${SW}_prev_old`), false, "no _prev_old when there was no _prev");
+  // RUN 2, clean, with a previous copy: the one before it goes to _prev_old (the script drops it AFTER the commit)
+  await mk(`${SW}_new2`, "new-2");
+  await q(swapSql(SW, `${SW}_new2`));
+  assert.equal(await dbOf(SW), "new-2");
+  assert.equal(await dbOf(`${SW}_prev`), "new-1", "the live copy of run 1 is now _prev");
+  assert.equal(await dbOf(`${SW}_prev_old`), "live-1", "the copy before it waits as _prev_old, not dropped inside the swap");
+  // RUN 3, with a stray connection held to the live copy: the rename is refused and the WHOLE swap rolls back
+  await q(`DROP DATABASE ${SW}_prev_old`);
+  await mk(`${SW}_new`, "new-3");
+  const held = await store.connect("postgres", SW);
+  try {
+    await assert.rejects(q(swapSql(SW, `${SW}_new`)), /being accessed by other users/, "control: Postgres refuses to rename a database a session is in");
+    assert.equal(await exists(SW), true, "the live name is intact");
+    assert.equal(await dbOf(SW), "new-2", "and it is still the same copy");
+    assert.equal(await dbOf(`${SW}_prev`), "new-1", "_prev was not renamed away (the first rename was rolled back)");
+    assert.equal(await exists(`${SW}_prev_old`), false, "nothing was left half-renamed");
+    assert.equal(await dbOf(`${SW}_new`), "new-3", "the new copy is left where it was, for a look");
+  } finally { await held.end(); }
+  // and once the session is gone the same call goes through (the trap's restart, then a rerun, is safe)
+  await q(swapSql(SW, `${SW}_new`));
+  assert.equal(await dbOf(SW), "new-3");
+  assert.notEqual(lib('uat_swap_sql "Bad;Name" x').status, 0, "a database name outside [a-z0-9_] is refused");
+});
+
+// ── 5c. uat-store.json (review paper cut): valid JSON even with Darko's quoted words in it ───────────────────────
+bashTest("uat_store_json is valid JSON when the REVIEWED text carries double quotes, a backslash and a tab", () => {
+  const scrub = `Darko, 2026-11-23 16:56 EST "okay go on all"; 17:01 EST "empty both is fine yeah" (a\\b\tc)`;
+  const r = lib('uat_store_json "$N" "$T" "$S"', { N: "20261126T000000Z", T: "2026-11-27T00:00:00Z", S: scrub });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { night: "20261126T000000Z", restored_at: "2026-11-27T00:00:00Z", scrub }, "round-trips exactly");
+  // the line the script really takes it from: scrub.sql's own REVIEWED line (it has quotes in it)
+  const real = /^-- REVIEWED: (.*)$/m.exec(SCRUB)[1];
+  assert.ok(real.includes('"'), "control: the real REVIEWED line carries double quotes");
+  assert.equal(JSON.parse(lib('uat_store_json n t "$S"', { S: real }).stdout).scrub, real);
 });
 
 // ── 6. THE OWNERS (finding 7): the restored copy is handed to world2_owner, so its migrations can run ──────────────
@@ -341,13 +431,20 @@ test("TEXT PIN (weak): store-restore-scrub.sh checks the gate before any network
   assert.match(sh, /pg_restore --exit-on-error --dbname "\$NEW"/);
   const at = (s) => { const i = sh.indexOf(s); assert.ok(i > 0, `${s} is in the script`); return i; };
   assert.ok(at('pg_restore --exit-on-error') < at('-f "$HERE/own.sql"') && at('-f "$HERE/own.sql"') < at('-f "$HERE/grants.sql"')
-    && at('-f "$HERE/grants.sql"') < at('"$HERE/migrate-plan.mjs" --db') && at('"$HERE/migrate-plan.mjs" --db') < at('-f "$HERE/scrub.sql"'),
+    && at('-f "$HERE/grants.sql"') < at('"$MIG/migrate-plan.mjs" --db') && at('"$MIG/migrate-plan.mjs" --db') < at('-f "$HERE/scrub.sql"'),
     "restore, owners, grants, migrations, then the scrub");
   assert.match(sh, /trap finish EXIT/);
   assert.match(sh, /STOPPED=1[\s\S]*systemctl stop[\s\S]*STOPPED=0/, "the units are marked stopped before they are, and cleared only after they start again");
-  const swap = sh.slice(sh.indexOf("<<SQL"), sh.indexOf("\nSQL\n"));
-  assert.match(swap, /^BEGIN;/m);
-  assert.match(swap, /COMMIT;/);
+  assert.match(sh, /uat_swap_sql "\$UAT_DB" "\$NEW" \| sudo -u postgres psql/, "the swap is lib.sh's uat_swap_sql, which the test below RUNS on scratch databases");
+  // review tax 1: the raw dump's directory and files are postgres's and closed
+  assert.match(sh, /chown postgres:postgres "\$WORK"; chmod 0700 "\$WORK"/);
+  assert.match(sh, /chown postgres:postgres "\$WORK"\/\*; chmod 0600 "\$WORK"\/\*/);
+  assert.ok(!/chmod 0(755|644)/.test(sh.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n")), "nothing in the script opens the dump to everyone again");
+  // review tax 2: nothing from the uat-owned release runs as root or as the superuser
+  const code = sh.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  assert.ok(!/\$RELEASE\/world2\/schema\/\$f/.test(code) && !/--release "\$RELEASE"/.test(code), "the release tree itself is only copied from, never run");
+  assert.match(code, /asnobody\(\) \{[^\n]*sudo -n -u nobody env PGPASSFILE=/);
+  assert.match(code, /asnobody psql -h 127\.0\.0\.1 -U world2_owner/);
   assert.ok(!/dropdb[^\n]*\$\{UAT_DB\}_prev"/.test(sh), "the previous copy is never dropped: it is renamed to _prev_old inside the transaction and that one is dropped after the commit");
   assert.ok(!/restore into .*owners and grants kept/.test(sh), "finding 12: the comment that claimed the dump's owners are kept is gone");
 });
@@ -375,7 +472,8 @@ test("TEXT PIN (weak): tunnel.sh restarts the connector after enabling it, so a 
   const sh = read("tunnel.sh").split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
   assert.ok(!/enable --now cloudflared-uat/.test(sh));
   assert.match(sh, /systemctl enable --quiet cloudflared-uat\.service\nsystemctl restart cloudflared-uat\.service/);
-  assert.match(read("uat.slice"), /^CPUWeight=500$/m);
+  assert.match(read("uat.slice"), /^CPUWeight=25$/m, "the live box has uat.slice at 25 against letta-town's 1000 (CORE-72 step 1): UAT yields");
+  assert.match(read("README.md"), /CPUWeight=25/);
 });
 
 test("TEXT PIN (weak): the env template carries no comment on PUBLIC_BASE's own line; the README names the GitHub callback URL", () => {
