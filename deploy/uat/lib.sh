@@ -12,7 +12,12 @@
 
 set -euo pipefail
 
-UAT_MARKER=/etc/postmark-uat
+# The marker is a FILE INSIDE /etc/postmark-uat/, never that path itself: the same directory holds the stamp trust
+# (src/stamp-trust.mjs § UAT_TRUST_PATH, /etc/postmark-uat/stamp-trust.json, the one path the town-tool sandbox
+# accepts). The first bring-up wrote the marker AS /etc/postmark-uat, and the w49 carry found the trust file could
+# not then be made (CORE-165, 2026-11-28). uat_require_marker names the one-time conversion for that old layout.
+UAT_MARKER=/etc/postmark-uat/marker
+UAT_MARKER_OLD=/etc/postmark-uat
 UAT_DB=world2_uat
 UAT_USER=uat
 UAT_SLICE=uat.slice
@@ -29,7 +34,7 @@ uat_refuse_prod() {
   if command -v psql >/dev/null 2>&1 && sudo -n -u postgres psql -tAc "select 1 from pg_database where datname = 'world2_dev'" 2>/dev/null | grep -q 1; then
     uat_die "this box holds a database named world2_dev, which is prod's store. UAT never runs where prod's store is."
   fi
-  if [ ! -f "$UAT_MARKER" ] && ls /srv/postmark-office/telemetry/access-*.jsonl >/dev/null 2>&1; then
+  if [ ! -f "$UAT_MARKER" ] && [ ! -f "$UAT_MARKER_OLD" ] && ls /srv/postmark-office/telemetry/access-*.jsonl >/dev/null 2>&1; then
     uat_die "/srv/postmark-office/telemetry holds a live office's access logs and this box has no UAT marker. That is prod, or a clone of its disk."
   fi
   case "$(hostname)" in ip-172-31-39-65*) uat_die "hostname $(hostname) is prod's." ;; esac
@@ -37,6 +42,9 @@ uat_refuse_prod() {
 
 # Every script but provision.sh also needs the marker provision.sh writes.
 uat_require_marker() {
+  if [ -f "$UAT_MARKER_OLD" ]; then
+    uat_die "$UAT_MARKER_OLD is the old marker layout (a file where the stamp trust's directory must be). Convert it once: sudo mv $UAT_MARKER_OLD $UAT_MARKER_OLD.marker && sudo install -d -m 0755 $UAT_MARKER_OLD && sudo mv $UAT_MARKER_OLD.marker $UAT_MARKER"
+  fi
   [ -f "$UAT_MARKER" ] || uat_die "$UAT_MARKER is missing: run deploy/uat/provision.sh on this box first (it checks the box is not prod and writes the marker)."
 }
 

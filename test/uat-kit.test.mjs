@@ -519,6 +519,22 @@ test("TEXT PIN (weak): nginx-uat.sh never chains `nginx -t &&` into a success li
   assert.ok(code.indexOf("grep -q 'server_name uat.postmark.town;' \"$NEWV\"") < code.indexOf('cat "$NEWV" > "$OUT"'));
 });
 
+// THE MARKER AND THE STAMP TRUST SHARE A DIRECTORY (CORE-165, found at the w49 carry 2026-11-28): the first kit wrote
+// the marker AS /etc/postmark-uat, and src/stamp-trust.mjs fixes the trust file at /etc/postmark-uat/stamp-trust.json,
+// so the trust file could not be made. The marker is now a file inside that directory, and this keeps them apart.
+test("the UAT marker is a file inside the stamp trust's directory, never the directory itself or the trust file", async () => {
+  const lib = read("lib.sh");
+  const marker = /^UAT_MARKER=(\S+)$/m.exec(lib)?.[1];
+  const old = /^UAT_MARKER_OLD=(\S+)$/m.exec(lib)?.[1];
+  const { UAT_TRUST_PATH } = await import(new URL("../src/stamp-trust.mjs", import.meta.url));
+  const trustDir = UAT_TRUST_PATH.slice(0, UAT_TRUST_PATH.lastIndexOf("/"));
+  assert.ok(marker && marker.startsWith(trustDir + "/"), `the marker ${marker} lives inside ${trustDir}/`);
+  assert.notEqual(marker, UAT_TRUST_PATH, "the marker is not the trust file");
+  assert.equal(old, trustDir, "the old layout named is the directory path the trust needs");
+  assert.match(lib, /if \[ -f "\$UAT_MARKER_OLD" \]; then\n\s*uat_die "[^"]*Convert it once:/, "the old layout is refused with its one-time conversion named");
+  assert.match(read("provision.sh"), /install -d -o root -g root -m 0755 "\$\(dirname "\$UAT_MARKER"\)"/, "provision makes the directory before the marker");
+});
+
 test("TEXT PIN (weak): units.sh gives /srv/uat-stubs only to units that already write /srv/postmark-office; the sandboxed ones get nothing", () => {
   const sh = read("units.sh");
   assert.match(sh, /if grep -q '\^ReadWritePaths=\/srv\/postmark-office' "\$f"; then echo "ReadWritePaths=-\/srv\/uat-stubs"; fi/);
