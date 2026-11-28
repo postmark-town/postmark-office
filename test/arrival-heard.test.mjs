@@ -308,7 +308,10 @@ test("H11 · declare and begin both ask, last and optional (POS-570: begin valid
   assert.deepEqual(DECLARE_SCHEMA.properties.heard.enum, HEARD_LABELS);
   assert.equal("BEGIN_PROPERTIES" in declareModule, false, "begin's question-less copy of the schema is gone");
   const apex = readFileSync(join(ROOT, "src", "household-apex.mjs"), "utf8");
-  assert.match(apex, /if \(act === "declare" \|\| act === "begin"\) return actionFields\(DECLARE_SCHEMA\.properties/, "begin's card is declare's fields");
+  assert.match(apex, /if \(act === "declare"\) return actionFields\(DECLARE_SCHEMA\.properties/, "declare's card is its schema's fields");
+  // begin's card is declare's fields too, the question included; only its handle adds this road's the- rule (POS-1237, BERTH_ROAD_THE_RULE)
+  assert.match(apex, /if \(act === "begin"\) \{\s*const fields = actionFields\(DECLARE_SCHEMA\.properties, DECLARE_SCHEMA\.required/, "begin's card is declare's fields");
+  assert.match(apex, /if \(fields\.handle\) fields\.handle = \{ \.\.\.fields\.handle, description: `\$\{fields\.handle\.description\} On this road \(begin\), \$\{BERTH_ROAD_THE_RULE\}\.` \};\s*return fields;/, "and differs only in its handle's words");
   assert.match(apex, /const declared = act === "declare" \|\| act === "begin" \? DECLARE_SCHEMA\.properties/, "begin's validator is declare's schema");
 });
 
